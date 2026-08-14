@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "buildCommand": "if [ -d frontend ]; then cd frontend; fi && npm run build",
+  "buildCommand": "if [ -d frontend ]; then cd frontend; fi && (yarn install || npm install --legacy-peer-deps) && npm run build",
   "outputDirectory": "build",
   "framework": "create-react-app",
   "rewrites": [
