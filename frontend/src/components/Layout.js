@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
-import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp } from "lucide-react";
+import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp, ShieldAlert, Sparkles } from "lucide-react";
 import NotificationBell from "@/components/NotificationBell";
 import ProfileMenu from "@/components/ProfileMenu";
 import TrialBanner from "@/components/TrialBanner";
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import PlanBadge from "@/components/PlanBadge";
 
 function GlobalSearch() {
   const [open, setOpen] = useState(false);
@@ -171,7 +172,8 @@ export default function Layout({ children }) {
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const isSuperOrAdmin = user?.role === "Super Admin" || user?.role === "Admin" || user?.user_type === "owner";
+  const isSuperAdmin = user?.user_type === "platform_owner" || user?.user_type === "super_admin" || user?.is_platform_owner || user?.is_super_admin || user?.role === "Platform Owner" || user?.role === "Super Admin";
+  const isSuperOrAdmin = isSuperAdmin || user?.role === "Admin" || user?.user_type === "owner";
   const isAdmin = isSuperOrAdmin;
   const allowed = (page) => isSuperOrAdmin || (user?.permissions?.[page]?.view === true);
   const ALWAYS_VISIBLE = new Set(["complaints"]);
@@ -190,7 +192,6 @@ export default function Layout({ children }) {
       title: "OPERATIONS",
       items: [
         { to: "/receivables", label: "Receivables & Collection", icon: DollarSign, key: "receivables" },
-        // { to: "/vendors", label: "Vendors & Procurement", icon: Truck, key: "vendors" },
         { to: "/inventory", label: "Data Management", icon: Boxes, key: "data_management" },
         { to: "/client-data", label: "Client Data", icon: LifeBuoy, key: "client_data" },
         { to: "/reports", label: "Reports", icon: ScrollText, key: "reports" },
@@ -207,8 +208,8 @@ export default function Layout({ children }) {
     {
       title: "CONTROL",
       items: [
+        { to: "/control-center", label: "SOLRIX Super Admin", icon: ShieldAlert, key: "super_admin", superAdminOnly: true },
         { to: "/billing", label: "Billing & Subscription", icon: CreditCard, key: "billing", adminOnly: true },
-        { to: "/admin/metrics", label: "SaaS Economics", icon: TrendingUp, key: "billing", adminOnly: true },
         { to: "/complaints", label: "Complaint Center", icon: Megaphone, key: "complaints" },
         { to: "/team", label: "Team & Access", icon: UserCog, key: "team", adminOnly: true },
         { to: "/profile", label: "Company Details", icon: Building2, key: "settings", adminOnly: true },
@@ -217,17 +218,28 @@ export default function Layout({ children }) {
     },
   ];
 
-  const SidebarContent = () => (
+  useEffect(() => {
+    if (pathname && !pathname.startsWith("/control-center")) {
+      api.post("/analytics/track-page", {
+        page_path: pathname,
+        page_name: navSections.flatMap(s => s.items).find(i => pathname.startsWith(i.to))?.label || pathname
+      }).catch(() => {});
+    }
+  }, [pathname]);
+
+  const sidebarContent = (
     <>
       <div className="p-5 border-b border-slate-200 flex items-center gap-3">
         <div className="w-9 h-9 bg-blue-600 text-white rounded-xl flex items-center justify-center shadow-sm">
           <Sun className="w-5 h-5" />
         </div>
         <div>
-          <div className="font-semibold tracking-tight text-slate-900" style={{ fontFamily: "Outfit" }}>SOLRIX WORK</div>
+          <div className="font-semibold tracking-tight text-slate-900 flex items-center gap-1.5" style={{ fontFamily: "Outfit" }}>
+            <span>SOLARIX</span>
+            <PlanBadge planId={company?.plan_id} size="xs" />
+          </div>
           <div className="text-[11px] text-slate-500 truncate max-w-[140px]">{company?.company_name || "Solar CRM"}</div>
         </div>
-        {/* Close button — only visible on mobile */}
         <button
           className="ml-auto lg:hidden p-1.5 rounded-md text-slate-500 hover:bg-slate-100"
           onClick={() => setSidebarOpen(false)}
@@ -240,6 +252,7 @@ export default function Layout({ children }) {
       <nav className="flex-1 p-3 space-y-4 overflow-y-auto">
         {navSections.map((sec) => {
           const visibleItems = sec.items.filter((it) => {
+            if (it.superAdminOnly) return isSuperAdmin;
             if (it.adminOnly) return isAdmin;
             return ALWAYS_VISIBLE.has(it.key) || allowed(it.key);
           });
@@ -310,7 +323,7 @@ export default function Layout({ children }) {
         } lg:translate-x-0`}
         data-testid="sidebar"
       >
-        <SidebarContent />
+        {sidebarContent}
       </aside>
 
       {/* Main content */}
@@ -330,7 +343,7 @@ export default function Layout({ children }) {
             {/* Breadcrumb section indicator */}
             <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 font-medium">
               <span className="text-slate-400 font-semibold tracking-wider uppercase text-[10px]">
-                {navSections.find(s => s.items.some(i => pathname.startsWith(i.to)))?.title || "SOLRIX 2.0"}
+                {navSections.find(s => s.items.some(i => pathname.startsWith(i.to)))?.title || "SOLARIX 2.0"}
               </span>
               <span className="text-slate-300">/</span>
               <span className="text-slate-800 font-semibold truncate">
@@ -339,6 +352,17 @@ export default function Layout({ children }) {
             </div>
 
             <div className="ml-auto flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => nav("/pricing")}
+                className="bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200 font-semibold text-xs gap-1.5 rounded-xl shadow-2xs transition"
+                data-testid="header-upgrade-btn"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <span className="hidden sm:inline">Upgrade / Change Plan</span>
+                <span className="sm:hidden">Upgrade</span>
+              </Button>
               <GlobalSearch />
               <NotificationBell />
               <ProfileMenu />

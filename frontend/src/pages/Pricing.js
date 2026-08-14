@@ -64,7 +64,7 @@ export default function Pricing() {
       const options = {
         key: subData.key_id,
         subscription_id: subData.subscription_id,
-        name: "SOLRIX WORK",
+        name: "SOLARIX",
         description: `Subscription for ${subData.plan_name} (${cycle})`,
         handler: async function (response) {
           try {

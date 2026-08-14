@@ -604,7 +604,7 @@ export default function ClientDataDetail() {
                 <div className="space-y-2.5 text-xs">
                   <Row label="Current Stage" val={currentStage} bold />
                   <Row label="Progress Percentage" val={`${progressPercent}% (${completedStagesCount}/${totalStagesCount} Completed)`} />
-                  <Row label="Assigned Team" val={c.assigned_team || "Team Solrix"} />
+                  <Row label="Assigned Team" val={c.assigned_team || "Team Solarix"} />
                   <Row label="Project Manager" val={c.project_manager || "Not Assigned"} />
                   <Row label="Lead Installer" val={c.installer_name || "Not Assigned"} />
                   <Row label="Created Date" val={c.created_at ? dayjs(c.created_at).format("D MMM YYYY") : "—"} />

@@ -234,7 +234,7 @@ function ChangeEmailDialog({ open, onClose }) {
         <DialogHeader>
           <DialogTitle style={{ fontFamily: "Outfit" }}>Change Authentication Email</DialogTitle>
           <DialogDescription className="text-xs">
-            Update the email address you use to log in to SOLRIX WORK. Company invoice/document details will remain unchanged.
+            Update the email address you use to log in to SOLARIX. Company invoice/document details will remain unchanged.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3.5 mt-2">

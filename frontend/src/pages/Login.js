@@ -115,7 +115,7 @@ export default function Login() {
             </div>
             <div>
               <span className="text-xl font-bold tracking-tight text-slate-900 font-mono" style={{ fontFamily: "Outfit" }}>
-                SOLRIX WORK
+                SOLARIX
               </span>
               <span className="block text-[11px] font-semibold text-blue-600 uppercase tracking-widest">
                 Solar EPC Business OS
@@ -225,7 +225,7 @@ export default function Login() {
                   Material comes in through purchases and goes out to projects.
                 </p>
                 <div className="text-[10px] font-bold text-blue-700 pt-1">
-                  SOLRIX WORK: Track inward, outward & balance.
+                  SOLARIX: Track inward, outward & balance.
                 </div>
               </div>
 
@@ -247,7 +247,7 @@ export default function Login() {
                   Quotation & delivery docs require repetitive client data entry.
                 </p>
                 <div className="text-[10px] font-bold text-blue-700 pt-1">
-                  SOLRIX WORK: Mapped data generates docs faster.
+                  SOLARIX: Mapped data generates docs faster.
                 </div>
               </div>
 
@@ -269,7 +269,7 @@ export default function Login() {
                   Milestone & final payments need project tracking.
                 </p>
                 <div className="text-[10px] font-bold text-blue-700 pt-1">
-                  SOLRIX WORK: Full project financial status.
+                  SOLARIX: Full project financial status.
                 </div>
               </div>
             </div>
@@ -279,7 +279,7 @@ export default function Login() {
         {/* Left Side Footer */}
         <div className="relative z-10 pt-4 border-t border-slate-200 text-xs text-slate-500 flex items-center justify-between font-mono">
           <span>Enterprise Solar EPC Operating Platform</span>
-          <span>SOLRIX WORK v2.0</span>
+          <span>SOLARIX v2.0</span>
         </div>
       </div>
 
@@ -311,7 +311,7 @@ export default function Login() {
                     <Sun className="w-5 h-5 text-white" />
                   </div>
                   <span className="font-bold text-lg text-slate-900 font-mono" style={{ fontFamily: "Outfit" }}>
-                    SOLRIX WORK
+                    SOLARIX
                   </span>
                 </div>
                 <h2 className="text-2xl font-bold text-slate-900 tracking-tight pt-3" style={{ fontFamily: "Outfit" }}>
@@ -431,7 +431,7 @@ export default function Login() {
 
               {/* Sign Up Link Box */}
               <div className="pt-3 text-center border-t border-slate-200 flex items-center justify-between text-xs">
-                <span className="text-slate-500">New to SOLRIX WORK?</span>
+                <span className="text-slate-500">New to SOLARIX?</span>
                 <Link
                   to="/register"
                   className="font-bold text-blue-600 hover:text-blue-700 hover:underline flex items-center gap-1"

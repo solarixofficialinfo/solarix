@@ -1,0 +1,23 @@
+# OS files
+.DS_Store
+*.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+backend/__pycache__/
+backend/.venv/
+
+# Environment files
+.env
+.env.local
+backend/.env
+
+# Dependencies & Build
+node_modules/
+frontend/node_modules/
+frontend/build/
+
+# Local data files
+backend/local_storage/*.json

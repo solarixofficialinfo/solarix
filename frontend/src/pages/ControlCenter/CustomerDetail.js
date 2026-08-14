@@ -16,6 +16,8 @@ import {
   ArrowLeft, ShieldCheck, Clock, CheckCircle2, AlertTriangle, Key, ExternalLink
 } from "lucide-react";
 
+import PlanBadge from "@/components/PlanBadge";
+
 const ALL_FEATURES = [
   { key: "core_crm", label: "Core CRM & Leads" },
   { key: "clients", label: "Clients Directory & Details" },
@@ -45,10 +47,12 @@ export default function CustomerDetail() {
   // Subscription Edit Dialog state
   const [subOpen, setSubOpen] = useState(false);
   const [subForm, setSubForm] = useState({ plan_id: "starter", status: "active", trial_days: 15, reason: "" });
+  const [notifyCustomer, setNotifyCustomer] = useState(true);
   const [submittingSub, setSubmittingSub] = useState(false);
 
-  // Features State
+  // Features & Temporary Feature Expiries State
   const [features, setFeatures] = useState({});
+  const [tempFeatures, setTempFeatures] = useState({});
   const [savingFeatures, setSavingFeatures] = useState(false);
 
   useEffect(() => {
@@ -67,6 +71,7 @@ export default function CustomerDetail() {
         reason: ""
       });
       setFeatures(res.data?.company?.feature_entitlements || {});
+      setTempFeatures(res.data?.company?.temporary_features || {});
     } catch (err) {
       toast.error(formatApiError(err));
     } finally {
@@ -82,9 +87,19 @@ export default function CustomerDetail() {
         action: "assign_plan",
         plan_id: subForm.plan_id,
         status: subForm.status,
-        reason: subForm.reason
+        reason: subForm.reason || "Manual plan update by Super Admin",
+        notify: notifyCustomer
       });
-      toast.success("Subscription updated successfully");
+      if (notifyCustomer) {
+        await api.post("/platform-owner/notifications", {
+          target_type: "company",
+          target_company_id: id,
+          title: "Subscription Plan Updated",
+          message: `Your SOLRIX workspace plan has been updated to ${subForm.plan_id.toUpperCase()}.`,
+          type: "info"
+        }).catch(() => {});
+      }
+      toast.success(`Subscription updated to ${subForm.plan_id.toUpperCase()} successfully!`);
       setSubOpen(false);
       fetchCustomerDetail();
     } catch (err) {
@@ -106,9 +121,10 @@ export default function CustomerDetail() {
     try {
       await api.post(`/platform-owner/customers/${id}/features`, {
         feature_entitlements: features,
-        reason: "Manual feature toggle by Platform Owner"
+        temporary_features: tempFeatures,
+        reason: "Manual feature override by Super Admin"
       });
-      toast.success("Feature entitlements saved successfully");
+      toast.success("Feature entitlements & temporary expiries saved successfully");
       fetchCustomerDetail();
     } catch (err) {
       toast.error(formatApiError(err));
@@ -172,48 +188,70 @@ export default function CustomerDetail() {
         {/* TAB 1: COMPANY PROFILE */}
         <TabsContent value="company" className="space-y-4">
           <Card className="bg-slate-950/60 border-slate-800 p-5 space-y-4 text-xs">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <span className="text-slate-400 font-semibold uppercase text-[10px]">Company Name</span>
-                <div className="text-sm font-bold text-white mt-0.5">{company.company_name}</div>
+                <div className="text-sm font-bold text-white mt-0.5">{company.company_name || "Not available"}</div>
               </div>
 
               <div>
                 <span className="text-slate-400 font-semibold uppercase text-[10px]">Owner / Admin</span>
-                <div className="text-sm font-bold text-white mt-0.5">{owner.name || company.owner_name}</div>
+                <div className="text-sm font-bold text-white mt-0.5">{owner.name || company.owner_name || "Not available"}</div>
               </div>
 
               <div>
                 <span className="text-slate-400 font-semibold uppercase text-[10px]">Work Email</span>
-                <div className="text-xs text-slate-200 font-mono mt-0.5">{owner.email || company.email}</div>
+                <div className="text-xs text-slate-200 font-mono mt-0.5">{owner.email || company.email || "Not available"}</div>
               </div>
 
               <div>
                 <span className="text-slate-400 font-semibold uppercase text-[10px]">Mobile Number</span>
-                <div className="text-xs text-slate-200 font-mono mt-0.5">{owner.mobile || company.mobile || "—"}</div>
+                <div className="text-xs text-slate-200 font-mono mt-0.5">{owner.mobile || company.mobile || "Not available"}</div>
+              </div>
+
+              <div>
+                <span className="text-slate-400 font-semibold uppercase text-[10px]">Alternate Mobile</span>
+                <div className="text-xs text-slate-200 font-mono mt-0.5">{company.alt_mobile || "Not available"}</div>
               </div>
 
               <div>
                 <span className="text-slate-400 font-semibold uppercase text-[10px]">GSTIN</span>
-                <div className="text-xs text-slate-200 font-mono mt-0.5">{company.gst_number || "—"}</div>
+                <div className="text-xs text-slate-200 font-mono mt-0.5">{company.gst_number || "Not available"}</div>
               </div>
 
               <div>
                 <span className="text-slate-400 font-semibold uppercase text-[10px]">Business Type</span>
-                <div className="text-xs text-slate-200 mt-0.5">{company.business_type || "Solar EPC Installer"}</div>
+                <div className="text-xs text-slate-200 mt-0.5">{company.business_type || "Not available"}</div>
               </div>
 
               <div>
-                <span className="text-slate-400 font-semibold uppercase text-[10px]">Location / Address</span>
+                <span className="text-slate-400 font-semibold uppercase text-[10px]">Website</span>
+                <div className="text-xs text-slate-200 mt-0.5">{company.website || "Not available"}</div>
+              </div>
+
+              <div>
+                <span className="text-slate-400 font-semibold uppercase text-[10px]">Address</span>
+                <div className="text-xs text-slate-200 mt-0.5">{company.address || "Not available"}</div>
+              </div>
+
+              <div>
+                <span className="text-slate-400 font-semibold uppercase text-[10px]">City / State / PIN</span>
                 <div className="text-xs text-slate-200 mt-0.5">
-                  {company.city ? `${company.city}, ${company.state}` : "India"} {company.pincode ? `(${company.pincode})` : ""}
+                  {company.city || company.state ? `${company.city || ""}, ${company.state || ""}` : "Not available"} {company.pincode ? `(${company.pincode})` : ""}
                 </div>
               </div>
 
               <div>
                 <span className="text-slate-400 font-semibold uppercase text-[10px]">Registration Date</span>
                 <div className="text-xs text-slate-200 font-mono mt-0.5">
-                  {company.created_at ? new Date(company.created_at).toLocaleString() : "—"}
+                  {company.created_at ? new Date(company.created_at).toLocaleString() : "Not available"}
+                </div>
+              </div>
+
+              <div>
+                <span className="text-slate-400 font-semibold uppercase text-[10px]">Last Login</span>
+                <div className="text-xs text-slate-200 font-mono mt-0.5">
+                  {owner.last_login ? new Date(owner.last_login).toLocaleString() : "Not available"}
                 </div>
               </div>
             </div>
@@ -231,21 +269,28 @@ export default function CustomerDetail() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 font-mono">
-              <div className="p-3 bg-slate-900 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-[10px]">CURRENT PLAN</span>
-                <div className="text-lg font-bold text-white uppercase">{company.plan_id || "Starter"}</div>
-              </div>
-
-              <div className="p-3 bg-slate-900 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-[10px]">STATUS</span>
-                <div className="text-lg font-bold text-emerald-400 uppercase">{company.subscription_status || "Trialing"}</div>
-              </div>
-
-              <div className="p-3 bg-slate-900 rounded-xl border border-slate-800">
-                <span className="text-slate-400 text-[10px]">TRIAL / EXPIRY ENDS</span>
-                <div className="text-sm font-bold text-amber-300 mt-1">
-                  {company.trial_ends_at ? new Date(company.trial_ends_at).toLocaleDateString() : "—"}
+              <div className="p-4 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
+                <span className="text-slate-400 text-[10px] uppercase font-semibold">CURRENT PLAN</span>
+                <div className="pt-1">
+                  <PlanBadge planId={company.plan_id} size="md" />
                 </div>
+                <div className="text-[11px] text-slate-400 pt-1 font-sans">
+                  {company.plan_id === "pro" ? "₹9,999 / month" : company.plan_id === "growth" ? "₹5,999 / month" : "₹2,999 / month"}
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
+                <span className="text-slate-400 text-[10px] uppercase font-semibold">SUBSCRIPTION STATUS</span>
+                <div className="text-lg font-bold text-emerald-400 uppercase pt-1">{company.subscription_status || "Active"}</div>
+                <div className="text-[10px] text-slate-400 font-sans">Workspace Active</div>
+              </div>
+
+              <div className="p-4 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
+                <span className="text-slate-400 text-[10px] uppercase font-semibold">TRIAL / SUBSCRIPTION EXPIRY</span>
+                <div className="text-sm font-bold text-amber-300 pt-1">
+                  {company.trial_ends_at ? new Date(company.trial_ends_at).toLocaleDateString() : "No Expiry"}
+                </div>
+                <div className="text-[10px] text-slate-400 font-sans">Auto-Renewal Active</div>
               </div>
             </div>
           </Card>
@@ -346,17 +391,44 @@ export default function CustomerDetail() {
 
       {/* SUBSCRIPTION MODAL */}
       <Dialog open={subOpen} onOpenChange={setSubOpen}>
-        <DialogContent className="bg-slate-900 border-slate-800 text-white max-w-md">
-          <DialogHeader><DialogTitle>Edit Workspace Subscription</DialogTitle></DialogHeader>
-          <form onSubmit={handleSubSubmit} className="space-y-3 text-xs py-2">
+        <DialogContent className="bg-slate-950 border-slate-800 text-white max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-white flex items-center gap-2">
+              <CreditCard className="w-4 h-4 text-blue-400" /> Change Customer Plan & Subscription
+            </DialogTitle>
+          </DialogHeader>
+
+          <form onSubmit={handleSubSubmit} className="space-y-4 text-xs py-2">
+            {/* CONFIRMATION SUMMARY CARD */}
+            <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
+              <div className="text-[11px] text-slate-400">Customer Workspace</div>
+              <div className="font-bold text-white text-sm">{company.company_name}</div>
+              
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80">
+                <div>
+                  <div className="text-[10px] text-slate-400">Current Plan</div>
+                  <div className="pt-1"><PlanBadge planId={company.plan_id} /></div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-slate-400">Target New Plan</div>
+                  <div className="pt-1"><PlanBadge planId={subForm.plan_id} /></div>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-2.5 bg-amber-950/40 border border-amber-800/50 rounded-lg text-amber-300 text-[11px] flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <span>The change will update this customer's feature access, entitlements, and subscription state immediately.</span>
+            </div>
+
             <div>
-              <Label className="text-slate-300">Target Plan</Label>
+              <Label className="text-slate-300">Select Target Plan</Label>
               <Select value={subForm.plan_id} onValueChange={(v) => setSubForm({ ...subForm, plan_id: v })}>
-                <SelectTrigger className="mt-1 bg-slate-800 border-slate-700 text-white h-8"><SelectValue /></SelectTrigger>
-                <SelectContent className="bg-slate-800 text-white border-slate-700">
-                  <SelectItem value="starter">STARTER</SelectItem>
-                  <SelectItem value="growth">GROWTH</SelectItem>
-                  <SelectItem value="pro">PRO</SelectItem>
+                <SelectTrigger className="mt-1 bg-slate-900 border-slate-700 text-white h-9"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-slate-900 text-white border-slate-700">
+                  <SelectItem value="starter">STARTER (₹2,999 / mo)</SelectItem>
+                  <SelectItem value="growth">GROWTH (₹5,999 / mo)</SelectItem>
+                  <SelectItem value="pro">PRO (₹9,999 / mo)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -364,8 +436,8 @@ export default function CustomerDetail() {
             <div>
               <Label className="text-slate-300">Subscription Status</Label>
               <Select value={subForm.status} onValueChange={(v) => setSubForm({ ...subForm, status: v })}>
-                <SelectTrigger className="mt-1 bg-slate-800 border-slate-700 text-white h-8"><SelectValue /></SelectTrigger>
-                <SelectContent className="bg-slate-800 text-white border-slate-700">
+                <SelectTrigger className="mt-1 bg-slate-900 border-slate-700 text-white h-9"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-slate-900 text-white border-slate-700">
                   <SelectItem value="active">Active</SelectItem>
                   <SelectItem value="trialing">Trialing</SelectItem>
                   <SelectItem value="suspended">Suspended</SelectItem>
@@ -379,16 +451,31 @@ export default function CustomerDetail() {
               <Input
                 value={subForm.reason}
                 onChange={(e) => setSubForm({ ...subForm, reason: e.target.value })}
-                placeholder="e.g. Manual plan upgrade requested"
-                className="mt-1 bg-slate-800 border-slate-700 text-white h-8 text-xs"
+                placeholder="e.g. Upgrade requested by customer owner"
+                className="mt-1 bg-slate-900 border-slate-700 text-white h-9 text-xs"
                 required
               />
             </div>
 
-            <DialogFooter className="pt-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => setSubOpen(false)}>Cancel</Button>
-              <Button type="submit" size="sm" disabled={submittingSub} className="bg-blue-600 hover:bg-blue-700">
-                {submittingSub ? "Updating..." : "Save Subscription"}
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                type="checkbox"
+                id="notify_customer_check"
+                checked={notifyCustomer}
+                onChange={(e) => setNotifyCustomer(e.target.checked)}
+                className="rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-0"
+              />
+              <label htmlFor="notify_customer_check" className="text-[11px] text-slate-300 font-medium cursor-pointer">
+                Notify customer via in-app announcement
+              </label>
+            </div>
+
+            <DialogFooter className="pt-3 border-t border-slate-800">
+              <Button type="button" variant="outline" size="sm" onClick={() => setSubOpen(false)} className="border-slate-700 text-slate-300">
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={submittingSub} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
+                {submittingSub ? "Confirming..." : "Confirm Plan Change"}
               </Button>
             </DialogFooter>
           </form>

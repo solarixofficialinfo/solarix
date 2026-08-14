@@ -128,7 +128,15 @@ const buildCsvArrays = (text) => {
   return lines.map((line) => splitLine(line, delimiter));
 };
 
-export default function HighValueBulkImport({ open, onOpenChange, onImported, products = [] }) {
+const EMPTY_PRODUCTS = [];
+
+export default function HighValueBulkImport({ open, onOpenChange, onClose, onImported, onImportSuccess, products = EMPTY_PRODUCTS }) {
+  const handleOpenChange = (val) => {
+    if (onOpenChange) onOpenChange(val);
+    if (!val && onClose) onClose();
+  };
+  const handleImported = onImported || onImportSuccess;
+
   const [step, setStep] = useState("input");
   const [inputMode, setInputMode] = useState("text");
   const [rawText, setRawText] = useState("");
@@ -175,7 +183,8 @@ export default function HighValueBulkImport({ open, onOpenChange, onImported, pr
     } else {
       setProductsList(products);
     }
-  }, [open, products]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const loadRowsFromText = async (text) => {
     const arrays = buildCsvArrays(text);

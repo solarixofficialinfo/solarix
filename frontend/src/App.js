@@ -39,14 +39,18 @@ const Vendors = lazy(() => import("@/pages/Vendors"));
 const PurchaseOrders = lazy(() => import("@/pages/PurchaseOrders"));
 const Pricing = lazy(() => import("@/pages/Pricing"));
 
-// Control Center Lazy Imports
 const ControlCenterLayout = lazy(() => import("@/pages/ControlCenter/ControlCenterLayout"));
 const ControlCenterDashboard = lazy(() => import("@/pages/ControlCenter/ControlCenterDashboard"));
 const CustomerList = lazy(() => import("@/pages/ControlCenter/CustomerList"));
 const CustomerDetail = lazy(() => import("@/pages/ControlCenter/CustomerDetail"));
+const PlansEntitlements = lazy(() => import("@/pages/ControlCenter/PlansEntitlements"));
+const NotificationComposer = lazy(() => import("@/pages/ControlCenter/NotificationComposer"));
+const PerformanceAnalytics = lazy(() => import("@/pages/ControlCenter/PerformanceAnalytics"));
+const PageAnalytics = lazy(() => import("@/pages/ControlCenter/PageAnalytics"));
 const FeedbackInbox = lazy(() => import("@/pages/ControlCenter/FeedbackInbox"));
 const SystemHealth = lazy(() => import("@/pages/ControlCenter/SystemHealth"));
 const AuditLogs = lazy(() => import("@/pages/ControlCenter/AuditLogs"));
+const AdminSettings = lazy(() => import("@/pages/ControlCenter/AdminSettings"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const AdminMetrics = lazy(() => import("@/pages/AdminMetrics"));
 
@@ -120,11 +124,26 @@ function PermissionRoute({ page, children }) {
   return children;
 }
 
+function ProtectedAdmin({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-400 font-mono text-sm">
+        Authenticating Super Admin...
+      </div>
+    );
+  }
+  if (!user) return <Navigate to="/login" replace />;
+  const isSuperAdmin = user?.user_type === "platform_owner" || user?.user_type === "super_admin" || user?.is_platform_owner || user?.is_super_admin || user?.role === "Platform Owner" || user?.role === "Super Admin";
+  if (!isSuperAdmin) return <AccessDenied />;
+  return children;
+}
+
 function PlatformOwnerRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return null;
-  const isOwner = user?.user_type === "platform_owner" || user?.is_platform_owner || user?.role === "Platform Owner" || user?.user_type === "owner" || user?.role === "Admin" || user?.role === "Super Admin";
-  if (!isOwner) return <AccessDenied />;
+  const isSuperAdmin = user?.user_type === "platform_owner" || user?.user_type === "super_admin" || user?.is_platform_owner || user?.is_super_admin || user?.role === "Platform Owner" || user?.role === "Super Admin";
+  if (!isSuperAdmin) return <AccessDenied />;
   return children;
 }
 
@@ -210,23 +229,29 @@ function App() {
             <Route path="/vendors" element={<Protected><Vendors /></Protected>} />
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/billing" element={<Protected><Billing /></Protected>} />
-            <Route path="/admin/metrics" element={<Protected><AdminMetrics /></Protected>} />
             <Route path="/purchase-orders" element={<Protected><PermissionRoute page="sales_documents"><PurchaseOrders /></PermissionRoute></Protected>} />
-
-            {/* Level 1 SOLRIX Control Center Routes */}
-            <Route path="/control-center" element={<Protected><PlatformOwnerRoute><ControlCenterLayout /></PlatformOwnerRoute></Protected>}>
+            {/* Level 1 SOLARIX Control Center Routes — Dedicated Full-Screen Admin Shell */}
+            <Route path="/admin/metrics" element={<ProtectedAdmin><AdminMetrics /></ProtectedAdmin>} />
+            <Route path="/admin" element={<Navigate to="/control-center" replace />} />
+            <Route path="/admin/*" element={<Navigate to="/control-center" replace />} />
+            <Route path="/control-center" element={<ProtectedAdmin><ControlCenterLayout /></ProtectedAdmin>}>
               <Route index element={<Navigate to="/control-center/dashboard" replace />} />
               <Route path="dashboard" element={<ControlCenterDashboard />} />
               <Route path="customers" element={<CustomerList />} />
               <Route path="customers/:id" element={<CustomerDetail />} />
-              <Route path="subscriptions" element={<CustomerList />} />
-              <Route path="features" element={<CustomerList />} />
-              <Route path="analytics" element={<ControlCenterDashboard />} />
+              <Route path="plans" element={<PlansEntitlements />} />
+              <Route path="notifications" element={<NotificationComposer />} />
               <Route path="feedback" element={<FeedbackInbox />} />
-              <Route path="notifications" element={<ControlCenterDashboard />} />
-              <Route path="health" element={<SystemHealth />} />
+              <Route path="performance" element={<PerformanceAnalytics />} />
+              <Route path="pages" element={<PageAnalytics />} />
+              <Route path="metrics" element={<AdminMetrics />} />
               <Route path="audit-logs" element={<AuditLogs />} />
-              <Route path="settings" element={<ControlCenterDashboard />} />
+              <Route path="settings" element={<AdminSettings />} />
+              {/* Legacy aliases for backward compatibility */}
+              <Route path="subscriptions" element={<PlansEntitlements />} />
+              <Route path="features" element={<PlansEntitlements />} />
+              <Route path="analytics" element={<PerformanceAnalytics />} />
+              <Route path="health" element={<AdminSettings />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

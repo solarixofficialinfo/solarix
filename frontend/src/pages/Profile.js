@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Upload, FileText, Building2, Image as ImageIcon } from "lucide-react";
+import LocationAutoFill from "@/components/LocationAutoFill";
 
 const DOC_TYPES = [
   { key: "company_profile_pdf", label: "Company Profile PDF" },
@@ -119,10 +120,15 @@ export default function Profile() {
                   </SelectContent>
                 </Select>
               </F>
-              <F label="Address" full><Input value={form.address || ""} onChange={set("address")} /></F>
-              <F label="City"><Input value={form.city || ""} onChange={set("city")} /></F>
-              <F label="State"><Input value={form.state || ""} onChange={set("state")} /></F>
-              <F label="Pincode"><Input value={form.pincode || ""} onChange={set("pincode")} /></F>
+              <F label="Street Address / Landmark" full><Input value={form.address || ""} onChange={set("address")} /></F>
+              <div className="col-span-full">
+                <LocationAutoFill
+                  city={form.city || ""}
+                  state={form.state || ""}
+                  pincode={form.pincode || ""}
+                  onChange={({ city, state, pincode }) => setForm({ ...form, city, state, pincode })}
+                />
+              </div>
             </div>
             <div className="mt-5 flex justify-end">
               <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="save-profile-btn">{saving ? "Saving…" : "Save Profile"}</Button>

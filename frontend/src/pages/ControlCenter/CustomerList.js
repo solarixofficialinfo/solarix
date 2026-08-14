@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Search, Building2, User, Phone, Mail, Calendar, Eye, Filter, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import PlanBadge from "@/components/PlanBadge";
 
 export default function CustomerList() {
   const [customers, setCustomers] = useState([]);
@@ -130,9 +131,7 @@ export default function CustomerList() {
                     <div className="text-[11px] text-slate-400 font-mono">{c.email}</div>
                   </td>
                   <td className="px-4 py-3">
-                    <Badge variant="outline" className="bg-blue-500/10 text-blue-300 border-blue-500/30 uppercase font-mono text-[10px]">
-                      {c.plan_id}
-                    </Badge>
+                    <PlanBadge planId={c.plan_id} />
                   </td>
                   <td className="px-4 py-3">
                     <Badge

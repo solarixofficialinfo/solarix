@@ -226,7 +226,28 @@ const getRowReferenceValue = (row, refType, mode) => {
   }
 };
 
-export default function ManualBulkImport({ open, onOpenChange, onImported, mode = "inward", products = [] }) {
+const EMPTY_PRODUCTS = [];
+
+export default function ManualBulkImport({
+  open,
+  onOpenChange,
+  onClose,
+  onImported,
+  onImportSuccess,
+  mode: propMode,
+  type,
+  products = EMPTY_PRODUCTS,
+}) {
+  const mode = propMode || type || "inward";
+  const handleOpenChange = useCallback(
+    (val) => {
+      if (onOpenChange) onOpenChange(val);
+      if (!val && onClose) onClose();
+    },
+    [onOpenChange, onClose]
+  );
+  const handleImported = onImported || onImportSuccess;
+
   const cfg = MODE_CONFIG[mode] || MODE_CONFIG.inward;
   const [step, setStep] = useState("input");
   const [inputMode, setInputMode] = useState("text");
@@ -302,7 +323,8 @@ export default function ManualBulkImport({ open, onOpenChange, onImported, mode 
     } else {
       setProductsList(products);
     }
-  }, [open, products, resetState]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const matchProduct = (name, size) => {
     if (!name) return "empty";
@@ -553,10 +575,10 @@ export default function ManualBulkImport({ open, onOpenChange, onImported, mode 
         setImportProgress(100);
 
         // 1. Inventory refresh completed first (await parent data reload)
-        if (onImported) {
+        if (handleImported) {
           try {
-            console.log("[IMPORT] refreshing inventory data via onImported...");
-            await Promise.resolve(onImported());
+            console.log("[IMPORT] refreshing inventory data via handleImported...");
+            await Promise.resolve(handleImported());
             console.log("[IMPORT] inventory refresh completed");
           } catch (refreshErr) {
             console.error("[IMPORT] Post-import refresh error:", refreshErr);
@@ -570,7 +592,7 @@ export default function ManualBulkImport({ open, onOpenChange, onImported, mode 
         resetState();
 
         // 4. Automatically close modal cleanly
-        onOpenChange?.(false);
+        handleOpenChange(false);
         return;
       } else {
         setStep("review");
@@ -600,7 +622,7 @@ export default function ManualBulkImport({ open, onOpenChange, onImported, mode 
   const clientOptions = clients.map((client) => client.full_name).filter(Boolean);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-7xl w-full h-[95vh] flex flex-col p-0 overflow-hidden">
         <DialogHeader className="px-6 py-4 border-b border-slate-200 flex flex-row items-center justify-between shrink-0">
           <div>
@@ -953,7 +975,7 @@ export default function ManualBulkImport({ open, onOpenChange, onImported, mode 
         <DialogFooter className="px-6 py-4 border-t flex flex-wrap gap-2 justify-end shrink-0">
           {step === "input" && (
             <>
-              <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button variant="outline" onClick={() => handleOpenChange(false)}>Cancel</Button>
               <Button onClick={handleParse} disabled={processing}>{processing ? "Parsing…" : "Parse rows"}</Button>
             </>
           )}
@@ -970,7 +992,7 @@ export default function ManualBulkImport({ open, onOpenChange, onImported, mode 
             </>
           )}
           {step === "done" && (
-            <Button onClick={() => onOpenChange(false)}>Close</Button>
+            <Button onClick={() => handleOpenChange(false)}>Close</Button>
           )}
         </DialogFooter>
       </DialogContent>

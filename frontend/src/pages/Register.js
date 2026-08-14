@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "sonner";
 import { formatApiError } from "@/lib/api";
 import { Sun, ArrowLeft, Building2, User, Phone, Mail, Lock, MapPin, CheckCircle2 } from "lucide-react";
+import LocationAutoFill from "@/components/LocationAutoFill";
 
 export default function Register() {
   const { register } = useAuth();
@@ -75,8 +76,12 @@ export default function Register() {
         pincode: form.pincode,
         business_type: form.business_type
       };
-      await register(payload);
-      toast.success("Vendor account created successfully!");
+      const res = await register(payload);
+      if (res?.resumed) {
+        toast.success("Registration completed successfully!");
+      } else {
+        toast.success("Vendor account created successfully!");
+      }
       nav("/dashboard");
     } catch (err) {
       toast.error(formatApiError(err));
@@ -96,7 +101,7 @@ export default function Register() {
             </div>
             <div>
               <span className="font-bold tracking-tight text-base text-slate-900 font-mono" style={{ fontFamily: "Outfit" }}>
-                SOLRIX WORK
+                SOLARIX
               </span>
               <span className="block text-[10px] font-semibold text-slate-500 uppercase tracking-widest">
                 GVP Solar Energy Vendor Portal
@@ -275,7 +280,7 @@ export default function Register() {
 
                 <div className="space-y-3 text-xs">
                   <div>
-                    <Label className="text-xs font-semibold text-slate-700">Address</Label>
+                    <Label className="text-xs font-semibold text-slate-700">Street Address / Landmark</Label>
                     <Input
                       value={form.address}
                       onChange={set("address")}
@@ -284,35 +289,12 @@ export default function Register() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                      <Label className="text-xs font-semibold text-slate-700">City</Label>
-                      <Input
-                        value={form.city}
-                        onChange={set("city")}
-                        placeholder="City"
-                        className="mt-1 text-xs h-9 bg-white border-slate-200 focus:border-blue-600"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs font-semibold text-slate-700">State</Label>
-                      <Input
-                        value={form.state}
-                        onChange={set("state")}
-                        placeholder="State"
-                        className="mt-1 text-xs h-9 bg-white border-slate-200 focus:border-blue-600"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs font-semibold text-slate-700">Pincode</Label>
-                      <Input
-                        value={form.pincode}
-                        onChange={set("pincode")}
-                        placeholder="6-digit pincode"
-                        className="mt-1 text-xs h-9 bg-white border-slate-200 font-mono focus:border-blue-600"
-                      />
-                    </div>
-                  </div>
+                  <LocationAutoFill
+                    city={form.city}
+                    state={form.state}
+                    pincode={form.pincode}
+                    onChange={({ city, state, pincode }) => setForm({ ...form, city, state, pincode })}
+                  />
                 </div>
               </div>
 
@@ -331,7 +313,7 @@ export default function Register() {
                   className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-6 h-10 shadow-sm rounded-xl"
                   data-testid="vendor-submit-btn"
                 >
-                  {loading ? "Creating Vendor Account..." : "Create Vendor Account"}
+                  {loading ? "Creating your workspace..." : "Create Vendor Account"}
                 </Button>
               </div>
             </form>

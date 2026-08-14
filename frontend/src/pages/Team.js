@@ -491,7 +491,7 @@ export default function Team() {
                       type="email"
                       value={form.email}
                       onChange={(e) => setForm({ ...form, email: e.target.value })}
-                      placeholder="e.g. rahul@solrix.com"
+                      placeholder="e.g. rahul@solarix.com"
                       className="mt-1 h-9 text-xs font-mono"
                       required
                     />

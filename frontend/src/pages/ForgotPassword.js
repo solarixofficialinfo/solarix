@@ -84,7 +84,7 @@ export default function ForgotPassword() {
       <div className="w-full max-w-md">
         <div className="flex items-center justify-center gap-2 mb-6">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 text-white flex items-center justify-center"><Sun className="w-5 h-5" /></div>
-          <div className="text-xl font-semibold text-slate-900" style={{ fontFamily: "Outfit" }}>SOLRIX WORK</div>
+          <div className="text-xl font-semibold text-slate-900" style={{ fontFamily: "Outfit" }}>SOLARIX</div>
         </div>
 
         <Card className="border-slate-200 shadow-lg" data-testid="forgot-password-card">

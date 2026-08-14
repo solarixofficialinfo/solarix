@@ -477,7 +477,7 @@ def _normalize_po_document_data(data: dict, company: dict) -> dict:
     if not isinstance(company, dict):
         company = {}
 
-    comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "SOLRIX WORK").strip()
+    comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "SOLARIX").strip()
     comp_gst = (company.get("gst_number") or company.get("gstin") or company.get("gst") or "").strip()
     comp_addr = (company.get("address") or company.get("address_line_1") or company.get("office_address") or "").strip()
     comp_phone = (company.get("mobile") or company.get("mobile_number") or company.get("phone") or company.get("phone_number") or "").strip()

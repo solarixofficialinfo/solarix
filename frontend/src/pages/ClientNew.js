@@ -11,6 +11,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { ArrowLeft, Upload, FileText, X, Plus, Trash2, DollarSign, Landmark, Layers } from "lucide-react";
+import LocationAutoFill from "@/components/LocationAutoFill";
 
 export default function ClientNew() {
   const nav = useNavigate();
@@ -303,10 +304,15 @@ export default function ClientNew() {
               <F label="Mobile *"><Input value={form.mobile} onChange={set("mobile")} required data-testid="client-mobile" /></F>
               <F label="Alternate Mobile"><Input value={form.alt_mobile} onChange={set("alt_mobile")} /></F>
               <F label="Consumer Number"><Input value={form.consumer_number} onChange={set("consumer_number")} data-testid="client-consumer" /></F>
-              <F label="Address" full><Input value={form.address} onChange={set("address")} /></F>
-              <F label="City"><Input value={form.city} onChange={set("city")} /></F>
-              <F label="State"><Input value={form.state} onChange={set("state")} /></F>
-              <F label="Pincode"><Input value={form.pincode} onChange={set("pincode")} /></F>
+              <F label="Street Address / Landmark" full><Input value={form.address} onChange={set("address")} placeholder="Building, Street, Landmark" /></F>
+              <div className="col-span-full">
+                <LocationAutoFill
+                  city={form.city}
+                  state={form.state}
+                  pincode={form.pincode}
+                  onChange={({ city, state, pincode }) => setForm({ ...form, city, state, pincode })}
+                />
+              </div>
               <F label="Consumer Category">
                 <Select value={form.consumer_type} onValueChange={(v) => setForm({ ...form, consumer_type: v })}>
                   <SelectTrigger><SelectValue placeholder="Select Category" /></SelectTrigger>

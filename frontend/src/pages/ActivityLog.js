@@ -66,7 +66,7 @@ export default function ActivityLog() {
     <div className="space-y-6 max-w-4xl">
       <PageHeader
         title="Activity Log"
-        subtitle="Audit trail of actions taken across the SOLRIX WORK platform by team members."
+        subtitle="Audit trail of actions taken across the SOLARIX platform by team members."
       />
 
       <div className="flex items-center gap-2 flex-wrap">

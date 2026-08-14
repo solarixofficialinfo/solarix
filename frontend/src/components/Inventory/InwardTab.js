@@ -790,7 +790,14 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
 
       {/* Manual Bulk Import Modal */}
       {manualOpen && (
-        <ManualBulkImport open={manualOpen} onClose={() => setManualOpen(false)} type="inward" onImportSuccess={() => { refetchInward(); onChanged?.(); }} />
+        <ManualBulkImport
+          open={manualOpen}
+          onOpenChange={setManualOpen}
+          onClose={() => setManualOpen(false)}
+          mode="inward"
+          products={products}
+          onImported={() => { refetchInward(); onChanged?.(); }}
+        />
       )}
     </div>
   );

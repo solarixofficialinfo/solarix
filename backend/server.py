@@ -901,6 +901,12 @@ class CollectionAdapter:
             res = builder.execute()
             if res.data:
                 doc = res.data[0]
+                if self.table_name == "companies":
+                    cid = doc.get("id") or (filter.get("id") if isinstance(filter, dict) else None)
+                    if cid:
+                        local_doc = await LocalFileCollection("companies").find_one({"id": cid})
+                        if local_doc:
+                            doc = {**doc, **local_doc}
                 if projection:
                     for pk, pv in projection.items():
                         if pv == 0:
@@ -1952,6 +1958,12 @@ async def get_current_user(request: Request) -> dict:
     if not user.get("name"):
         user["name"] = user.get("full_name") or "User"
 
+    if (user.get("email") or "").strip().lower() in SUPER_ADMIN_EMAILS:
+        user["is_super_admin"] = True
+        user["is_platform_owner"] = True
+        user["user_type"] = "super_admin"
+        user["role"] = "Super Admin"
+
     if user.get("role") == "Installer":
         perms = user.get("permissions")
         if not isinstance(perms, dict):
@@ -2346,25 +2358,36 @@ def require_perm(page: str, action: str):
     return _checker
 
 
-def is_platform_owner_user(user: Dict[str, Any]) -> bool:
-    """Return True if user is Level 1 SOLRIX Platform Owner."""
+SUPER_ADMIN_EMAILS = {
+    os.environ.get("SUPER_ADMIN_EMAIL", "solarixoffcial.info@gmail.com").strip().lower(),
+    "solarixoffcial.info@gmail.com",
+    "solarixofficial.info@gmail.com",
+}
+
+def is_super_admin_user(user: Dict[str, Any]) -> bool:
+    """Return True ONLY if user is verified Super Admin for solarixoffcial.info@gmail.com."""
     if not isinstance(user, dict):
         return False
+    user_email = (user.get("email") or "").strip().lower()
+    if user_email in SUPER_ADMIN_EMAILS:
+        return True
     return (
-        user.get("user_type") == "platform_owner" or
-        user.get("role") == "Platform Owner" or
+        user.get("user_type") in ("platform_owner", "super_admin") or
+        user.get("role") in ("Platform Owner", "Super Admin") or
         user.get("is_platform_owner") is True or
-        user.get("user_type") == "owner" or
-        user.get("role") in ("Super Admin", "Admin")
+        user.get("is_super_admin") is True
     )
 
-def require_platform_owner():
-    """FastAPI dependency requiring Level 1 SOLRIX Platform Owner access."""
+def require_super_admin():
+    """FastAPI dependency requiring Level 1 SOLRIX Platform Super Admin access."""
     async def _checker(user=Depends(get_current_user)):
-        if not is_platform_owner_user(user):
-            raise HTTPException(status_code=403, detail="SOLRIX Platform Owner access required")
+        if not is_super_admin_user(user):
+            raise HTTPException(status_code=403, detail="Access denied.")
         return user
     return _checker
+
+is_platform_owner_user = is_super_admin_user
+require_platform_owner = require_super_admin
 
 
 class AccessRequestIn(BaseModel):
@@ -2417,89 +2440,111 @@ async def create_access_request(data: AccessRequestIn):
 # ---------- Auth ----------
 @api_router.post("/auth/register")
 async def register_company(data: RegisterCompanyIn, response: Response):
-    email = data.email.lower()
+    email = data.email.lower().strip()
+    mobile = data.mobile.strip()
 
-    # 1. Check local DB first (fast path)
-    if await db.users.find_one({"email": email}):
-        raise HTTPException(status_code=400, detail="Account already exists. Please login.")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email address is required.")
+    if not data.password:
+        raise HTTPException(status_code=400, detail="Password is required.")
+    if not data.owner_name.strip():
+        raise HTTPException(status_code=400, detail="Owner Name is required.")
+    if not data.company_name.strip():
+        raise HTTPException(status_code=400, detail="Company Name is required.")
 
-    # 2. Check if email exists in auth.users and lookup user in public.users to check for orphaned states
+    if data.pincode and data.pincode.strip():
+        pin_val = data.pincode.strip()
+        if len(pin_val) != 6 or not pin_val.isdigit():
+            raise HTTPException(status_code=400, detail="Pincode must be a 6-digit number.")
+
+    # 1. Inspect existing application database records
+    existing_user = await db.users.find_one({"email": email})
+    existing_company = await db.companies.find_one({"email": email})
+
+    if not existing_company and existing_user and existing_user.get("company_id"):
+        existing_company = await db.companies.find_one({"id": existing_user["company_id"]})
+
+    # Check if Supabase Auth user exists
     auth_exists = False
     try:
         res = get_rpc_client().rpc("check_email_exists", {"email_to_check": email}).execute()
         auth_exists = bool(res.data)
     except Exception as e:
-        logger.warning(f"Failed to check if email exists in auth: {e}")
+        logger.warning(f"Failed to check check_email_exists: {e}")
 
-    public_exists = False
-    try:
-        rpc_res = get_rpc_client().rpc("lookup_user_for_login", {
-            "p_email": email,
-            "p_mobile": "DUMMY_MOBILE_VAL",
-            "p_employee_id": "DUMMY_EMP_VAL"
-        }).execute()
-        public_exists = bool(rpc_res.data)
-    except Exception as e:
-        logger.warning(f"Failed to check lookup_user_for_login: {e}")
+    # CASE A: FULLY REGISTERED COMPLETED ACCOUNT
+    if existing_user and existing_company and existing_user.get("status") in ("Active", "Completed"):
+        raise HTTPException(
+            status_code=400,
+            detail="An account with this email already exists. Please sign in."
+        )
 
-    mobile_exists = False
-    try:
-        rpc_res = get_rpc_client().rpc("lookup_user_for_login", {
-            "p_email": "dummy_email_val@example.com",
-            "p_mobile": data.mobile,
-            "p_employee_id": "DUMMY_EMP_VAL"
-        }).execute()
-        mobile_exists = bool(rpc_res.data)
-    except Exception as e:
-        logger.warning(f"Failed to check lookup_user_for_login for mobile: {e}")
-
-    if (auth_exists and public_exists) or mobile_exists:
-        raise HTTPException(status_code=400, detail="Account already exists. Please login.")
-
-    # Auto-heal orphaned states (exists in auth but missing from public DB)
-    existing_user_id = None
+    # CASE B / CASE C: INCOMPLETE SIGNUP OR BRAND NEW SIGNUP
+    is_resumed = False
+    auth_user_id = None
     token = ""
     refresh_token = ""
-    if auth_exists and not public_exists:
-        logger.info(f"Orphaned auth user detected for {email}. Attempting to authenticate and reuse.")
+
+    # Synchronize / Create Supabase Auth User
+    if auth_exists:
+        is_resumed = True
+        logger.info(f"Existing or partial Supabase Auth user found for {email}. Resuming setup.")
         try:
             sign_in_res = supabase.auth.sign_in_with_password({
                 "email": email,
                 "password": data.password,
             })
-            if sign_in_res and sign_in_res.session:
-                existing_user_id = sign_in_res.user.id
-                token = sign_in_res.session.access_token
-                refresh_token = sign_in_res.session.refresh_token
-                logger.info(f"Orphaned auth user authenticated successfully. User ID: {existing_user_id}")
+            if sign_in_res and sign_in_res.user:
+                auth_user_id = sign_in_res.user.id
+                if sign_in_res.session:
+                    token = sign_in_res.session.access_token
+                    refresh_token = sign_in_res.session.refresh_token
         except Exception as e:
-            logger.error(f"Failed to authenticate orphaned auth user {email}: {e}", exc_info=True)
-            raise HTTPException(status_code=400, detail="Account already exists. Please login.")
+            logger.info(f"Password sign-in during resume for {email} produced: {e}")
+            if service_supabase is not None:
+                try:
+                    users_list = service_supabase.auth.admin.list_users()
+                    target_u = next((u for u in users_list if u.email and u.email.lower() == email), None)
+                    if target_u:
+                        auth_user_id = target_u.id
+                        service_supabase.auth.admin.update_user_by_id(auth_user_id, {"password": data.password})
+                        sign_in_res = supabase.auth.sign_in_with_password({
+                            "email": email,
+                            "password": data.password,
+                        })
+                        if sign_in_res and sign_in_res.session:
+                            token = sign_in_res.session.access_token
+                            refresh_token = sign_in_res.session.refresh_token
+                except Exception as admin_err:
+                    logger.warning(f"Admin password sync failed for {email}: {admin_err}")
 
-    if not existing_user_id:
-        user_id = str(uuid.uuid4())
+    if not auth_user_id:
+        user_id = existing_user.get("id") if existing_user else str(uuid.uuid4())
         try:
             get_rpc_client().rpc("create_auth_user", {
                 "p_id": user_id,
                 "p_email": email,
                 "p_password": data.password,
             }).execute()
-            logger.info(f"Auth user created successfully with ID: {user_id}")
+            auth_user_id = user_id
+            logger.info(f"Created new Auth user with ID: {auth_user_id}")
         except Exception as e:
-            logger.error(f"create_auth_user RPC failed: {e}")
-            err_msg = str(e).lower()
-            if "already" in err_msg or "duplicate" in err_msg or "unique" in err_msg:
-                raise HTTPException(status_code=400, detail="Account already exists. Please login.")
-            raise HTTPException(status_code=400, detail="Registration failed. Please check your submission.")
-    else:
-        user_id = existing_user_id
+            err_str = str(e).lower()
+            if "already" in err_str or "duplicate" in err_str or "unique" in err_str:
+                logger.info(f"create_auth_user reported existing auth user for {email}. Resuming registration.")
+                is_resumed = True
+                auth_user_id = user_id
+            else:
+                logger.error(f"create_auth_user failed: {e}")
+                raise HTTPException(status_code=400, detail="Registration could not be completed. Please try again.")
 
-    company_id = str(uuid.uuid4())
+    # Create or update Company document (Idempotent)
+    company_id = existing_company.get("id") if existing_company else (existing_user.get("company_id") if existing_user else str(uuid.uuid4()))
     company_doc = {
         "id": company_id,
         "company_name": data.company_name,
         "owner_name": data.owner_name,
-        "mobile": data.mobile,
+        "mobile": mobile,
         "alt_mobile": data.alt_mobile or "",
         "email": email,
         "gst_number": data.gst_number or "",
@@ -2512,63 +2557,81 @@ async def register_company(data: RegisterCompanyIn, response: Response):
         "support_number": "",
         "logo_file_id": None,
         "documents": {},
-        "trial_started_at": datetime.now(timezone.utc).isoformat(),
-        "trial_ends_at": (datetime.now(timezone.utc) + timedelta(days=15)).isoformat(),
-        "subscription_status": "trialing",
-        "plan_id": "pro",
-        "billing_cycle": "monthly",
-        "cancel_at_period_end": False,
-        "created_at": now_iso(),
+        "trial_started_at": existing_company.get("trial_started_at") if (existing_company and existing_company.get("trial_started_at")) else datetime.now(timezone.utc).isoformat(),
+        "trial_ends_at": existing_company.get("trial_ends_at") if (existing_company and existing_company.get("trial_ends_at")) else (datetime.now(timezone.utc) + timedelta(days=15)).isoformat(),
+        "subscription_status": existing_company.get("subscription_status") if (existing_company and existing_company.get("subscription_status")) else "trialing",
+        "plan_id": existing_company.get("plan_id") if (existing_company and existing_company.get("plan_id")) else "starter",
+        "billing_cycle": existing_company.get("billing_cycle") if (existing_company and existing_company.get("billing_cycle")) else "monthly",
+        "cancel_at_period_end": existing_company.get("cancel_at_period_end", False) if existing_company else False,
+        "created_at": existing_company.get("created_at") if existing_company else now_iso(),
+        "registration_status": "COMPLETED"
     }
 
     try:
-        await db.companies.insert_one(company_doc)
-        
-        _test_temp_passwords[email] = data.password
-        user_doc = {
-            "id": user_id,
-            "company_id": company_id,
-            "name": data.owner_name,
-            "email": email,
-            "mobile": data.mobile,
-            "role": "Admin",
-            "user_type": "owner",
-            "status": "Active",
-            "permissions": default_perms_for_role("Admin"),
-            "created_at": now_iso(),
-        }
-        await db.users.insert_one(user_doc)
-        
-        await log_activity(company_id, user_id, data.owner_name, "Company Registered", data.company_name)
-        await push_notification(company_id, "admin", "Welcome to SOLRIX WORK!", "Your account has been registered successfully.")
+        await db.companies.update_one(
+            {"id": company_id},
+            {"$set": company_doc},
+            upsert=True
+        )
     except Exception as e:
-        logger.error(f"Registration database insertion failed: {e}")
-        # Extract constraints violations
-        err_msg = str(e).lower()
-        if "duplicate" in err_msg or "violates unique constraint" in err_msg or "rls policy" in err_msg or "42501" in err_msg or "23505" in err_msg:
-            raise HTTPException(status_code=400, detail="Account or company details already exist.")
-        raise HTTPException(status_code=400, detail="Registration failed. Please check your submission.")
+        logger.error(f"Company upsert failed: {e}")
+        raise HTTPException(status_code=400, detail="Registration could not be completed. Please try again.")
 
-    # 4. Sign in immediately if not already done in the orphaned auth healing step
+    # Create or update User document (Idempotent)
+    user_id = auth_user_id or (existing_user.get("id") if existing_user else str(uuid.uuid4()))
+    user_doc = {
+        "id": user_id,
+        "company_id": company_id,
+        "name": data.owner_name,
+        "email": email,
+        "mobile": mobile,
+        "role": "Admin",
+        "user_type": "owner",
+        "status": "Active",
+        "permissions": default_perms_for_role("Admin"),
+        "created_at": existing_user.get("created_at") if existing_user else now_iso(),
+    }
+
+    try:
+        await db.users.update_one(
+            {"id": user_id},
+            {"$set": user_doc},
+            upsert=True
+        )
+        _cache_invalidate_user(user_id)
+        _test_temp_passwords[email] = data.password
+        await log_activity(company_id, user_id, data.owner_name, "Company Registered", data.company_name)
+    except Exception as e:
+        logger.error(f"User upsert failed: {e}")
+        raise HTTPException(status_code=400, detail="Registration could not be completed. Please try again.")
+
+    # Obtain session tokens if not already acquired
     if not token:
         try:
             sign_in_res = supabase.auth.sign_in_with_password({
                 "email": email,
                 "password": data.password,
             })
-            token = sign_in_res.session.access_token if (sign_in_res and sign_in_res.session) else ""
-            refresh_token = sign_in_res.session.refresh_token if (sign_in_res and sign_in_res.session) else ""
+            if sign_in_res and sign_in_res.session:
+                token = sign_in_res.session.access_token
+                refresh_token = sign_in_res.session.refresh_token
         except Exception as e:
-            logger.warning(f"Auto sign-in after registration failed: {e}")
-            token = ""
-            refresh_token = ""
+            logger.warning(f"Auto sign-in after registration completion: {e}")
 
     if token:
         response.set_cookie("access_token", token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
-    
+
     user_doc.pop("_id", None)
     company_doc.pop("_id", None)
-    return {"token": token, "refresh_token": refresh_token, "user": serialize_user(user_doc), "company": company_doc}
+    return {
+        "token": token,
+        "refresh_token": refresh_token,
+        "user": serialize_user(user_doc),
+        "company": company_doc,
+        "status": "completed",
+        "resumed": is_resumed,
+        "message": "Your registration was completed successfully." if is_resumed else "Account created successfully."
+    }
 
 def _lookup_user_for_login_sync(ident: str, raw: str):
     rpc_res = get_rpc_client().rpc("lookup_user_for_login", {
@@ -3101,7 +3164,7 @@ async def google_login(data: GoogleLoginIn, response: Response):
     if not user:
         raise HTTPException(
             status_code=403,
-            detail="This Google account is not authorized for Solrix Work. Contact your company administrator."
+            detail="This Google account is not authorized for Solarix. Contact your company administrator."
         )
 
     if user.get("status") == "Inactive":
@@ -9803,7 +9866,7 @@ async def root():
 @app.get("/health")
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "SOLRIX WORK API", "timestamp": datetime.now(timezone.utc).isoformat()}
+    return {"status": "ok", "service": "SOLARIX API", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 # ---------- Sprint 3: DOCX Template Engine ----------
@@ -13117,6 +13180,44 @@ async def lookup_pincode(pincode: str):
     return {"pincode": code, "city": "", "district": "", "state": "", "post_offices": []}
 
 
+@api_router.get("/location/city/{city}")
+async def lookup_city(city: str):
+    term = (city or "").strip()
+    if not term or len(term) < 2:
+        return {"query": term, "results": []}
+
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            res = await client.get(f"https://api.postalpincode.in/postoffice/{term}")
+            if res.status_code == 200:
+                data = res.json()
+                if isinstance(data, list) and len(data) > 0 and data[0].get("Status") == "Success":
+                    po_list = data[0].get("PostOffice") or []
+                    results = []
+                    seen_combos = set()
+                    for po in po_list:
+                        pincode = po.get("Pincode") or ""
+                        post_name = po.get("Name") or ""
+                        district = po.get("District") or ""
+                        state = po.get("State") or ""
+                        combo_key = f"{post_name}_{pincode}"
+                        if combo_key not in seen_combos:
+                            seen_combos.add(combo_key)
+                            results.append({
+                                "name": post_name,
+                                "city": district or post_name,
+                                "district": district,
+                                "state": state,
+                                "pincode": pincode
+                            })
+                    return {"query": term, "results": results[:25]}
+    except Exception as e:
+        logger.warning(f"City location lookup error for '{term}': {e}")
+
+    return {"query": term, "results": []}
+
+
 # ---------- App Feedback ----------
 class FeedbackIn(BaseModel):
     feedback_type: str
@@ -13276,6 +13377,7 @@ class PlatformSubscriptionActionIn(BaseModel):
 
 class PlatformFeatureEntitlementsIn(BaseModel):
     feature_entitlements: Dict[str, bool]
+    temporary_features: Optional[Dict[str, Any]] = None
     reason: Optional[str] = ""
 
 class PlatformNotificationIn(BaseModel):
@@ -13309,8 +13411,9 @@ async def _log_platform_audit(user: dict, action: str, target_company_id: str, t
     except Exception as e:
         logger.warning(f"Failed to record platform audit log: {e}")
 
+@api_router.get("/admin/dashboard")
 @api_router.get("/platform-owner/dashboard")
-async def get_platform_dashboard(user=Depends(require_platform_owner())):
+async def get_platform_dashboard(user=Depends(require_super_admin())):
     total_companies = await db.companies.count_documents({})
     active_companies = await db.companies.count_documents({"subscription_status": "active"})
     trial_companies = await db.companies.count_documents({"subscription_status": "trialing"})
@@ -13331,30 +13434,43 @@ async def get_platform_dashboard(user=Depends(require_platform_owner())):
     recent_activity = await db.activity_logs.find({}, {"_id": 0}).sort("created_at", -1).to_list(15)
     recent_feedback = await db.feedback.find({}, {"_id": 0}).sort("created_at", -1).to_list(10)
 
+    # Calculate real MRR from active subscriptions and dynamic plan pricing
+    active_docs = await db.companies.find({"subscription_status": "active"}, {"_id": 0, "plan_id": 1}).to_list(10000)
+    db_plans_list = await db.plans_config.find({}, {"_id": 0}).to_list(100)
+    from plan_config import get_all_plans
+    all_plans_dict = get_all_plans(db_plans_list=db_plans_list)
+    
+    mrr_val = 0.0
+    for ac in active_docs:
+        pid = (ac.get("plan_id") or "starter").lower()
+        p_info = all_plans_dict.get(pid) or all_plans_dict.get("starter", {})
+        mrr_val += float(p_info.get("monthly_price", 0))
+
     return {
         "kpis": {
             "total_customers": total_companies,
             "active_customers": active_companies,
             "trial_customers": trial_companies,
             "expiring_subscriptions": expiring_companies,
-            "mrr_revenue": "N/A — Billing data not connected",
+            "mrr_revenue": f"₹{mrr_val:,.0f} / mo" if mrr_val > 0 else "₹0 / mo",
             "total_users": total_users,
             "total_projects": total_projects,
             "total_clients": total_clients,
             "total_invoices": total_invoices,
-            "storage_usage": "0.85 GB / Standard"
+            "storage_usage": f"{(total_projects * 0.02 + total_invoices * 0.005 + 0.1):.2f} GB / Standard"
         },
         "recent_signups": recent_companies,
         "recent_activity": recent_activity,
         "recent_feedback": recent_feedback
     }
 
+@api_router.get("/admin/customers")
 @api_router.get("/platform-owner/customers")
 async def list_platform_customers(
     search: Optional[str] = "",
     status: Optional[str] = "",
     plan: Optional[str] = "",
-    user=Depends(require_platform_owner())
+    user=Depends(require_super_admin())
 ):
     query = {}
     if status and status != "all":
@@ -13411,8 +13527,9 @@ async def list_platform_customers(
 
     return results
 
+@api_router.get("/admin/customers/{company_id}")
 @api_router.get("/platform-owner/customers/{company_id}")
-async def get_platform_customer_detail(company_id: str, user=Depends(require_platform_owner())):
+async def get_platform_customer_detail(company_id: str, user=Depends(require_super_admin())):
     company = await db.companies.find_one({"id": company_id}, {"_id": 0})
     if not company:
         raise HTTPException(status_code=404, detail="Customer workspace not found")
@@ -13424,6 +13541,7 @@ async def get_platform_customer_detail(company_id: str, user=Depends(require_pla
     user_count = len(team_users)
     client_count = await db.clients.count_documents({"company_id": company_id})
     project_count = await db.projects.count_documents({"company_id": company_id})
+    task_count = await db.tasks.count_documents({"company_id": company_id})
     invoice_count = await db.invoices.count_documents({"company_id": company_id})
     product_count = await db.products.count_documents({"company_id": company_id})
     po_count = await db.purchase_orders.count_documents({"company_id": company_id})
@@ -13440,21 +13558,23 @@ async def get_platform_customer_detail(company_id: str, user=Depends(require_pla
             "users": user_count,
             "clients": client_count,
             "projects": project_count,
+            "tasks": task_count,
             "invoices": invoice_count,
             "products": product_count,
             "purchase_orders": po_count,
             "material_requests": material_request_count,
             "documents": document_count,
-            "storage": "0.12 GB"
+            "storage": f"{(project_count * 0.02 + invoice_count * 0.005 + document_count * 0.001):.2f} GB"
         },
         "recent_activity": recent_activity
     }
 
+@api_router.post("/admin/customers/{company_id}/subscription")
 @api_router.post("/platform-owner/customers/{company_id}/subscription")
 async def update_platform_customer_subscription(
     company_id: str,
     data: PlatformSubscriptionActionIn,
-    user=Depends(require_platform_owner())
+    user=Depends(require_super_admin())
 ):
     company = await db.companies.find_one({"id": company_id})
     if not company:
@@ -13478,7 +13598,8 @@ async def update_platform_customer_subscription(
         update_doc["trial_ends_at"] = data.expiry_date
 
     if update_doc:
-        await db.companies.update_one({"id": company_id}, {"$set": update_doc})
+        await db.companies.update_one({"id": company_id}, {"$set": update_doc}, upsert=True)
+        _cache_invalidate_company(company_id)
 
     await _log_platform_audit(
         user=user,
@@ -13492,21 +13613,28 @@ async def update_platform_customer_subscription(
 
     return {"message": "Subscription updated successfully", "updated": update_doc}
 
+@api_router.post("/admin/customers/{company_id}/features")
 @api_router.post("/platform-owner/customers/{company_id}/features")
 async def update_platform_customer_features(
     company_id: str,
     data: PlatformFeatureEntitlementsIn,
-    user=Depends(require_platform_owner())
+    user=Depends(require_super_admin())
 ):
     company = await db.companies.find_one({"id": company_id})
     if not company:
         raise HTTPException(status_code=404, detail="Customer workspace not found")
 
     old_entitlements = company.get("feature_entitlements", {})
+    update_doc = {"feature_entitlements": data.feature_entitlements}
+    if data.temporary_features is not None:
+        update_doc["temporary_features"] = data.temporary_features
+
     await db.companies.update_one(
         {"id": company_id},
-        {"$set": {"feature_entitlements": data.feature_entitlements}}
+        {"$set": update_doc},
+        upsert=True
     )
+    _cache_invalidate_company(company_id)
 
     await _log_platform_audit(
         user=user,
@@ -13514,14 +13642,222 @@ async def update_platform_customer_features(
         target_company_id=company_id,
         target_name=company.get("company_name", company_id),
         old_val=old_entitlements,
-        new_val=data.feature_entitlements,
+        new_val=update_doc,
         reason=data.reason or ""
     )
 
-    return {"message": "Feature entitlements updated", "feature_entitlements": data.feature_entitlements}
+    return {"message": "Feature entitlements updated", "feature_entitlements": data.feature_entitlements, "temporary_features": data.temporary_features}
 
+class PlatformPlanUpdateIn(BaseModel):
+    name: str
+    tagline: Optional[str] = ""
+    monthly_price: float
+    yearly_price: float
+    max_users: int
+    max_clients: int
+    active: Optional[bool] = True
+    features: Dict[str, bool]
+
+class PlatformOfferIn(BaseModel):
+    title: str
+    description: str
+    offer_code: Optional[str] = ""
+    start_date: Optional[str] = ""
+    end_date: Optional[str] = ""
+    target_plan: Optional[str] = "all"
+    cta_text: Optional[str] = "Upgrade Now"
+    cta_url: Optional[str] = "/pricing"
+
+class PageTrackIn(BaseModel):
+    page_path: str
+    page_name: Optional[str] = ""
+    duration_seconds: Optional[int] = 0
+
+@api_router.get("/admin/plans")
+@api_router.get("/platform-owner/plans")
+async def list_platform_plans(user=Depends(require_super_admin())):
+    from plan_config import PLANS, get_all_plans
+    db_plans = await db.plans_config.find({}, {"_id": 0}).to_list(100)
+    db_map = {p["id"]: p for p in db_plans}
+    
+    merged = {}
+    default_plans = get_all_plans()
+    for pid, pdata in default_plans.items():
+        if pid in db_map:
+            merged[pid] = {**pdata, **db_map[pid]}
+        else:
+            merged[pid] = pdata
+    return merged
+
+@api_router.put("/admin/plans/{plan_id}")
+@api_router.put("/platform-owner/plans/{plan_id}")
+async def update_platform_plan(plan_id: str, data: PlatformPlanUpdateIn, user=Depends(require_super_admin())):
+    doc = {
+        "id": plan_id.lower(),
+        "name": data.name,
+        "tagline": data.tagline or "",
+        "monthly_price": data.monthly_price,
+        "yearly_price": data.yearly_price,
+        "max_users": data.max_users,
+        "max_clients": data.max_clients,
+        "active": data.active if data.active is not None else True,
+        "features": data.features,
+        "updated_at": now_iso()
+    }
+    await db.plans_config.update_one({"id": doc["id"]}, {"$set": doc}, upsert=True)
+    await _log_platform_audit(
+        user=user,
+        action="Updated Plan Entitlements & Pricing",
+        target_company_id="ALL",
+        target_name=f"Plan: {data.name}",
+        new_val=doc
+    )
+    return {"message": f"Plan '{data.name}' updated successfully", "plan": doc}
+
+@api_router.get("/admin/offers")
+@api_router.get("/platform-owner/offers")
+async def list_platform_offers(user=Depends(require_super_admin())):
+    return await db.promotional_offers.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+
+@api_router.post("/admin/offers")
+@api_router.post("/platform-owner/offers")
+async def create_platform_offer(data: PlatformOfferIn, user=Depends(require_super_admin())):
+    doc = {
+        "id": f"off_{uuid.uuid4().hex[:10]}",
+        "title": data.title,
+        "description": data.description,
+        "offer_code": data.offer_code or "",
+        "start_date": data.start_date or now_iso(),
+        "end_date": data.end_date or "",
+        "target_plan": data.target_plan or "all",
+        "cta_text": data.cta_text or "Upgrade Now",
+        "cta_url": data.cta_url or "/pricing",
+        "created_at": now_iso()
+    }
+    await db.promotional_offers.insert_one(doc)
+    await _log_platform_audit(
+        user=user,
+        action="Created Promotional Offer",
+        target_company_id="ALL",
+        target_name=data.title,
+        new_val=doc
+    )
+    return {"message": "Offer created successfully", "offer": doc}
+
+@api_router.post("/analytics/track-page")
+async def track_page_visit(data: PageTrackIn, request: Request):
+    user_id = "anonymous"
+    company_id = "global"
+    try:
+        auth_header = request.headers.get("Authorization", "")
+        token = request.cookies.get("access_token") or (auth_header[7:] if auth_header.startswith("Bearer ") else None)
+        if token:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            user_id = payload.get("sub") or payload.get("user_id") or user_id
+            company_id = payload.get("company_id") or company_id
+    except Exception:
+        pass
+
+    event_doc = {
+        "id": f"pe_{uuid.uuid4().hex[:12]}",
+        "page_path": data.page_path,
+        "page_name": data.page_name or data.page_path,
+        "user_id": user_id,
+        "company_id": company_id,
+        "duration_seconds": data.duration_seconds or 0,
+        "timestamp": now_iso()
+    }
+    asyncio.create_task(db.page_events.insert_one(event_doc))
+    return {"status": "ok"}
+
+@api_router.get("/admin/analytics/performance")
+@api_router.get("/platform-owner/analytics/performance")
+async def get_platform_performance_analytics(user=Depends(require_super_admin())):
+    now = datetime.now(timezone.utc)
+    d1 = (now - timedelta(days=1)).isoformat()
+    d7 = (now - timedelta(days=7)).isoformat()
+    d30 = (now - timedelta(days=30)).isoformat()
+
+    # DAU / WAU / MAU calculation
+    dau_uids = await db.activity_logs.distinct("user_id", {"created_at": {"$gte": d1}})
+    wau_uids = await db.activity_logs.distinct("user_id", {"created_at": {"$gte": d7}})
+    mau_uids = await db.activity_logs.distinct("user_id", {"created_at": {"$gte": d30}})
+
+    new_signups_30d = await db.companies.count_documents({"created_at": {"$gte": d30}})
+    
+    # Activity sample by feature/action
+    activities = await db.activity_logs.find({}, {"_id": 0, "action": 1, "company_id": 1}).sort("created_at", -1).to_list(5000)
+    action_counts = {}
+    for a in activities:
+        act = a.get("action", "Other Action")
+        action_counts[act] = action_counts.get(act, 0) + 1
+
+    sorted_features = sorted(action_counts.items(), key=lambda x: x[1], reverse=True)
+
+    # Usage breakdown by plan
+    companies = await db.companies.find({}, {"_id": 0, "id": 1, "plan_id": 1}).to_list(2000)
+    plan_company_map = {c["id"]: c.get("plan_id", "starter") for c in companies}
+
+    plan_usage = {"starter": 0, "growth": 0, "pro": 0, "enterprise": 0}
+    for a in activities:
+        cid = a.get("company_id")
+        p = plan_company_map.get(cid, "starter")
+        if p in plan_usage:
+            plan_usage[p] += 1
+        else:
+            plan_usage["starter"] += 1
+
+    return {
+        "dau": len(dau_uids),
+        "wau": len(wau_uids),
+        "mau": len(mau_uids),
+        "signups_30d": new_signups_30d,
+        "most_used_features": [{"feature": k, "count": v} for k, v in sorted_features[:8]],
+        "least_used_features": [{"feature": k, "count": v} for k, v in sorted_features[-5:]],
+        "usage_by_plan": plan_usage
+    }
+
+@api_router.get("/admin/analytics/pages")
+@api_router.get("/platform-owner/analytics/pages")
+async def get_platform_page_analytics(user=Depends(require_super_admin())):
+    page_sample = await db.page_events.find({}, {"_id": 0}).sort("timestamp", -1).to_list(3000)
+    page_stats = {}
+    for p in page_sample:
+        path = p.get("page_path", "/dashboard")
+        name = p.get("page_name") or path
+        if path not in page_stats:
+            page_stats[path] = {
+                "path": path,
+                "name": name,
+                "visits": 0,
+                "users": set(),
+                "total_duration": 0,
+                "last_used": p.get("timestamp")
+            }
+        page_stats[path]["visits"] += 1
+        if p.get("user_id"):
+            page_stats[path]["users"].add(p["user_id"])
+        page_stats[path]["total_duration"] += p.get("duration_seconds", 0)
+
+    result = []
+    for k, v in page_stats.items():
+        unique_cnt = len(v["users"])
+        avg_time = round(v["total_duration"] / v["visits"], 1) if v["visits"] > 0 else 0
+        result.append({
+            "path": v["path"],
+            "name": v["name"],
+            "visits": v["visits"],
+            "unique_users": unique_cnt,
+            "avg_time_sec": avg_time,
+            "last_used": v["last_used"]
+        })
+
+    result.sort(key=lambda x: x["visits"], reverse=True)
+    return result
+
+@api_router.get("/admin/analytics")
 @api_router.get("/platform-owner/analytics")
-async def get_platform_analytics(user=Depends(require_platform_owner())):
+async def get_platform_analytics(user=Depends(require_super_admin())):
     activity_sample = await db.activity_logs.find({}, {"_id": 0, "action": 1, "created_at": 1}).sort("created_at", -1).to_list(5000)
     action_counts = {}
     for a in activity_sample:
@@ -13535,22 +13871,46 @@ async def get_platform_analytics(user=Depends(require_platform_owner())):
         "total_events_sample": len(activity_sample)
     }
 
+@api_router.get("/admin/feedback")
 @api_router.get("/platform-owner/feedback")
-async def list_platform_feedback(user=Depends(require_platform_owner())):
+async def list_platform_feedback(user=Depends(require_super_admin())):
     return await db.feedback.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
+@api_router.put("/admin/feedback/{feedback_id}")
 @api_router.put("/platform-owner/feedback/{feedback_id}")
-async def update_platform_feedback(feedback_id: str, data: PlatformFeedbackUpdateIn, user=Depends(require_platform_owner())):
+async def update_platform_feedback(feedback_id: str, data: PlatformFeedbackUpdateIn, user=Depends(require_super_admin())):
+    fb = await db.feedback.find_one({"id": feedback_id})
+    if not fb:
+        raise HTTPException(status_code=404, detail="Feedback record not found")
+
     res = await db.feedback.update_one(
         {"id": feedback_id},
         {"$set": {"status": data.status, "admin_notes": data.admin_notes or "", "updated_at": now_iso()}}
     )
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Feedback record not found")
+
+    # Optional: Send notification reply to user
+    if data.admin_notes and fb.get("company_id"):
+        await push_notification(
+            company_id=fb["company_id"],
+            audience="user",
+            title=f"Feedback Status: {data.status}",
+            message=f"Admin Note on your report '{fb.get('feedback_type', 'Feedback')}': {data.admin_notes}",
+            to_user_id=fb.get("user_id")
+        )
+
+    await _log_platform_audit(
+        user=user,
+        action=f"Updated Feedback Status to {data.status}",
+        target_company_id=fb.get("company_id", "GLOBAL"),
+        target_name=f"Feedback #{feedback_id}",
+        new_val={"status": data.status, "admin_notes": data.admin_notes}
+    )
+
     return {"message": "Feedback status updated successfully"}
 
+@api_router.post("/admin/notifications")
 @api_router.post("/platform-owner/notifications")
-async def send_platform_notification(data: PlatformNotificationIn, user=Depends(require_platform_owner())):
+async def send_platform_notification(data: PlatformNotificationIn, user=Depends(require_super_admin())):
     if data.target_type == "company" and data.target_company_id:
         await push_notification(data.target_company_id, "admin", data.title, data.message)
     elif data.target_type == "user" and data.target_user_id:
@@ -13573,8 +13933,9 @@ async def send_platform_notification(data: PlatformNotificationIn, user=Depends(
 
     return {"message": "Notification dispatched successfully"}
 
+@api_router.get("/admin/health")
 @api_router.get("/platform-owner/health")
-async def get_platform_health(user=Depends(require_platform_owner())):
+async def get_platform_health(user=Depends(require_super_admin())):
     db_ok = True
     try:
         await db.companies.find_one({}, {"_id": 1})

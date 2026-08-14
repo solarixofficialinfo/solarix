@@ -1,5 +1,5 @@
 """
-SOLRIX WORK — Subscription, Pricing, Trial, Razorpay & Billing APIs
+SOLARIX — Subscription, Pricing, Trial, Razorpay & Billing APIs
 """
 import os
 import hmac
@@ -70,7 +70,9 @@ class CancelSubscriptionIn(BaseModel):
 @billing_router.get("/plans")
 async def list_plans():
     """Return available subscription plans with dynamic annual savings."""
-    return {"plans": get_all_plans()}
+    db = get_db()
+    db_plans = await db.plans_config.find({}, {"_id": 0}).to_list(100)
+    return {"plans": get_all_plans(db_plans_list=db_plans)}
 
 
 @billing_router.get("/subscription")
@@ -111,9 +113,10 @@ async def get_company_subscription(user=Depends(get_current_user_dep())):
             {"$set": {"subscription_status": "expired"}}
         )
 
-    current_plan_id = company.get("plan_id") or "growth" if is_trial else company.get("plan_id", "starter")
-    plan_info = get_plan_details(current_plan_id)
-    limits = get_plan_limits(current_plan_id, is_trial=is_trial)
+    current_plan_id = company.get("plan_id") or "starter"
+    db_plan_override = await db.plans_config.find_one({"id": current_plan_id.lower()}, {"_id": 0})
+    plan_info = get_plan_details(current_plan_id, db_override=db_plan_override)
+    limits = get_plan_limits(current_plan_id, is_trial=is_trial, db_override=db_plan_override)
 
     # Current resource usage counts
     active_users_count = await db.users.count_documents({"company_id": company_id, "status": "Active"})
@@ -406,16 +409,21 @@ async def cancel_subscription(data: CancelSubscriptionIn, user=Depends(get_curre
     return {"status": "success", "message": "Subscription auto-renewal has been cancelled. Access continues until period end."}
 
 
+async def get_super_admin_user(request: Request):
+    from server import get_current_user, is_super_admin_user
+    user = await get_current_user(request)
+    if not is_super_admin_user(user):
+        raise HTTPException(status_code=403, detail="Admin access required. Only authorized SOLRIX Super Admin can view SaaS economics metrics.")
+    return user
+
 # ---------- ADMIN SAAS METRICS ----------
 @billing_router.get("/admin/metrics")
 async def get_admin_metrics(
     gateway_fee_percent: float = 2.0,
     infra_cost_per_company: float = 250.0,
-    user=Depends(get_current_user_dep())
+    user=Depends(get_super_admin_user)
 ):
     """Super-Admin SaaS Business Metrics & Customer Economics Calculator."""
-    if user.get("role") != "Admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
 
     db = get_db()
     companies = await db.companies.find({}, {"_id": 0}).to_list(10000)

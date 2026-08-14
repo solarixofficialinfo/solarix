@@ -421,7 +421,7 @@ export default function DocumentBuilder({ initialDocType = "quotation", existing
             </div>
             <div>
               <h2 className="text-lg font-bold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>
-                Document Builder — Solarix Work
+                Document Builder — Solarix
               </h2>
               <p className="text-xs text-slate-500">
                 Unified Sales & Procurement Engine. Select Document Type to auto-configure fields & headers.
