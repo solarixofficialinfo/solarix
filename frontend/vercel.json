@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "buildCommand": "if [ -d frontend ]; then cd frontend; fi && npm run build",
+  "buildCommand": "npm run build",
   "outputDirectory": "build",
   "framework": "create-react-app",
   "rewrites": [
