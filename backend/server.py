@@ -3029,7 +3029,7 @@ async def reset_password(data: ResetPasswordIn):
 
         if not updated_in_supabase:
             temp_pwd = _test_temp_passwords.get(user["email"].lower())
-            if temp_pwd:
+            if default_supabase is not None and temp_pwd:
                 try:
                     login_res = default_supabase.auth.sign_in_with_password({
                         "email": user["email"],
@@ -4488,6 +4488,8 @@ async def generate_document_preview(payload: Dict[str, Any], user=Depends(get_cu
     storage_path = f"{APP_NAME}/{user['company_id']}/generated/{file_id}{_ext}"
     result = put_object(storage_path, pdf_bytes, gen_content_type)
     
+    client_name_val = (client_doc.get("full_name") if client_doc else "") or doc_data.get("client_name") or "Client"
+
     await db.files.insert_one({
         "id": file_id, "company_id": user["company_id"], "uploader_id": user["id"],
         "storage_path": result["path"], "original_filename": filename,
@@ -4495,19 +4497,21 @@ async def generate_document_preview(payload: Dict[str, Any], user=Depends(get_cu
         "category": "generated", "is_deleted": False, "created_at": now_iso(),
         "doc_type": doc_type,
         "document_number": doc_number,
-        "client_name": client_doc.get("full_name") or "Client",
+        "client_name": client_name_val,
         "prepared_by": doc_data.get("preparedBy") or user["name"],
         "status": "Active"
     })
     
-    docs = list(client_doc.get("documents") or [])
-    docs.append({"id": file_id, "filename": filename, "label": _document_label(doc_type), "content_type": gen_content_type, "created_at": now_iso()})
-    stages = {**(client_doc.get("stages") or {}), "Document Making": True, "Onboarding": True}
-    await db.clients.update_one(
-        {"id": client_id, "company_id": user["company_id"]},
-        {"$set": {"documents": docs, "stages": stages, "progress": calc_progress(stages), "updated_at": now_iso()}}
-    )
-    await log_activity(user["company_id"], user["id"], user["name"], f"Generated {_document_label(doc_type).upper()}", client_doc.get("full_name", ""))
+    if client_doc:
+        docs = list(client_doc.get("documents") or [])
+        docs.append({"id": file_id, "filename": filename, "label": _document_label(doc_type), "content_type": gen_content_type, "created_at": now_iso()})
+        stages = {**(client_doc.get("stages") or {}), "Document Making": True, "Onboarding": True}
+        await db.clients.update_one(
+            {"id": client_id, "company_id": user["company_id"]},
+            {"$set": {"documents": docs, "stages": stages, "progress": calc_progress(stages), "updated_at": now_iso()}}
+        )
+    log_client_name = (client_doc.get("full_name") if client_doc else "") or "Manual"
+    await log_activity(user["company_id"], user["id"], user["name"], f"Generated {_document_label(doc_type).upper()}", log_client_name)
     return {"id": file_id, "filename": filename, "label": _document_label(doc_type)}
 
 @api_router.post("/documents/generate")
@@ -11758,7 +11762,7 @@ async def get_receivables_dashboard(
                 "estimated_profit": p_profit,
                 "status": p_status,
                 "payment_plan": p.get("payment_plan") or [],
-                "project_date": p.get("project_date") or (p.get("created_at") or "")[:10]
+                "project_date": p.get("project_date") or str(p.get("created_at") or "")[:10]
             })
 
         c_profit = (c_val - c_cost) if c_cost > 0 else None
@@ -12619,7 +12623,7 @@ async def update_vendor_detail(vendor_id: str, payload: Dict[str, Any], user=Dep
         raise HTTPException(status_code=404, detail="Vendor not found")
     
     update_fields = {
-        "name": payload.get("name", vendor.get("name")).strip() if payload.get("name") else vendor.get("name"),
+        "name": str(payload.get("name") or vendor.get("name") or "").strip(),
         "contact_person": payload.get("contact_person", vendor.get("contact_person", "")),
         "phone": payload.get("phone", vendor.get("phone", "")),
         "email": payload.get("email", vendor.get("email", "")),
