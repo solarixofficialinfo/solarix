@@ -22,6 +22,18 @@ export default function ForgotPassword() {
   const [resendCountdown, setResendCountdown] = useState(0);
 
   useEffect(() => {
+    const hashParams = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+    const queryParams = new URLSearchParams(window.location.search || "");
+    const tokenFromUrl = hashParams.get("access_token") || queryParams.get("token") || queryParams.get("code");
+
+    if (tokenFromUrl) {
+      setResetToken(tokenFromUrl);
+      setStep("password");
+      toast.success("Reset link verified. Enter your new password.");
+    }
+  }, []);
+
+  useEffect(() => {
     if (resendCountdown <= 0) return;
     const t = setTimeout(() => setResendCountdown((s) => s - 1), 1000);
     return () => clearTimeout(t);

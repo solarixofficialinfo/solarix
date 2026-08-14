@@ -477,12 +477,12 @@ def _normalize_po_document_data(data: dict, company: dict) -> dict:
     if not isinstance(company, dict):
         company = {}
 
-    comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "GVP SOLAR ENERGY").strip()
-    comp_gst = (company.get("gst_number") or company.get("gstin") or company.get("gst") or "27AKMPD5407A1ZM").strip()
-    comp_addr = (company.get("address") or company.get("address_line_1") or company.get("office_address") or "No 1-2, Building No 1 Kapad Market, Ichalkaranji, Maharashtra 416115").strip()
-    comp_phone = (company.get("mobile") or company.get("mobile_number") or company.get("phone") or company.get("phone_number") or "7665 165 666").strip()
-    comp_email = (company.get("email") or "info@gvpsolutions.org").strip()
-    comp_tagline = (company.get("tagline") or company.get("subtitle") or "SOLAR ENERGY FOR BETTER TOMORROW").strip()
+    comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "SOLRIX WORK").strip()
+    comp_gst = (company.get("gst_number") or company.get("gstin") or company.get("gst") or "").strip()
+    comp_addr = (company.get("address") or company.get("address_line_1") or company.get("office_address") or "").strip()
+    comp_phone = (company.get("mobile") or company.get("mobile_number") or company.get("phone") or company.get("phone_number") or "").strip()
+    comp_email = (company.get("email") or "").strip()
+    comp_tagline = (company.get("tagline") or company.get("subtitle") or "").strip()
     logo_bytes = company.get("logo_bytes")
 
     vendor_raw = data.get("vendor") or {}
@@ -895,7 +895,28 @@ def generate_po_pdf(data: dict, company: dict) -> bytes:
         ('BOTTOMPADDING', (0,0), (-1,-1), 0),
     ]))
     story.append(bottom_table)
+    story.append(Spacer(1, 0.4 * cm))
+
+    # Amount in Words
+    story.append(Paragraph("<b>Amount in Words</b>", ParagraphStyle('po_words_hdr', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.HexColor('#1e3a8a'))))
+    story.append(Paragraph(_amount_to_words(fin.get("grand_total") or 0), ParagraphStyle('po_words_body', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#334155'))))
     story.append(Spacer(1, 0.5 * cm))
+
+    # Authorized Signature Block
+    SIG_LEFT = ParagraphStyle('po_sig_l', parent=styles['Normal'], fontSize=8.5, leading=12, textColor=colors.HexColor('#1f2937'), alignment=0)
+    SIG_RIGHT = ParagraphStyle('po_sig_r', parent=styles['Normal'], fontSize=8.5, leading=12, textColor=colors.HexColor('#1f2937'), alignment=2)
+    sig_table = Table([
+        [Paragraph("<b>Vendor Acceptance Signature</b><br/><br/>_______________________", SIG_LEFT), Paragraph(f"<b>For {comp['name']}</b><br/><br/>_______________________<br/>Authorized Signatory", SIG_RIGHT)]
+    ], colWidths=[9.3 * cm, 9.3 * cm])
+    sig_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    story.append(KeepTogether([sig_table]))
+    story.append(Spacer(1, 0.4 * cm))
 
     # 6. FOOTER & NOT TAX INVOICE NOTICE
     footer_p = Paragraph(f"Enquiries: {comp['email']} | Contact: {comp['phone']} | Office: {comp['address']}", ParagraphStyle('po_ftr', parent=styles['Normal'], fontSize=7.5, leading=10, textColor=colors.HexColor('#64748b'), alignment=1))
@@ -5036,6 +5057,31 @@ def generate_po_docx(data: dict, company: dict) -> bytes:
             r_val.bold = True
             r_val.font.size = Pt(10)
             r_val.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
+
+    doc.add_paragraph()
+
+    # Amount in Words
+    p_w_hdr = doc.add_paragraph()
+    r_w_hdr = p_w_hdr.add_run("Amount in Words:")
+    r_w_hdr.bold = True
+    r_w_hdr.font.size = Pt(9)
+    r_w_hdr.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
+    p_w_body = doc.add_paragraph()
+    r_w_body = p_w_body.add_run(_amount_to_words(fin.get("grand_total") or 0))
+    r_w_body.font.size = Pt(8.5)
+
+    doc.add_paragraph()
+
+    # Authorized Signature Table
+    sig_tbl = doc.add_table(rows=2, cols=2)
+    sig_tbl.style = 'Table Grid'
+    _remove_tbl_borders(sig_tbl)
+    sig_tbl.rows[0].cells[0].text = "Vendor Acceptance Signature"
+    sig_tbl.rows[0].cells[1].text = f"For {comp['name']}"
+    sig_tbl.rows[1].cells[0].text = "\n\n_________________________"
+    sig_tbl.rows[1].cells[1].text = "\n\n_________________________\nAuthorized Signatory"
+    for r in sig_tbl.rows:
+        r.cells[1].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
     doc.add_paragraph()
 

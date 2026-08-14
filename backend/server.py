@@ -3426,7 +3426,7 @@ async def upload_file(file: UploadFile = File(...), category: str = Form("genera
     return {"id": file_id, "filename": file.filename, "content_type": content_type, "size": doc["size"]}
 
 @api_router.get("/files/{file_id}")
-async def download_file(file_id: str, request: Request, auth: Optional[str] = Query(None)):
+async def download_file(file_id: str, request: Request, auth: Optional[str] = Query(None), download: Optional[int] = Query(None)):
     token = request.cookies.get("access_token")
     if not token and auth:
         token = auth
@@ -3456,7 +3456,15 @@ async def download_file(file_id: str, request: Request, auth: Optional[str] = Qu
     if not rec:
         raise HTTPException(status_code=404, detail="File not found")
     data, ct = get_object(rec["storage_path"])
-    return FastAPIResponse(content=data, media_type=rec.get("content_type", ct))
+    media_type = rec.get("content_type") or ct or "application/octet-stream"
+    original_filename = rec.get("original_filename") or f"document_{file_id[:8]}"
+    
+    is_docx = "wordprocessingml" in media_type or original_filename.endswith(".docx")
+    disposition_type = "attachment" if (download == 1 or is_docx) else "inline"
+    headers = {
+        "Content-Disposition": f'{disposition_type}; filename="{original_filename}"'
+    }
+    return FastAPIResponse(content=data, media_type=media_type, headers=headers)
 
 # ---------- Clients ----------
 @api_router.get("/clients")

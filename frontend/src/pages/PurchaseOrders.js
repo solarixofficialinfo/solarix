@@ -385,11 +385,31 @@ export default function PurchaseOrders() {
       return { data: res.data, format };
     },
     onSuccess: ({ data, format }) => {
-      const fmtLabel = format === "docx" ? "Word document" : "PDF";
+      const isDocx = format === "docx";
+      const fmtLabel = isDocx ? "Word document" : "PDF";
       toast.success(`Purchase Order ${fmtLabel} generated!`);
       const fileId = data?.id || data?.file_id;
+      const filename = data?.filename || (isDocx ? "PurchaseOrder.docx" : "PurchaseOrder.pdf");
       if (fileId) {
-        window.open(fileUrl(fileId), "_blank");
+        if (isDocx) {
+          const a = document.createElement("a");
+          a.href = `${fileUrl(fileId)}&download=1`;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } else {
+          const win = window.open(fileUrl(fileId), "_blank");
+          if (!win || win.closed || typeof win.closed === "undefined") {
+            const a = document.createElement("a");
+            a.href = fileUrl(fileId);
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
+        }
       } else {
         toast.error("Failed to retrieve document file ID");
       }
@@ -445,7 +465,16 @@ export default function PurchaseOrders() {
       const fileId = res.data?.id || res.data?.file_id;
       if (fileId) {
         toast.success("Purchase Order PDF generated!");
-        window.open(fileUrl(fileId), "_blank");
+        const win = window.open(fileUrl(fileId), "_blank");
+        if (!win || win.closed || typeof win.closed === "undefined") {
+          const a = document.createElement("a");
+          a.href = fileUrl(fileId);
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }
       } else {
         toast.error("Failed to retrieve generated PDF ID");
       }

@@ -182,6 +182,7 @@ function App() {
             <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
             <Route path="/vendor/register" element={<PublicOnly><Register /></PublicOnly>} />
             <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
+            <Route path="/reset-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
             <Route path="/dashboard" element={<Protected><PermissionRoute page="dashboard"><MainTabShell activeTab="dashboard" /></PermissionRoute></Protected>} />
             <Route path="/clients" element={<Protected><PermissionRoute page="clients"><MainTabShell activeTab="clients" /></PermissionRoute></Protected>} />
             <Route path="/clients/new" element={<Protected><PermissionRoute page="clients"><ClientNew /></PermissionRoute></Protected>} />
