@@ -1,7 +1,7 @@
 {
   "version": 2,
   "buildCommand": "if [ -d frontend ]; then cd frontend; fi && (yarn install || npm install --legacy-peer-deps) && CI=false DISABLE_ESLINT_PLUGIN=true npm run build",
-  "outputDirectory": "build",
+  "outputDirectory": "frontend/build",
   "framework": "create-react-app",
   "rewrites": [
     {
