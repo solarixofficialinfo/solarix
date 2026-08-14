@@ -3,8 +3,6 @@
 backend/.venv/
 node_modules/
 frontend/node_modules/
-frontend/src/
-frontend/public/
 frontend/android/
 release.keystore
 test_reports/
