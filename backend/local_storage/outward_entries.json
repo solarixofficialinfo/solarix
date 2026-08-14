@@ -1,0 +1,28 @@
+[
+  {
+    "id": "6c129a4d-639f-4fa6-bc3c-ee0e5b00e31e",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "client_id": "75ff21cd-fd07-42ca-b530-beb026d344e8",
+    "client_name": "Shubham Jadhav",
+    "project_id": "75ff21cd-fd07-42ca-b530-beb026d344e8",
+    "project_name": "Shubham Jadhav",
+    "product": "SS",
+    "size": "25",
+    "quantity": 10.0,
+    "unit": "Nos",
+    "outward_challan_no": "224",
+    "reference_number": "224",
+    "reference_type": "Challan Number",
+    "date": "2026-08-10T08:54:48.975718+00:00",
+    "status": "Dispatched",
+    "remarks": "Auto-created from approved Material Request",
+    "source": "auto-material-request",
+    "material_request_id": "4dee09f8-48fe-4757-8354-ba11331bff9e",
+    "delivery_photo_file_id": null,
+    "challan_photo_file_id": null,
+    "created_at": "2026-08-10T08:54:48.975727+00:00",
+    "attachment_file_id": null,
+    "attachment_filename": null,
+    "updated_at": "2026-08-10T08:57:08.061387+00:00"
+  }
+]

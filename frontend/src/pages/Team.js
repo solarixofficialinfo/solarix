@@ -1,0 +1,720 @@
+import React, { useState } from "react";
+import api, { formatApiError } from "@/lib/api";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { toast } from "sonner";
+import {
+  Plus, Trash2, Pencil, ShieldCheck, User, Lock, Key, ChevronDown, ChevronRight,
+  Info, Check, UserCheck, AlertTriangle
+} from "lucide-react";
+import { useEmployeeList, useInvalidateTeam } from "@/hooks/useTeam";
+import PageHeader from "@/components/PageHeader";
+
+const ROLES = ["Super Admin", "Admin", "Manager", "Staff", "Installer", "Viewer"];
+
+const MODULE_GROUPS = [
+  {
+    group: "WORKSPACE",
+    modules: [
+      { key: "dashboard", label: "Dashboard", actions: ["view"] },
+      { key: "clients", label: "Clients", actions: ["view", "create", "edit", "delete"] },
+      { key: "project_execution", label: "Project Execution", actions: ["view", "create", "edit", "delete", "approve"] },
+      { key: "task_portal", label: "Task Portal", actions: ["view", "create", "edit", "delete", "approve"] },
+    ]
+  },
+  {
+    group: "OPERATIONS",
+    modules: [
+      { key: "receivables", label: "Receivables & Collection", actions: ["view", "create", "edit", "delete", "approve"] },
+      {
+        key: "data_management",
+        label: "Data Management (Inventory)",
+        actions: ["view", "create", "edit", "delete", "approve"],
+        hasSubModules: true,
+        subModules: [
+          { key: "inward", label: "Inward", actions: ["view", "create", "edit", "delete", "approve"] },
+          { key: "outward", label: "Outward", actions: ["view", "create", "edit", "delete", "approve"] },
+          { key: "product_master", label: "Product Master", actions: ["view", "create", "edit", "delete"] },
+          { key: "balance_report", label: "Balance Report", actions: ["view"] },
+          { key: "history", label: "History", actions: ["view"] },
+          { key: "high_value_goods", label: "High Value Goods", actions: ["view", "edit"] },
+          { key: "material_requests", label: "Material Requests", actions: ["view", "create", "edit", "delete", "approve"] },
+        ]
+      },
+      { key: "client_data", label: "Client Data", actions: ["view", "create", "edit", "delete"] },
+      { key: "reports", label: "Reports", actions: ["view"] },
+    ]
+  },
+  {
+    group: "DOCUMENTS",
+    modules: [
+      { key: "sales_documents", label: "Sales Documents", actions: ["view", "create", "edit", "delete", "approve"] },
+      { key: "purchase_orders", label: "Purchase Orders", actions: ["view", "create", "edit", "delete", "approve"] },
+      { key: "documents", label: "Document Templates", actions: ["view", "create", "edit", "delete"] },
+    ]
+  },
+  {
+    group: "ADMINISTRATION",
+    modules: [
+      { key: "team", label: "Team & Access", actions: ["view", "create", "edit", "delete", "approve"] },
+      { key: "settings", label: "Company Details", actions: ["view", "edit"] },
+      { key: "activity_log", label: "Activity Log", actions: ["view"] },
+      { key: "billing", label: "Billing & Subscription", actions: ["view", "edit"] },
+    ]
+  }
+];
+
+const ACTION_LABELS = {
+  view: "View — Open & read records",
+  create: "Create — Add new records",
+  edit: "Edit — Modify existing records",
+  delete: "Delete — Cancel/Remove records",
+  approve: "Approve — Authorize workflow steps"
+};
+
+const emptyPermissions = () => {
+  const perms = {};
+  MODULE_GROUPS.forEach((g) => {
+    g.modules.forEach((m) => {
+      perms[m.key] = { view: false, create: false, edit: false, delete: false, approve: false };
+      if (m.hasSubModules) {
+        m.subModules.forEach((sm) => {
+          perms[`dm_${sm.key}`] = { view: false, create: false, edit: false, delete: false, approve: false };
+        });
+      }
+    });
+  });
+  return perms;
+};
+
+const getPresetPermissions = (role) => {
+  const perms = emptyPermissions();
+  if (role === "Super Admin" || role === "Admin") {
+    Object.keys(perms).forEach((k) => {
+      perms[k] = { view: true, create: true, edit: true, delete: true, approve: true };
+    });
+    return perms;
+  }
+
+  const grant = (key, actions) => {
+    perms[key] = {
+      view: actions.includes("view"),
+      create: actions.includes("create"),
+      edit: actions.includes("edit"),
+      delete: actions.includes("delete"),
+      approve: actions.includes("approve")
+    };
+  };
+
+  if (role === "Manager") {
+    ["dashboard", "clients", "project_execution", "task_portal", "receivables", "data_management", "client_data", "reports", "sales_documents", "purchase_orders", "documents"].forEach((k) => {
+      grant(k, ["view", "create", "edit", "approve"]);
+    });
+    ["inward", "outward", "product_master", "balance_report", "history", "high_value_goods", "material_requests"].forEach((sm) => {
+      grant(`dm_${sm}`, ["view", "create", "edit", "approve"]);
+    });
+  } else if (role === "Staff") {
+    ["dashboard", "clients", "task_portal", "data_management", "sales_documents", "documents"].forEach((k) => {
+      grant(k, ["view", "create", "edit"]);
+    });
+    ["inward", "outward", "product_master", "balance_report", "history"].forEach((sm) => {
+      grant(`dm_${sm}`, ["view", "create", "edit"]);
+    });
+  } else if (role === "Installer") {
+    grant("task_portal", ["view", "edit"]);
+    grant("clients", ["view"]);
+    grant("client_data", ["view"]);
+  } else if (role === "Viewer") {
+    ["dashboard", "clients", "task_portal", "project_execution", "data_management", "client_data", "reports", "sales_documents"].forEach((k) => {
+      grant(k, ["view"]);
+    });
+  }
+
+  return perms;
+};
+
+export default function Team() {
+  const { data: list = [], isLoading } = useEmployeeList();
+  const invalidateTeam = useInvalidateTeam();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState(null);
+  const [activeTab, setActiveTab] = useState("basic");
+  const [preset, setPreset] = useState("Role Default");
+  const [expandedGroups, setExpandedGroups] = useState({ data_management: true });
+
+  const [form, setForm] = useState({
+    name: "",
+    mobile: "",
+    email: "",
+    password: "",
+    role: "Staff",
+    status: "Active",
+    permissions: getPresetPermissions("Staff")
+  });
+  const [saving, setSaving] = useState(false);
+
+  const openCreate = () => {
+    setEditingUser(null);
+    setActiveTab("basic");
+    setPreset("Role Default");
+    setForm({
+      name: "",
+      mobile: "",
+      email: "",
+      password: "",
+      role: "Staff",
+      status: "Active",
+      permissions: getPresetPermissions("Staff")
+    });
+    setModalOpen(true);
+  };
+
+  const openEdit = (u) => {
+    setEditingUser(u);
+    setActiveTab("basic");
+    setPreset("Custom");
+    setForm({
+      name: u.name || "",
+      mobile: u.mobile || "",
+      email: u.email || "",
+      password: "",
+      role: u.role || "Staff",
+      status: u.status || "Active",
+      permissions: u.permissions || getPresetPermissions(u.role || "Staff")
+    });
+    setModalOpen(true);
+  };
+
+  const handleRoleChange = (newRole) => {
+    setForm((f) => ({
+      ...f,
+      role: newRole,
+      permissions: getPresetPermissions(newRole)
+    }));
+    setPreset("Role Default");
+  };
+
+  const handlePresetSelect = (presetName) => {
+    setPreset(presetName);
+    if (presetName !== "Custom") {
+      const targetRole = presetName === "Full Access" ? "Admin" : presetName;
+      setForm((f) => ({
+        ...f,
+        permissions: getPresetPermissions(targetRole)
+      }));
+    }
+  };
+
+  const togglePermission = (moduleKey, action) => {
+    setPreset("Custom");
+    setForm((f) => {
+      const curMod = f.permissions?.[moduleKey] || {};
+      return {
+        ...f,
+        permissions: {
+          ...f.permissions,
+          [moduleKey]: {
+            ...curMod,
+            [action]: !curMod[action]
+          }
+        }
+      };
+    });
+  };
+
+  const toggleRowAll = (moduleKey, actions) => {
+    setPreset("Custom");
+    setForm((f) => {
+      const curMod = f.permissions?.[moduleKey] || {};
+      const allActive = actions.every((a) => curMod[a]);
+      const newMod = {};
+      actions.forEach((a) => { newMod[a] = !allActive; });
+      return {
+        ...f,
+        permissions: {
+          ...f.permissions,
+          [moduleKey]: newMod
+        }
+      };
+    });
+  };
+
+  const toggleColumnAll = (action) => {
+    setPreset("Custom");
+    setForm((f) => {
+      const newPerms = { ...f.permissions };
+      let allActive = true;
+      Object.keys(newPerms).forEach((k) => {
+        if (!newPerms[k]?.[action]) allActive = false;
+      });
+      Object.keys(newPerms).forEach((k) => {
+        newPerms[k] = { ...newPerms[k], [action]: !allActive };
+      });
+      return { ...f, permissions: newPerms };
+    });
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!form.name.trim()) {
+      toast.error("Please enter team member name");
+      return;
+    }
+    const cleanMobile = form.mobile.replace(/\D/g, "");
+    if (cleanMobile.length !== 10) {
+      toast.error("Mobile number must be exactly 10 digits");
+      return;
+    }
+    if (!editingUser && (!form.password || form.password.length < 6)) {
+      toast.error("Password must be at least 6 characters");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      if (editingUser) {
+        const payload = { ...form, mobile: cleanMobile };
+        if (!payload.password) delete payload.password;
+        await api.put(`/employees/${editingUser.id}`, payload);
+        toast.success("Team member updated successfully");
+      } else {
+        await api.post("/employees", { ...form, mobile: cleanMobile });
+        toast.success("Team member added successfully");
+      }
+      setModalOpen(false);
+      invalidateTeam();
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRemove = async (u) => {
+    if (u.role === "Super Admin" || u.user_type === "owner") {
+      toast.error("Cannot delete Super Admin or Owner account");
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to remove ${u.name}?`)) return;
+    try {
+      await api.delete(`/employees/${u.id}`);
+      toast.success("Team member removed");
+      invalidateTeam();
+    } catch (err) {
+      toast.error(formatApiError(err));
+    }
+  };
+
+  return (
+    <div className="space-y-6 font-sans">
+      <PageHeader
+        title="Team & Access Control"
+        subtitle="Manage employee accounts, assign enterprise roles, and configure granular page permissions."
+        badge={`${list.length} Members`}
+        actions={
+          <Button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 font-semibold shadow-2xs gap-1.5 text-xs">
+            <Plus className="w-4 h-4" /> Add Team Member
+          </Button>
+        }
+      />
+
+      {/* TABLE VIEW (DESKTOP) & CARDS (MOBILE) */}
+      <Card className="border-slate-200 overflow-hidden shadow-2xs">
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full text-xs text-left">
+            <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold border-b border-slate-200">
+              <tr>
+                <th className="px-4 py-3">Team Member</th>
+                <th className="px-4 py-3">Employee ID</th>
+                <th className="px-4 py-3">Contact</th>
+                <th className="px-4 py-3">Role</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {list.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="p-8 text-center text-slate-500">
+                    No team members found. Click "Add Team Member" to get started.
+                  </td>
+                </tr>
+              )}
+              {list.map((u) => (
+                <tr key={u.id} className="hover:bg-slate-50/80 transition-colors">
+                  <td className="px-4 py-3">
+                    <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                      <User className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span>{u.name}</span>
+                      {(u.role === "Super Admin" || u.user_type === "owner") && (
+                        <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300 text-[10px]">
+                          Owner
+                        </Badge>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-slate-600">{u.employee_id || "—"}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-mono text-slate-800">{u.email}</div>
+                    <div className="text-[11px] text-slate-500 font-mono">{u.mobile}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 font-semibold">
+                      {u.role}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge
+                      variant="outline"
+                      className={u.status === "Active" ? "bg-emerald-50 text-emerald-700 border-emerald-300" : "bg-slate-100 text-slate-600 border-slate-300"}
+                    >
+                      {u.status}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3 text-right space-x-1">
+                    <Button variant="ghost" size="xs" onClick={() => openEdit(u)} className="h-7 w-7 p-0 text-slate-600 hover:text-blue-600">
+                      <Pencil className="w-3.5 h-3.5" />
+                    </Button>
+                    {u.user_type !== "owner" && u.role !== "Super Admin" && (
+                      <Button variant="ghost" size="xs" onClick={() => handleRemove(u)} className="h-7 w-7 p-0 text-slate-400 hover:text-rose-600">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* MOBILE RESPONSIVE MEMBER CARDS */}
+        <div className="md:hidden divide-y divide-slate-100 p-3 space-y-3">
+          {list.map((u) => (
+            <div key={u.id} className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <div className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                  <User className="w-4 h-4 text-blue-600" /> {u.name}
+                </div>
+                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-[10px]">
+                  {u.role}
+                </Badge>
+              </div>
+
+              <div className="space-y-0.5 text-[11px] text-slate-500 font-mono">
+                <div>Email: {u.email}</div>
+                <div>Mobile: {u.mobile}</div>
+                <div>ID: {u.employee_id || "N/A"}</div>
+              </div>
+
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                <Badge variant="outline" className={u.status === "Active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}>
+                  {u.status}
+                </Badge>
+
+                <div className="flex items-center gap-2">
+                  <Button size="xs" variant="outline" onClick={() => openEdit(u)} className="h-7 text-xs text-blue-600 gap-1">
+                    <Pencil className="w-3 h-3" /> Edit
+                  </Button>
+                  {u.user_type !== "owner" && u.role !== "Super Admin" && (
+                    <Button size="xs" variant="ghost" onClick={() => handleRemove(u)} className="h-7 text-xs text-rose-600 p-1">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* ─── TEAM MEMBER MODAL WITH TABS ───────────────────────────────────── */}
+      <Dialog open={modalOpen} onOpenChange={setModalOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl p-6">
+          <DialogHeader className="border-b border-slate-100 pb-3">
+            <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-lg">
+              <ShieldCheck className="w-5 h-5 text-blue-600" />
+              {editingUser ? `Edit Team Member — ${editingUser.name}` : "Add New Team Member"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <form onSubmit={handleSubmit} className="py-2 text-xs">
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+              <TabsList className="grid grid-cols-3 w-full bg-slate-100 p-1 rounded-xl">
+                <TabsTrigger value="basic" className="text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 py-1.5">
+                  <User className="w-3.5 h-3.5" /> Basic Information
+                </TabsTrigger>
+                <TabsTrigger value="permissions" className="text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 py-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5" /> Access Permissions
+                </TabsTrigger>
+                <TabsTrigger value="security" className="text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 py-1.5">
+                  <Lock className="w-3.5 h-3.5" /> Security & Account
+                </TabsTrigger>
+              </TabsList>
+
+              {/* TAB 1: BASIC INFORMATION */}
+              <TabsContent value="basic" className="space-y-4 pt-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">Full Name *</Label>
+                    <Input
+                      value={form.name}
+                      onChange={(e) => setForm({ ...form, name: e.target.value })}
+                      placeholder="e.g. Rahul Sharma"
+                      className="mt-1 h-9 text-xs"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">Mobile Number (10 Digits) *</Label>
+                    <Input
+                      value={form.mobile}
+                      onChange={(e) => setForm({ ...form, mobile: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                      placeholder="e.g. 9876543210"
+                      maxLength={10}
+                      className="mt-1 h-9 text-xs font-mono font-semibold"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">Work Email *</Label>
+                    <Input
+                      type="email"
+                      value={form.email}
+                      onChange={(e) => setForm({ ...form, email: e.target.value })}
+                      placeholder="e.g. rahul@solrix.com"
+                      className="mt-1 h-9 text-xs font-mono"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">
+                      {editingUser ? "Password (Leave blank to keep unchanged)" : "Password (Min 6 chars) *"}
+                    </Label>
+                    <Input
+                      type="password"
+                      value={form.password}
+                      onChange={(e) => setForm({ ...form, password: e.target.value })}
+                      placeholder="••••••••"
+                      className="mt-1 h-9 text-xs font-mono"
+                      required={!editingUser}
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">Role Preset</Label>
+                    <Select value={form.role} onValueChange={handleRoleChange}>
+                      <SelectTrigger className="mt-1 h-9 text-xs bg-white"><SelectValue /></SelectTrigger>
+                      <SelectContent className="text-xs">
+                        {ROLES.map((r) => (
+                          <SelectItem key={r} value={r}>
+                            {r}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">Account Status</Label>
+                    <div className="flex items-center gap-3 mt-2">
+                      <Switch
+                        checked={form.status === "Active"}
+                        onCheckedChange={(v) => setForm({ ...form, status: v ? "Active" : "Inactive" })}
+                        disabled={editingUser && (editingUser.role === "Super Admin" || editingUser.user_type === "owner")}
+                      />
+                      <span className="font-semibold text-xs text-slate-800">{form.status}</span>
+                    </div>
+                  </div>
+                </div>
+              </TabsContent>
+
+              {/* TAB 2: ACCESS PERMISSIONS MATRIX */}
+              <TabsContent value="permissions" className="space-y-4 pt-1">
+                {/* PRESETS HEADER BAR */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-800 text-xs">Permission Preset:</span>
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300 font-mono text-[11px]">
+                      {preset}
+                    </Badge>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5">
+                    {["Role Default", "Full Access", "Manager", "Staff", "Installer", "Viewer"].map((pr) => (
+                      <Button
+                        key={pr}
+                        type="button"
+                        size="xs"
+                        variant={preset === pr ? "default" : "outline"}
+                        onClick={() => handlePresetSelect(pr === "Role Default" ? form.role : pr)}
+                        className="h-7 text-[11px]"
+                      >
+                        {pr}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* PERMISSION MATRIX TABLE */}
+                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
+                      <tr>
+                        <th className="p-2.5">Module / Page</th>
+                        {["view", "create", "edit", "delete", "approve"].map((action) => (
+                          <th key={action} className="p-2.5 text-center capitalize">
+                            <button
+                              type="button"
+                              onClick={() => toggleColumnAll(action)}
+                              className="hover:underline text-slate-800 font-bold"
+                              title={`Toggle ${action} for all modules`}
+                            >
+                              {action}
+                            </button>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {MODULE_GROUPS.map((grp) => (
+                        <React.Fragment key={grp.group}>
+                          <tr className="bg-slate-50/80">
+                            <td colSpan={6} className="px-3 py-1.5 font-bold text-[11px] text-slate-500 tracking-wider">
+                              {grp.group}
+                            </td>
+                          </tr>
+                          {grp.modules.map((m) => (
+                            <React.Fragment key={m.key}>
+                              <tr className="hover:bg-slate-50 transition-colors">
+                                <td className="p-2.5 font-semibold text-slate-900 flex items-center justify-between">
+                                  <span>{m.label}</span>
+                                  {m.hasSubModules && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setExpandedGroups((prev) => ({ ...prev, [m.key]: !prev[m.key] }))}
+                                      className="text-blue-600 text-[11px] flex items-center gap-0.5 hover:underline"
+                                    >
+                                      {expandedGroups[m.key] ? "Hide Detail" : "Granular Modules"}
+                                      {expandedGroups[m.key] ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                    </button>
+                                  )}
+                                </td>
+                                {["view", "create", "edit", "delete", "approve"].map((action) => {
+                                  const isApplicable = m.actions.includes(action);
+                                  const isChecked = !!form.permissions?.[m.key]?.[action];
+                                  return (
+                                    <td key={action} className="p-2.5 text-center">
+                                      {isApplicable ? (
+                                        <Checkbox
+                                          checked={isChecked}
+                                          onCheckedChange={() => togglePermission(m.key, action)}
+                                        />
+                                      ) : (
+                                        <span className="text-slate-300">—</span>
+                                      )}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+
+                              {/* GRANULAR SUB-MODULES FOR DATA MANAGEMENT */}
+                              {m.hasSubModules && expandedGroups[m.key] && m.subModules.map((sm) => (
+                                <tr key={sm.key} className="bg-slate-50/40 border-t border-slate-100">
+                                  <td className="py-2 pl-8 pr-2.5 text-slate-700 font-mono text-[11px]">
+                                    ↳ {sm.label}
+                                  </td>
+                                  {["view", "create", "edit", "delete", "approve"].map((action) => {
+                                    const isApp = sm.actions.includes(action);
+                                    const isChecked = !!form.permissions?.[`dm_${sm.key}`]?.[action];
+                                    return (
+                                      <td key={action} className="p-2 text-center">
+                                        {isApp ? (
+                                          <Checkbox
+                                            checked={isChecked}
+                                            onCheckedChange={() => togglePermission(`dm_${sm.key}`, action)}
+                                          />
+                                        ) : (
+                                          <span className="text-slate-300">—</span>
+                                        )}
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              ))}
+                            </React.Fragment>
+                          ))}
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </TabsContent>
+
+              {/* TAB 3: SECURITY & ACCOUNT */}
+              <TabsContent value="security" className="space-y-4 pt-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">Account Type</Label>
+                    <div className="mt-1 font-mono text-xs font-bold text-slate-900">
+                      {editingUser?.user_type === "owner" ? "Workspace Owner (Super Admin)" : "Employee Account"}
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">Employee ID</Label>
+                    <div className="mt-1 font-mono text-xs font-bold text-slate-900">
+                      {editingUser?.employee_id || "Auto-generated on save"}
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">Last Login</Label>
+                    <div className="mt-1 font-mono text-xs text-slate-600">
+                      {editingUser?.last_login_at ? new Date(editingUser.last_login_at).toLocaleString() : "Never logged in"}
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">Two-Factor Auth (2FA)</Label>
+                    <div className="mt-1 text-xs text-slate-600 flex items-center gap-1.5">
+                      <Badge variant="outline" className="bg-slate-100 text-slate-600">Disabled</Badge>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5 text-xs">
+                    <AlertTriangle className="w-4 h-4 text-amber-600" /> Security Notice:
+                  </div>
+                  <div className="text-[11px] text-amber-800">
+                    Changes to team permissions take effect on the next session refresh or login. Super Admin credentials cannot be deleted or revoked.
+                  </div>
+                </div>
+              </TabsContent>
+            </Tabs>
+
+            <DialogFooter className="pt-4 border-t border-slate-100 flex items-center justify-between">
+              <Button type="button" variant="outline" size="sm" onClick={() => setModalOpen(false)} disabled={saving}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={saving} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-2xs">
+                {saving ? "Saving Changes..." : "Save Team Member"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

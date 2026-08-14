@@ -1,0 +1,44 @@
+[
+  {
+    "id": "4dee09f8-48fe-4757-8354-ba11331bff9e",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "client_id": "75ff21cd-fd07-42ca-b530-beb026d344e8",
+    "client_name": "Shubham Jadhav",
+    "sol_id": "SOL-2026-0001",
+    "requested_by": "527cb359-af07-422c-b47f-a5bb64427932",
+    "requested_by_name": "testing shubham",
+    "request_no": "MR-2026-0001",
+    "items": [
+      {
+        "product": "SS",
+        "size": "25",
+        "quantity": 10.0,
+        "approved_quantity": 10.0,
+        "unit": "Nos",
+        "variant": "",
+        "available_stock": 0,
+        "pending_quantity": 0.0
+      }
+    ],
+    "remarks": "",
+    "status": "approved",
+    "approval": {
+      "by": "testing shubham",
+      "by_id": "527cb359-af07-422c-b47f-a5bb64427932",
+      "at": "2026-08-10T08:54:48.975524+00:00",
+      "remarks": "",
+      "delivery_photo_file_id": "",
+      "challan_photo_file_id": ""
+    },
+    "delivery": {
+      "challan_number": "224",
+      "vehicle_number": "",
+      "driver_name": "",
+      "delivery_date": "2026-08-10T08:54:48.975539+00:00",
+      "delivery_photo_file_id": "",
+      "challan_photo_file_id": ""
+    },
+    "created_at": "2026-08-10T08:53:39.040062+00:00",
+    "updated_at": "2026-08-10T08:54:48.975480+00:00"
+  }
+]

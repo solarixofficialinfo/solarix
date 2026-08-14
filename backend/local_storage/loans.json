@@ -1,0 +1,38 @@
+[
+  {
+    "id": "loan_d539a2909664",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "client_id": "173017a9-f253-4a3f-bb30-93b9b7855f6a",
+    "project_id": "proj_6b6f98cb2c0a",
+    "provider": "d",
+    "loan_amount": 33333.0,
+    "approved_amount": 33333.0,
+    "approved_date": "2026-08-11",
+    "expected_disbursement_date": "",
+    "disbursed_amount": 333333.0,
+    "loan_ref": "",
+    "status": "Approved",
+    "remarks": "",
+    "created_by": "testing shubham",
+    "created_at": "2026-08-11T08:21:13.665023+00:00",
+    "updated_at": "2026-08-11T08:21:13.665045+00:00"
+  },
+  {
+    "id": "loan_046b10259655",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "client_id": "ab1f8714-0335-489a-bbc7-852238021030",
+    "project_id": "proj_ab1f8714-0335-489a-bbc7-852238021030",
+    "provider": "Tata Capital",
+    "loan_amount": 100000.0,
+    "approved_amount": 100000.0,
+    "approved_date": "2026-08-11",
+    "expected_disbursement_date": "",
+    "disbursed_amount": 0.0,
+    "loan_ref": "",
+    "status": "Applied",
+    "remarks": "",
+    "created_by": "testing shubham",
+    "created_at": "2026-08-11T08:28:50.459773+00:00",
+    "updated_at": "2026-08-11T08:28:50.459817+00:00"
+  }
+]

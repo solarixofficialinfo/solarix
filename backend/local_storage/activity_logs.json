@@ -1,0 +1,875 @@
+[
+  {
+    "id": "afd0bcce-c6e6-4375-a952-0d87f4d7e9e3",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Added Client",
+    "target": "Shubham Jadhav",
+    "created_at": "2026-08-09T15:39:57.901971+00:00"
+  },
+  {
+    "id": "847f621a-0bba-45cd-9122-b284d7228c0e",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Progress",
+    "target": "Shubham Jadhav",
+    "created_at": "2026-08-09T15:40:20.635293+00:00"
+  },
+  {
+    "id": "ba9b67d0-fd70-4ca8-ac13-23a84aa7c8b5",
+    "company_id": "test-company-id",
+    "user_id": "test-sales-user-id",
+    "user_name": "Shubham Sales",
+    "action": "Created Solar Lead",
+    "target": "Apollo Solar Mills (LEAD-2026-0001)",
+    "created_at": "2026-08-09T18:07:12.546275+00:00"
+  },
+  {
+    "id": "ffb049d2-224b-4c78-8bc5-5aecd095afcd",
+    "company_id": "test-company-id",
+    "user_id": "test-sales-user-id",
+    "user_name": "Shubham Sales",
+    "action": "Created Solar Lead",
+    "target": "Apollo Solar Mills (LEAD-2026-0002)",
+    "created_at": "2026-08-09T18:08:16.017118+00:00"
+  },
+  {
+    "id": "577808ea-ad13-4850-a094-4d3f916e00b0",
+    "company_id": "test-company-id",
+    "user_id": "test-sales-user-id",
+    "user_name": "Shubham Sales",
+    "action": "Created Solar Lead",
+    "target": "Apollo Solar Mills (LEAD-2026-0003)",
+    "created_at": "2026-08-09T18:08:46.420037+00:00"
+  },
+  {
+    "id": "83388ecf-f2f8-4f98-bee4-42e2546b476d",
+    "company_id": "test-company-id",
+    "user_id": "test-sales-user-id",
+    "user_name": "Shubham Sales",
+    "action": "Converted Lead to Client",
+    "target": "Lead ID: 4c904d36-84f5-4a9f-9d6f-8ec12bdd3f38 -> Client ID: test-client-123",
+    "created_at": "2026-08-09T18:08:51.379047+00:00"
+  },
+  {
+    "id": "7708fe8b-c5b1-443e-b5ef-0d415b8d7696",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Added Employee",
+    "target": "SS",
+    "created_at": "2026-08-10T08:51:16.401426+00:00"
+  },
+  {
+    "id": "cfb931d1-1015-4e48-a0b1-66f8966b8d68",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "Installation to SS",
+    "created_at": "2026-08-10T08:51:59.712763+00:00"
+  },
+  {
+    "id": "7f25e055-e86f-4e46-b6f6-121909d9bfb9",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Task (in_progress)",
+    "target": "Shubham Jadhav",
+    "created_at": "2026-08-10T08:52:14.075899+00:00"
+  },
+  {
+    "id": "8ffd0ce2-bc03-4f06-97fe-64d804a1d9d2",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Material Request Created",
+    "target": "Shubham Jadhav",
+    "created_at": "2026-08-10T08:53:39.905783+00:00"
+  },
+  {
+    "id": "bfc78ff7-7beb-47c1-9f92-afc94ec08500",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Material Approved",
+    "target": "Shubham Jadhav",
+    "created_at": "2026-08-10T08:54:51.130543+00:00"
+  },
+  {
+    "id": "2bdc7dee-deca-4abe-b537-0018e4895aa0",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Cancelled Task: Installation",
+    "target": "Shubham Jadhav",
+    "created_at": "2026-08-10T08:56:00.388815+00:00"
+  },
+  {
+    "id": "c62ecc87-7a96-44c1-8aea-2f1f3cb6a9a2",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Task (cancelled)",
+    "target": "Shubham Jadhav",
+    "created_at": "2026-08-10T08:56:00.765990+00:00"
+  },
+  {
+    "id": "61402a0d-1f62-4f12-9285-abc679f62b4e",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Outward Updated",
+    "target": "SS × 10.0",
+    "created_at": "2026-08-10T08:57:05.090455+00:00"
+  },
+  {
+    "id": "f1742c6e-70e4-42f2-b1e2-334f0c21ab32",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Outward Updated",
+    "target": "SS × 10.0",
+    "created_at": "2026-08-10T08:57:08.476136+00:00"
+  },
+  {
+    "id": "ee8a6c48-0f7f-4d44-afd4-b711b46f810a",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated DELIVERY BILL",
+    "target": "Shubham Jadhav",
+    "created_at": "2026-08-10T08:59:19.846229+00:00"
+  },
+  {
+    "id": "2393f510-4bf6-4d39-9e15-0d36f648719c",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Bulk Inward Import",
+    "target": "1 entries",
+    "created_at": "2026-08-10T09:03:01.819575+00:00"
+  },
+  {
+    "id": "06b741dd-34c4-4067-91b3-bdb9a95fc080",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Recorded Payment",
+    "target": "Amount: ₹50000.0 for Client ID: 75ff21cd-fd07-42ca-b530-beb026d344e8",
+    "created_at": "2026-08-10T18:19:32.940718+00:00"
+  },
+  {
+    "id": "368348bc-d1bb-4e9f-bf73-d79d4d394bad",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Recorded Payment",
+    "target": "Amount: ₹400000.0 for Client ID: 75ff21cd-fd07-42ca-b530-beb026d344e8",
+    "created_at": "2026-08-11T05:26:20.150742+00:00"
+  },
+  {
+    "id": "0c232324-29c0-444b-b284-c810af3700bf",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Created Vendor",
+    "target": "Vendor: VRL",
+    "created_at": "2026-08-11T05:27:12.693604+00:00"
+  },
+  {
+    "id": "1d4275a4-f8c5-4fae-acf2-2a14d87feac5",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Deleted Payment",
+    "target": "Payment ID: pay_b4648b59f748",
+    "created_at": "2026-08-11T06:34:14.751398+00:00"
+  },
+  {
+    "id": "8b5e7207-5295-45bc-bb53-c74dcdf15c04",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Deleted Payment",
+    "target": "Payment ID: pay_84003d821e2d",
+    "created_at": "2026-08-11T06:34:18.213817+00:00"
+  },
+  {
+    "id": "eced9aaa-a408-42af-80c7-799e8c72960d",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Added Client",
+    "target": "SS MOBILE",
+    "created_at": "2026-08-11T06:34:58.216291+00:00"
+  },
+  {
+    "id": "f958373b-42b7-4ec1-9cf7-e36f282ff35f",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Progress",
+    "target": "SS MOBILE",
+    "created_at": "2026-08-11T06:35:40.482924+00:00"
+  },
+  {
+    "id": "41d83506-a7f8-40ba-9cf4-36296c29bd67",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Progress",
+    "target": "SS MOBILE",
+    "created_at": "2026-08-11T06:35:42.253255+00:00"
+  },
+  {
+    "id": "d152343f-94e4-4b06-944a-6c01901546b2",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Progress",
+    "target": "SS MOBILE",
+    "created_at": "2026-08-11T06:35:43.291760+00:00"
+  },
+  {
+    "id": "2c34bda0-9c42-4f36-ba9e-fde2276dcaf7",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Progress",
+    "target": "SS MOBILE",
+    "created_at": "2026-08-11T06:35:44.250907+00:00"
+  },
+  {
+    "id": "d3afd690-a2d1-4f66-996f-f25b1bb8c3a4",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Recorded Payment",
+    "target": "Amount: ₹30000.0 for Project ID: proj_75ff21cd-fd07-42ca-b530-beb026d344e8",
+    "created_at": "2026-08-11T06:36:43.750786+00:00"
+  },
+  {
+    "id": "7162cce1-4463-4cbe-b2f2-01bed4b7cc48",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Created Financial Project",
+    "target": "Project: SS for Client: SS MOBILE",
+    "created_at": "2026-08-11T06:54:37.235422+00:00"
+  },
+  {
+    "id": "3ef46750-33ed-4548-9597-9f6a31fd414d",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Added Client",
+    "target": "shubam jadhav",
+    "created_at": "2026-08-11T07:34:21.513111+00:00"
+  },
+  {
+    "id": "755afaa8-af19-40f9-9e4f-7d530d4b31d2",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Created Financial Project",
+    "target": "Project: testing for Client: shubam jadhav",
+    "created_at": "2026-08-11T07:35:34.617898+00:00"
+  },
+  {
+    "id": "a61fc802-b97b-4d99-b75b-5f9aaf5f77b1",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Recorded Payment",
+    "target": "Amount: ₹20000.0 for Project ID: proj_6b6f98cb2c0a",
+    "created_at": "2026-08-11T08:17:09.604383+00:00"
+  },
+  {
+    "id": "fe98ecc6-3ded-405a-bd74-b7b04b367c6a",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Recorded Payment",
+    "target": "Amount: ₹5000.0 for Project ID: proj_6b6f98cb2c0a",
+    "created_at": "2026-08-11T08:17:23.342492+00:00"
+  },
+  {
+    "id": "e8bbc802-d6b5-42e2-b394-c915940d2cf5",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Recorded Payment",
+    "target": "Amount: ₹300000.0 for Project ID: proj_6b6f98cb2c0a",
+    "created_at": "2026-08-11T08:17:31.324522+00:00"
+  },
+  {
+    "id": "acff47b3-7138-4059-a264-7aff6ceebd85",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Recorded Loan",
+    "target": "Provider: d, Approved: ₹33333.0",
+    "created_at": "2026-08-11T08:21:14.056452+00:00"
+  },
+  {
+    "id": "65141fb9-1341-44db-b879-fed712f9c5e1",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Added Client",
+    "target": "testing 2",
+    "created_at": "2026-08-11T08:28:51.012571+00:00"
+  },
+  {
+    "id": "e91c33f8-06ee-49a0-94eb-4f00764bb3ac",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Progress",
+    "target": "testing 2",
+    "created_at": "2026-08-11T08:29:11.350306+00:00"
+  },
+  {
+    "id": "11f6c518-d9c4-4a21-9b70-fb56eae82c20",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "Installation to SS",
+    "created_at": "2026-08-11T13:56:53.886183+00:00"
+  },
+  {
+    "id": "3ee6ad7d-92f4-4df2-8691-5f3d84f13341",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "Survey to SS",
+    "created_at": "2026-08-11T13:57:03.804118+00:00"
+  },
+  {
+    "id": "9e1d2aae-54b7-4f45-9ef5-379581a64e34",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "Document Making to SS",
+    "created_at": "2026-08-11T13:57:15.867413+00:00"
+  },
+  {
+    "id": "0cd8672b-dc40-4382-b201-29268d02d241",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "Material Delivery to SS",
+    "created_at": "2026-08-11T13:57:29.714853+00:00"
+  },
+  {
+    "id": "43a70673-01fe-44cc-95c1-159bf6568856",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "Document Signed to SS",
+    "created_at": "2026-08-11T13:57:41.202686+00:00"
+  },
+  {
+    "id": "34c40b27-683d-40bb-a65c-968d986246b4",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "Meter Testing Request to SS",
+    "created_at": "2026-08-11T13:57:49.557154+00:00"
+  },
+  {
+    "id": "fb8da7e1-b0ce-4c71-ac61-f4c850c1581f",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "Meter Testing Completed to SS",
+    "created_at": "2026-08-11T13:57:59.559059+00:00"
+  },
+  {
+    "id": "fb1aa998-5634-46ce-8222-6e3cf4bbf4b0",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "PM Surya Ghar Upload to SS",
+    "created_at": "2026-08-11T13:58:14.116469+00:00"
+  },
+  {
+    "id": "da2ec8b2-01f5-4050-9197-3dedf54e0576",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "MSEDCL Upload to SS",
+    "created_at": "2026-08-11T13:58:21.965406+00:00"
+  },
+  {
+    "id": "f0a8b55d-8481-4ba1-9896-4d18f3e3dbc3",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "Verification to SS",
+    "created_at": "2026-08-11T13:58:32.056177+00:00"
+  },
+  {
+    "id": "1fed873d-c3f6-4b56-a297-c639325cef29",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Assigned Task",
+    "target": "Handover to SS",
+    "created_at": "2026-08-11T13:58:41.076221+00:00"
+  },
+  {
+    "id": "c205ac55-47f1-4c69-85d4-4423256b33f9",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Created Solar Lead",
+    "target": "ss (LEAD-2026-0001)",
+    "created_at": "2026-08-11T15:33:58.038609+00:00"
+  },
+  {
+    "id": "7b6211bd-e2d7-4b7b-801c-bdf333d9348a",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Employee",
+    "target": "SS",
+    "created_at": "2026-08-11T17:24:56.198799+00:00"
+  },
+  {
+    "id": "0ad581a6-e9a1-46cd-937f-1cadde1b0b6b",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated QUOTATION",
+    "target": "Manual",
+    "created_at": "2026-08-11T17:54:08.946903+00:00"
+  },
+  {
+    "id": "17c56c2d-13c4-44ae-acc9-1940401e39a3",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated QUOTATION",
+    "target": "Manual",
+    "created_at": "2026-08-11T17:54:24.296659+00:00"
+  },
+  {
+    "id": "aa114bee-6df0-42c0-aafd-32103a2817f8",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated QUOTATION",
+    "target": "shubam jadhav",
+    "created_at": "2026-08-12T05:03:13.317453+00:00"
+  },
+  {
+    "id": "a88cb292-0988-4d17-9675-9b115939a443",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Deleted Generated Document",
+    "target": "Client_Quotation_QT-260811-925_2026-08-11.pdf",
+    "created_at": "2026-08-12T05:03:29.097419+00:00"
+  },
+  {
+    "id": "1bf2a309-90e2-4ab3-b0c0-62ef24ea7a6e",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Deleted Generated Document",
+    "target": "shubam_jadhav_Quotation_Q-260812-1032_2026-08-12.pdf",
+    "created_at": "2026-08-12T05:03:34.515454+00:00"
+  },
+  {
+    "id": "95ce9ad6-3e93-4cb8-b7e3-841652803af8",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Inward Entry",
+    "target": "SS × 50.0",
+    "created_at": "2026-08-12T05:37:31.099484+00:00"
+  },
+  {
+    "id": "c793f35b-dd03-4f21-ae6b-9a9a2a4add0c",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Product Updated",
+    "target": "SS (25)",
+    "created_at": "2026-08-12T06:07:53.982176+00:00"
+  },
+  {
+    "id": "7ab9a062-1954-4258-9000-046434cd645f",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Added Employee",
+    "target": "shubam jadhav",
+    "created_at": "2026-08-12T06:16:37.798598+00:00"
+  },
+  {
+    "id": "a0b20a85-448b-4b6b-af27-e069867634e9",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated TAX INVOICE",
+    "target": "shubam jadhav",
+    "created_at": "2026-08-12T06:21:04.632415+00:00"
+  },
+  {
+    "id": "c73393f5-718f-4ae0-8087-d8fa315db39f",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Created Amount Bill",
+    "target": "Bill: 22E2E2 Amount: ₹120000.0 Vendor: VRL",
+    "created_at": "2026-08-12T06:45:51.220928+00:00"
+  },
+  {
+    "id": "eadfac4b-8f4f-4513-898f-c3de7b2d603b",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Created Amount Bill",
+    "target": "Bill: 22E2E2 Amount: ₹120000.0 Vendor: VRL",
+    "created_at": "2026-08-12T06:45:51.799564+00:00"
+  },
+  {
+    "id": "97b3c566-6ebe-4429-babe-a72103646ac8",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Recorded Payment",
+    "target": "Amount: ₹600000.0 for Project ID: proj_ab1f8714-0335-489a-bbc7-852238021030",
+    "created_at": "2026-08-12T07:48:47.235431+00:00"
+  },
+  {
+    "id": "77bae03c-91f6-4496-bd4d-b730e964dcf1",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Recorded Expense",
+    "target": "Category: Material, Amount: ₹558000.0",
+    "created_at": "2026-08-12T07:49:20.146145+00:00"
+  },
+  {
+    "id": "29585af4-cf4d-4955-87db-1b9e4beb2f9b",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated QUOTATION",
+    "target": "shubam jadhav",
+    "created_at": "2026-08-12T10:04:24.947209+00:00"
+  },
+  {
+    "id": "fb7b0d3d-7fb0-4be1-8365-b12c2aead5ef",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated QUOTATION",
+    "target": "shubam jadhav",
+    "created_at": "2026-08-12T10:16:59.546617+00:00"
+  },
+  {
+    "id": "0dd0f671-9569-440a-9d9c-921efe14084e",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated TAX INVOICE",
+    "target": "testing 2",
+    "created_at": "2026-08-12T10:18:34.589554+00:00"
+  },
+  {
+    "id": "b99885e1-2f82-43b8-96e7-71fe3eb613de",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated QUOTATION",
+    "target": "shubam jadhav",
+    "created_at": "2026-08-12T10:22:59.264613+00:00"
+  },
+  {
+    "id": "0a17156f-0caf-44f6-a3a9-b544db86ce01",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated QUOTATION",
+    "target": "Shubham Jadhav",
+    "created_at": "2026-08-12T10:33:51.050181+00:00"
+  },
+  {
+    "id": "c2c3bee8-790d-4967-874f-c4555cd8e2e2",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated QUOTATION",
+    "target": "Shubham Jadhav",
+    "created_at": "2026-08-12T10:34:38.262995+00:00"
+  },
+  {
+    "id": "561a7331-01b2-43ed-8792-eb77d8281b23",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-12T11:02:37.964832+00:00"
+  },
+  {
+    "id": "39d85a29-b5f9-40b1-b5b3-3ba6d3b3968e",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-12T11:02:54.710030+00:00"
+  },
+  {
+    "id": "19ddd9a0-8061-412f-a01d-19a84b2eb928",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-12T11:22:51.636774+00:00"
+  },
+  {
+    "id": "24f33f88-4a17-4788-af04-52be9002ada5",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated QUOTATION",
+    "target": "shubam jadhav",
+    "created_at": "2026-08-12T11:24:05.617799+00:00"
+  },
+  {
+    "id": "ae12a125-643a-4aeb-ace1-da659fe6d9e0",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Company Profile",
+    "target": "",
+    "created_at": "2026-08-12T11:25:02.916968+00:00"
+  },
+  {
+    "id": "2932e737-a9e6-432f-9326-10ce1217ff93",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated QUOTATION",
+    "target": "shubam jadhav",
+    "created_at": "2026-08-12T11:25:22.704648+00:00"
+  },
+  {
+    "id": "e37839b2-1394-43b9-b2e5-20f5525fd31b",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated QUOTATION",
+    "target": "shubam jadhav",
+    "created_at": "2026-08-12T11:26:09.893770+00:00"
+  },
+  {
+    "id": "5d4dec8d-8c7a-4be6-af4a-2146313cf93e",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Inward Entry",
+    "target": "SS × 33.0",
+    "created_at": "2026-08-12T11:31:09.878138+00:00"
+  },
+  {
+    "id": "6c0b2b91-a187-4b00-b415-792e300124ea",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-12T11:32:54.320916+00:00"
+  },
+  {
+    "id": "0f56be8e-3082-440b-97ae-f9759add7685",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Saved Purchase Order",
+    "target": "PO #: PO26-AUG950",
+    "created_at": "2026-08-12T11:33:00.621483+00:00"
+  },
+  {
+    "id": "ec62c74e-6050-44f3-abd3-1373a9689880",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-12T15:23:38.514189+00:00"
+  },
+  {
+    "id": "91b142bc-da3a-40f2-8f5a-1896b294c6a3",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-12T15:23:54.621262+00:00"
+  },
+  {
+    "id": "c3ecf565-6f53-468d-bde7-7fc0d7541cee",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Created Tax Invoice",
+    "target": "Invoice #INV-20260812-3291 for ₹708000.0",
+    "created_at": "2026-08-12T15:30:27.585250+00:00"
+  },
+  {
+    "id": "14f472fe-880d-441c-a1d2-e9fff81085e7",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-13T10:05:49.439159+00:00"
+  },
+  {
+    "id": "c38dd973-abec-4f85-80be-68eec1f92de4",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-13T10:08:43.192801+00:00"
+  },
+  {
+    "id": "ed42206f-c1bc-4ddb-b262-cbf4169c5c19",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-13T10:08:54.945415+00:00"
+  },
+  {
+    "id": "573151bd-d824-446a-8a2e-b923c4eaeed4",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-13T10:09:20.744131+00:00"
+  },
+  {
+    "id": "86ae0369-e21d-4206-9775-9f689d4ae6ac",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-13T10:12:14.798989+00:00"
+  },
+  {
+    "id": "d97334fc-16a1-4fe5-9ff1-7a0a08fe1f5d",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Created Tax Invoice",
+    "target": "Invoice #INV-20260813-7646 for ₹708000.0",
+    "created_at": "2026-08-13T10:21:14.548602+00:00"
+  },
+  {
+    "id": "582b910a-8800-4629-a3e8-f9a60aad3564",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Created Tax Invoice",
+    "target": "Invoice #INV-20260813-2703 for ₹708000.0",
+    "created_at": "2026-08-13T10:22:25.577436+00:00"
+  },
+  {
+    "id": "69a98677-28a5-4412-86b3-93533aa63d1b",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-13T10:24:52.571212+00:00"
+  },
+  {
+    "id": "bdb02d73-0748-455b-b293-bbf4b0b6da86",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-13T10:24:54.816435+00:00"
+  },
+  {
+    "id": "e6206fe7-00f5-4a6c-a5a3-08835ba57909",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-13T10:25:07.881712+00:00"
+  },
+  {
+    "id": "74c635bf-e3ef-4e67-9a98-f8aa47b293d0",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Generated PURCHASE ORDER",
+    "target": "Manual",
+    "created_at": "2026-08-13T10:26:16.174539+00:00"
+  },
+  {
+    "id": "8e4702de-631f-4da7-b9b9-a01aa8cd5915",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Created Tax Invoice",
+    "target": "Invoice #INV-20260813-5414 for ₹708000.0",
+    "created_at": "2026-08-13T10:40:05.655393+00:00"
+  },
+  {
+    "id": "c11c82d9-6546-4db9-acf5-0fad62f17816",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Progress",
+    "target": "testing 2",
+    "created_at": "2026-08-13T11:15:51.691066+00:00"
+  },
+  {
+    "id": "bc4d03ec-5a02-4514-8c79-9171f486aa96",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Submitted Feedback",
+    "target": "Suggestion: NOT WROKING...",
+    "created_at": "2026-08-13T11:18:28.852350+00:00"
+  },
+  {
+    "id": "a1396b03-51f6-4351-9afc-2d9180483073",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "user_id": "527cb359-af07-422c-b47f-a5bb64427932",
+    "user_name": "testing shubham",
+    "action": "Updated Employee",
+    "target": "testing shubham",
+    "created_at": "2026-08-13T11:37:08.118049+00:00"
+  }
+]

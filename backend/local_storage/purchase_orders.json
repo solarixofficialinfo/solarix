@@ -1,0 +1,41 @@
+[
+  {
+    "id": "po_c59eb4d28564",
+    "company_id": "7da2622b-3882-4b69-ab5e-defc41ea29c3",
+    "po_number": "PO26-AUG950",
+    "po_date": "2026-08-12",
+    "vendor_id": "ven_85459360ba31",
+    "vendor_name": "VRL",
+    "vendor_address": "",
+    "vendor_phone": "44444444",
+    "vendor_email": "SHUBHAM.WORKF@GMAIL.COM",
+    "vendor_gstin": "SSDCD",
+    "ship_via": "FOR",
+    "shipping_method": "PAID",
+    "shipping_term": "DOOR DELIVERY",
+    "delivery_date": "2026-08-26",
+    "items": [
+      {
+        "id": "po_item_k5ps835py",
+        "product_name": "SS",
+        "size": "25",
+        "quantity": "566",
+        "unit": "Nos",
+        "unit_price": "50",
+        "amount": 28300
+      }
+    ],
+    "notes": "DELIVERY WILL BE F.O.R. ON-SITE\nLOCATION OF SITE WILL BE PROVIDED AT THE TIME OF DISPATCH",
+    "cgst_rate": 2.5,
+    "sgst_rate": 2.5,
+    "igst_rate": 0.0,
+    "freight": 0.0,
+    "subtotal": 28300.0,
+    "grand_total": 29715.0,
+    "status": "Created",
+    "created_by": "527cb359-af07-422c-b47f-a5bb64427932",
+    "created_by_name": "testing shubham",
+    "created_at": "2026-08-12T11:33:00.237319+00:00",
+    "updated_at": "2026-08-12T11:33:00.237336+00:00"
+  }
+]

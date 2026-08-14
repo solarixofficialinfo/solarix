@@ -1,0 +1,6 @@
+{
+  "appId": "com.solrix.app",
+  "appName": "SOLRIX WORK",
+  "webDir": "build",
+  "bundledWebRuntime": false
+}

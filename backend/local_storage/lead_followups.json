@@ -1,0 +1,57 @@
+[
+  {
+    "id": "fa85c16b-1ec8-481d-8c2d-71979a2fecd9",
+    "lead_id": "9d6ef4fa-f1a7-4987-a6c5-69354261a823",
+    "company_id": "test-company-id",
+    "assigned_to": "test-sales-user-id",
+    "assigned_to_name": "Shubham Sales",
+    "followup_at": "2026-08-11T11:00",
+    "status": "pending",
+    "notes": "Initial follow-up set on lead creation",
+    "created_at": "2026-08-09T18:07:12.123414+00:00"
+  },
+  {
+    "id": "8da2c74c-515c-41bf-8236-2c6fa5278625",
+    "lead_id": "74af555e-be49-4410-a748-433d920e624b",
+    "company_id": "test-company-id",
+    "assigned_to": "test-sales-user-id",
+    "assigned_to_name": "Shubham Sales",
+    "followup_at": "2026-08-11T11:00",
+    "status": "pending",
+    "notes": "Initial follow-up set on lead creation",
+    "created_at": "2026-08-09T18:08:15.585058+00:00"
+  },
+  {
+    "id": "6cffa127-8e85-4ea9-8637-2988b8384cc8",
+    "lead_id": "74af555e-be49-4410-a748-433d920e624b",
+    "company_id": "test-company-id",
+    "assigned_to": "test-sales-user-id",
+    "assigned_to_name": "Shubham Sales",
+    "followup_at": "2026-08-12T14:00",
+    "status": "pending",
+    "notes": "Discussed 25 kW specs. Client requested site visit on Tuesday.",
+    "created_at": "2026-08-09T18:08:20.019300+00:00"
+  },
+  {
+    "id": "2c8f4b99-40fc-4a96-a43a-0c0ba9524836",
+    "lead_id": "4c904d36-84f5-4a9f-9d6f-8ec12bdd3f38",
+    "company_id": "test-company-id",
+    "assigned_to": "test-sales-user-id",
+    "assigned_to_name": "Shubham Sales",
+    "followup_at": "2026-08-11T11:00",
+    "status": "pending",
+    "notes": "Initial follow-up set on lead creation",
+    "created_at": "2026-08-09T18:08:46.031761+00:00"
+  },
+  {
+    "id": "12285b6f-ecf2-4af1-8bfb-1b1e024e006c",
+    "lead_id": "4c904d36-84f5-4a9f-9d6f-8ec12bdd3f38",
+    "company_id": "test-company-id",
+    "assigned_to": "test-sales-user-id",
+    "assigned_to_name": "Shubham Sales",
+    "followup_at": "2026-08-12T14:00",
+    "status": "pending",
+    "notes": "Discussed 25 kW specs. Client requested site visit on Tuesday.",
+    "created_at": "2026-08-09T18:08:47.457609+00:00"
+  }
+]
