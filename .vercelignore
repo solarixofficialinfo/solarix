@@ -11,3 +11,7 @@ backend/local_storage/
 *.whl
 *.tar.gz
 *.zip
+
+# Ignore Python backend files from Vercel Frontend deployment
+api/
+requirements.txt
