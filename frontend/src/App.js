@@ -103,9 +103,6 @@ function AccessDenied() {
 function PermissionRoute({ page, children }) {
   const { user, loading } = useAuth();
   if (loading) return null;
-  if (page === "team" && (user?.user_type === "owner" || user?.role === "Owner")) {
-    return <Navigate to="/dashboard" replace />;
-  }
   const isSuperOrAdmin = user?.role === "Super Admin" || user?.role === "Admin" || user?.user_type === "owner";
   const hasPerm = isSuperOrAdmin || page === "complaints" || (user?.permissions?.[page]?.view === true);
 
