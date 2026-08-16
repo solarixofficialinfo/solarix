@@ -2,12 +2,13 @@ services:
   - type: web
     name: solrix-api
     runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: PYTHONPATH=backend uvicorn server:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"
+      - key: PYTHONPATH
+        value: "backend"
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
