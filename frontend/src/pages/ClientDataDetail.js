@@ -7,6 +7,7 @@ import { useDeleteClient } from "@/hooks/useClients";
 import { queryKeys, invalidateAllClientQueries } from "@/lib/queryKeys";
 import { usePermission } from "@/lib/permissions";
 import { useEmployeeList } from "@/hooks/useTeam";
+import { compressImageFile } from "@/lib/imageOptimizer";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -1661,52 +1662,6 @@ function UploadPhotoDialog({ open, onClose, queryClient, clientId }) {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
     }
-  };
-
-  const compressImageFile = async (f) => {
-    if (!f || !f.type || !f.type.startsWith("image/") || f.size <= 1024 * 1024) {
-      return f;
-    }
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(f);
-      reader.onload = (e) => {
-        const img = new Image();
-        img.src = e.target.result;
-        img.onload = () => {
-          const canvas = document.createElement("canvas");
-          let { width, height } = img;
-          const maxDim = 2400;
-          if (width > maxDim || height > maxDim) {
-            if (width > height) {
-              height = Math.round((height * maxDim) / width);
-              width = maxDim;
-            } else {
-              width = Math.round((width * maxDim) / height);
-              height = maxDim;
-            }
-          }
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(img, 0, 0, width, height);
-          canvas.toBlob(
-            (blob) => {
-              if (!blob) return resolve(f);
-              const compressedFile = new File([blob], f.name, {
-                type: "image/jpeg",
-                lastModified: Date.now(),
-              });
-              resolve(compressedFile);
-            },
-            "image/jpeg",
-            0.85
-          );
-        };
-        img.onerror = () => resolve(f);
-      };
-      reader.onerror = () => resolve(f);
-    });
   };
 
   const handleUpload = async () => {

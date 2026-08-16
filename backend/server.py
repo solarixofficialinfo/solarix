@@ -4565,13 +4565,13 @@ async def generate_document_preview(payload: Dict[str, Any], user=Depends(get_cu
     if doc_type in ("quotation", "tax_invoice", "delivery_bill", "purchase_order", "purchase_bill"):
         if client_doc and not doc_data.get("client"):
             doc_data["client"] = client_doc
-        pdf_bytes = pdf_generator.generate_document(doc_type, doc_data, company_doc)
+        pdf_bytes = await asyncio.to_thread(pdf_generator.generate_document, doc_type, doc_data, company_doc)
         gen_content_type = "application/pdf"
     elif doc_type == "annexure":
         import annexure_generator as _annex_gen
-        pdf_bytes, gen_content_type = _annex_gen.generate_annexure(client_doc, company_doc or {})
+        pdf_bytes, gen_content_type = await asyncio.to_thread(_annex_gen.generate_annexure, client_doc, company_doc or {})
     else:
-        pdf_bytes = pdf_generator.generate(doc_type, client_doc, company_doc or {})
+        pdf_bytes = await asyncio.to_thread(pdf_generator.generate, doc_type, client_doc, company_doc or {})
         gen_content_type = "application/pdf"
 
     # Extract document number and clean up duplicates
@@ -4650,21 +4650,21 @@ async def generate_public_document(payload: Dict[str, Any], user=Depends(get_cur
         if client_doc and not doc_data.get("client"):
             doc_data["client"] = client_doc
         if fmt_type == "docx":
-            pdf_bytes = pdf_generator.generate_docx(doc_type, doc_data, company_doc)
+            pdf_bytes = await asyncio.to_thread(pdf_generator.generate_docx, doc_type, doc_data, company_doc)
             gen_content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else:
-            pdf_bytes = pdf_generator.generate_document(doc_type, doc_data, company_doc)
+            pdf_bytes = await asyncio.to_thread(pdf_generator.generate_document, doc_type, doc_data, company_doc)
             gen_content_type = "application/pdf"
     elif doc_type == "annexure":
         import annexure_generator as _annex_gen
         if not client_doc:
             raise HTTPException(status_code=400, detail="client_id is required for this document type")
         client_doc = _enrich_client_doc(client_doc)
-        pdf_bytes, gen_content_type = _annex_gen.generate_annexure(client_doc, company_doc or {})
+        pdf_bytes, gen_content_type = await asyncio.to_thread(_annex_gen.generate_annexure, client_doc, company_doc or {})
     else:
         if not client_doc:
             raise HTTPException(status_code=400, detail="client_id is required for this document type")
-        pdf_bytes = pdf_generator.generate(doc_type, client_doc, company_doc or {})
+        pdf_bytes = await asyncio.to_thread(pdf_generator.generate, doc_type, client_doc, company_doc or {})
         gen_content_type = "application/pdf"
 
     # Extract document number and clean up duplicates
