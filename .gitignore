@@ -21,3 +21,5 @@ frontend/build/
 
 # Local data files
 backend/local_storage/*.json
+*.csv
+rzp-key.csv

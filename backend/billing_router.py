@@ -151,8 +151,8 @@ async def get_company_subscription(user=Depends(get_current_user_dep())):
 @billing_router.post("/razorpay/create-subscription")
 async def create_razorpay_subscription(data: CreateSubscriptionIn, user=Depends(get_current_user_dep())):
     """Create Razorpay Subscription object or return test subscription parameters."""
-    if user.get("role") != "Admin":
-        raise HTTPException(status_code=403, detail="Only Company Admins can manage subscriptions")
+    if user.get("role") not in ("Admin", "Super Admin", "Owner") and user.get("user_type") != "owner":
+        raise HTTPException(status_code=403, detail="Only Company Admins or Owners can manage subscriptions")
 
     db = get_db()
     company_id = user["company_id"]
@@ -213,8 +213,8 @@ async def create_razorpay_subscription(data: CreateSubscriptionIn, user=Depends(
 @billing_router.post("/razorpay/verify-subscription")
 async def verify_razorpay_subscription(data: VerifySubscriptionIn, user=Depends(get_current_user_dep())):
     """Server-side HMAC verification of checkout response and activation of paid subscription."""
-    if user.get("role") != "Admin":
-        raise HTTPException(status_code=403, detail="Only Company Admins can manage subscriptions")
+    if user.get("role") not in ("Admin", "Super Admin", "Owner") and user.get("user_type") != "owner":
+        raise HTTPException(status_code=403, detail="Only Company Admins or Owners can manage subscriptions")
 
     db = get_db()
     company_id = user["company_id"]
