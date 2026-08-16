@@ -433,6 +433,17 @@ export default function ProjectExecution() {
 
         {canApproval && (
           <div style={{ display: tab === "materials" ? "block" : "none" }}>
+            <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between mb-4 shadow-xs">
+              <div className="flex items-center gap-2 text-xs text-blue-900 font-medium">
+                <PackageSearch className="w-4 h-4 text-blue-600 shrink-0" />
+                <span>Material requests and inventory allocations are centrally managed on the dedicated Material page.</span>
+              </div>
+              <Link to="/material">
+                <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold gap-1.5 h-7">
+                  Open Material Page <ArrowRight className="w-3 h-3" />
+                </Button>
+              </Link>
+            </div>
             {loadedTabs.has("materials") && loadingTab ? (
               <Card className="border-slate-200 p-6 space-y-4 animate-pulse">
                 {[1, 2, 3].map((x) => (

@@ -2833,7 +2833,7 @@ async def login(data: LoginIn, response: Response):
 
     cid = str(user.get("company_id") or "")
     logger.info(f"[LOGIN] step=company_lookup_start cid={cid} elapsed={_elapsed()}ms")
-    company = _cache_get_company(cid)
+    company = _cache_get_company(cid) if cid else None
     if not company and cid:
         try:
             company = await asyncio.to_thread(_fetch_company_with_token_sync, cid, token)
@@ -2846,6 +2846,18 @@ async def login(data: LoginIn, response: Response):
         except Exception as e:
             logger.error(f"[LOGIN] step=company_failed elapsed={_elapsed()}ms err={e}")
             company = None
+
+    if not company:
+        user_email = (user.get("email") or "").lower().strip()
+        if user_email:
+            try:
+                company = await db.companies.find_one({"email": user_email}, {"_id": 0})
+                if company and isinstance(company, dict):
+                    user["company_id"] = company["id"]
+                    _cache_put_company(company["id"], company)
+                    await db.users.update_one({"id": user["id"]}, {"$set": {"company_id": company["id"]}})
+            except Exception as e:
+                logger.error(f"[LOGIN] step=company_by_email_failed err={e}")
 
     # Proactively seed auth cache so subsequent requests (/auth/me, /clients, etc.) resolve instantly
     _cache_put_user(token, user)
@@ -2880,7 +2892,19 @@ async def refresh_token_endpoint(data: RefreshIn, response: Response):
 
 @api_router.get("/auth/me")
 async def me(user=Depends(get_current_user)):
-    company = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0})
+    cid = user.get("company_id")
+    company = _cache_get_company(cid) if cid else None
+    if not company and cid:
+        company = await db.companies.find_one({"id": cid}, {"_id": 0})
+        if company and isinstance(company, dict):
+            _cache_put_company(cid, company)
+    if not company and user.get("email"):
+        company = await db.companies.find_one({"email": user["email"].lower().strip()}, {"_id": 0})
+        if company and isinstance(company, dict):
+            if user.get("id"):
+                await db.users.update_one({"id": user["id"]}, {"$set": {"company_id": company["id"]}})
+                user["company_id"] = company["id"]
+            _cache_put_company(company["id"], company)
     return {"user": user, "company": company}
 
 @api_router.patch("/auth/me")
@@ -6795,7 +6819,7 @@ async def get_high_value_ledger(search: Optional[str] = None, user=Depends(get_c
             "quantity": float(oe.get("quantity") or 0.0),
             "unit": oe.get("unit") or "Nos",
             "serial_numbers": serials,
-            "challan_number": oe.get("reference_number") or oe.get("bill_number") or "—",
+            "challan_number": oe.get("outward_challan_no") or oe.get("reference_number") or oe.get("bill_number") or "—",
             "client_name": c_name,
             "site": site_val,
             "requested_by": req_by,
@@ -12188,6 +12212,11 @@ async def record_project_payment(project_id: str, data: PaymentRecordPayload, us
         client_id = project.get("client_id")
     elif not client_id and project_id.startswith("proj_"):
         client_id = project_id.replace("proj_", "")
+    
+    if not client_id:
+        cl = await db.clients.find_one({"$or": [{"id": project_id}, {"sol_id": project_id}], "company_id": cid})
+        if cl:
+            client_id = cl["id"]
 
     if not client_id:
         raise HTTPException(status_code=400, detail="Client ID required for payment")

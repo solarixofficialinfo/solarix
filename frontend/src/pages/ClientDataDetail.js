@@ -498,9 +498,6 @@ export default function ClientDataDetail() {
             <TabsTrigger value="tasks" className="text-xs font-semibold px-4 py-2 gap-1.5">
               <ClipboardList className="w-3.5 h-3.5 text-teal-600" /> Tasks ({tasks.length})
             </TabsTrigger>
-            <TabsTrigger value="materials" className="text-xs font-semibold px-4 py-2 gap-1.5">
-              <Truck className="w-3.5 h-3.5 text-amber-600" /> Materials ({materialDeliveries.length})
-            </TabsTrigger>
             <TabsTrigger value="documents" className="text-xs font-semibold px-4 py-2 gap-1.5">
               <FileText className="w-3.5 h-3.5 text-violet-600" /> Documents ({documents.length})
             </TabsTrigger>
@@ -933,46 +930,6 @@ export default function ClientDataDetail() {
                           </Badge>
                         </td>
                         <td className="p-3 text-slate-500">{t.due_date ? dayjs(t.due_date).format("D MMM YYYY") : "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Card>
-        </TabsContent>
-
-        {/* SECTION 4: MATERIALS */}
-        <TabsContent value="materials" className="space-y-4">
-          <Card className="border-slate-200 p-5 space-y-4">
-            <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-              <Truck className="w-4 h-4 text-amber-600" /> Project Materials & High Value Tracking
-            </h3>
-
-            {materialDeliveries.length === 0 ? (
-              <div className="p-8 text-center text-slate-400 text-xs italic">No material deliveries logged.</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs text-left">
-                  <thead className="bg-slate-50 text-[11px] uppercase text-slate-500 border-b">
-                    <tr>
-                      <th className="p-3">Product Name</th>
-                      <th className="p-3">Quantity</th>
-                      <th className="p-3">Status</th>
-                      <th className="p-3">Delivery Date</th>
-                      <th className="p-3">Serial Numbers</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {materialDeliveries.map((m, i) => (
-                      <tr key={i} className="hover:bg-slate-50">
-                        <td className="p-3 font-semibold text-slate-900">{m.product_name || m.product || "Solar Components"}</td>
-                        <td className="p-3 font-bold text-slate-800">{m.quantity || 1} Nos</td>
-                        <td className="p-3">
-                          <Badge variant="outline" className="bg-emerald-50 text-emerald-700 text-[10px]">Delivered</Badge>
-                        </td>
-                        <td className="p-3 text-slate-600">{m.created_at ? dayjs(m.created_at).format("D MMM YYYY") : "—"}</td>
-                        <td className="p-3 font-mono text-[11px] text-slate-700">{m.serial_numbers?.join(", ") || m.serial_number || "—"}</td>
                       </tr>
                     ))}
                   </tbody>

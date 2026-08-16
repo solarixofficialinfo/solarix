@@ -122,15 +122,13 @@ export const AuthProvider = ({ children }) => {
   };
 
   const googleLogin = async () => {
-    // Build the OAuth redirect URL from the current browser origin.
-    // In production browser environments, always use the active window.location.origin.
-    let origin = typeof window !== "undefined" && window.location && window.location.origin ? window.location.origin : "";
-    if (
-      !origin ||
-      ((origin.includes("localhost") || origin.includes("127.0.0.1")) && process.env.NODE_ENV === "production")
-    ) {
-      origin = process.env.REACT_APP_SITE_URL || "https://solarix-cumx-sable.vercel.app";
-    }
+    // Always use the current browser origin as the redirect URL.
+    // On Vercel production, window.location.origin is the Vercel URL.
+    // In development, it is http://localhost:3000.
+    // Never rely on NODE_ENV for this — it reflects build time, not runtime.
+    let origin = (typeof window !== "undefined" && window.location?.origin)
+      ? window.location.origin
+      : (process.env.REACT_APP_SITE_URL || "https://solarix-cumx-sable.vercel.app");
     const redirectUrl = `${origin}/login`;
 
     const { data, error } = await supabase.auth.signInWithOAuth({

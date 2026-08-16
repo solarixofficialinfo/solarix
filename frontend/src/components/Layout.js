@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
-import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp, ShieldAlert, Sparkles } from "lucide-react";
+import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp, ShieldAlert, Sparkles, PackageSearch } from "lucide-react";
 import NotificationBell from "@/components/NotificationBell";
 import ProfileMenu from "@/components/ProfileMenu";
 import TrialBanner from "@/components/TrialBanner";
@@ -193,6 +193,7 @@ export default function Layout({ children }) {
       items: [
         { to: "/receivables", label: "Receivables & Collection", icon: DollarSign, key: "receivables" },
         { to: "/inventory", label: "Data Management", icon: Boxes, key: "data_management" },
+        { to: "/material", label: "Material Requests", icon: PackageSearch, key: "data_management" },
         { to: "/client-data", label: "Client Data", icon: LifeBuoy, key: "client_data" },
         { to: "/reports", label: "Reports", icon: ScrollText, key: "reports" },
       ],

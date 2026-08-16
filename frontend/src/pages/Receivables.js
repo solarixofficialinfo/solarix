@@ -2768,13 +2768,19 @@ export default function Receivables() {
               <Button
                 size="sm"
                 onClick={() => {
+                  if (!activeProjectId) {
+                    toast.error("No project selected. Please open a project first.");
+                    return;
+                  }
                   if (!paymentForm.amount || Number(paymentForm.amount) <= 0) {
                     toast.error("Please enter a valid amount");
                     return;
                   }
+                  const clientId = projectWorkspace?.client?.id || projectWorkspace?.project?.client_id || "";
                   recordPaymentMutation.mutate({
                     projectId: activeProjectId,
                     payload: {
+                      client_id: clientId,
                       payment_type: paymentForm.payment_type,
                       milestone_name: paymentForm.payment_type,
                       amount: Number(paymentForm.amount),

@@ -38,6 +38,7 @@ const Receivables = lazy(() => import("@/pages/Receivables"));
 const Vendors = lazy(() => import("@/pages/Vendors"));
 const PurchaseOrders = lazy(() => import("@/pages/PurchaseOrders"));
 const Pricing = lazy(() => import("@/pages/Pricing"));
+const MaterialRequests = lazy(() => import("@/pages/MaterialRequests"));
 
 const ControlCenterLayout = lazy(() => import("@/pages/ControlCenter/ControlCenterLayout"));
 const ControlCenterDashboard = lazy(() => import("@/pages/ControlCenter/ControlCenterDashboard"));
@@ -231,6 +232,9 @@ function App() {
             <Route path="/complaints/:id" element={<Protected><PermissionRoute page="complaints"><ComplaintDetail /></PermissionRoute></Protected>} />
             <Route path="/receivables" element={<Protected><Receivables /></Protected>} />
             <Route path="/vendors" element={<Protected><Vendors /></Protected>} />
+            <Route path="/material" element={<Protected><PermissionRoute page="data_management"><MaterialRequests /></PermissionRoute></Protected>} />
+            <Route path="/materials" element={<Navigate to="/material" replace />} />
+            <Route path="/material-requests" element={<Navigate to="/material" replace />} />
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/billing" element={<Protected><Billing /></Protected>} />
             <Route path="/purchase-orders" element={<Protected><PermissionRoute page="sales_documents"><PurchaseOrders /></PermissionRoute></Protected>} />

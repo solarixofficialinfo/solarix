@@ -785,9 +785,9 @@ export default function PurchaseOrders() {
         <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             {company.logo_url ? (
-              <img src={company.logo_url} alt="Logo" className="h-8 object-contain" />
+              <img src={company.logo_url} alt="Logo" className="h-16 max-w-[160px] object-contain" />
             ) : (
-              <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white font-bold flex items-center justify-center text-xs">
+              <div className="w-12 h-12 rounded-lg bg-indigo-600 text-white font-bold flex items-center justify-center text-sm">
                 GVP
               </div>
             )}

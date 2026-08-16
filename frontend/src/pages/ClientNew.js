@@ -49,29 +49,27 @@ export default function ClientNew() {
       status: fromLead ? "Approved" : "Lead",
       documents: [],
       // ── Financial Setup Initial State ──
-      contract_value: "500000",
+      contract_value: "",
       initial_payments: [
-        { description: "Advance", amount: "20000", payment_source: "Cash", status: "Received", ref_number: "", remarks: "" },
-        { description: "Initial Online Payment", amount: "30000", payment_source: "Online", status: "Received", ref_number: "", remarks: "" },
-        { description: "Custom Payment", amount: "", payment_source: "Bank Transfer", status: "Pending", ref_number: "", remarks: "" }
+        { description: "Advance Payment", amount: "", payment_source: "Bank Transfer", status: "Received", ref_number: "", remarks: "" }
       ],
       loan_setup: {
-        enabled: true,
-        provider: "Tata Capital",
-        loan_amount: "100000",
-        approved_amount: "100000",
+        enabled: false,
+        provider: "",
+        loan_amount: "",
+        approved_amount: "",
         approved_date: new Date().toISOString().split("T")[0],
         expected_disbursement_date: "",
         disbursed_amount: "0",
         loan_ref: "",
-        status: "Approved",
+        status: "Pending",
         remarks: ""
       },
       payment_plan: [
-        { name: "Advance", amount: "50000" },
-        { name: "Dispatch", amount: "150000" },
-        { name: "Installation", amount: "200000" },
-        { name: "Handover", amount: "50000" }
+        { name: "Advance Payment", amount: "" },
+        { name: "Material Dispatch", amount: "" },
+        { name: "Installation Complete", amount: "" },
+        { name: "Net Metering / Handover", amount: "" }
       ]
     };
     return base;
