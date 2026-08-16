@@ -9,7 +9,18 @@ const PROJ_EXEC_TABS = ["verification", "approval", "reject", "project_assignmen
 export function usePermission(page, action = "view") {
   const { user } = useAuth();
   if (!user) return false;
-  if (user.role === "Admin") return true;
+  if (
+    user.role === "Admin" ||
+    user.role === "Super Admin" ||
+    user.role === "Platform Owner" ||
+    user.user_type === "owner" ||
+    user.user_type === "platform_owner" ||
+    user.user_type === "super_admin" ||
+    user.is_super_admin ||
+    user.is_platform_owner
+  ) {
+    return true;
+  }
   const p = (user.permissions || {})[page];
   if (!p) return false;
   if (page === "project_execution" && PROJ_EXEC_TABS.includes(action) && p[action] === undefined) {

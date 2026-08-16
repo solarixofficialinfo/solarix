@@ -207,6 +207,9 @@ function App() {
             <Route path="/clients/new" element={<Protected><PermissionRoute page="clients"><ClientNew /></PermissionRoute></Protected>} />
             <Route path="/clients/:id" element={<Protected><PermissionRoute page="clients"><ClientDetail /></PermissionRoute></Protected>} />
             <Route path="/team" element={<Protected><PermissionRoute page="team"><Team /></PermissionRoute></Protected>} />
+            <Route path="/access" element={<Navigate to="/team" replace />} />
+            <Route path="/permissions" element={<Navigate to="/team" replace />} />
+            <Route path="/team-access" element={<Navigate to="/team" replace />} />
             <Route path="/profile" element={<Protected><PermissionRoute page="settings"><Profile /></PermissionRoute></Protected>} />
             <Route path="/notifications" element={<Protected><Notifications /></Protected>} />
             <Route path="/activity" element={<Protected><PermissionRoute page="settings"><ActivityLog /></PermissionRoute></Protected>} />

@@ -22,12 +22,16 @@ const DOC_TYPES = [
 ];
 
 export default function Profile() {
-  const { refreshCompany } = useAuth();
+  const { user, refreshCompany } = useAuth();
   const queryClient = useQueryClient();
   const { data: companyData, isLoading: loading, error: companyError } = useCompany();
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
-  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const canEdit = user?.role === "Super Admin" || user?.role === "Admin" || user?.user_type === "owner" || user?.permissions?.settings?.edit === true;
+  const set = (k) => (e) => {
+    if (!canEdit) return;
+    setForm({ ...form, [k]: e.target.value });
+  };
 
   // Sync local form state when company data loads or changes
   useEffect(() => {
@@ -130,8 +134,15 @@ export default function Profile() {
                 />
               </div>
             </div>
-            <div className="mt-5 flex justify-end">
-              <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="save-profile-btn">{saving ? "Saving…" : "Save Profile"}</Button>
+            <div className="mt-5 flex items-center justify-between">
+              {!canEdit && (
+                <div className="text-xs text-slate-500 italic">
+                  View-only mode. Administrator permissions required to modify company details.
+                </div>
+              )}
+              {canEdit && (
+                <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700 ml-auto" data-testid="save-profile-btn">{saving ? "Saving…" : "Save Profile"}</Button>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -139,16 +150,16 @@ export default function Profile() {
         <Card className="border-slate-200">
           <CardContent className="p-6">
             <div className="font-semibold text-slate-900 mb-4" style={{ fontFamily: "Outfit" }}>Company Logo</div>
-            <label className="block aspect-square rounded-xl border-2 border-dashed border-slate-200 hover:border-blue-400 cursor-pointer flex items-center justify-center overflow-hidden bg-slate-50" data-testid="company-logo-upload">
+            <label className={`block aspect-square rounded-xl border-2 border-dashed border-slate-200 ${canEdit ? "hover:border-blue-400 cursor-pointer" : "cursor-default opacity-80"} flex items-center justify-center overflow-hidden bg-slate-50`} data-testid="company-logo-upload">
               {form.logo_file_id ? (
                 <img src={fileUrl(form.logo_file_id)} alt="Logo" className="object-contain w-full h-full" />
               ) : (
                 <div className="text-center text-slate-400">
                   <ImageIcon className="w-10 h-10 mx-auto mb-2" />
-                  <div className="text-sm">Click to upload logo</div>
+                  <div className="text-sm">{canEdit ? "Click to upload logo" : "No logo uploaded"}</div>
                 </div>
               )}
-              <input type="file" accept="image/*" className="hidden" onChange={uploadLogo} />
+              {canEdit && <input type="file" accept="image/*" className="hidden" onChange={uploadLogo} />}
             </label>
           </CardContent>
         </Card>
@@ -169,10 +180,12 @@ export default function Profile() {
                     <div className="text-xs text-slate-500 truncate">{existing?.filename || "No file uploaded"}</div>
                   </div>
                   {existing && <a href={fileUrl(existing.id)} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">View</a>}
-                  <label className="cursor-pointer">
-                    <span className="px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md flex items-center gap-1"><Upload className="w-3.5 h-3.5" /> Upload</span>
-                    <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => uploadDoc(e, d.key)} />
-                  </label>
+                  {canEdit && (
+                    <label className="cursor-pointer">
+                      <span className="px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md flex items-center gap-1"><Upload className="w-3.5 h-3.5" /> Upload</span>
+                      <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => uploadDoc(e, d.key)} />
+                    </label>
+                  )}
                 </div>
               );
             })}

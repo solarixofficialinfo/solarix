@@ -2,15 +2,15 @@ import axios from "axios";
 
 let BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "";
 
-// Safety check: If running in browser on a production domain (not localhost) and BACKEND_URL points to localhost/127.0.0.1, fallback to relative "/api"
+// Safety check: If running in browser on a production domain (not localhost) and BACKEND_URL points to localhost/127.0.0.1 or is empty, use the Render production backend
 if (
   typeof window !== "undefined" &&
   window.location &&
   window.location.hostname !== "localhost" &&
   window.location.hostname !== "127.0.0.1" &&
-  (BACKEND_URL.includes("localhost") || BACKEND_URL.includes("127.0.0.1"))
+  (!BACKEND_URL || BACKEND_URL.includes("localhost") || BACKEND_URL.includes("127.0.0.1"))
 ) {
-  BACKEND_URL = "";
+  BACKEND_URL = "https://solarix.onrender.com";
 }
 
 export const API = BACKEND_URL ? `${BACKEND_URL.replace(/\/$/, "")}/api` : "/api";

@@ -291,6 +291,7 @@ export default function Team() {
       }
       setModalOpen(false);
       invalidateTeam();
+      window.dispatchEvent(new Event("solarix:auth-refresh"));
     } catch (err) {
       toast.error(formatApiError(err));
     } finally {
@@ -308,6 +309,7 @@ export default function Team() {
       await api.delete(`/employees/${u.id}`);
       toast.success("Team member removed");
       invalidateTeam();
+      window.dispatchEvent(new Event("solarix:auth-refresh"));
     } catch (err) {
       toast.error(formatApiError(err));
     }
@@ -513,7 +515,11 @@ export default function Team() {
 
                   <div>
                     <Label className="text-xs font-semibold text-slate-700">Role Preset</Label>
-                    <Select value={form.role} onValueChange={handleRoleChange}>
+                    <Select
+                      value={editingUser && (editingUser.role === "Super Admin" || editingUser.user_type === "owner") ? editingUser.role : form.role}
+                      onValueChange={handleRoleChange}
+                      disabled={editingUser && (editingUser.role === "Super Admin" || editingUser.user_type === "owner")}
+                    >
                       <SelectTrigger className="mt-1 h-9 text-xs bg-white"><SelectValue /></SelectTrigger>
                       <SelectContent className="text-xs">
                         {ROLES.map((r) => (

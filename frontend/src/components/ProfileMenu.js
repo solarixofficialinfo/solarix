@@ -61,7 +61,7 @@ export default function ProfileMenu() {
           <DropdownMenuItem onClick={() => setOpen("password")} data-testid="menu-change-password">
             <Lock className="w-4 h-4 mr-2" /> Change Password
           </DropdownMenuItem>
-          {user?.role === "Admin" && (
+          {(user?.role === "Admin" || user?.role === "Super Admin" || user?.user_type === "owner" || user?.user_type === "platform_owner" || user?.is_super_admin) && (
             <DropdownMenuItem onClick={() => nav("/profile")} data-testid="menu-company-details">
               <Building2 className="w-4 h-4 mr-2" /> Company Details
             </DropdownMenuItem>

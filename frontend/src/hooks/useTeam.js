@@ -1,9 +1,9 @@
-﻿import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api, { formatApiError } from "@/lib/api";
 import { queryKeys } from "@/lib/queryKeys";
 import { toast } from "sonner";
 
-const STALE_TIME = 10 * 60 * 1000; // 10 min — team rarely changes
+const STALE_TIME = 10 * 1000; // 10s — keeps team & access in real-time sync
 
 export function useEmployeeList() {
   return useQuery({

@@ -1929,15 +1929,23 @@ async def get_current_user(request: Request) -> dict:
             user = None
 
     if not user or not isinstance(user, dict):
+        user_email = (payload.get("email") if isinstance(payload, dict) else None) or (getattr(locals().get('res', None), 'user', None) and getattr(res.user, 'email', None))
+        if user_email:
+            try:
+                user = await db.users.find_one({"email": user_email.lower().strip()}, {"_id": 0})
+            except Exception:
+                user = None
+
+    if not user or not isinstance(user, dict):
         if isinstance(payload, dict) and (payload.get("id") or payload.get("sub") or payload.get("user_id")):
             user = {
                 "id": payload.get("id") or payload.get("sub") or user_id,
                 "company_id": payload.get("company_id") or "COMP-001",
-                "role": payload.get("role") or "Admin",
+                "role": payload.get("role") or "Staff",
                 "name": payload.get("name") or payload.get("full_name") or "User",
                 "full_name": payload.get("full_name") or payload.get("name") or "User",
                 "email": payload.get("email") or "",
-                "permissions": payload.get("permissions") or {}
+                "permissions": payload.get("permissions") or default_perms_for_role(payload.get("role") or "Staff")
             }
         elif locals().get('res') is not None and hasattr(locals()['res'], 'user') and locals()['res'].user:
             user_meta = getattr(res.user, 'user_metadata', {}) or {}
@@ -1948,8 +1956,8 @@ async def get_current_user(request: Request) -> dict:
                 "name": u_name,
                 "full_name": u_name,
                 "email": getattr(res.user, 'email', '') or "",
-                "role": user_meta.get("role") or "Admin",
-                "permissions": {}
+                "role": user_meta.get("role") or "Staff",
+                "permissions": default_perms_for_role(user_meta.get("role") or "Staff")
             }
 
     if not user or not isinstance(user, dict):
@@ -2341,7 +2349,12 @@ def has_perm(user: Dict[str, Any], page: str, action: str) -> bool:
     """Single source of truth for permission checks. Super Admin and Admin always have full access."""
     if not isinstance(user, dict):
         return False
-    if user.get("role") in ("Super Admin", "Admin") or user.get("user_type") == "owner":
+    if (
+        user.get("role") in ("Super Admin", "Admin", "Platform Owner") or
+        user.get("user_type") in ("owner", "platform_owner", "super_admin") or
+        user.get("is_super_admin") is True or
+        user.get("is_platform_owner") is True
+    ):
         return True
     perms = user.get("permissions")
     if not isinstance(perms, dict):
@@ -2350,6 +2363,8 @@ def has_perm(user: Dict[str, Any], page: str, action: str) -> bool:
     val = page_perms.get(action)
     if val is None and page == "project_execution" and action in PROJ_EXEC_TABS:
         return page_perms.get("view") is True
+    if val is None and page == "data_management" and action == "view":
+        return any(perms.get(k, {}).get("view") is True for k in perms if k.startswith("dm_"))
     return val is True
 
 
@@ -2705,11 +2720,36 @@ async def login(data: LoginIn, response: Response):
         except Exception as e:
             err_str = str(e).lower()
             logger.error(f"[LOGIN] step=auth_failed elapsed={_elapsed()}ms err={e}")
-            if "invalid login credentials" in err_str or "invalid_credentials" in err_str:
+            db_u = await db.users.find_one({"email": ident.lower().strip()})
+            if db_u and db_u.get("password_hash") and verify_password(data.password, db_u["password_hash"]):
+                try:
+                    if service_supabase is not None:
+                        service_supabase.auth.admin.update_user_by_id(db_u["id"], {"password": data.password})
+                    auth_res = await asyncio.to_thread(_supabase_sign_in_sync, ident, data.password)
+                    if auth_res and auth_res.session:
+                        token = auth_res.session.access_token
+                        refresh_token = auth_res.session.refresh_token
+                        auth_user_id = auth_res.session.user.id
+                except Exception:
+                    pass
+                if not token:
+                    token_payload = {
+                        "sub": db_u["id"],
+                        "id": db_u["id"],
+                        "user_id": db_u["id"],
+                        "email": db_u["email"],
+                        "company_id": db_u["company_id"],
+                        "role": db_u.get("role", "Staff"),
+                        "exp": datetime.now(timezone.utc) + timedelta(days=7)
+                    }
+                    token = jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+                    refresh_token = token
+                    auth_user_id = db_u["id"]
+                    user = db_u
+            else:
+                if "email not confirmed" in err_str:
+                    raise HTTPException(status_code=401, detail="Email not confirmed. Please check your inbox.")
                 raise HTTPException(status_code=401, detail="Invalid credentials")
-            if "email not confirmed" in err_str:
-                raise HTTPException(status_code=401, detail="Email not confirmed. Please check your inbox.")
-            raise HTTPException(status_code=401, detail="Invalid credentials")
 
         # Fetch user profile using the user's own JWT (bypasses RLS without needing service key)
         logger.info(f"[LOGIN] step=profile_lookup_start elapsed={_elapsed()}ms")
@@ -3248,8 +3288,8 @@ async def get_company(user=Depends(get_current_user)):
 
 @api_router.put("/company")
 async def update_company(data: CompanyUpdate, request: Request, user=Depends(get_current_user)):
-    if user["role"] != "Admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    if not (user.get("user_type") == "owner" or user.get("role") in ("Super Admin", "Admin") or has_perm(user, "settings", "edit")):
+        raise HTTPException(status_code=403, detail="Permission required to update company details")
     
     update = {k: v for k, v in data.model_dump().items() if v is not None}
     if not update:
@@ -5707,7 +5747,7 @@ async def list_employees(user=Depends(get_current_user)):
 
 @api_router.post("/employees")
 async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
-    if not has_perm(user, "team", "create") and user.get("role") not in ("Super Admin", "Admin"):
+    if not has_perm(user, "team", "create") and user.get("role") not in ("Super Admin", "Admin") and user.get("user_type") != "owner":
         raise HTTPException(status_code=403, detail="Team creation permission required")
 
     # Mobile validation: Exactly 10 digits
@@ -5761,19 +5801,26 @@ async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
                 if rpc_lookup.data and isinstance(rpc_lookup.data, list) and len(rpc_lookup.data) > 0:
                     lookup_row = rpc_lookup.data[0]
                     if isinstance(lookup_row, dict):
-                        emp_uid = str(lookup_row.get("id") or "")
+                        emp_uid = str(lookup_row.get("id") or emp_uid)
             except Exception as lookup_err:
                 logger.warning(f"Failed auth user lookup on re-registration: {lookup_err}")
+            if service_supabase is not None:
+                try:
+                    service_supabase.auth.admin.update_user_by_id(emp_uid, {"password": data.password})
+                except Exception as update_err:
+                    logger.warning(f"Admin password sync failed on existing employee creation: {update_err}")
         else:
             raise HTTPException(status_code=400, detail=f"Employee registration failed: {e}")
 
     emp_id = data.employee_id or f"EMP-{datetime.now(timezone.utc).year}-{uuid.uuid4().hex[:6].upper()}"
     perms = data.permissions or default_perms_for_role(data.role)
+    pwd_hash = hash_password(data.password)
     _test_temp_passwords[email] = data.password
     doc = {
         "id": emp_uid, "company_id": user["company_id"], "employee_id": emp_id,
         "name": data.name, "email": email, "mobile": clean_mobile,
         "role": data.role, "user_type": "employee", "status": data.status, "permissions": perms,
+        "password_hash": pwd_hash,
         "created_at": now_iso(),
     }
     try:
@@ -5787,12 +5834,13 @@ async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
     await log_activity(user["company_id"], user["id"], user["name"], "Added Employee", data.name)
     await push_notification(user["company_id"], "admin", "New Employee Added", data.name)
     doc.pop("_id", None)
+    doc.pop("password_hash", None)
     return doc
 
 
 @api_router.put("/employees/{emp_id}")
 async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_current_user)):
-    if not has_perm(user, "team", "edit") and user.get("role") not in ("Super Admin", "Admin"):
+    if not has_perm(user, "team", "edit") and user.get("role") not in ("Super Admin", "Admin") and user.get("user_type") != "owner":
         raise HTTPException(status_code=403, detail="Team edit permission required")
 
     old_user = await db.users.find_one({"id": emp_id, "company_id": user["company_id"]})
@@ -5811,11 +5859,11 @@ async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_cu
 
     # Super Admin / Owner Protection
     is_target_owner = old_user.get("user_type") == "owner" or old_user.get("role") == "Super Admin"
-    if is_target_owner and emp_id == user["id"]:
+    if is_target_owner:
         if data.status and data.status != "Active":
-            raise HTTPException(status_code=400, detail="Super Admin cannot deactivate own account")
+            raise HTTPException(status_code=400, detail="Company Owner cannot be deactivated")
         if data.role and data.role not in ("Super Admin", "Admin"):
-            raise HTTPException(status_code=400, detail="Super Admin cannot downgrade own role")
+            raise HTTPException(status_code=400, detail="Company Owner role cannot be downgraded")
 
     old_email = (str(old_user.get("email") or "")).lower() if isinstance(old_user, dict) else ""
     update = {k: v for k, v in data.model_dump().items() if v is not None}
@@ -5832,6 +5880,16 @@ async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_cu
             raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
         if len(new_password) > 128:
             raise HTTPException(status_code=400, detail="Password maximum length exceeded (128 chars)")
+        update["password_hash"] = hash_password(new_password)
+        if service_supabase is not None:
+            try:
+                service_supabase.auth.admin.update_user_by_id(emp_id, {"password": new_password})
+            except Exception as se:
+                logger.warning(f"service_supabase update_user_by_id failed: {se}")
+        try:
+            get_rpc_client().rpc("update_auth_user_password", {"p_id": emp_id, "p_password": new_password}).execute()
+        except Exception:
+            pass
 
     new_email = (update.get("email") or old_email).lower()
     if new_email and old_email and new_email != old_email:
@@ -5839,6 +5897,11 @@ async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_cu
         if existing and existing.get("id") != emp_id:
             raise HTTPException(status_code=400, detail="Email is already used by another user")
         update["email"] = new_email
+        if service_supabase is not None:
+            try:
+                service_supabase.auth.admin.update_user_by_id(emp_id, {"email": new_email})
+            except Exception as se:
+                logger.warning(f"service_supabase update email failed: {se}")
 
     if new_password and new_email:
         _test_temp_passwords[new_email] = new_password
@@ -5869,7 +5932,7 @@ async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_cu
 
 @api_router.delete("/employees/{emp_id}")
 async def delete_employee(emp_id: str, user=Depends(get_current_user)):
-    if not has_perm(user, "team", "delete") and user.get("role") not in ("Super Admin", "Admin"):
+    if not has_perm(user, "team", "delete") and user.get("role") not in ("Super Admin", "Admin") and user.get("user_type") != "owner":
         raise HTTPException(status_code=403, detail="Team delete permission required")
 
     emp = await db.users.find_one({"id": emp_id, "company_id": user["company_id"]})
