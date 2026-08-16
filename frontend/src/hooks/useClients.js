@@ -3,7 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { queryKeys, invalidateAllClientQueries } from "@/lib/queryKeys";
 import { toast } from "sonner";
 
-const STALE_TIME = 0; // Fresh fetching on navigation and mutation
+const STALE_TIME = 60 * 1000; // 60s cache — prevents duplicate requests while keeping data fresh
 
 // --- Company -----------------------------------------------------------------
 
@@ -30,8 +30,6 @@ export function useClientList() {
       return data || [];
     },
     staleTime: STALE_TIME,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
   });
 }
 
@@ -55,8 +53,6 @@ export function useClientDetail(clientId) {
     },
     enabled: !!clientId,
     staleTime: STALE_TIME,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
   });
 }
 

@@ -512,7 +512,7 @@ class CursorAdapter:
                 builder = builder.range(skip, 1000000)
 
         try:
-            res = builder.execute()
+            res = await asyncio.to_thread(builder.execute)
             data = res.data or []
         except Exception as e:
             err_str = str(e).lower()
@@ -898,7 +898,7 @@ class CollectionAdapter:
                 builder = builder.order(k, desc=desc)
         builder = builder.limit(1)
         try:
-            res = builder.execute()
+            res = await asyncio.to_thread(builder.execute)
             if res.data:
                 doc = res.data[0]
                 if self.table_name == "companies":
@@ -1724,14 +1724,18 @@ async def run_one_time_size_standardization_migration():
 
 async def _deferred_startup_tasks():
     """Non-critical startup tasks deferred so they don't block the first request."""
-    await asyncio.sleep(5)  # Wait 5s for the function to be warm before doing heavy work
-    try:
-        await run_one_time_size_standardization_migration()
-        await auto_migrate_product_variants()
-        await sync_inventory_master()
-        logger.info("Deferred product variant migration & inventory synchronization complete")
-    except Exception as e:
-        logger.warning(f"Deferred migration error: {e}")
+    should_run_migrations = os.environ.get("RUN_STARTUP_MIGRATIONS", "false").lower() in ("true", "1", "yes")
+    if should_run_migrations:
+        await asyncio.sleep(5)  # Wait 5s for the server to be warm before doing heavy migration work
+        try:
+            await run_one_time_size_standardization_migration()
+            await auto_migrate_product_variants()
+            await sync_inventory_master()
+            logger.info("Deferred product variant migration & inventory synchronization complete")
+        except Exception as e:
+            logger.warning(f"Deferred migration error: {e}")
+    else:
+        logger.info("Startup data migrations skipped (RUN_STARTUP_MIGRATIONS=false)")
     # Schedule daily cleanup — sleep first so the infinite loop starts harmlessly
     await activity_logs_cleanup_task()
 
@@ -3568,25 +3572,26 @@ async def list_clients(
 @api_router.get("/clients/stats")
 async def client_stats(user=Depends(get_current_user)):
     cid = user["company_id"]
-    # Single $facet aggregation replaces 5 separate count_documents + aggregate calls
-    pipeline = [
-        {"$match": {"company_id": cid}},
-        {"$facet": {
-            "total":     [{"$count": "n"}],
-            "completed": [{"$match": {"status": "Handover Complete"}}, {"$count": "n"}],
-            "pending":   [{"$match": {"status": {"$ne": "Handover Complete"}}}, {"$count": "n"}],
-            "subsidy":   [{"$match": {"subsidy_eligible": True}}, {"$count": "n"}],
-            "kw_agg":    [{"$match": {"status": "Handover Complete"}}, {"$group": {"_id": None, "total_kw": {"$sum": "$system_kw"}}}],
-        }}
-    ]
-    result = await db.clients.aggregate(pipeline).to_list(1)
-    r = result[0] if result else {}
+    try:
+        builder = supabase.table("clients").select("status,subsidy_eligible,system_kw").eq("company_id", cid)
+        res = await asyncio.to_thread(builder.execute)
+        rows = res.data or []
+    except Exception as e:
+        logger.warning(f"Failed to fetch client stats from Supabase: {e}")
+        rows = await db.clients.find({"company_id": cid}, {"status": 1, "subsidy_eligible": 1, "system_kw": 1}).to_list(100000)
+
+    total = len(rows)
+    completed = sum(1 for r in rows if r.get("status") == "Handover Complete")
+    pending = total - completed
+    subsidy = sum(1 for r in rows if r.get("subsidy_eligible") is True)
+    total_kw = sum(float(r.get("system_kw") or 0) for r in rows if r.get("status") == "Handover Complete")
+
     return {
-        "total":     r.get("total",     [{}])[0].get("n", 0),
-        "completed": r.get("completed", [{}])[0].get("n", 0),
-        "pending":   r.get("pending",   [{}])[0].get("n", 0),
-        "subsidy":   r.get("subsidy",   [{}])[0].get("n", 0),
-        "total_kw":  r.get("kw_agg",    [{}])[0].get("total_kw", 0),
+        "total":     total,
+        "completed": completed,
+        "pending":   pending,
+        "subsidy":   subsidy,
+        "total_kw":  total_kw,
     }
 
 @api_router.post("/clients")
