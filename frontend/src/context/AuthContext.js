@@ -122,11 +122,22 @@ export const AuthProvider = ({ children }) => {
   };
 
   const googleLogin = async () => {
-    const redirectUrl = `${window.location.origin}/login`;
+    // Build the OAuth redirect URL from the current browser origin.
+    // Safety: never send a localhost/127.0.0.1 redirect to Supabase in production.
+    let origin = window.location.origin;
+    if (
+      process.env.NODE_ENV === "production" &&
+      (origin.includes("localhost") || origin.includes("127.0.0.1"))
+    ) {
+      origin = process.env.REACT_APP_SITE_URL || "https://solarix-cumx-sable.vercel.app";
+    }
+    const redirectUrl = `${origin}/login`;
+
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: redirectUrl
+        redirectTo: redirectUrl,
+        queryParams: { prompt: "select_account" }
       }
     });
     if (error) throw error;
