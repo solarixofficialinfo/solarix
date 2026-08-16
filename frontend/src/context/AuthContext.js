@@ -123,11 +123,11 @@ export const AuthProvider = ({ children }) => {
 
   const googleLogin = async () => {
     // Build the OAuth redirect URL from the current browser origin.
-    // Safety: never send a localhost/127.0.0.1 redirect to Supabase in production.
-    let origin = window.location.origin;
+    // In production browser environments, always use the active window.location.origin.
+    let origin = typeof window !== "undefined" && window.location && window.location.origin ? window.location.origin : "";
     if (
-      process.env.NODE_ENV === "production" &&
-      (origin.includes("localhost") || origin.includes("127.0.0.1"))
+      !origin ||
+      ((origin.includes("localhost") || origin.includes("127.0.0.1")) && process.env.NODE_ENV === "production")
     ) {
       origin = process.env.REACT_APP_SITE_URL || "https://solarix-cumx-sable.vercel.app";
     }

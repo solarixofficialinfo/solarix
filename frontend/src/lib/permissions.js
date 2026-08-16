@@ -9,6 +9,9 @@ const PROJ_EXEC_TABS = ["verification", "approval", "reject", "project_assignmen
 export function usePermission(page, action = "view") {
   const { user } = useAuth();
   if (!user) return false;
+  if (page === "team" && (user.user_type === "owner" || user.role === "Owner")) {
+    return false;
+  }
   if (
     user.role === "Admin" ||
     user.role === "Super Admin" ||

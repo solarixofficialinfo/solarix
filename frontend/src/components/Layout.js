@@ -253,6 +253,9 @@ export default function Layout({ children }) {
         {navSections.map((sec) => {
           const visibleItems = sec.items.filter((it) => {
             if (it.superAdminOnly) return isSuperAdmin;
+            if (it.key === "team" && (user?.user_type === "owner" || user?.role === "Owner")) {
+              return false;
+            }
             if (it.adminOnly) return isAdmin;
             return ALWAYS_VISIBLE.has(it.key) || allowed(it.key);
           });

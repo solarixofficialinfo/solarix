@@ -2349,6 +2349,9 @@ def has_perm(user: Dict[str, Any], page: str, action: str) -> bool:
     """Single source of truth for permission checks. Super Admin and Admin always have full access."""
     if not isinstance(user, dict):
         return False
+    # Requirement: Company Owner must NOT have access to Team & Access
+    if page == "team" and (user.get("user_type") == "owner" or user.get("role") == "Owner"):
+        return False
     if (
         user.get("role") in ("Super Admin", "Admin", "Platform Owner") or
         user.get("user_type") in ("owner", "platform_owner", "super_admin") or
@@ -5738,7 +5741,7 @@ async def review_verification(v_id: str, data: MaterialApproval, user=Depends(ge
 # ---------- Employees ----------
 @api_router.get("/employees")
 async def list_employees(user=Depends(get_current_user)):
-    if not has_perm(user, "team", "view"):
+    if user.get("user_type") == "owner" or user.get("role") == "Owner" or not has_perm(user, "team", "view"):
         raise HTTPException(status_code=403, detail="Unauthorized to view team members")
     return await db.users.find(
         {"company_id": user["company_id"]},
@@ -5747,7 +5750,9 @@ async def list_employees(user=Depends(get_current_user)):
 
 @api_router.post("/employees")
 async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
-    if not has_perm(user, "team", "create") and user.get("role") not in ("Super Admin", "Admin") and user.get("user_type") != "owner":
+    if user.get("user_type") == "owner" or user.get("role") == "Owner":
+        raise HTTPException(status_code=403, detail="Owner does not have access to Team & Access")
+    if not has_perm(user, "team", "create") and user.get("role") not in ("Super Admin", "Admin"):
         raise HTTPException(status_code=403, detail="Team creation permission required")
 
     # Mobile validation: Exactly 10 digits
@@ -5840,7 +5845,9 @@ async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
 
 @api_router.put("/employees/{emp_id}")
 async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_current_user)):
-    if not has_perm(user, "team", "edit") and user.get("role") not in ("Super Admin", "Admin") and user.get("user_type") != "owner":
+    if user.get("user_type") == "owner" or user.get("role") == "Owner":
+        raise HTTPException(status_code=403, detail="Owner does not have access to Team & Access")
+    if not has_perm(user, "team", "edit") and user.get("role") not in ("Super Admin", "Admin"):
         raise HTTPException(status_code=403, detail="Team edit permission required")
 
     old_user = await db.users.find_one({"id": emp_id, "company_id": user["company_id"]})
@@ -5932,7 +5939,9 @@ async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_cu
 
 @api_router.delete("/employees/{emp_id}")
 async def delete_employee(emp_id: str, user=Depends(get_current_user)):
-    if not has_perm(user, "team", "delete") and user.get("role") not in ("Super Admin", "Admin") and user.get("user_type") != "owner":
+    if user.get("user_type") == "owner" or user.get("role") == "Owner":
+        raise HTTPException(status_code=403, detail="Owner does not have access to Team & Access")
+    if not has_perm(user, "team", "delete") and user.get("role") not in ("Super Admin", "Admin"):
         raise HTTPException(status_code=403, detail="Team delete permission required")
 
     emp = await db.users.find_one({"id": emp_id, "company_id": user["company_id"]})
