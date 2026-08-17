@@ -9,7 +9,7 @@ const PROJ_EXEC_TABS = ["verification", "approval", "reject", "project_assignmen
 export function usePermission(page, action = "view") {
   const { user } = useAuth();
   if (!user) return false;
-  const userEmail = (user.email || "").trim().lower();
+  const userEmail = (user.email || "").trim().toLowerCase();
   if (
     user.role === "Admin" ||
     user.role === "Super Admin" ||

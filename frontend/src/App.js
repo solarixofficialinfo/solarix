@@ -104,7 +104,7 @@ function AccessDenied() {
 function PermissionRoute({ page, children }) {
   const { user, loading } = useAuth();
   if (loading) return null;
-  const userEmail = (user?.email || "").trim().lower();
+  const userEmail = (user?.email || "").trim().toLowerCase();
   const isSuperOrAdmin =
     user?.role === "Super Admin" ||
     user?.role === "Admin" ||
@@ -148,7 +148,7 @@ function ProtectedAdmin({ children }) {
     );
   }
   if (!user) return <Navigate to="/login" replace />;
-  const userEmail = (user?.email || "").trim().lower();
+  const userEmail = (user?.email || "").trim().toLowerCase();
   const isSuperAdmin =
     user?.user_type === "platform_owner" ||
     user?.user_type === "super_admin" ||
@@ -165,7 +165,7 @@ function ProtectedAdmin({ children }) {
 function PlatformOwnerRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return null;
-  const userEmail = (user?.email || "").trim().lower();
+  const userEmail = (user?.email || "").trim().toLowerCase();
   const isSuperAdmin =
     user?.user_type === "platform_owner" ||
     user?.user_type === "super_admin" ||

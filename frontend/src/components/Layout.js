@@ -172,7 +172,7 @@ export default function Layout({ children }) {
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const userEmail = (user?.email || "").trim().lower();
+  const userEmail = (user?.email || "").trim().toLowerCase();
   const isSuperAdmin =
     user?.user_type === "platform_owner" ||
     user?.user_type === "super_admin" ||
