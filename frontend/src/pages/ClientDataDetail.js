@@ -1024,12 +1024,22 @@ export default function ClientDataDetail() {
                     className="bg-white rounded-xl border border-slate-200 overflow-hidden group cursor-pointer shadow-2xs hover:shadow-xs transition"
                     onClick={() => setZoom(ast)}
                   >
-                    <div className="aspect-square bg-slate-100 relative overflow-hidden">
+                    <div className="aspect-square bg-slate-100 relative overflow-hidden flex items-center justify-center">
                       <img
-                        src={fileUrl(ast.file_id || ast.storage_path || ast.url)}
+                        src={fileUrl(ast.file_id || ast.id || ast.storage_path || ast.url)}
                         alt={ast.location || ast.label || "Photo"}
                         className="w-full h-full object-cover group-hover:scale-105 transition"
+                        onError={(e) => {
+                          e.target.style.display = "none";
+                          if (e.target.nextSibling) {
+                            e.target.nextSibling.style.display = "flex";
+                          }
+                        }}
                       />
+                      <div className="hidden absolute inset-0 bg-slate-100 flex-col items-center justify-center text-slate-400 text-xs">
+                        <ImageIcon className="w-6 h-6 mb-1 text-slate-300" />
+                        <span>No preview</span>
+                      </div>
                       <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white text-xs font-semibold">
                         View Photo
                       </div>
@@ -1261,9 +1271,10 @@ export default function ClientDataDetail() {
             </DialogHeader>
             <div className="relative flex flex-col items-center justify-center p-2 space-y-3">
               <img
-                src={fileUrl(zoom.file_id || zoom.storage_path || zoom.url)}
+                src={fileUrl(zoom.file_id || zoom.id || zoom.storage_path || zoom.url)}
                 alt={zoom.label || "Photo"}
                 className="max-h-[65vh] object-contain rounded-lg shadow-lg"
+                onError={(e) => { e.target.style.display = "none"; }}
               />
               <div className="w-full text-xs space-y-1 text-slate-300 bg-slate-900/90 p-3 rounded-lg border border-slate-800">
                 {zoom.location && <div><strong className="text-white">Location / Area:</strong> {zoom.location}</div>}

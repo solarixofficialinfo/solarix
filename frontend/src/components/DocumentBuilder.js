@@ -470,11 +470,16 @@ export default function DocumentBuilder({ initialDocType = "quotation", existing
             {/* Left Side: Auto-Populated Company Details */}
             <div className="lg:col-span-7 bg-slate-50 p-4 rounded-xl border border-slate-200/80 space-y-2">
               <div className="flex items-center gap-3">
-                {company.logo_url ? (
-                  <img src={fileUrl(company.logo_url)} alt="Logo" className="h-20 max-w-[200px] object-contain" />
+                {(company.logo_file_id || company.logo_url) && fileUrl(company.logo_file_id || company.logo_url) ? (
+                  <img
+                    src={fileUrl(company.logo_file_id || company.logo_url)}
+                    alt="Logo"
+                    className="h-20 max-w-[200px] object-contain"
+                    onError={(e) => { e.target.style.display = "none"; }}
+                  />
                 ) : (
                   <div className="w-14 h-14 rounded-lg bg-indigo-600 text-white font-bold flex items-center justify-center text-lg">
-                    GVP
+                    {(company.company_name || company.name || "GVP").slice(0, 3).toUpperCase()}
                   </div>
                 )}
                 <div>

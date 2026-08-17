@@ -268,6 +268,52 @@ export function formatApiError(err) {
 
 export function fileUrl(fileId) {
   if (!fileId) return null;
+  if (typeof fileId !== "string") return null;
+
+  const trimmed = fileId.trim();
+  if (!trimmed) return null;
+
+  const isProduction =
+    typeof window !== "undefined" &&
+    window.location &&
+    window.location.hostname !== "localhost" &&
+    window.location.hostname !== "127.0.0.1";
+
+  // If a full HTTP/HTTPS URL is provided
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    // If it points to localhost, 127.0.0.1, or port 7071
+    if (
+      trimmed.includes("localhost") ||
+      trimmed.includes("127.0.0.1") ||
+      trimmed.includes(":7071")
+    ) {
+      if (isProduction) {
+        // In production, check if the URL contains a file ID pattern like /files/{id}
+        const fileMatch = trimmed.match(/\/files\/([a-zA-Z0-9_-]+)/);
+        if (fileMatch && fileMatch[1]) {
+          const token = localStorage.getItem("solarix_token");
+          return `${API}/files/${fileMatch[1]}${token ? `?auth=${token}` : ""}`;
+        }
+        // Dead local URL (e.g. http://localhost:7071/3697880.png) - prevent broken browser request
+        return null;
+      }
+    } else {
+      // Valid remote external URL (e.g. Supabase, CDN)
+      return trimmed;
+    }
+  }
+
+  // If storage path was passed (e.g. "solrix_work/.../b191ae8e-54cc-4773-a0a5-6a6b22b32a1c.png")
+  // Extract the UUID file_id if present
+  let resolvedId = trimmed;
+  if (trimmed.includes("/")) {
+    const filename = trimmed.split("/").pop();
+    const uuidMatch = filename?.match(/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/);
+    if (uuidMatch && uuidMatch[1]) {
+      resolvedId = uuidMatch[1];
+    }
+  }
+
   const token = localStorage.getItem("solarix_token");
-  return `${API}/files/${fileId}${token ? `?auth=${token}` : ""}`;
+  return `${API}/files/${resolvedId}${token ? `?auth=${token}` : ""}`;
 }

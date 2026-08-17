@@ -784,11 +784,16 @@ export default function PurchaseOrders() {
         {/* Header Title Bar */}
         <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {company.logo_url ? (
-              <img src={company.logo_url} alt="Logo" className="h-16 max-w-[160px] object-contain" />
+            {(company.logo_file_id || company.logo_url) && fileUrl(company.logo_file_id || company.logo_url) ? (
+              <img
+                src={fileUrl(company.logo_file_id || company.logo_url)}
+                alt="Logo"
+                className="h-16 max-w-[160px] object-contain"
+                onError={(e) => { e.target.style.display = "none"; }}
+              />
             ) : (
               <div className="w-12 h-12 rounded-lg bg-indigo-600 text-white font-bold flex items-center justify-center text-sm">
-                GVP
+                {(company.company_name || company.name || "GVP").slice(0, 3).toUpperCase()}
               </div>
             )}
             <div>

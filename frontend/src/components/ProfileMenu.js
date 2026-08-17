@@ -24,7 +24,9 @@ export default function ProfileMenu() {
   const [open, setOpen] = useState(null); // 'profile' | 'email' | 'password' | null
 
   const initials = (user?.name || "?").slice(0, 1).toUpperCase();
-  const photoUrl = user?.profile_photo_file_id ? fileUrl(user.profile_photo_file_id) : null;
+  const photoUrl = user?.profile_photo_file_id
+    ? fileUrl(user.profile_photo_file_id)
+    : (user?.photo_url || user?.avatar_url ? fileUrl(user.photo_url || user.avatar_url) : null);
 
   return (
     <>
@@ -36,14 +38,28 @@ export default function ProfileMenu() {
             data-testid="profile-menu-trigger"
             aria-label="Profile menu"
           >
-            {photoUrl ? <img src={photoUrl} alt={user?.name} className="w-full h-full object-cover" /> : initials}
+            {photoUrl ? (
+              <img
+                src={photoUrl}
+                alt={user?.name || ""}
+                className="w-full h-full object-cover"
+                onError={(e) => { e.target.style.display = "none"; }}
+              />
+            ) : initials}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-60" data-testid="profile-menu-content">
           <DropdownMenuLabel className="font-normal">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 text-white flex items-center justify-center text-sm font-semibold overflow-hidden shrink-0">
-                {photoUrl ? <img src={photoUrl} alt="" className="w-full h-full object-cover" /> : initials}
+                {photoUrl ? (
+                  <img
+                    src={photoUrl}
+                    alt=""
+                    className="w-full h-full object-cover"
+                    onError={(e) => { e.target.style.display = "none"; }}
+                  />
+                ) : initials}
               </div>
               <div className="min-w-0">
                 <div className="font-medium text-sm text-slate-900 truncate">{user?.name}</div>
@@ -140,7 +156,14 @@ function MyProfileDialog({ open, onClose, onSaved }) {
           <div className="flex items-center gap-4">
             <div className="relative">
               <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-blue-700 text-white flex items-center justify-center text-2xl font-semibold overflow-hidden ring-2 ring-white shadow">
-                {photoId ? <img src={fileUrl(photoId)} alt="" className="w-full h-full object-cover" /> : (name || "?").slice(0, 1).toUpperCase()}
+                {photoId && fileUrl(photoId) ? (
+                  <img
+                    src={fileUrl(photoId)}
+                    alt=""
+                    className="w-full h-full object-cover"
+                    onError={(e) => { e.target.style.display = "none"; }}
+                  />
+                ) : (name || "?").slice(0, 1).toUpperCase()}
               </div>
               <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => upload(e.target.files?.[0])} data-testid="profile-photo-input" />
               <button

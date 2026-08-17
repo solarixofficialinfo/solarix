@@ -1218,7 +1218,12 @@ function SurveyWorkflow({ task, canMutate, updateStatus }) {
                 return (
                   <div key={label} className="border border-slate-200 rounded-xl overflow-hidden bg-white hover:shadow-sm transition flex flex-col">
                     <div className="relative aspect-video bg-slate-100 border-b border-slate-100 flex items-center justify-center overflow-hidden">
-                      <img src={fileUrl(fileId)} alt={label} className="w-full h-full object-cover" />
+                      <img
+                        src={fileUrl(fileId)}
+                        alt={label}
+                        className="w-full h-full object-cover"
+                        onError={(e) => { e.target.style.display = "none"; }}
+                      />
                       <div className="absolute top-2 left-2 right-2 flex justify-between items-start">
                         <Badge className="bg-black/60 text-white border-none text-[9px]">{label}</Badge>
                         {canMutate && (
