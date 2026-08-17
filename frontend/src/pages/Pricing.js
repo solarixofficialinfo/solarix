@@ -62,7 +62,7 @@ export default function Pricing() {
 
       // 2. Open Razorpay Checkout Modal
       const options = {
-        key: subData.key_id,
+        key: subData.key_id || process.env.REACT_APP_RAZORPAY_KEY_ID || "rzp_live_TQX31MofTekXzi",
         subscription_id: subData.subscription_id,
         name: "SOLARIX",
         description: `Subscription for ${subData.plan_name} (${cycle})`,

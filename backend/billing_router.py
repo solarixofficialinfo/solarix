@@ -19,9 +19,15 @@ logger = logging.getLogger("solarix_billing")
 
 billing_router = APIRouter(prefix="/api/billing", tags=["billing"])
 
-RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "rzp_test_solrix_key_id")
-RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "rzp_test_solrix_key_secret")
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "rzp_live_TQX31MofTekXzi")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "Qkl444fdYLTcGwXdqVAWn2EG")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "rzp_test_webhook_secret")
+
+def get_razorpay_key_id() -> str:
+    return os.environ.get("RAZORPAY_KEY_ID") or RAZORPAY_KEY_ID or "rzp_live_TQX31MofTekXzi"
+
+def get_razorpay_key_secret() -> str:
+    return os.environ.get("RAZORPAY_KEY_SECRET") or RAZORPAY_KEY_SECRET or "Qkl444fdYLTcGwXdqVAWn2EG"
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -174,13 +180,15 @@ async def create_razorpay_subscription(data: CreateSubscriptionIn, user=Depends(
 
     # Call Razorpay Subscription API if credentials configured
     razorpay_sub_id = f"sub_test_{company_id[:8]}_{int(datetime.now().timestamp())}"
+    key_id = get_razorpay_key_id()
+    key_secret = get_razorpay_key_secret()
     
-    if RAZORPAY_KEY_ID and not RAZORPAY_KEY_ID.startswith("rzp_test_solrix"):
+    if key_id and not key_id.startswith("rzp_test_solrix"):
         try:
             async with httpx.AsyncClient() as client:
                 res = await client.post(
                     "https://api.razorpay.com/v1/subscriptions",
-                    auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+                    auth=(key_id, key_secret),
                     json={
                         "plan_id": os.environ.get(f"RAZORPAY_PLAN_{data.plan_id.upper()}_{data.billing_cycle.upper()}", f"plan_{data.plan_id}_{data.billing_cycle}"),
                         "total_count": 12 if data.billing_cycle == "monthly" else 1,
@@ -201,7 +209,7 @@ async def create_razorpay_subscription(data: CreateSubscriptionIn, user=Depends(
 
     return {
         "subscription_id": razorpay_sub_id,
-        "key_id": RAZORPAY_KEY_ID,
+        "key_id": key_id,
         "amount": final_amount,
         "currency": "INR",
         "plan_name": plan["name"],
@@ -218,16 +226,17 @@ async def verify_razorpay_subscription(data: VerifySubscriptionIn, user=Depends(
 
     db = get_db()
     company_id = user["company_id"]
+    key_secret = get_razorpay_key_secret()
 
     # Verify signature
     generated_signature = hmac.new(
-        RAZORPAY_KEY_SECRET.encode(),
+        key_secret.encode(),
         f"{data.razorpay_payment_id}|{data.razorpay_subscription_id}".encode(),
         hashlib.sha256
     ).hexdigest()
 
     # In test mode with dummy secrets, bypass strict signature match if signature matches dummy test format
-    is_test_mode = RAZORPAY_KEY_SECRET.startswith("rzp_test")
+    is_test_mode = key_secret.startswith("rzp_test")
     if not is_test_mode and generated_signature != data.razorpay_signature:
         logger.error("Razorpay subscription signature verification failed")
         raise HTTPException(status_code=400, detail="Invalid payment signature")
