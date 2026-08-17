@@ -402,6 +402,13 @@ export default function DocumentBuilder({ initialDocType = "quotation", existing
       toast.success(`${config.label} generated successfully!`);
       if (res.data?.id) {
         setGeneratedPdf(res.data);
+        const downloadUrl = fileUrl(res.data.id) + "?download=1";
+        const link = document.createElement("a");
+        link.href = downloadUrl;
+        link.setAttribute("download", res.data.filename || res.data.original_filename || `${config.label}.pdf`);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
       }
     } catch (err) {
       toast.error(formatApiError(err));
@@ -474,7 +481,7 @@ export default function DocumentBuilder({ initialDocType = "quotation", existing
                   <img
                     src={fileUrl(company.logo_file_id || company.logo_url)}
                     alt="Logo"
-                    className="h-20 max-w-[200px] object-contain"
+                    className="h-40 max-w-[400px] object-contain"
                     onError={(e) => { e.target.style.display = "none"; }}
                   />
                 ) : (

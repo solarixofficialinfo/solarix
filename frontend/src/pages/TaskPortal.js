@@ -491,8 +491,11 @@ export default function TaskPortal() {
             <div style={{ display: taskPortalTab === "materials" ? "block" : "none" }} className="mt-3">
               {visitedTaskPortalTabs.has("materials") && (
                 <Card className="border-slate-200">
-                  <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-                    <div className="font-semibold text-slate-900" style={{ fontFamily: "Outfit" }}>My Material Requests</div>
+                  <div className="p-4 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-3">
+                      <div className="font-semibold text-slate-900" style={{ fontFamily: "Outfit" }}>My Material Requests</div>
+                      <Link to="/material" className="text-xs text-blue-600 hover:underline">Open Material Requests Page →</Link>
+                    </div>
                     <Button size="sm" onClick={() => setMrOpen(true)} className="bg-blue-600 hover:bg-blue-700 h-8 text-xs" data-testid="new-mr-from-tab">
                       <Plus className="w-3.5 h-3.5 mr-1" /> New Material Request
                     </Button>

@@ -679,7 +679,7 @@ export default function Vendors() {
                           </Badge>
                         </div>
                         <div className="text-xs text-slate-500 mt-0.5">
-                          Bill Date: {bill.bill_date} · Due Date: {bill.due_date || "N/A"} · PO Ref: {bill.po_reference || "None"}
+                          Bill Date: {bill.bill_date} · Due Date: {bill.due_date || "N/A"} · PO Ref: {bill.po_reference || "None"}{(bill.challan_number || bill.challan_no || bill.reference_number) ? ` · Challan No: ${bill.challan_number || bill.challan_no || bill.reference_number}` : ""}
                         </div>
                       </div>
                       <div className="font-mono text-right">

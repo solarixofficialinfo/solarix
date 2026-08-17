@@ -59,7 +59,7 @@ const isAuthRoute = (url = "") =>
 const api = axios.create({
   baseURL: API,
   withCredentials: true,
-  timeout: 30000,  // 30 second timeout — prevents indefinite hangs
+  timeout: 45000,  // 45 second timeout — accommodates Render cold-starts
 });
 
 // ─── Request interceptor: proactive token refresh ───────────────────────────
@@ -123,6 +123,20 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
+    const status = error.response?.status;
+
+    // ── Auto-retry once for idempotent GET requests on cold start or network hiccup ──
+    if (
+      originalRequest &&
+      !originalRequest._retryNetwork &&
+      (!originalRequest.method || originalRequest.method.toLowerCase() === "get") &&
+      (error.code === "ECONNABORTED" || !error.response || (status && [502, 503, 504].includes(status)))
+    ) {
+      originalRequest._retryNetwork = true;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      return api(originalRequest);
+    }
+
     // ── Timeout or no-response → give a clear message ───────────────────────
     if (error.code === "ECONNABORTED" || !error.response) {
       const msg =
@@ -131,8 +145,6 @@ api.interceptors.response.use(
           : `Cannot reach the server (${error.message || "Connection refused"}). Please make sure the backend is running and try again.`;
       return Promise.reject(new Error(msg));
     }
-
-    const { status } = error.response;
 
     // ── 401: try token refresh once, then redirect if still failing ─────────
     if (status === 401 && !originalRequest._retry && !isAuthRoute(originalRequest.url)) {

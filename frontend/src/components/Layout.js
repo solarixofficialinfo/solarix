@@ -182,7 +182,7 @@ export default function Layout({ children }) {
     user?.role === "Super Admin" ||
     userEmail === "solarixofficial.info@gmail.com" ||
     userEmail === "solarixoffcial.info@gmail.com";
-  const isSuperOrAdmin = isSuperAdmin || user?.role === "Admin" || user?.user_type === "owner";
+  const isSuperOrAdmin = isSuperAdmin || user?.role === "Admin" || user?.role === "Owner" || user?.user_type === "owner" || user?.is_owner;
   const isAdmin = isSuperOrAdmin;
   const allowed = (page) => isSuperOrAdmin || (user?.permissions?.[page]?.view === true);
   const ALWAYS_VISIBLE = new Set(["complaints"]);

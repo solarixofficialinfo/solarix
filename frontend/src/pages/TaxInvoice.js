@@ -340,7 +340,15 @@ export default function TaxInvoice() {
       setGeneratedFiles(files);
       toast.success("Tax Invoice generated successfully");
       fetchHistory();
-      if (files[0]) window.open(fileUrl(files[0].id), "_blank");
+      if (files[0] && files[0].id) {
+        const downloadUrl = fileUrl(files[0].id) + "?download=1";
+        const link = document.createElement("a");
+        link.href = downloadUrl;
+        link.setAttribute("download", files[0].filename || files[0].original_filename || "Tax_Invoice.pdf");
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
     } catch (err) {
       toast.error(formatApiError(err));
     } finally {

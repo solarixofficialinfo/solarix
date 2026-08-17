@@ -256,11 +256,21 @@ export default function Receivables() {
       const res = await api.post("/finance/invoices", payload);
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast.success("Tax Invoice created successfully");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
       setCreateInvoiceOpen(false);
+      const fileId = data?.file_id || data?.invoice?.file_id;
+      if (fileId) {
+        const downloadUrl = fileUrl(fileId) + "?download=1";
+        const link = document.createElement("a");
+        link.href = downloadUrl;
+        link.setAttribute("download", `Invoice_${data?.invoice?.invoice_number || fileId}.pdf`);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
     },
     onError: (err) => toast.error(formatApiError(err))
   });

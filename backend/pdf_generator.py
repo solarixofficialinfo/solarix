@@ -68,8 +68,8 @@ def _header(company: dict, prepared_by: str | None = None, show_owner: bool = Tr
             w, h = img.size
             if w > 0 and h > 0:
                 aspect = h / w
-                max_w = 4.5 * cm
-                max_h = 2.2 * cm
+                max_w = 9.0 * cm
+                max_h = 4.4 * cm
                 target_w = max_w
                 target_h = target_w * aspect
                 if target_h > max_h:
@@ -668,7 +668,7 @@ def generate_po_pdf(data: dict, company: dict) -> bytes:
             img = PILImage.open(BytesIO(logo_bytes))
             orig_w, orig_h = img.size
             if orig_w > 0 and orig_h > 0:
-                max_w, max_h = 5.5 * cm, 1.5 * cm
+                max_w, max_h = 11.0 * cm, 3.0 * cm
                 aspect = orig_w / float(orig_h or 1)
                 if orig_w > orig_h:
                     target_w = max_w
@@ -1152,7 +1152,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
             img = PILImage.open(BytesIO(logo_bytes))
             orig_w, orig_h = img.size
             if orig_w > 0 and orig_h > 0:
-                max_w, max_h = 5.5 * cm, 1.5 * cm
+                max_w, max_h = 11.0 * cm, 3.0 * cm
                 aspect = orig_w / float(orig_h or 1)
                 if orig_w > orig_h:
                     target_w = max_w
@@ -1427,7 +1427,7 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     if logo_bytes:
         try:
             p_logo = cell_l.paragraphs[0]
-            p_logo.add_run().add_picture(BytesIO(logo_bytes), width=Inches(1.8))
+            p_logo.add_run().add_picture(BytesIO(logo_bytes), width=Inches(3.6))
         except Exception:
             pass
 

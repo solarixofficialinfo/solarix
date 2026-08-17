@@ -10,16 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Upload, FileText, Building2, Image as ImageIcon } from "lucide-react";
+import { Building2, Image as ImageIcon } from "lucide-react";
 import LocationAutoFill from "@/components/LocationAutoFill";
-
-const DOC_TYPES = [
-  { key: "company_profile_pdf", label: "Company Profile PDF" },
-  { key: "company_brochure", label: "Company Brochure PDF" },
-  { key: "quotation_template", label: "Quotation Template" },
-  { key: "vendor_agreement", label: "Vendor Agreement Template" },
-  { key: "other_docs", label: "Other Company Documents" },
-];
 
 export default function Profile() {
   const { user, refreshCompany } = useAuth();
@@ -66,21 +58,6 @@ export default function Profile() {
       await api.put("/company", { logo_file_id: data.id });
       refreshCompany();
       toast.success("Logo uploaded");
-    } catch (err) { toast.error(formatApiError(err)); }
-    finally { e.target.value = ""; }
-  };
-
-  const uploadDoc = async (e, key) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      const fd = new FormData(); fd.append("file", file); fd.append("category", key);
-      const { data } = await api.post("/files/upload", fd, { headers: { "Content-Type": "multipart/form-data" } });
-      const docs = { ...form.documents, [key]: { id: data.id, filename: data.filename } };
-      const updated = { ...form, documents: docs };
-      setForm(updated);
-      await api.put("/company", { documents: docs });
-      toast.success("Document uploaded");
     } catch (err) { toast.error(formatApiError(err)); }
     finally { e.target.value = ""; }
   };
@@ -164,34 +141,6 @@ export default function Profile() {
           </CardContent>
         </Card>
       </div>
-
-      <Card className="border-slate-200">
-        <CardContent className="p-6">
-          <div className="font-semibold text-slate-900 mb-4" style={{ fontFamily: "Outfit" }}>Document Storage</div>
-          <p className="text-xs text-slate-500 mb-4">These documents will be reused by future modules (quotations, agreements, etc.)</p>
-          <div className="grid md:grid-cols-2 gap-3" data-testid="document-upload-dropzone">
-            {DOC_TYPES.map((d) => {
-              const existing = form.documents?.[d.key];
-              return (
-                <div key={d.key} className="flex items-center gap-3 p-4 border border-slate-200 rounded-lg">
-                  <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center"><FileText className="w-5 h-5" /></div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-slate-900">{d.label}</div>
-                    <div className="text-xs text-slate-500 truncate">{existing?.filename || "No file uploaded"}</div>
-                  </div>
-                  {existing && <a href={fileUrl(existing.id)} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">View</a>}
-                  {canEdit && (
-                    <label className="cursor-pointer">
-                      <span className="px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md flex items-center gap-1"><Upload className="w-3.5 h-3.5" /> Upload</span>
-                      <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => uploadDoc(e, d.key)} />
-                    </label>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

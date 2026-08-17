@@ -579,6 +579,17 @@ def _clean_products_doc(doc: dict) -> dict:
         cleaned.pop("serial_number_required", None)
     return cleaned
 
+_INWARD_VALID_COLS = {
+    "id", "company_id", "product", "size", "quantity", "unit",
+    "reference_number", "reference_type", "bill_number", "source_type",
+    "source_name", "date", "remarks", "attachment_file_id",
+    "attachment_filename", "source", "created_by", "created_by_name",
+    "created_at", "import_batch", "updated_at"
+}
+
+def _clean_inward_doc(doc: dict) -> dict:
+    return {k: v for k, v in doc.items() if k in _INWARD_VALID_COLS}
+
 VALID_CLIENT_COLUMNS = {
     "id", "sol_id", "company_id", "created_by", "full_name", "mobile", "alt_mobile",
     "consumer_number", "address", "city", "state", "pincode", "aadhaar", "system_kw",
@@ -953,6 +964,8 @@ class CollectionAdapter:
 
         if self.table_name == "products":
             document = _clean_products_doc(document)
+        elif self.table_name == "inward_entries":
+            document = _clean_inward_doc(document)
         
         while True:
             try:
@@ -2346,16 +2359,25 @@ def default_perms_for_role(role: str) -> Dict[str, Dict[str, bool]]:
     return base
 
 
-def has_perm(user: Dict[str, Any], page: str, action: str) -> bool:
-    """Single source of truth for permission checks. Super Admin, Admin, and Owner always have full access."""
+def is_owner(user: Dict[str, Any]) -> bool:
+    """Return True if user is verified Company Owner or Platform Super Admin."""
     if not isinstance(user, dict):
         return False
-    if (
-        user.get("role") in ("Super Admin", "Admin", "Platform Owner") or
+    user_email = (user.get("email") or "").strip().lower()
+    return (
+        user_email in SUPER_ADMIN_EMAILS or
+        user.get("role") in ("Super Admin", "Admin", "Platform Owner", "Owner") or
         user.get("user_type") in ("owner", "platform_owner", "super_admin") or
         user.get("is_super_admin") is True or
-        user.get("is_platform_owner") is True
-    ):
+        user.get("is_platform_owner") is True or
+        user.get("is_owner") is True
+    )
+
+def has_perm(user: Dict[str, Any], page: str, action: str) -> bool:
+    """Single source of truth for permission checks. Company Owner always has full access."""
+    if not isinstance(user, dict):
+        return False
+    if is_owner(user):
         return True
     perms = user.get("permissions")
     if not isinstance(perms, dict):
@@ -5033,10 +5055,8 @@ async def list_projects(user=Depends(get_current_user)):
 # Tasks
 @api_router.post("/tasks")
 async def create_task(data: TaskIn, user=Depends(get_current_user)):
-    if not has_perm(user, "task_portal", "create"):
+    if not (is_owner(user) or has_perm(user, "task_portal", "create")):
         raise HTTPException(status_code=403, detail="Missing permission: task_portal.create")
-    if user["role"] not in ("Admin", "Supervisor"):
-        raise HTTPException(status_code=403, detail="Admin/Supervisor only")
         
     # Prevent duplicate active task of the same type for the client
     existing = await db.tasks.find_one({
@@ -5095,7 +5115,7 @@ async def list_tasks(user=Depends(get_current_user), client_id: Optional[str] = 
         raise HTTPException(status_code=403, detail="Missing permission: task_portal.view")
     q = {"company_id": user["company_id"]}
     if client_id: q["client_id"] = client_id
-    if mine or user["role"] not in ("Admin", "Supervisor"):
+    if mine or not (is_owner(user) or has_perm(user, "task_portal", "approve") or has_perm(user, "task_portal", "edit")):
         q["assigned_to"] = user["id"]
     limit = min(limit, 500)
     skip = max(0, skip)
@@ -5388,7 +5408,7 @@ async def list_material_requests(user=Depends(get_current_user), client_id: Opti
     q = {"company_id": user["company_id"]}
     if client_id:
         q["client_id"] = client_id
-    elif user["role"] not in ("Admin", "Supervisor"):
+    elif not (is_owner(user) or has_perm(user, "data_management", "view") or has_perm(user, "task_portal", "view")):
         q["requested_by"] = user["id"]
 
     rows = await db.material_requests.find(q, {"_id": 0}).sort("updated_at", -1).to_list(500)
@@ -5443,7 +5463,7 @@ async def update_material_request(req_id: str, data: MaterialRequestUpdateIn, us
     req = await db.material_requests.find_one({"id": req_id, "company_id": user["company_id"]})
     if not req:
         raise HTTPException(status_code=404, detail="Material request not found")
-    if user["role"] not in ("Admin", "Supervisor") and req.get("requested_by") != user["id"]:
+    if not (is_owner(user) or has_perm(user, "task_portal", "edit") or has_perm(user, "data_management", "edit")) and req.get("requested_by") != user["id"]:
         raise HTTPException(status_code=403, detail="Not your request")
     if (req.get("status") or "").lower() not in ("draft", "pending"):
         raise HTTPException(status_code=400, detail="Cannot edit request after approval or completion")
@@ -5484,7 +5504,7 @@ async def cancel_material_request(req_id: str, user=Depends(get_current_user)):
     req = await db.material_requests.find_one({"id": req_id, "company_id": user["company_id"]})
     if not req:
         raise HTTPException(status_code=404, detail="Material request not found")
-    if user["role"] not in ("Admin", "Supervisor") and req.get("requested_by") != user["id"]:
+    if not (is_owner(user) or has_perm(user, "task_portal", "edit") or has_perm(user, "data_management", "edit")) and req.get("requested_by") != user["id"]:
         raise HTTPException(status_code=403, detail="Not your request")
     if (req.get("status") or "").lower() not in ("draft", "pending", "submitted"):
         raise HTTPException(status_code=400, detail="Only pending, draft, or submitted requests can be cancelled")
@@ -5562,10 +5582,8 @@ async def create_retry_material_request(req_id: str, user=Depends(get_current_us
 
 @api_router.patch("/material-requests/{req_id}")
 async def approve_material(req_id: str, data: MaterialApproval, user=Depends(get_current_user)):
-    if not has_perm(user, "task_portal", "approve"):
+    if not (is_owner(user) or has_perm(user, "task_portal", "approve") or has_perm(user, "data_management", "approve")):
         raise HTTPException(status_code=403, detail="Missing permission: task_portal.approve")
-    if user["role"] not in ("Admin", "Supervisor"):
-        raise HTTPException(status_code=403, detail="Admin/Supervisor only")
     req = await db.material_requests.find_one({"id": req_id, "company_id": user["company_id"]})
     if not req:
         raise HTTPException(status_code=404, detail="Not found")
@@ -5719,10 +5737,8 @@ async def list_verifications(user=Depends(get_current_user), client_id: Optional
 
 @api_router.patch("/verifications/{v_id}")
 async def review_verification(v_id: str, data: MaterialApproval, user=Depends(get_current_user)):
-    if not has_perm(user, "task_portal", "approve"):
-        raise HTTPException(status_code=403, detail="Missing permission: task_portal.approve")
-    if user["role"] not in ("Admin", "Supervisor"):
-        raise HTTPException(status_code=403, detail="Admin/Supervisor only")
+    if not (is_owner(user) or has_perm(user, "task_portal", "approve") or has_perm(user, "project_execution", "approval") or has_perm(user, "project_execution", "verification")):
+        raise HTTPException(status_code=403, detail="Missing permission: project_execution.approval")
     v = await db.verifications.find_one({"id": v_id, "company_id": user["company_id"]})
     if not v:
         raise HTTPException(status_code=404, detail="Not found")
@@ -5775,16 +5791,21 @@ async def review_verification(v_id: str, data: MaterialApproval, user=Depends(ge
 # ---------- Employees ----------
 @api_router.get("/employees")
 async def list_employees(user=Depends(get_current_user)):
-    if not has_perm(user, "team", "view") and user.get("role") not in ("Super Admin", "Admin") and user.get("user_type") != "owner":
+    if not (is_owner(user) or has_perm(user, "team", "view")):
         raise HTTPException(status_code=403, detail="Unauthorized to view team members")
-    return await db.users.find(
+    rows = await db.users.find(
         {"company_id": user["company_id"]},
         {"_id": 0, "password_hash": 0}
     ).sort("created_at", -1).to_list(500)
+    for r in rows:
+        email_clean = (r.get("email") or "").strip().lower()
+        if email_clean in SUPER_ADMIN_EMAILS or r.get("user_type") in ("platform_owner", "super_admin") or r.get("is_super_admin") or r.get("is_platform_owner"):
+            r["role"] = "Super Admin"
+    return rows
 
 @api_router.post("/employees")
 async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
-    if not has_perm(user, "team", "create") and user.get("role") not in ("Super Admin", "Admin") and user.get("user_type") != "owner":
+    if not (is_owner(user) or has_perm(user, "team", "create")):
         raise HTTPException(status_code=403, detail="Team creation permission required")
 
     # Mobile validation: Exactly 10 digits
@@ -5877,7 +5898,7 @@ async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
 
 @api_router.put("/employees/{emp_id}")
 async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_current_user)):
-    if not has_perm(user, "team", "edit") and user.get("role") not in ("Super Admin", "Admin") and user.get("user_type") != "owner":
+    if not (is_owner(user) or has_perm(user, "team", "edit")):
         raise HTTPException(status_code=403, detail="Team edit permission required")
 
     old_user = await db.users.find_one({"id": emp_id, "company_id": user["company_id"]})
@@ -5969,7 +5990,7 @@ async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_cu
 
 @api_router.delete("/employees/{emp_id}")
 async def delete_employee(emp_id: str, user=Depends(get_current_user)):
-    if not has_perm(user, "team", "delete") and user.get("role") not in ("Super Admin", "Admin") and user.get("user_type") != "owner":
+    if not (is_owner(user) or has_perm(user, "team", "delete")):
         raise HTTPException(status_code=403, detail="Team delete permission required")
 
     emp = await db.users.find_one({"id": emp_id, "company_id": user["company_id"]})
@@ -7012,6 +7033,8 @@ def parse_inward_client_info(entry):
             entry["remarks"] = re.sub(r"\s*\[client_id:[^\]]+\]", "", r).strip()
     entry["client_id"] = cid
     entry["client_name"] = entry.get("source_name") if entry.get("source_type") == "Return From Client" else ""
+    entry["challan_number"] = entry.get("reference_number") or ""
+    entry["challan_no"] = entry.get("reference_number") or ""
     return entry
 
 def _enrich_inward_with_assets(inward_doc: Optional[dict]) -> Optional[dict]:
@@ -7064,7 +7087,8 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
 
     # Vendor Purchase Bill Flow: Save/upsert purchase bill in db.purchase_bills if Vendor/Supplier is specified and total_amount or bill_number is set
     vendor_id_val = data.vendor_id or data.source_id or ""
-    if source_type_val == "Vendor / Supplier" and vendor_id_val:
+    challan_val = (data.reference_number or data.challan_no or "").strip()
+    if source_type_val in ("Vendor / Supplier", "Supplier", "Vendor") and vendor_id_val:
       bnum = (data.bill_number or data.reference_number or "").strip()
       if bnum or float(data.total_amount or 0.0) > 0:
         existing_pbill = await db.purchase_bills.find_one({
@@ -7081,6 +7105,9 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
             "vendor_id": vendor_id_val,
             "vendor_name": source_name_val or "Unknown Vendor",
             "bill_number": bnum or f"INV-{uuid.uuid4().hex[:6]}",
+            "challan_number": challan_val or numeric_only(data.reference_number),
+            "challan_no": challan_val or numeric_only(data.reference_number),
+            "reference_number": challan_val or numeric_only(data.reference_number),
             "bill_date": (data.date or now_iso())[:10],
             "due_date": "",
             "items": [],
@@ -7139,9 +7166,9 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
         "size": data.size or "",
         "quantity": data.quantity,
         "unit": data.unit or "Nos",
-        "reference_number": numeric_only(data.reference_number),
+        "reference_number": numeric_only(data.reference_number or data.challan_no) or challan_val,
         "reference_type": data.reference_type or "Challan Number",
-        "bill_number": numeric_only(data.bill_number),
+        "bill_number": (data.bill_number or "").strip() or numeric_only(data.bill_number),
         "source_type": source_type_val,
         "source_name": source_name_val,
         "date": data.date or now_iso(),
@@ -7487,11 +7514,13 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
     if source_type_val == "Return From Client" and client_id_val:
         remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
         
+    ref_num = numeric_only(data.reference_number or data.challan_no or data.bill_number)
     patch = {
         "product": pn, "size": data.size or "", "quantity": data.quantity,
         "unit": data.unit or existing.get("unit") or "Nos",
-        "reference_number": numeric_only(data.reference_number), "reference_type": data.reference_type or "Challan Number",
-        "bill_number": numeric_only(data.bill_number),
+        "reference_number": ref_num,
+        "reference_type": data.reference_type or "Challan Number",
+        "bill_number": (data.bill_number or "").strip() or numeric_only(data.bill_number),
         "source_type": source_type_val, "source_name": data.source_name or existing.get("source_name") or "",
         "date": data.date or existing.get("date") or now_iso(), "remarks": remarks_val,
         "attachment_file_id": data.attachment_file_id if data.attachment_file_id is not None else existing.get("attachment_file_id", ""),
@@ -10478,7 +10507,7 @@ async def list_complaints(
 ):
     cid = user["company_id"]
     q: Dict[str, Any] = {"company_id": cid}
-    is_admin = user["role"] in ("Admin", "Supervisor")
+    is_admin = is_owner(user) or has_perm(user, "complaints", "view")
 
     if mine or not is_admin:
         q["$or"] = [{"raised_by": user["id"]}, {"assigned_to": user["id"]}]
@@ -10518,7 +10547,7 @@ async def get_complaint(complaint_id: str, user=Depends(get_current_user)):
 
 @api_router.patch("/complaints/{complaint_id}")
 async def update_complaint(complaint_id: str, data: ComplaintUpdate, user=Depends(get_current_user)):
-    if not has_perm(user, "complaints", "edit"):
+    if not (is_owner(user) or has_perm(user, "complaints", "edit")):
         raise HTTPException(status_code=403, detail="Missing permission: complaints.edit")
     cid = user["company_id"]
     existing = await db.complaints.find_one({"id": complaint_id, "company_id": cid})
@@ -10547,8 +10576,8 @@ async def update_complaint(complaint_id: str, data: ComplaintUpdate, user=Depend
     if "assigned_to" in payload:
         new_assignee = payload["assigned_to"] or ""
         if new_assignee:
-            if user["role"] not in ("Admin", "Supervisor"):
-                raise HTTPException(status_code=403, detail="Only Admin/Supervisor can assign complaints")
+            if not (is_owner(user) or has_perm(user, "complaints", "edit") or has_perm(user, "team", "edit")):
+                raise HTTPException(status_code=403, detail="Only authorized users can assign complaints")
             assignee = await db.users.find_one({"id": new_assignee, "company_id": cid}, {"_id": 0, "name": 1})
             if not assignee:
                 raise HTTPException(status_code=404, detail="Assignee not found")
@@ -10594,10 +10623,8 @@ async def update_complaint(complaint_id: str, data: ComplaintUpdate, user=Depend
 
 @api_router.delete("/complaints/{complaint_id}")
 async def delete_complaint(complaint_id: str, user=Depends(get_current_user)):
-    if not has_perm(user, "complaints", "delete"):
+    if not (is_owner(user) or has_perm(user, "complaints", "delete")):
         raise HTTPException(status_code=403, detail="Missing permission: complaints.delete")
-    if user["role"] != "Admin":
-        raise HTTPException(status_code=403, detail="Admin only")
     cid = user["company_id"]
     existing = await db.complaints.find_one({"id": complaint_id, "company_id": cid}, {"_id": 0})
     if not existing:
@@ -10657,10 +10684,8 @@ async def list_complaint_audit(complaint_id: str, user=Depends(get_current_user)
 
 @api_router.post("/complaints/{complaint_id}/convert-to-task")
 async def convert_complaint_to_task(complaint_id: str, user=Depends(get_current_user)):
-    if not has_perm(user, "complaints", "approve"):
+    if not (is_owner(user) or has_perm(user, "complaints", "approve") or has_perm(user, "task_portal", "create")):
         raise HTTPException(status_code=403, detail="Missing permission: complaints.approve")
-    if user["role"] not in ("Admin", "Supervisor"):
-        raise HTTPException(status_code=403, detail="Admin/Supervisor only")
     cid = user["company_id"]
     c = await db.complaints.find_one({"id": complaint_id, "company_id": cid})
     if not c:

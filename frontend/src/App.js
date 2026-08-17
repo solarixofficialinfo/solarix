@@ -107,12 +107,15 @@ function PermissionRoute({ page, children }) {
   const userEmail = (user?.email || "").trim().toLowerCase();
   const isSuperOrAdmin =
     user?.role === "Super Admin" ||
+    user?.role === "Platform Owner" ||
     user?.role === "Admin" ||
+    user?.role === "Owner" ||
     user?.user_type === "owner" ||
     user?.user_type === "super_admin" ||
     user?.user_type === "platform_owner" ||
     user?.is_super_admin ||
     user?.is_platform_owner ||
+    user?.is_owner ||
     userEmail === "solarixofficial.info@gmail.com" ||
     userEmail === "solarixoffcial.info@gmail.com";
   const hasPerm = isSuperOrAdmin || page === "complaints" || (user?.permissions?.[page]?.view === true);

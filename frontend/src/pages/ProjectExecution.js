@@ -4,8 +4,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import api, { formatApiError, fileUrl } from "@/lib/api";
 import { useProjectList, useProjectStats, useInvalidateProjects } from "@/hooks/useProjects";
 import { useEmployeeList } from "@/hooks/useTeam";
-import { useMaterialRequestList, useInvalidateMaterialRequests } from "@/hooks/useMaterialRequests";
-import { useProductList } from "@/hooks/useInventory";
 import { usePermission } from "@/lib/permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,9 +15,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Briefcase, Clock, PackageSearch, ShieldCheck, CheckCircle2, Zap, Plus, ClipboardCheck, Camera, Eye, MapPin, ImageIcon, FileText, Trash2, ArrowUp, ArrowDown, ArrowRight } from "lucide-react";
+import { Briefcase, Clock, ShieldCheck, CheckCircle2, Zap, Plus, Camera, Eye, MapPin, ImageIcon, FileText, Trash2, ArrowUp, ArrowDown } from "lucide-react";
 import dayjs from "dayjs";
-import { MaterialRequest } from "./TaskPortal";
 import PageHeader from "@/components/PageHeader";
 
 const TASK_TYPES = [
@@ -71,7 +68,6 @@ export default function ProjectExecution() {
   const { data: projects = [], isLoading: projectsLoading } = useProjectList();
 
   const { data: employees = [], isLoading: employeesLoading } = useEmployeeList();
-  const { data: matReqs = [], isLoading: matReqsLoading } = useMaterialRequestList({}, { enabled: tab === "materials" || tab === "rejected" });
 
   const { data: verifs = [], isLoading: verifsLoading } = useQuery({
     queryKey: ["verifications"],
@@ -79,16 +75,14 @@ export default function ProjectExecution() {
       const { data } = await api.get("/verifications");
       return data || [];
     },
-    enabled: tab === "verifications" || tab === "materials" || tab === "rejected" || tab === "retry",
+    enabled: tab === "verifications" || tab === "rejected" || tab === "retry",
     staleTime: 3 * 60 * 1000,
   });
 
   const loading = tab === "projects" && (projectsLoading || statsLoading);
-  const loadingTab = (tab === "materials" && (employeesLoading || matReqsLoading)) ||
-    (tab === "verifications" && verifsLoading);
+  const loadingTab = tab === "verifications" && verifsLoading;
 
   const invalidateProjects = useInvalidateProjects();
-  const invalidateMatReqs = useInvalidateMaterialRequests();
 
   const openAssign = (c) => { setSelected(c); setTaskForm({ task_type: "Survey", assigned_to: "", deadline: "", priority: "Medium", remarks: "" }); setAssignOpen(true); };
 
@@ -109,16 +103,6 @@ export default function ProjectExecution() {
     }
   };
 
-  const approveMaterial = async (id, payload) => {
-    try {
-      await api.patch(`/material-requests/${id}`, payload);
-      toast.success("Updated");
-      invalidateProjects();
-      invalidateMatReqs();
-    }
-    catch (e) { toast.error(formatApiError(e)); }
-  };
-
   const reviewVerif = async (id, status) => {
     try {
       await api.patch(`/verifications/${id}`, { status });
@@ -132,7 +116,6 @@ export default function ProjectExecution() {
   const cards = [
     { label: "Total Projects", v: stats.total || 0, icon: Briefcase, color: "blue" },
     { label: "Pending Installation", v: stats.pending_install || 0, icon: Clock, color: "amber" },
-    { label: "Material Pending", v: stats.material_pending || 0, icon: PackageSearch, color: "orange" },
     { label: "Verification Pending", v: stats.verif_pending || 0, icon: ShieldCheck, color: "indigo" },
     { label: "Completed", v: stats.completed || 0, icon: CheckCircle2, color: "emerald" },
     { label: "KW Under Execution", v: `${(stats.kw_in_execution || 0).toFixed(1)} kW`, icon: Zap, color: "teal" },
@@ -197,21 +180,6 @@ export default function ProjectExecution() {
     });
   }, [verifs, searchQuery, selectedStatus, selectedEmployee, selectedDateRange]);
 
-  const filteredMatReqs = useMemo(() => {
-    return matReqs.filter((m) => {
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        const nameMatch = (m.client_name || "").toLowerCase().includes(q);
-        const idMatch = (m.client_id || "").toLowerCase().includes(q);
-        if (!nameMatch && !idMatch) return false;
-      }
-      if (selectedStatus !== "All" && m.status !== selectedStatus) return false;
-      if (selectedEmployee !== "All" && m.user_id !== selectedEmployee) return false;
-      if (!matchesDateRange(m.created_at || m.updated_at, selectedDateRange)) return false;
-      return true;
-    });
-  }, [matReqs, searchQuery, selectedStatus, selectedEmployee, selectedDateRange]);
-
   const totalPages = Math.ceil(filteredProjects.length / itemsPerPage);
   const paginated = useMemo(() => {
     const safePage = Math.min(projectPage, Math.max(1, totalPages || 1));
@@ -224,11 +192,10 @@ export default function ProjectExecution() {
 
   const allTabs = useMemo(() => [
     { id: "projects", label: "Project Assignment", perm: canProjectAssignment, testId: "tab-projects" },
-    { id: "verifications", label: "Verification", perm: canVerification, testId: "tab-verifs" },
-    { id: "materials", label: "Approval", perm: canApproval, testId: "tab-materials", badge: loadedTabs.has("materials") ? (matReqs.filter(m => m.status === "pending").length + verifs.filter(v => v.status === "pending").length) : 0 },
-    { id: "rejected", label: "Rejected", perm: canReject, testId: "tab-rejected", badge: (matReqs.filter(m => m.status === "rejected").length + verifs.filter(v => v.status === "rejected").length) },
+    { id: "verifications", label: "Verification", perm: canVerification, testId: "tab-verifs", badge: verifs.filter(v => v.status === "pending").length },
+    { id: "rejected", label: "Rejected", perm: canReject, testId: "tab-rejected", badge: verifs.filter(v => v.status === "rejected").length },
     { id: "retry", label: "Rework / Retry", perm: canRetry, testId: "tab-retry", badge: verifs.filter(v => v.status === "rework" || v.status === "retry").length },
-  ], [canProjectAssignment, canVerification, canApproval, canReject, canRetry, loadedTabs, matReqs, verifs]);
+  ], [canProjectAssignment, canVerification, canReject, canRetry, verifs]);
 
   const visibleTabs = useMemo(() => allTabs.filter((t) => t.perm), [allTabs]);
 
@@ -269,7 +236,7 @@ export default function ProjectExecution() {
         badge={`${filteredProjects.length} Projects`}
       />
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {cards.map((c) => {
           const Icon = c.icon;
           return (
@@ -431,110 +398,6 @@ export default function ProjectExecution() {
           </div>
         )}
 
-        {canApproval && (
-          <div style={{ display: tab === "materials" ? "block" : "none" }}>
-            <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between mb-4 shadow-xs">
-              <div className="flex items-center gap-2 text-xs text-blue-900 font-medium">
-                <PackageSearch className="w-4 h-4 text-blue-600 shrink-0" />
-                <span>Material requests and inventory allocations are centrally managed on the dedicated Material page.</span>
-              </div>
-              <Link to="/material">
-                <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold gap-1.5 h-7">
-                  Open Material Page <ArrowRight className="w-3 h-3" />
-                </Button>
-              </Link>
-            </div>
-            {loadedTabs.has("materials") && loadingTab ? (
-              <Card className="border-slate-200 p-6 space-y-4 animate-pulse">
-                {[1, 2, 3].map((x) => (
-                  <div key={x} className="flex justify-between items-center py-4 border-b border-slate-100 last:border-none">
-                    <div className="space-y-2 flex-1">
-                      <div className="h-4 w-32 bg-slate-200 rounded" />
-                      <div className="h-3 w-64 bg-slate-100 rounded" />
-                    </div>
-                    <div className="h-8 w-24 bg-slate-200 rounded" />
-                  </div>
-                ))}
-              </Card>
-            ) : (
-              <Card className="border-slate-200">
-                <div className="divide-y divide-slate-100">
-                  {matReqs.length === 0 && <div className="p-8 text-center text-slate-500">No material requests yet.</div>}
-                  {matReqs.map((m) => {
-                    const totalApproved = (m.items || []).reduce((sum, it) => {
-                      const requested = Number(it.quantity || 0);
-                      const approved = it.approved_quantity != null ? Number(it.approved_quantity) : (m.status === "approved" ? requested : 0);
-                      return sum + approved;
-                    }, 0);
-                    const totalPending = (m.items || []).reduce((sum, it) => {
-                      const requested = Number(it.quantity || 0);
-                      const approved = it.approved_quantity != null ? Number(it.approved_quantity) : (m.status === "approved" ? requested : 0);
-                      const pending = m.status === "pending" ? requested : Math.max(0, requested - approved);
-                      return sum + pending;
-                    }, 0);
-
-                    return (
-                      <div key={m.id} className="p-5 flex items-start gap-4 flex-wrap" data-testid={`material-req-${m.id}`}>
-                        <div className="flex-1 min-w-[280px]">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-xs bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-semibold">{m.request_no || "—"}</span>
-                            <div className="font-semibold text-slate-900">{m.client_name}</div>
-                            <span className="text-xs text-slate-500">{m.sol_id}</span>
-                            <Badge variant="outline" className={
-                              m.status === "approved" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
-                                m.status === "partial_approved" ? "bg-amber-50 text-amber-700 border-amber-200" :
-                                  m.status === "rejected" ? "bg-red-50 text-red-700 border-red-200" :
-                                    "bg-slate-100 text-slate-700 border-slate-200"
-                            } data-testid={`mr-status-${m.id}`}>{(m.status || "pending").replace("_", " ").toUpperCase()}</Badge>
-                          </div>
-                          <div className="text-xs text-slate-500 mt-0.5">Requested by {m.requested_by_name} · {dayjs(m.created_at).format("MMM D, YYYY h:mm A")}</div>
-
-                          <div className="text-xs text-slate-600 mt-2 flex gap-4 font-medium">
-                            <span>Approved Qty: <span className="text-slate-900 font-semibold">{totalApproved}</span></span>
-                            <span>Pending Qty: <span className="text-slate-900 font-semibold">{totalPending}</span></span>
-                          </div>
-
-                          <div className="mt-2 overflow-x-auto -mx-1 px-1">
-                            <table className="w-full text-xs min-w-[480px]">
-                              <thead><tr className="text-[10px] uppercase tracking-wider text-slate-400">
-                                <th className="text-left py-1 pr-2">Product</th>
-                                <th className="text-right py-1 px-2">Requested</th>
-                                <th className="text-right py-1 px-2">Available</th>
-                                <th className="text-right py-1 px-2">Approved</th>
-                                <th className="text-right py-1 pl-2">Pending</th>
-                              </tr></thead>
-                              <tbody>
-                                {(m.items || []).map((it) => {
-                                  const requested = Number(it.quantity || 0);
-                                  const available = Number(it.available_stock || 0);
-                                  const approved = it.approved_quantity != null ? Number(it.approved_quantity) : (m.status === "approved" ? requested : 0);
-                                  const pending = m.status === "pending" ? requested : Math.max(0, requested - approved);
-                                  const short = available < requested;
-                                  return (
-                                    <tr key={`${m.id}-${it.product}`} className="border-t border-slate-100">
-                                      <td className="py-1 pr-2 text-slate-700">{it.product} {it.size && <span className="text-slate-400">({it.size})</span>}</td>
-                                      <td className="py-1 px-2 text-right tabular-nums">{requested}</td>
-                                      <td className={`py-1 px-2 text-right tabular-nums ${short ? "text-red-600 font-semibold" : "text-slate-700"}`}>{available}</td>
-                                      <td className="py-1 px-2 text-right tabular-nums">{approved}</td>
-                                      <td className="py-1 pl-2 text-right tabular-nums">{pending}</td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                          {m.delivery && <div className="text-xs text-slate-500 mt-2">Challan {m.delivery.challan_number} · {m.delivery.vehicle_number} · {m.delivery.driver_name}</div>}
-                        </div>
-                        {m.status === "pending" && <MaterialApprovalForm request={m} canApproval={canApproval} canReject={canReject} onSubmit={(p) => approveMaterial(m.id, p)} />}
-                      </div>
-                    );
-                  })}
-                </div>
-              </Card>
-            )}
-          </div>
-        )}
-
         {canVerification && (
           <div style={{ display: tab === "verifications" ? "block" : "none" }}>
             {loadedTabs.has("verifications") && loadingTab ? (
@@ -591,8 +454,8 @@ export default function ProjectExecution() {
           <div style={{ display: tab === "rejected" ? "block" : "none" }}>
             <Card className="border-slate-200">
               <div className="divide-y divide-slate-100">
-                {matReqs.filter(m => m.status === "rejected").length === 0 && verifs.filter(v => v.status === "rejected").length === 0 && (
-                  <div className="p-8 text-center text-slate-500">No rejected items found.</div>
+                {verifs.filter(v => v.status === "rejected").length === 0 && (
+                  <div className="p-8 text-center text-slate-500">No rejected verifications found.</div>
                 )}
                 {verifs.filter(v => v.status === "rejected").map((v) => (
                   <div key={`rej-v-${v.id}`} className="p-5 flex items-start gap-4 flex-wrap" data-testid={`rejected-verif-${v.id}`}>
@@ -606,19 +469,6 @@ export default function ProjectExecution() {
                       {v.notes && <div className="text-sm text-slate-600 mt-1">{v.notes}</div>}
                     </div>
                     <VerificationDetailsButton verification={v} />
-                  </div>
-                ))}
-                {matReqs.filter(m => m.status === "rejected").map((m) => (
-                  <div key={`rej-m-${m.id}`} className="p-5 flex items-start gap-4 flex-wrap" data-testid={`rejected-mr-${m.id}`}>
-                    <div className="flex-1 min-w-[280px]">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-semibold">{m.request_no || "—"}</span>
-                        <div className="font-semibold text-slate-900">{m.client_name}</div>
-                        <span className="text-xs text-slate-500">{m.sol_id}</span>
-                        <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">REJECTED MATERIAL REQUEST</Badge>
-                      </div>
-                      <div className="text-xs text-slate-500 mt-0.5">Requested by {m.requested_by_name} · {dayjs(m.created_at).format("MMM D, YYYY h:mm A")}</div>
-                    </div>
                   </div>
                 ))}
               </div>

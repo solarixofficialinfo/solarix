@@ -277,8 +277,14 @@ export default function Quotation() {
       setGeneratedFiles(files);
       toast.success("Quotation generated successfully.");
       fetchHistory();
-      if (files.length > 0) {
-        window.open(fileUrl(files[0].id), "_blank");
+      if (files[0] && files[0].id) {
+        const downloadUrl = fileUrl(files[0].id) + "?download=1";
+        const link = document.createElement("a");
+        link.href = downloadUrl;
+        link.setAttribute("download", files[0].filename || files[0].original_filename || "Quotation.pdf");
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
       }
     } catch (err) {
       toast.error(formatApiError(err));
