@@ -17,7 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Briefcase, Clock, PackageSearch, ShieldCheck, CheckCircle2, Zap, Plus, ClipboardCheck, Camera, Eye, MapPin, ImageIcon, FileText, Trash2, ArrowUp, ArrowDown } from "lucide-react";
+import { Briefcase, Clock, PackageSearch, ShieldCheck, CheckCircle2, Zap, Plus, ClipboardCheck, Camera, Eye, MapPin, ImageIcon, FileText, Trash2, ArrowUp, ArrowDown, ArrowRight } from "lucide-react";
 import dayjs from "dayjs";
 import { MaterialRequest } from "./TaskPortal";
 import PageHeader from "@/components/PageHeader";
