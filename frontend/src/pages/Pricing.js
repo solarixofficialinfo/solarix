@@ -63,15 +63,19 @@ export default function Pricing() {
       // 2. Open Razorpay Checkout Modal
       const options = {
         key: subData.key_id || process.env.REACT_APP_RAZORPAY_KEY_ID || "rzp_live_TQX31MofTekXzi",
-        subscription_id: subData.subscription_id,
+        amount: Math.round(Number(subData.amount || 0) * 100),
+        currency: subData.currency || "INR",
         name: "SOLARIX",
         description: `Subscription for ${subData.plan_name} (${cycle})`,
+        ...(subData.order_id ? { order_id: subData.order_id } : {}),
+        ...(subData.subscription_id && !subData.subscription_id.startsWith("sub_test") ? { subscription_id: subData.subscription_id } : {}),
         handler: async function (response) {
           try {
             const { data: verifyRes } = await api.post("/billing/razorpay/verify-subscription", {
               razorpay_payment_id: response.razorpay_payment_id,
-              razorpay_subscription_id: response.razorpay_subscription_id,
-              razorpay_signature: response.razorpay_signature,
+              razorpay_order_id: response.razorpay_order_id || subData.order_id || "",
+              razorpay_subscription_id: response.razorpay_subscription_id || subData.subscription_id || "",
+              razorpay_signature: response.razorpay_signature || "",
               plan_id: planKey,
               billing_cycle: cycle
             });
@@ -83,9 +87,9 @@ export default function Pricing() {
           }
         },
         prefill: {
-          name: user.name || "",
-          email: user.email || "",
-          contact: user.mobile || ""
+          name: user?.name || user?.full_name || "",
+          email: user?.email || "",
+          contact: user?.mobile || ""
         },
         theme: {
           color: "#2563EB"

@@ -60,8 +60,9 @@ class CreateSubscriptionIn(BaseModel):
 
 class VerifySubscriptionIn(BaseModel):
     razorpay_payment_id: str
-    razorpay_subscription_id: str
-    razorpay_signature: str
+    razorpay_order_id: Optional[str] = ""
+    razorpay_subscription_id: Optional[str] = ""
+    razorpay_signature: Optional[str] = ""
     plan_id: str
     billing_cycle: str = "monthly"
 
@@ -177,23 +178,25 @@ async def create_razorpay_subscription(data: CreateSubscriptionIn, user=Depends(
                 discount_amount = coupon.get("discount_value", 0)
 
     final_amount = max(0, amount - discount_amount)
+    amount_paise = int(final_amount * 100)
 
-    # Call Razorpay Subscription API if credentials configured
-    razorpay_sub_id = f"sub_test_{company_id[:8]}_{int(datetime.now().timestamp())}"
+    # Initialize order and subscription identifiers
+    razorpay_order_id = ""
+    razorpay_sub_id = ""
     key_id = get_razorpay_key_id()
     key_secret = get_razorpay_key_secret()
-    
+
     if key_id and not key_id.startswith("rzp_test_solrix"):
         try:
             async with httpx.AsyncClient() as client:
-                res = await client.post(
-                    "https://api.razorpay.com/v1/subscriptions",
+                # 1. Create standard Razorpay Order for reliable checkout across all payment methods
+                order_res = await client.post(
+                    "https://api.razorpay.com/v1/orders",
                     auth=(key_id, key_secret),
                     json={
-                        "plan_id": os.environ.get(f"RAZORPAY_PLAN_{data.plan_id.upper()}_{data.billing_cycle.upper()}", f"plan_{data.plan_id}_{data.billing_cycle}"),
-                        "total_count": 12 if data.billing_cycle == "monthly" else 1,
-                        "quantity": 1,
-                        "customer_notify": 1,
+                        "amount": amount_paise,
+                        "currency": "INR",
+                        "receipt": f"rcpt_{company_id[:8]}_{int(datetime.now().timestamp())}",
                         "notes": {
                             "company_id": company_id,
                             "plan_id": data.plan_id,
@@ -202,12 +205,38 @@ async def create_razorpay_subscription(data: CreateSubscriptionIn, user=Depends(
                     },
                     timeout=10.0
                 )
-                if res.status_code == 200:
-                    razorpay_sub_id = res.json().get("id", razorpay_sub_id)
+                if order_res.status_code == 200:
+                    razorpay_order_id = order_res.json().get("id", "")
+                    logger.info(f"Created Razorpay Order {razorpay_order_id} for plan {data.plan_id}")
+                else:
+                    logger.warning(f"Razorpay order creation status={order_res.status_code}: {order_res.text}")
+
+                # 2. Attempt subscription creation if plan id configured
+                plan_id_env = os.environ.get(f"RAZORPAY_PLAN_{data.plan_id.upper()}_{data.billing_cycle.upper()}")
+                if plan_id_env:
+                    sub_res = await client.post(
+                        "https://api.razorpay.com/v1/subscriptions",
+                        auth=(key_id, key_secret),
+                        json={
+                            "plan_id": plan_id_env,
+                            "total_count": 12 if data.billing_cycle == "monthly" else 1,
+                            "quantity": 1,
+                            "customer_notify": 1,
+                            "notes": {
+                                "company_id": company_id,
+                                "plan_id": data.plan_id,
+                                "billing_cycle": data.billing_cycle
+                            }
+                        },
+                        timeout=10.0
+                    )
+                    if sub_res.status_code == 200:
+                        razorpay_sub_id = sub_res.json().get("id", "")
         except Exception as e:
-            logger.warning(f"Razorpay API call failed, falling back to test subscription mode: {e}")
+            logger.error(f"Razorpay order/subscription API call failed: {e}")
 
     return {
+        "order_id": razorpay_order_id,
         "subscription_id": razorpay_sub_id,
         "key_id": key_id,
         "amount": final_amount,
@@ -227,18 +256,45 @@ async def verify_razorpay_subscription(data: VerifySubscriptionIn, user=Depends(
     db = get_db()
     company_id = user["company_id"]
     key_secret = get_razorpay_key_secret()
-
-    # Verify signature
-    generated_signature = hmac.new(
-        key_secret.encode(),
-        f"{data.razorpay_payment_id}|{data.razorpay_subscription_id}".encode(),
-        hashlib.sha256
-    ).hexdigest()
-
-    # In test mode with dummy secrets, bypass strict signature match if signature matches dummy test format
     is_test_mode = key_secret.startswith("rzp_test")
-    if not is_test_mode and generated_signature != data.razorpay_signature:
-        logger.error("Razorpay subscription signature verification failed")
+    sig_valid = False
+
+    # Check Order signature: HMAC SHA256 of f"{order_id}|{payment_id}"
+    if data.razorpay_order_id and data.razorpay_signature:
+        expected_order_sig = hmac.new(
+            key_secret.encode(),
+            f"{data.razorpay_order_id}|{data.razorpay_payment_id}".encode(),
+            hashlib.sha256
+        ).hexdigest()
+        if expected_order_sig == data.razorpay_signature:
+            sig_valid = True
+
+    # Check Subscription signature: HMAC SHA256 of f"{payment_id}|{subscription_id}"
+    if not sig_valid and data.razorpay_subscription_id and data.razorpay_signature:
+        expected_sub_sig = hmac.new(
+            key_secret.encode(),
+            f"{data.razorpay_payment_id}|{data.razorpay_subscription_id}".encode(),
+            hashlib.sha256
+        ).hexdigest()
+        if expected_sub_sig == data.razorpay_signature:
+            sig_valid = True
+
+    # Fallback: Query payment status directly from Razorpay API to confirm capture
+    if not is_test_mode and not sig_valid and data.razorpay_payment_id:
+        try:
+            async with httpx.AsyncClient() as client:
+                pay_res = await client.get(
+                    f"https://api.razorpay.com/v1/payments/{data.razorpay_payment_id}",
+                    auth=(get_razorpay_key_id(), key_secret),
+                    timeout=8.0
+                )
+                if pay_res.status_code == 200 and pay_res.json().get("status") in ("captured", "authorized"):
+                    sig_valid = True
+        except Exception as e:
+            logger.warning(f"Direct payment verification fallback error: {e}")
+
+    if not is_test_mode and not sig_valid:
+        logger.error("Razorpay signature verification failed")
         raise HTTPException(status_code=400, detail="Invalid payment signature")
 
     plan = get_plan_details(data.plan_id)
@@ -246,13 +302,14 @@ async def verify_razorpay_subscription(data: VerifySubscriptionIn, user=Depends(
 
     # Activate subscription in company record
     now = now_iso()
+    sub_ref = data.razorpay_subscription_id or data.razorpay_order_id or data.razorpay_payment_id
     await db.companies.update_one(
         {"id": company_id},
         {"$set": {
             "subscription_status": "active",
             "plan_id": data.plan_id,
             "billing_cycle": data.billing_cycle,
-            "razorpay_subscription_id": data.razorpay_subscription_id,
+            "razorpay_subscription_id": sub_ref,
             "cancel_at_period_end": False,
             "updated_at": now
         }}
@@ -262,8 +319,9 @@ async def verify_razorpay_subscription(data: VerifySubscriptionIn, user=Depends(
     payment_record = {
         "id": f"PAY-{int(datetime.now().timestamp())}",
         "company_id": company_id,
-        "subscription_id": data.razorpay_subscription_id,
+        "subscription_id": sub_ref,
         "razorpay_payment_id": data.razorpay_payment_id,
+        "razorpay_order_id": data.razorpay_order_id,
         "amount": amount,
         "currency": "INR",
         "status": "success",
