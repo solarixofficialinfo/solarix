@@ -62,7 +62,7 @@ export default function Pricing() {
 
       // 2. Open Razorpay Checkout Modal
       const options = {
-        key: subData.key_id || process.env.REACT_APP_RAZORPAY_KEY_ID || "rzp_live_TQX31MofTekXzi",
+        key: subData.key_id || process.env.REACT_APP_RAZORPAY_KEY_ID || "rzp_live_TQhcb9xdCCZClE",
         amount: Math.round(Number(subData.amount || 0) * 100),
         currency: subData.currency || "INR",
         name: "SOLARIX",

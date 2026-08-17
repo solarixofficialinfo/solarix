@@ -19,15 +19,15 @@ logger = logging.getLogger("solarix_billing")
 
 billing_router = APIRouter(prefix="/api/billing", tags=["billing"])
 
-RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "rzp_live_TQX31MofTekXzi")
-RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "Qkl444fdYLTcGwXdqVAWn2EG")
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "rzp_live_TQhcb9xdCCZClE")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "N26Rl7vSjMPMFd9F6Lz1j7Jq")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "rzp_test_webhook_secret")
 
 def get_razorpay_key_id() -> str:
-    return os.environ.get("RAZORPAY_KEY_ID") or RAZORPAY_KEY_ID or "rzp_live_TQX31MofTekXzi"
+    return os.environ.get("RAZORPAY_KEY_ID") or RAZORPAY_KEY_ID or "rzp_live_TQhcb9xdCCZClE"
 
 def get_razorpay_key_secret() -> str:
-    return os.environ.get("RAZORPAY_KEY_SECRET") or RAZORPAY_KEY_SECRET or "Qkl444fdYLTcGwXdqVAWn2EG"
+    return os.environ.get("RAZORPAY_KEY_SECRET") or RAZORPAY_KEY_SECRET or "N26Rl7vSjMPMFd9F6Lz1j7Jq"
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
