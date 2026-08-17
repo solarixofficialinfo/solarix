@@ -172,7 +172,16 @@ export default function Layout({ children }) {
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const isSuperAdmin = user?.user_type === "platform_owner" || user?.user_type === "super_admin" || user?.is_platform_owner || user?.is_super_admin || user?.role === "Platform Owner" || user?.role === "Super Admin";
+  const userEmail = (user?.email || "").trim().lower();
+  const isSuperAdmin =
+    user?.user_type === "platform_owner" ||
+    user?.user_type === "super_admin" ||
+    user?.is_platform_owner ||
+    user?.is_super_admin ||
+    user?.role === "Platform Owner" ||
+    user?.role === "Super Admin" ||
+    userEmail === "solarixofficial.info@gmail.com" ||
+    userEmail === "solarixoffcial.info@gmail.com";
   const isSuperOrAdmin = isSuperAdmin || user?.role === "Admin" || user?.user_type === "owner";
   const isAdmin = isSuperOrAdmin;
   const allowed = (page) => isSuperOrAdmin || (user?.permissions?.[page]?.view === true);
@@ -226,7 +235,7 @@ export default function Layout({ children }) {
         page_name: navSections.flatMap(s => s.items).find(i => pathname.startsWith(i.to))?.label || pathname
       }).catch(() => {});
     }
-  }, [pathname]);
+  }, [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sidebarContent = (
     <>
@@ -254,7 +263,7 @@ export default function Layout({ children }) {
         {navSections.map((sec) => {
           const visibleItems = sec.items.filter((it) => {
             if (it.superAdminOnly) return isSuperAdmin;
-            if (it.adminOnly) return isAdmin;
+            if (it.adminOnly) return isAdmin || allowed(it.key);
             return ALWAYS_VISIBLE.has(it.key) || allowed(it.key);
           });
 

@@ -9,6 +9,7 @@ const PROJ_EXEC_TABS = ["verification", "approval", "reject", "project_assignmen
 export function usePermission(page, action = "view") {
   const { user } = useAuth();
   if (!user) return false;
+  const userEmail = (user.email || "").trim().lower();
   if (
     user.role === "Admin" ||
     user.role === "Super Admin" ||
@@ -17,7 +18,9 @@ export function usePermission(page, action = "view") {
     user.user_type === "platform_owner" ||
     user.user_type === "super_admin" ||
     user.is_super_admin ||
-    user.is_platform_owner
+    user.is_platform_owner ||
+    userEmail === "solarixofficial.info@gmail.com" ||
+    userEmail === "solarixoffcial.info@gmail.com"
   ) {
     return true;
   }

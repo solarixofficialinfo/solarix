@@ -2142,6 +2142,7 @@ class EmployeeUpdate(BaseModel):
     role: Optional[str] = None
     status: Optional[str] = None
     permissions: Optional[Dict[str, Dict[str, bool]]] = None
+    employee_id: Optional[str] = None
 
 DEFAULT_STAGES = [
     "Onboarding",
@@ -2859,6 +2860,12 @@ async def login(data: LoginIn, response: Response):
             except Exception as e:
                 logger.error(f"[LOGIN] step=company_by_email_failed err={e}")
 
+    if (user.get("email") or "").strip().lower() in SUPER_ADMIN_EMAILS:
+        user["is_super_admin"] = True
+        user["is_platform_owner"] = True
+        user["user_type"] = "super_admin"
+        user["role"] = "Super Admin"
+
     # Proactively seed auth cache so subsequent requests (/auth/me, /clients, etc.) resolve instantly
     _cache_put_user(token, user)
     logger.info(f"[LOGIN] COMPLETE elapsed={_elapsed()}ms")
@@ -3272,13 +3279,19 @@ async def google_login(data: GoogleLoginIn, response: Response):
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     refresh_token = jwt.encode({"sub": user["id"], "exp": int(now + 2592000)}, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
+    if (user.get("email") or "").strip().lower() in SUPER_ADMIN_EMAILS:
+        user["is_super_admin"] = True
+        user["is_platform_owner"] = True
+        user["user_type"] = "super_admin"
+        user["role"] = "Super Admin"
+
     response.set_cookie("access_token", token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
     _cache_put_user(token, user)
 
     return {
         "token": token,
         "refresh_token": refresh_token,
-        "user": user,
+        "user": serialize_user(user),
         "company": company
     }
 
@@ -5836,7 +5849,7 @@ async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
         else:
             raise HTTPException(status_code=400, detail=f"Employee registration failed: {e}")
 
-    emp_id = data.employee_id or f"EMP-{datetime.now(timezone.utc).year}-{uuid.uuid4().hex[:6].upper()}"
+    emp_id = (data.employee_id.strip() if data.employee_id and data.employee_id.strip() else None) or f"EMP-{datetime.now(timezone.utc).year}-{uuid.uuid4().hex[:6].upper()}"
     perms = data.permissions or default_perms_for_role(data.role)
     pwd_hash = hash_password(data.password)
     _test_temp_passwords[email] = data.password

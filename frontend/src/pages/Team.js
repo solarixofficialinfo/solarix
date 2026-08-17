@@ -18,7 +18,7 @@ import {
 import { useEmployeeList, useInvalidateTeam } from "@/hooks/useTeam";
 import PageHeader from "@/components/PageHeader";
 
-const ROLES = ["Super Admin", "Admin", "Manager", "Staff", "Installer", "Viewer"];
+const ROLES = ["Admin", "Manager", "Staff", "Installer", "Viewer"];
 
 const MODULE_GROUPS = [
   {
@@ -154,6 +154,7 @@ export default function Team() {
     name: "",
     mobile: "",
     email: "",
+    employee_id: "",
     password: "",
     role: "Staff",
     status: "Active",
@@ -169,6 +170,7 @@ export default function Team() {
       name: "",
       mobile: "",
       email: "",
+      employee_id: "",
       password: "",
       role: "Staff",
       status: "Active",
@@ -185,6 +187,7 @@ export default function Team() {
       name: u.name || "",
       mobile: u.mobile || "",
       email: u.email || "",
+      employee_id: u.employee_id || "",
       password: "",
       role: u.role || "Staff",
       status: u.status || "Active",
@@ -280,13 +283,17 @@ export default function Team() {
 
     setSaving(true);
     try {
+      const payload = {
+        ...form,
+        mobile: cleanMobile,
+        employee_id: form.employee_id?.trim() || undefined
+      };
       if (editingUser) {
-        const payload = { ...form, mobile: cleanMobile };
         if (!payload.password) delete payload.password;
         await api.put(`/employees/${editingUser.id}`, payload);
         toast.success("Team member updated successfully");
       } else {
-        await api.post("/employees", { ...form, mobile: cleanMobile });
+        await api.post("/employees", payload);
         toast.success("Team member added successfully");
       }
       setModalOpen(false);
@@ -356,11 +363,6 @@ export default function Team() {
                     <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
                       <User className="w-4 h-4 text-blue-600 shrink-0" />
                       <span>{u.name}</span>
-                      {(u.role === "Super Admin" || u.user_type === "owner") && (
-                        <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-300 text-[10px]">
-                          Owner
-                        </Badge>
-                      )}
                     </div>
                   </td>
                   <td className="px-4 py-3 font-mono text-slate-600">{u.employee_id || "—"}</td>
@@ -496,6 +498,16 @@ export default function Team() {
                       placeholder="e.g. rahul@solarix.com"
                       className="mt-1 h-9 text-xs font-mono"
                       required
+                    />
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700">Employee ID</Label>
+                    <Input
+                      value={form.employee_id}
+                      onChange={(e) => setForm({ ...form, employee_id: e.target.value })}
+                      placeholder="e.g. EMP-2026-001 (Optional, auto-generated if blank)"
+                      className="mt-1 h-9 text-xs font-mono"
                     />
                   </div>
 

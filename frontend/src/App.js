@@ -104,7 +104,17 @@ function AccessDenied() {
 function PermissionRoute({ page, children }) {
   const { user, loading } = useAuth();
   if (loading) return null;
-  const isSuperOrAdmin = user?.role === "Super Admin" || user?.role === "Admin" || user?.user_type === "owner";
+  const userEmail = (user?.email || "").trim().lower();
+  const isSuperOrAdmin =
+    user?.role === "Super Admin" ||
+    user?.role === "Admin" ||
+    user?.user_type === "owner" ||
+    user?.user_type === "super_admin" ||
+    user?.user_type === "platform_owner" ||
+    user?.is_super_admin ||
+    user?.is_platform_owner ||
+    userEmail === "solarixofficial.info@gmail.com" ||
+    userEmail === "solarixoffcial.info@gmail.com";
   const hasPerm = isSuperOrAdmin || page === "complaints" || (user?.permissions?.[page]?.view === true);
 
   if (!hasPerm) {
@@ -117,6 +127,9 @@ function PermissionRoute({ page, children }) {
       { key: "client_data", path: "/client-data" },
       { key: "reports", path: "/reports" },
       { key: "sales_documents", path: "/sales-documents" },
+      { key: "billing", path: "/billing" },
+      { key: "team", path: "/team" },
+      { key: "settings", path: "/profile" },
       { key: "complaints", path: "/complaints" },
     ];
     const allowed = pages.find((p) => p.key === "complaints" || isSuperOrAdmin || (user?.permissions?.[p.key]?.view === true));
@@ -135,7 +148,16 @@ function ProtectedAdmin({ children }) {
     );
   }
   if (!user) return <Navigate to="/login" replace />;
-  const isSuperAdmin = user?.user_type === "platform_owner" || user?.user_type === "super_admin" || user?.is_platform_owner || user?.is_super_admin || user?.role === "Platform Owner" || user?.role === "Super Admin";
+  const userEmail = (user?.email || "").trim().lower();
+  const isSuperAdmin =
+    user?.user_type === "platform_owner" ||
+    user?.user_type === "super_admin" ||
+    user?.is_platform_owner ||
+    user?.is_super_admin ||
+    user?.role === "Platform Owner" ||
+    user?.role === "Super Admin" ||
+    userEmail === "solarixofficial.info@gmail.com" ||
+    userEmail === "solarixoffcial.info@gmail.com";
   if (!isSuperAdmin) return <AccessDenied />;
   return children;
 }
@@ -143,7 +165,16 @@ function ProtectedAdmin({ children }) {
 function PlatformOwnerRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return null;
-  const isSuperAdmin = user?.user_type === "platform_owner" || user?.user_type === "super_admin" || user?.is_platform_owner || user?.is_super_admin || user?.role === "Platform Owner" || user?.role === "Super Admin";
+  const userEmail = (user?.email || "").trim().lower();
+  const isSuperAdmin =
+    user?.user_type === "platform_owner" ||
+    user?.user_type === "super_admin" ||
+    user?.is_platform_owner ||
+    user?.is_super_admin ||
+    user?.role === "Platform Owner" ||
+    user?.role === "Super Admin" ||
+    userEmail === "solarixofficial.info@gmail.com" ||
+    userEmail === "solarixoffcial.info@gmail.com";
   if (!isSuperAdmin) return <AccessDenied />;
   return children;
 }
@@ -236,7 +267,7 @@ function App() {
             <Route path="/materials" element={<Navigate to="/material" replace />} />
             <Route path="/material-requests" element={<Navigate to="/material" replace />} />
             <Route path="/pricing" element={<Pricing />} />
-            <Route path="/billing" element={<Protected><Billing /></Protected>} />
+            <Route path="/billing" element={<Protected><PermissionRoute page="billing"><Billing /></PermissionRoute></Protected>} />
             <Route path="/purchase-orders" element={<Protected><PermissionRoute page="sales_documents"><PurchaseOrders /></PermissionRoute></Protected>} />
             {/* Level 1 SOLARIX Control Center Routes — Dedicated Full-Screen Admin Shell */}
             <Route path="/admin/metrics" element={<ProtectedAdmin><AdminMetrics /></ProtectedAdmin>} />
