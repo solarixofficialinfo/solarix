@@ -6,16 +6,23 @@ import { FileCheck2, Download } from "lucide-react";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 
-export default function TemplateGenerateDialog({ open, onOpenChange, clientId }) {
+export default function TemplateGenerateDialog({ open, onOpenChange, clientId, client, onClose, onGenerated }) {
   const navigate = useNavigate();
+  const targetClientId = clientId || client?.id || client?.sol_id;
+  const isOpen = open !== undefined ? open : true;
+
+  const handleClose = () => {
+    if (onClose) onClose();
+    if (onOpenChange) onOpenChange(false);
+  };
 
   const handleDownload = async (docType, docLabel) => {
-    if (!clientId) return;
+    if (!targetClientId) return;
     const toastId = toast.loading(`Generating ${docLabel} PDF from code...`);
     try {
       const response = await api.post(
         "/documents/download-direct",
-        { client_id: clientId, doc_type: docType },
+        { client_id: targetClientId, doc_type: docType },
         { responseType: "blob" }
       );
       const blob = response.data;
@@ -37,21 +44,22 @@ export default function TemplateGenerateDialog({ open, onOpenChange, clientId })
       window.URL.revokeObjectURL(url);
       const formatLabel = isDocx ? `${docLabel} (DOCX)` : `${docLabel} (PDF)`;
       toast.success(`${formatLabel} downloaded!`, { id: toastId });
-      onOpenChange(false);
+      if (onGenerated) onGenerated();
+      handleClose();
     } catch (e) {
       toast.error(formatApiError(e) || "Generation failed", { id: toastId });
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="max-w-xl p-6 space-y-4">
         <DialogHeader>
           <DialogTitle className="text-lg font-bold flex items-center gap-2">
-            <FileCheck2 className="w-5 h-5 text-blue-600" /> Code-Based Document Generator
+            <FileCheck2 className="w-5 h-5 text-blue-600" /> Client Onboarding Document Generator
           </DialogTitle>
           <DialogDescription className="text-xs">
-            Generate and download 100% code-based PDFs directly using verified onboarding data.
+            Generate and download 100% code-based onboarding compliance documents directly using verified client data.
           </DialogDescription>
         </DialogHeader>
 
@@ -63,7 +71,6 @@ export default function TemplateGenerateDialog({ open, onOpenChange, clientId })
             { k: "vendor_agreement", l: "Vendor Agreement" },
             { k: "net_meter_agreement", l: "Net Meter Agreement" },
             { k: "meter_testing_request", l: "Meter Testing Request" },
-            { k: "quotation", l: "Quotation" },
           ].map((d) => (
             <Button
               key={d.k}
@@ -83,13 +90,13 @@ export default function TemplateGenerateDialog({ open, onOpenChange, clientId })
             size="sm"
             className="text-xs text-blue-600 hover:text-blue-700"
             onClick={() => {
-              onOpenChange(false);
-              navigate(`/templates?client_id=${clientId}`);
+              handleClose();
+              navigate(`/templates?client_id=${targetClientId}`);
             }}
           >
             Open Full Documents Hub →
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => onOpenChange(false)}>
+          <Button variant="secondary" size="sm" onClick={handleClose}>
             Close
           </Button>
         </div>

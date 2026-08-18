@@ -4529,18 +4529,26 @@ async def _cleanup_duplicate_document(company_id: str, doc_type: str, doc_number
             {"$pull": {"documents": {"id": existing_file["id"]}}}
         )
 
+ONBOARDING_DOC_TYPES = {
+    "annexure", "wcr", "sldr", "net_meter_agreement", "net_metering_agreement",
+    "vendor_agreement", "meter_testing_request", "meter_testing", "onboarding"
+}
+
 @api_router.post("/clients/{client_id}/generate-document")
 async def generate_document(client_id: str, payload: Dict[str, Any], user=Depends(get_current_user)):
-    doc_type = payload.get("doc_type", "")
+    doc_type = payload.get("doc_type", "").lower().strip()
     if doc_type not in ALLOWED_DOC_TYPES:
         raise HTTPException(status_code=400, detail="Invalid doc_type")
         
-    if doc_type in ("quotation", "tax_invoice", "delivery_bill"):
-        if not has_perm(user, "sales_documents", "create"):
-            raise HTTPException(status_code=403, detail="Missing permission: sales_documents.create")
-    else:
-        if not has_perm(user, "clients", "create"):
-            raise HTTPException(status_code=403, detail="Missing permission: clients.create")
+    if doc_type in ("quotation", "tax_invoice", "delivery_bill", "purchase_order"):
+        raise HTTPException(
+            status_code=400,
+            detail="Client Workspace document generation supports onboarding documents only. For sales, billing, or delivery documents, please use the Sales Documents or Receivables module."
+        )
+
+    if not has_perm(user, "clients", "create"):
+        raise HTTPException(status_code=403, detail="Missing permission: clients.create")
+
     client_doc = await db.clients.find_one({"id": client_id, "company_id": user["company_id"]}, {"_id": 0})
     if not client_doc:
         raise HTTPException(status_code=404, detail="Client not found")

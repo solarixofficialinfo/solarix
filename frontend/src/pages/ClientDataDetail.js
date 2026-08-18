@@ -50,6 +50,54 @@ const STAGES = [
   "Handover",
 ];
 
+const ONBOARDING_DOC_KEYS = new Set([
+  "wcr", "sldr", "annexure", "vendor_agreement", "vendor agreement",
+  "net_meter_agreement", "net meter agreement", "net_metering_agreement",
+  "meter_testing", "meter testing", "meter_testing_report", "meter_testing_request", "onboarding"
+]);
+
+const NON_ONBOARDING_KEYS = new Set([
+  "quotation", "tax_invoice", "invoice", "delivery_bill", "delivery_challan",
+  "chalan", "purchase_order", "purchase_bill", "sales_order"
+]);
+
+export const isOnboardingDoc = (doc) => {
+  if (!doc) return false;
+  const docType = (doc.doc_type || doc.category || doc.type || "").toLowerCase().trim();
+  const label = (doc.label || doc.filename || doc.name || "").toLowerCase().trim();
+
+  if (
+    NON_ONBOARDING_KEYS.has(docType) ||
+    NON_ONBOARDING_KEYS.has(label) ||
+    docType.includes("quotation") ||
+    docType.includes("invoice") ||
+    docType.includes("delivery") ||
+    docType.includes("purchase") ||
+    label.includes("quotation") ||
+    label.includes("invoice") ||
+    label.includes("delivery") ||
+    label.includes("purchase")
+  ) {
+    return false;
+  }
+
+  if (ONBOARDING_DOC_KEYS.has(docType) || ONBOARDING_DOC_KEYS.has(label) || doc.category === "onboarding" || doc.is_onboarding === true) {
+    return true;
+  }
+
+  const matchStr = `${docType} ${label}`;
+  return (
+    matchStr.includes("wcr") ||
+    matchStr.includes("sldr") ||
+    matchStr.includes("annexure") ||
+    matchStr.includes("vendor agreement") ||
+    matchStr.includes("net meter") ||
+    matchStr.includes("meter testing") ||
+    matchStr.includes("work completion") ||
+    matchStr.includes("single line")
+  );
+};
+
 const OFFICIAL_DOC_TYPES = [
   { key: "WCR", label: "Work Completion Report (WCR)", icon: FileText },
   { key: "SLDR", label: "Single Line Diagram (SLDR)", icon: Zap },
@@ -57,8 +105,6 @@ const OFFICIAL_DOC_TYPES = [
   { key: "Vendor Agreement", label: "Vendor Agreement", icon: FileText },
   { key: "Net Meter Agreement", label: "Net Meter Agreement", icon: Gauge },
   { key: "Meter Testing", label: "Meter Testing Report", icon: CheckCircle2 },
-  { key: "Quotation", label: "Quotation", icon: ScrollText },
-  { key: "Delivery Bill", label: "Delivery Bill / Chalan", icon: Truck },
 ];
 
 const INV_STATUS_STYLES = {
@@ -147,7 +193,7 @@ export default function ClientDataDetail() {
   const surveys = clientData?.surveys || [];
   const materialDeliveries = clientData?.material_deliveries || [];
   const materialRequests = clientData?.material_requests || [];
-  const documents = clientData?.documents || [];
+  const documents = useMemo(() => (clientData?.documents || []).filter(isOnboardingDoc), [clientData?.documents]);
   const meterTestings = clientData?.meter_testings || [];
   const installations = clientData?.installations || [];
   const verifications = clientData?.verifications || [];
