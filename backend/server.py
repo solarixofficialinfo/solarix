@@ -6148,6 +6148,8 @@ class InwardIn(BaseModel):
     quantity: float
     unit: Optional[str] = "Nos"
     reference_number: Optional[str] = ""  # Challan No
+    challan_no: Optional[str] = ""
+    challan_number: Optional[str] = ""
     reference_type: Optional[str] = "Challan Number"
     bill_number: Optional[str] = ""
     source_type: Optional[str] = "Supplier"
@@ -13780,6 +13782,7 @@ async def get_platform_customer_detail(company_id: str, user=Depends(require_sup
     if not company:
         raise HTTPException(status_code=404, detail="Customer workspace not found")
 
+    owner = await db.users.find_one({"company_id": company_id, "user_type": "owner"}, {"_id": 0, "password_hash": 0})
     raw_team = await db.users.find({"company_id": company_id}, {"_id": 0, "password_hash": 0}).to_list(500)
     team_users = [u for u in raw_team if is_internal_team_user(u)]
 
@@ -14140,7 +14143,7 @@ async def update_platform_feedback(feedback_id: str, data: PlatformFeedbackUpdat
             company_id=fb["company_id"],
             audience="user",
             title=f"Feedback Status: {data.status}",
-            message=f"Admin Note on your report '{fb.get('feedback_type', 'Feedback')}': {data.admin_notes}",
+            body=f"Admin Note on your report '{fb.get('feedback_type', 'Feedback')}': {data.admin_notes}",
             to_user_id=fb.get("user_id")
         )
 
