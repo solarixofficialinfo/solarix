@@ -2359,23 +2359,46 @@ def default_perms_for_role(role: str) -> Dict[str, Dict[str, bool]]:
     return base
 
 
-def is_owner(user: Dict[str, Any]) -> bool:
-    """Return True if user is verified Company Owner or Platform Super Admin."""
+EXTERNAL_USER_TYPES = {"client", "vendor", "epc", "epc_partner", "customer", "external"}
+EXTERNAL_ROLES = {"client", "vendor", "epc", "epc/partner", "partner", "customer"}
+
+def is_external_user(user: Dict[str, Any]) -> bool:
+    """Return True if user is an external business account (Client, Vendor, EPC/Partner, Customer)."""
     if not isinstance(user, dict):
         return False
+    u_type = (user.get("user_type") or "").strip().lower()
+    role = (user.get("role") or "").strip().lower()
+    return u_type in EXTERNAL_USER_TYPES or role in EXTERNAL_ROLES
+
+def is_internal_team_user(user: Dict[str, Any]) -> bool:
+    """Return True if user is an internal team member or company owner."""
+    if not isinstance(user, dict):
+        return False
+    return not is_external_user(user)
+
+def is_owner(user: Dict[str, Any]) -> bool:
+    """Return True if user is verified Company Owner or Platform Super Admin. External accounts are NEVER owners."""
+    if not isinstance(user, dict) or is_external_user(user):
+        return False
     user_email = (user.get("email") or "").strip().lower()
+    if user_email in SUPER_ADMIN_EMAILS:
+        return True
     return (
-        user_email in SUPER_ADMIN_EMAILS or
-        user.get("role") in ("Super Admin", "Admin", "Platform Owner", "Owner") or
         user.get("user_type") in ("owner", "platform_owner", "super_admin") or
+        user.get("role") in ("Super Admin", "Owner", "Platform Owner") or
         user.get("is_super_admin") is True or
         user.get("is_platform_owner") is True or
-        user.get("is_owner") is True
+        user.get("is_owner") is True or
+        (user.get("role") == "Admin" and user.get("user_type") in ("owner", "", None))
     )
 
 def has_perm(user: Dict[str, Any], page: str, action: str) -> bool:
-    """Single source of truth for permission checks. Company Owner always has full access."""
+    """Single source of truth for permission checks. Company Owner always has full access. External users cannot access internal admin pages."""
     if not isinstance(user, dict):
+        return False
+    if is_external_user(user):
+        if page in ("team", "settings", "activity_log", "billing"):
+            return False
         return False
     if is_owner(user):
         return True
@@ -5791,21 +5814,29 @@ async def review_verification(v_id: str, data: MaterialApproval, user=Depends(ge
 # ---------- Employees ----------
 @api_router.get("/employees")
 async def list_employees(user=Depends(get_current_user)):
-    if not (is_owner(user) or has_perm(user, "team", "view")):
+    if is_external_user(user) or not (is_owner(user) or has_perm(user, "team", "view")):
         raise HTTPException(status_code=403, detail="Unauthorized to view team members")
+    query = {
+        "company_id": user["company_id"],
+        "user_type": {"$nin": list(EXTERNAL_USER_TYPES)},
+        "role": {"$nin": ["Client", "Vendor", "EPC", "EPC/Partner", "Partner", "Customer"]}
+    }
     rows = await db.users.find(
-        {"company_id": user["company_id"]},
+        query,
         {"_id": 0, "password_hash": 0}
     ).sort("created_at", -1).to_list(500)
+    team_members = []
     for r in rows:
-        email_clean = (r.get("email") or "").strip().lower()
-        if email_clean in SUPER_ADMIN_EMAILS or r.get("user_type") in ("platform_owner", "super_admin") or r.get("is_super_admin") or r.get("is_platform_owner"):
-            r["role"] = "Super Admin"
-    return rows
+        if is_internal_team_user(r):
+            email_clean = (r.get("email") or "").strip().lower()
+            if email_clean in SUPER_ADMIN_EMAILS or r.get("user_type") in ("platform_owner", "super_admin") or r.get("is_super_admin") or r.get("is_platform_owner"):
+                r["role"] = "Super Admin"
+            team_members.append(r)
+    return team_members
 
 @api_router.post("/employees")
 async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
-    if not (is_owner(user) or has_perm(user, "team", "create")):
+    if is_external_user(user) or not (is_owner(user) or has_perm(user, "team", "create")):
         raise HTTPException(status_code=403, detail="Team creation permission required")
 
     # Mobile validation: Exactly 10 digits
@@ -5826,7 +5857,7 @@ async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
     pid = c_doc.get("plan_id") or "starter"
     is_trial = st == "trialing"
     limits = get_plan_limits(pid, is_trial=is_trial)
-    active_users = await db.users.count_documents({"company_id": user["company_id"], "status": "Active"})
+    active_users = await db.users.count_documents({"company_id": user["company_id"], "status": "Active", "user_type": {"$nin": list(EXTERNAL_USER_TYPES)}})
     if active_users >= limits["max_users"]:
         raise HTTPException(
             status_code=403,
@@ -5898,7 +5929,7 @@ async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
 
 @api_router.put("/employees/{emp_id}")
 async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_current_user)):
-    if not (is_owner(user) or has_perm(user, "team", "edit")):
+    if is_external_user(user) or not (is_owner(user) or has_perm(user, "team", "edit")):
         raise HTTPException(status_code=403, detail="Team edit permission required")
 
     old_user = await db.users.find_one({"id": emp_id, "company_id": user["company_id"]})
@@ -5912,7 +5943,7 @@ async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_cu
         except Exception:
             pass
 
-    if not old_user:
+    if not old_user or is_external_user(old_user):
         raise HTTPException(status_code=404, detail="Employee not found")
 
     # Super Admin / Owner Protection
@@ -5990,10 +6021,12 @@ async def update_employee(emp_id: str, data: EmployeeUpdate, user=Depends(get_cu
 
 @api_router.delete("/employees/{emp_id}")
 async def delete_employee(emp_id: str, user=Depends(get_current_user)):
-    if not (is_owner(user) or has_perm(user, "team", "delete")):
+    if is_external_user(user) or not (is_owner(user) or has_perm(user, "team", "delete")):
         raise HTTPException(status_code=403, detail="Team delete permission required")
 
     emp = await db.users.find_one({"id": emp_id, "company_id": user["company_id"]})
+    if not emp or is_external_user(emp):
+        raise HTTPException(status_code=404, detail="Employee not found")
     if not emp:
         try:
             rpc_res = get_rpc_client().rpc("get_user_by_id", {"p_user_id": emp_id}).execute()
@@ -13747,8 +13780,8 @@ async def get_platform_customer_detail(company_id: str, user=Depends(require_sup
     if not company:
         raise HTTPException(status_code=404, detail="Customer workspace not found")
 
-    owner = await db.users.find_one({"company_id": company_id, "user_type": "owner"}, {"_id": 0, "password_hash": 0})
-    team_users = await db.users.find({"company_id": company_id}, {"_id": 0, "password_hash": 0}).to_list(500)
+    raw_team = await db.users.find({"company_id": company_id}, {"_id": 0, "password_hash": 0}).to_list(500)
+    team_users = [u for u in raw_team if is_internal_team_user(u)]
 
     # Compute usage metrics
     user_count = len(team_users)

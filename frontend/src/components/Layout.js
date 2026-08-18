@@ -173,18 +173,24 @@ export default function Layout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const userEmail = (user?.email || "").trim().toLowerCase();
+  const isExternalUser =
+    ["client", "vendor", "epc", "epc_partner", "customer", "external"].includes((user?.user_type || "").toLowerCase()) ||
+    ["client", "vendor", "epc", "epc/partner", "partner", "customer"].includes((user?.role || "").toLowerCase());
+
   const isSuperAdmin =
-    user?.user_type === "platform_owner" ||
-    user?.user_type === "super_admin" ||
-    user?.is_platform_owner ||
-    user?.is_super_admin ||
-    user?.role === "Platform Owner" ||
-    user?.role === "Super Admin" ||
-    userEmail === "solarixofficial.info@gmail.com" ||
-    userEmail === "solarixoffcial.info@gmail.com";
-  const isSuperOrAdmin = isSuperAdmin || user?.role === "Admin" || user?.role === "Owner" || user?.user_type === "owner" || user?.is_owner;
+    !isExternalUser && (
+      user?.user_type === "platform_owner" ||
+      user?.user_type === "super_admin" ||
+      user?.is_platform_owner ||
+      user?.is_super_admin ||
+      user?.role === "Platform Owner" ||
+      user?.role === "Super Admin" ||
+      userEmail === "solarixofficial.info@gmail.com" ||
+      userEmail === "solarixoffcial.info@gmail.com"
+    );
+  const isSuperOrAdmin = !isExternalUser && (isSuperAdmin || user?.role === "Admin" || user?.role === "Owner" || user?.user_type === "owner" || user?.is_owner);
   const isAdmin = isSuperOrAdmin;
-  const allowed = (page) => isSuperOrAdmin || (user?.permissions?.[page]?.view === true);
+  const allowed = (page) => !isExternalUser && (isSuperOrAdmin || (user?.permissions?.[page]?.view === true));
   const ALWAYS_VISIBLE = new Set(["complaints"]);
 
   const navSections = [
