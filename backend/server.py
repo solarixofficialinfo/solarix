@@ -516,11 +516,11 @@ class CursorAdapter:
             data = res.data or []
         except Exception as e:
             err_str = str(e).lower()
-            if "pgrst205" in err_str or "does not exist" in err_str or "schema cache" in err_str:
-                data = []
-            elif "42501" in err_str or "row-level security" in err_str or "unauthorized" in err_str or "timeout" in err_str or "timed out" in err_str or "connection" in err_str:
+            if "42501" in err_str or "row-level security" in err_str or "unauthorized" in err_str or "timeout" in err_str or "timed out" in err_str or "connection" in err_str or "400" in err_str or "bad request" in err_str or "pgrst" in err_str:
                 logger.warning(f"Supabase query failed ({e}), falling back to local files for {self.collection.table_name}")
                 return await LocalFileCollection(self.collection.table_name).find(self.filter, self.projection).sort(self.sort_fields).to_list(length)
+            elif "pgrst205" in err_str or "does not exist" in err_str or "schema cache" in err_str:
+                data = []
             else:
                 raise e
         
@@ -7079,57 +7079,106 @@ def _enrich_outward_with_assets(outward_doc: Optional[dict]) -> Optional[dict]:
         outward_doc["asset_remarks"] = ""
     return outward_doc
 
+async def _enrich_bill_challan(bill: Dict[str, Any], company_id: str) -> Dict[str, Any]:
+    if not isinstance(bill, dict):
+        return bill
+    ch = (bill.get("challan_number") or bill.get("challan_no") or bill.get("reference_number") or "").strip()
+    if not ch:
+        b_id = bill.get("id")
+        b_num = bill.get("bill_number")
+        v_inw = None
+        if b_id:
+            v_inw = await db.vendor_inwards.find_one({"bill_id": b_id, "company_id": company_id})
+        if not v_inw and b_num:
+            v_inw = await db.vendor_inwards.find_one({"bill_number": b_num, "company_id": company_id})
+        if v_inw and (v_inw.get("challan_number") or v_inw.get("challan_no") or v_inw.get("reference_number")):
+            ch = (v_inw.get("challan_number") or v_inw.get("challan_no") or v_inw.get("reference_number") or "").strip()
+
+        if not ch and b_num:
+            c_inw = await db.inward_entries.find_one({"bill_number": b_num, "company_id": company_id})
+            if c_inw and (c_inw.get("reference_number") or c_inw.get("challan_no") or c_inw.get("challan_number")):
+                ch = (c_inw.get("reference_number") or c_inw.get("challan_no") or c_inw.get("challan_number") or "").strip()
+
+    if ch:
+        bill["challan_number"] = ch
+        bill["challan_no"] = ch
+        bill["reference_number"] = ch
+    return bill
+
 async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str, user_name: str, source: str = "manual", import_batch: str = "", skip_activity_log: bool = False):
     source_type_val = data.source_type or "Vendor / Supplier"
     source_name_val = data.source_name or ""
     client_id_val = data.client_id or ""
     client_name_val = data.client_name or ""
 
-    # Vendor Purchase Bill Flow: Save/upsert purchase bill in db.purchase_bills if Vendor/Supplier is specified and total_amount or bill_number is set
+    # Vendor Purchase Bill Flow: Save/upsert purchase bill in db.purchase_bills if Vendor/Supplier is specified
     vendor_id_val = data.vendor_id or data.source_id or ""
-    challan_val = (data.reference_number or data.challan_no or "").strip()
-    if source_type_val in ("Vendor / Supplier", "Supplier", "Vendor") and vendor_id_val:
-      bnum = (data.bill_number or data.reference_number or "").strip()
-      if bnum or float(data.total_amount or 0.0) > 0:
-        existing_pbill = await db.purchase_bills.find_one({
-          "company_id": company_id,
-          "vendor_id": vendor_id_val,
-          "bill_number": bnum
-        }) if bnum else None
+    if not vendor_id_val and source_name_val and source_type_val in ("Vendor / Supplier", "Supplier", "Vendor"):
+        v_doc = await db.vendors.find_one({"company_id": company_id, "name": {"$regex": f"^{re.escape(source_name_val.strip())}$", "$options": "i"}})
+        if v_doc:
+            vendor_id_val = v_doc["id"]
 
-        if not existing_pbill:
-          pbill_id = f"pbill_{uuid.uuid4().hex[:12]}"
-          pbill_doc = {
-            "id": pbill_id,
-            "company_id": company_id,
-            "vendor_id": vendor_id_val,
-            "vendor_name": source_name_val or "Unknown Vendor",
-            "bill_number": bnum or f"INV-{uuid.uuid4().hex[:6]}",
-            "challan_number": challan_val or numeric_only(data.reference_number),
-            "challan_no": challan_val or numeric_only(data.reference_number),
-            "reference_number": challan_val or numeric_only(data.reference_number),
-            "bill_date": (data.date or now_iso())[:10],
-            "due_date": "",
-            "items": [],
-            "subtotal": float(data.total_amount or 0.0),
-            "gst_total": 0.0,
-            "grand_total": float(data.total_amount or 0.0),
-            "payment_status": data.payment_status or "Unpaid",
-            "status": data.payment_status or "Unpaid",
-            "inward_status": "Received",
-            "bill_type": data.bill_type or "Product Bill",
-            "notes": data.remarks or "",
-            "remarks": data.remarks or "",
-            "attachment_file_id": data.attachment_file_id or "",
-            "attachment_filename": data.attachment_filename or "",
-            "paid_amount": float(data.total_amount or 0.0) if data.payment_status == "Paid" else 0.0,
-            "created_by": user_name,
-            "created_at": now_iso(),
-            "updated_at": now_iso()
-          }
-          await db.purchase_bills.insert_one(pbill_doc)
-          if not skip_activity_log:
-            await log_activity(company_id, user_id, user_name, "Created Purchase Bill", f"Bill: {pbill_doc['bill_number']} Amount: ₹{pbill_doc['grand_total']} Vendor: {pbill_doc['vendor_name']}")
+    challan_val = (data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None) or "").strip()
+    raw_bill_num = (data.bill_number or "").strip()
+
+    if source_type_val in ("Vendor / Supplier", "Supplier", "Vendor") and (vendor_id_val or source_name_val):
+        existing_pbill = None
+        if raw_bill_num:
+            existing_pbill = await db.purchase_bills.find_one({
+                "company_id": company_id,
+                "bill_number": raw_bill_num
+            })
+        if not existing_pbill and challan_val and vendor_id_val:
+            existing_pbill = await db.purchase_bills.find_one({
+                "company_id": company_id,
+                "vendor_id": vendor_id_val,
+                "challan_number": challan_val
+            })
+
+        if existing_pbill:
+            if challan_val:
+                await db.purchase_bills.update_one(
+                    {"id": existing_pbill["id"], "company_id": company_id},
+                    {"$set": {
+                        "challan_number": challan_val,
+                        "challan_no": challan_val,
+                        "reference_number": challan_val,
+                        "updated_at": now_iso()
+                    }}
+                )
+        elif raw_bill_num or float(data.total_amount or 0.0) > 0 or challan_val:
+            pbill_id = f"pbill_{uuid.uuid4().hex[:12]}"
+            pbill_doc = {
+                "id": pbill_id,
+                "company_id": company_id,
+                "vendor_id": vendor_id_val,
+                "vendor_name": source_name_val or "Unknown Vendor",
+                "bill_number": raw_bill_num or (f"BILL-{challan_val}" if challan_val else f"INV-{uuid.uuid4().hex[:6]}"),
+                "challan_number": challan_val,
+                "challan_no": challan_val,
+                "reference_number": challan_val,
+                "bill_date": (data.date or now_iso())[:10],
+                "due_date": "",
+                "items": [],
+                "subtotal": float(data.total_amount or 0.0),
+                "gst_total": 0.0,
+                "grand_total": float(data.total_amount or 0.0),
+                "payment_status": data.payment_status or "Unpaid",
+                "status": data.payment_status or "Unpaid",
+                "inward_status": "Received",
+                "bill_type": data.bill_type or "Product Bill",
+                "notes": data.remarks or "",
+                "remarks": data.remarks or "",
+                "attachment_file_id": data.attachment_file_id or "",
+                "attachment_filename": data.attachment_filename or "",
+                "paid_amount": float(data.total_amount or 0.0) if data.payment_status == "Paid" else 0.0,
+                "created_by": user_name,
+                "created_at": now_iso(),
+                "updated_at": now_iso()
+            }
+            await db.purchase_bills.insert_one(pbill_doc)
+            if not skip_activity_log:
+                await log_activity(company_id, user_id, user_name, "Created Purchase Bill", f"Bill: {pbill_doc['bill_number']} Amount: ₹{pbill_doc['grand_total']} Vendor: {pbill_doc['vendor_name']}")
 
     # Material Stock Inward Entry
     pn = data.product.strip().upper()
@@ -7166,7 +7215,9 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
         "size": data.size or "",
         "quantity": data.quantity,
         "unit": data.unit or "Nos",
-        "reference_number": numeric_only(data.reference_number or data.challan_no) or challan_val,
+        "reference_number": challan_val or numeric_only(data.reference_number or data.challan_no),
+        "challan_no": challan_val or numeric_only(data.reference_number or data.challan_no),
+        "challan_number": challan_val or numeric_only(data.reference_number or data.challan_no),
         "reference_type": data.reference_type or "Challan Number",
         "bill_number": (data.bill_number or "").strip() or numeric_only(data.bill_number),
         "source_type": source_type_val,
@@ -7514,11 +7565,14 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
     if source_type_val == "Return From Client" and client_id_val:
         remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
         
-    ref_num = numeric_only(data.reference_number or data.challan_no or data.bill_number)
+    raw_ch = (data.reference_number or data.challan_no or "").strip()
+    ref_num = raw_ch or numeric_only(data.reference_number or data.challan_no or data.bill_number)
     patch = {
         "product": pn, "size": data.size or "", "quantity": data.quantity,
         "unit": data.unit or existing.get("unit") or "Nos",
         "reference_number": ref_num,
+        "challan_no": ref_num,
+        "challan_number": ref_num,
         "reference_type": data.reference_type or "Challan Number",
         "bill_number": (data.bill_number or "").strip() or numeric_only(data.bill_number),
         "source_type": source_type_val, "source_name": data.source_name or existing.get("source_name") or "",
@@ -7528,6 +7582,14 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
         "updated_at": now_iso(),
     }
     await db.inward_entries.update_one({"id": entry_id, "company_id": cid}, {"$set": patch})
+
+    # Sync Challan No. to linked Purchase Bills if any
+    b_num = patch.get("bill_number") or existing.get("bill_number")
+    if b_num and ref_num:
+        await db.purchase_bills.update_many(
+            {"bill_number": b_num, "company_id": cid},
+            {"$set": {"challan_number": ref_num, "challan_no": ref_num, "reference_number": ref_num, "updated_at": now_iso()}}
+        )
     
     # Recreate high value assets for this inward entry
     all_assets = _load_local_assets()
@@ -12758,6 +12820,8 @@ async def list_vendors(user=Depends(get_current_user)):
     cid = user["company_id"]
     vendors = await db.vendors.find({"company_id": cid}, {"_id": 0}).sort("name", 1).to_list(1000)
     bills = await db.purchase_bills.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+    for b in bills:
+        await _enrich_bill_challan(b, cid)
     payments = await db.vendor_payments.find({"company_id": cid}, {"_id": 0}).to_list(10000)
     inwards = await db.vendor_inwards.find({"company_id": cid}, {"_id": 0}).to_list(10000)
 
@@ -12955,6 +13019,8 @@ async def get_vendor_detail(vendor_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Vendor not found")
 
     bills = await db.purchase_bills.find({"vendor_id": vendor_id, "company_id": cid}, {"_id": 0}).sort("bill_date", -1).to_list(1000)
+    for b in bills:
+        await _enrich_bill_challan(b, cid)
     inwards = await db.vendor_inwards.find({"vendor_id": vendor_id, "company_id": cid}, {"_id": 0}).sort("challan_date", -1).to_list(1000)
     central_inwards = await db.inward_entries.find({"$or": [{"vendor_id": vendor_id}, {"source_name": vendor.get("name")}], "company_id": cid}, {"_id": 0}).sort("date", -1).to_list(1000)
     payments = await db.vendor_payments.find({"vendor_id": vendor_id, "company_id": cid}, {"_id": 0}).sort("payment_date", -1).to_list(1000)
@@ -13088,6 +13154,7 @@ async def get_purchase_bill_detail(bill_id: str, user=Depends(get_current_user))
     if not bill:
         raise HTTPException(status_code=404, detail="Purchase bill not found")
 
+    bill = await _enrich_bill_challan(bill, cid)
     inwards = await db.vendor_inwards.find({"bill_id": bill_id, "company_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     payments = await db.vendor_payments.find({"bill_id": bill_id, "company_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
@@ -13128,9 +13195,20 @@ async def create_material_inward(bill_id: str, data: MaterialInwardPayload, user
     all_completed = all(float(b.get("remaining_qty") or 0) <= 0 for b in updated_bill_items)
     inward_status = "Fully Received" if all_completed else "Partially Received"
 
+    c_num = data.challan_number.strip() if data.challan_number else ""
+    pb_set = {
+        "items": updated_bill_items,
+        "inward_status": inward_status,
+        "updated_at": now_iso()
+    }
+    if c_num:
+        pb_set["challan_number"] = c_num
+        pb_set["challan_no"] = c_num
+        pb_set["reference_number"] = c_num
+
     await db.purchase_bills.update_one(
         {"id": bill_id, "company_id": cid},
-        {"$set": {"items": updated_bill_items, "inward_status": inward_status, "updated_at": now_iso()}}
+        {"$set": pb_set}
     )
 
     vinw_doc = {
