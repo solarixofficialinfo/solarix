@@ -5824,6 +5824,10 @@ async def review_verification(v_id: str, data: MaterialApproval, user=Depends(ge
 async def list_employees(user=Depends(get_current_user)):
     if is_external_user(user) or not (is_owner(user) or has_perm(user, "team", "view")):
         raise HTTPException(status_code=403, detail="Unauthorized to view team members")
+
+    company_doc = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}
+    company_owner_email = (company_doc.get("email") or "").strip().lower()
+
     query = {
         "company_id": user["company_id"],
         "user_type": {"$nin": list(EXTERNAL_USER_TYPES)},
@@ -5835,11 +5839,26 @@ async def list_employees(user=Depends(get_current_user)):
     ).sort("created_at", -1).to_list(500)
     team_members = []
     for r in rows:
-        if is_internal_team_user(r):
-            email_clean = (r.get("email") or "").strip().lower()
-            if email_clean in SUPER_ADMIN_EMAILS or r.get("user_type") in ("platform_owner", "super_admin") or r.get("is_super_admin") or r.get("is_platform_owner"):
-                r["role"] = "Super Admin"
-            team_members.append(r)
+        if not is_internal_team_user(r):
+            continue
+
+        email_clean = (r.get("email") or "").strip().lower()
+
+        # Identify primary company owner / admin account or platform super admin
+        is_primary_owner_account = (
+            r.get("user_type") in ("owner", "platform_owner", "super_admin") or
+            r.get("is_owner") is True or
+            r.get("is_platform_owner") is True or
+            r.get("is_super_admin") is True or
+            (company_owner_email and email_clean == company_owner_email) or
+            email_clean in SUPER_ADMIN_EMAILS
+        )
+
+        # Exclude primary owner account from the employee list
+        if is_primary_owner_account:
+            continue
+
+        team_members.append(r)
     return team_members
 
 @api_router.post("/employees")
