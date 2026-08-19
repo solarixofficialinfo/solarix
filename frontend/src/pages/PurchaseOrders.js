@@ -115,13 +115,14 @@ export default function PurchaseOrders() {
   }, [productsData]);
 
   // ── Fetch Company Profile ──────────────────────────────────────────────
-  const { data: company = {} } = useQuery({
+  const { data: companyRaw } = useQuery({
     queryKey: ["company"],
     queryFn: async () => {
       const res = await api.get("/company");
       return res.data || {};
     }
   });
+  const company = companyRaw || {};
 
   // ── Fetch Purchase Orders List ─────────────────────────────────────────
   const { data: poResponse, refetch: refetchPoList, isLoading: loadingPo } = useQuery({
@@ -354,7 +355,7 @@ export default function PurchaseOrders() {
           shipping_method: poForm.shipping_method,
           shipping_term: poForm.shipping_term,
           delivery_date: poForm.delivery_date,
-          prepared_by: company.owner_name || company.company_name || "Manager",
+          prepared_by: company?.owner_name || company?.company_name || "Manager",
           vendor: {
             name: poForm.vendor_name,
             address: poForm.vendor_address,
@@ -434,7 +435,7 @@ export default function PurchaseOrders() {
           shipping_method: po.shipping_method,
           shipping_term: po.shipping_term,
           delivery_date: po.delivery_date,
-          prepared_by: company.owner_name || company.company_name || "Manager",
+          prepared_by: company?.owner_name || company?.company_name || "Manager",
           vendor: {
             name: po.vendor_name,
             address: po.vendor_address,
@@ -499,7 +500,7 @@ export default function PurchaseOrders() {
           shipping_method: po.shipping_method,
           shipping_term: po.shipping_term,
           delivery_date: po.delivery_date,
-          prepared_by: company.owner_name || company.company_name || "Manager",
+          prepared_by: company?.owner_name || company?.company_name || "Manager",
           vendor: {
             name: po.vendor_name,
             address: po.vendor_address,
@@ -784,24 +785,24 @@ export default function PurchaseOrders() {
         {/* Header Title Bar */}
         <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {(company.logo_file_id || company.logo_url) && fileUrl(company.logo_file_id || company.logo_url) ? (
+            {(company?.logo_file_id || company?.logo_url) && fileUrl(company?.logo_file_id || company?.logo_url) ? (
               <img
-                src={fileUrl(company.logo_file_id || company.logo_url)}
+                src={fileUrl(company?.logo_file_id || company?.logo_url)}
                 alt="Logo"
                 className="h-16 max-w-[160px] object-contain"
                 onError={(e) => { e.target.style.display = "none"; }}
               />
             ) : (
               <div className="w-12 h-12 rounded-lg bg-indigo-600 text-white font-bold flex items-center justify-center text-sm">
-                {(company.company_name || company.name || "GVP").slice(0, 3).toUpperCase()}
+                {(company?.company_name || company?.name || "GVP").slice(0, 3).toUpperCase()}
               </div>
             )}
             <div>
               <h2 className="font-bold text-base tracking-tight text-white" style={{ fontFamily: "Outfit" }}>
-                {company.company_name || company.name || "SOLAR EPC SUPPLIER MANAGEMENT"}
+                {company?.company_name || company?.name || "SOLAR EPC SUPPLIER MANAGEMENT"}
               </h2>
               <div className="text-[10px] text-slate-300 font-mono">
-                GSTIN: {company.gst_number || company.gstin || "27AKMPD5407A1ZM"}
+                GSTIN: {company?.gst_number || company?.gstin || "27AKMPD5407A1ZM"}
               </div>
             </div>
           </div>
@@ -976,11 +977,11 @@ export default function PurchaseOrders() {
               </Label>
 
               <div className="space-y-1.5 text-xs text-slate-700 font-mono">
-                <div className="font-bold text-slate-900 text-sm">{company.company_name || company.name || "GVP SOLAR ENERGY"}</div>
-                <div>{company.address || "No 1-2, Building No 1 Kapad Market, Ichalkaranji, Maharashtra 416115"}</div>
-                <div>GSTIN: {company.gst_number || company.gstin || "27AKMPD5407A1ZM"}</div>
-                <div>Email: {company.email || "info@gvpsolutions.org"}</div>
-                <div>Phone: {company.mobile || company.phone || "7665 165 666"}</div>
+                <div className="font-bold text-slate-900 text-sm">{company?.company_name || company?.name || "GVP SOLAR ENERGY"}</div>
+                <div>{company?.address || "No 1-2, Building No 1 Kapad Market, Ichalkaranji, Maharashtra 416115"}</div>
+                <div>GSTIN: {company?.gst_number || company?.gstin || "27AKMPD5407A1ZM"}</div>
+                <div>Email: {company?.email || "info@gvpsolutions.org"}</div>
+                <div>Phone: {company?.mobile || company?.phone || "7665 165 666"}</div>
               </div>
             </div>
           </div>

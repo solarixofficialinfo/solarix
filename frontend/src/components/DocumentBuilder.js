@@ -132,13 +132,14 @@ export default function DocumentBuilder({ initialDocType = "quotation", existing
   const [generatedPdf, setGeneratedPdf] = useState(null);
 
   // ── 1. Fetch Company Master ───────────────────────────────────────────────
-  const { data: company = {} } = useQuery({
+  const { data: companyRaw } = useQuery({
     queryKey: ["company"],
     queryFn: async () => {
       const res = await api.get("/company");
       return res.data || {};
     }
   });
+  const company = companyRaw || {};
 
   // ── 2. Fetch Master Vendors ──────────────────────────────────────────────
   const { data: vendorsData } = useQuery({
@@ -370,7 +371,7 @@ export default function DocumentBuilder({ initialDocType = "quotation", existing
           invoice_date: docDate,
           valid_till: validTillDate,
           delivery_date: deliveryDate,
-          prepared_by: company.owner_name || company.name || "Manager",
+          prepared_by: company?.owner_name || company?.name || "Manager",
           client: config.partyType === "customer" ? partyForm : null,
           vendor: config.partyType === "vendor" ? partyForm : null,
           ship_to: shipToManual ? shipToForm : partyForm,
@@ -477,33 +478,33 @@ export default function DocumentBuilder({ initialDocType = "quotation", existing
             {/* Left Side: Auto-Populated Company Details */}
             <div className="lg:col-span-7 bg-slate-50 p-4 rounded-xl border border-slate-200/80 space-y-2">
               <div className="flex items-center gap-3">
-                {(company.logo_file_id || company.logo_url) && fileUrl(company.logo_file_id || company.logo_url) ? (
+                {(company?.logo_file_id || company?.logo_url) && fileUrl(company?.logo_file_id || company?.logo_url) ? (
                   <img
-                    src={fileUrl(company.logo_file_id || company.logo_url)}
+                    src={fileUrl(company?.logo_file_id || company?.logo_url)}
                     alt="Logo"
                     className="h-40 max-w-[400px] object-contain"
                     onError={(e) => { e.target.style.display = "none"; }}
                   />
                 ) : (
                   <div className="w-14 h-14 rounded-lg bg-indigo-600 text-white font-bold flex items-center justify-center text-lg">
-                    {(company.company_name || company.name || "GVP").slice(0, 3).toUpperCase()}
+                    {(company?.company_name || company?.name || "GVP").slice(0, 3).toUpperCase()}
                   </div>
                 )}
                 <div>
                   <h3 className="font-bold text-base text-slate-900 leading-tight">
-                    {company.company_name || company.name || "GVP SOLAR ENERGY"}
+                    {company?.company_name || company?.name || "GVP SOLAR ENERGY"}
                   </h3>
                   <div className="text-[11px] text-slate-500 font-medium">
-                    {company.tagline || "SOLAR ENERGY FOR BETTER TOMORROW"}
+                    {company?.tagline || "SOLAR ENERGY FOR BETTER TOMORROW"}
                   </div>
                 </div>
               </div>
               <div className="text-[11px] text-slate-600 space-y-0.5 pt-1 border-t border-slate-200/60 font-mono">
-                <div>{company.address || "No 1-2, Building No 1 Kapad Market, Ichalkaranji, India, Maharashtra, 416115"}</div>
+                <div>{company?.address || "No 1-2, Building No 1 Kapad Market, Ichalkaranji, India, Maharashtra, 416115"}</div>
                 <div className="flex flex-wrap gap-3 pt-0.5 text-slate-700">
-                  <span>Phone: <strong>{company.mobile || company.phone || "7665 165 666"}</strong></span>
-                  <span>Email: <strong>{company.email || "info.gvpsolar@gmail.com"}</strong></span>
-                  <span>GSTIN: <strong className="text-indigo-700">{company.gst_number || company.gstin || "27AKMPD5407A1ZM"}</strong></span>
+                  <span>Phone: <strong>{company?.mobile || company?.phone || "7665 165 666"}</strong></span>
+                  <span>Email: <strong>{company?.email || "info.gvpsolar@gmail.com"}</strong></span>
+                  <span>GSTIN: <strong className="text-indigo-700">{company?.gst_number || company?.gstin || "27AKMPD5407A1ZM"}</strong></span>
                 </div>
               </div>
             </div>
