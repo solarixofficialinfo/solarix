@@ -7608,8 +7608,8 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
     if source_type_val == "Return From Client" and client_id_val:
         remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
         
-    raw_ch = (data.reference_number or data.challan_no or "").strip()
-    ref_num = raw_ch or numeric_only(data.reference_number or data.challan_no or data.bill_number)
+    raw_ch = (data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None) or "").strip()
+    ref_num = raw_ch or numeric_only(data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None))
     patch = {
         "product": pn, "size": data.size or "", "quantity": data.quantity,
         "unit": data.unit or existing.get("unit") or "Nos",

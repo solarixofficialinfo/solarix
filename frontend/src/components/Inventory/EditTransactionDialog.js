@@ -85,7 +85,7 @@ export default function EditTransactionDialog({ transaction, onClose, onSaved, p
             <>
               <SelectField label="Reference Type" value={form.reference_type} onChange={(v) => upd({ reference_type: v })} options={REF_TYPES} testid="et-ref-type" />
               <Field label="Challan Number" value={form.reference_number} onChange={(v) => upd({ reference_number: digitsOnly(v) })} testid="et-challan" inputMode="numeric" pattern="[0-9]*" />
-              <Field label="Bill Number" value={form.bill_number} onChange={(v) => upd({ bill_number: digitsOnly(v) })} testid="et-bill" inputMode="numeric" pattern="[0-9]*" />
+              <Field label="Bill Number" value={form.bill_number} onChange={(v) => upd({ bill_number: v })} testid="et-bill" />
               <SelectField label="Source Type" value={form.source_type} onChange={(v) => upd({ source_type: v, client_id: "", client_name: "", source_name: "" })} options={SRC_TYPES} testid="et-src-type" />
               {form.source_type === "Return From Client" ? (
                 <div className="md:col-span-2">

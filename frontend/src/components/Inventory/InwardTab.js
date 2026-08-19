@@ -138,7 +138,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
   const suggestNextChallan = async () => {
     try {
       const { data } = await api.get("/inventory/next-challan", { params: { type: "inward", prefix: "" } });
-      setForm((f) => ({ ...f, reference_number: data.suggested, bill_number: f.bill_number || data.suggested }));
+      setForm((f) => ({ ...f, reference_number: data.suggested }));
       toast.success(`Next challan: ${data.suggested}`);
     } catch (e) {
       toast.error(formatApiError(e));
