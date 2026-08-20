@@ -38,13 +38,16 @@ export function loadGoogleMapsScript() {
   return googleMapsPromise;
 }
 
+const locationSearchCache = new Map();
+
 /**
- * Parses Google Place address components preserving locality over district.
+ * Parses Google Place address components preserving locality/town/village over district.
  */
 export function parseGoogleAddressComponents(components = []) {
   let locality = "";
   let sublocality = "";
   let neighborhood = "";
+  let adminLevel3 = "";
   let district = "";
   let stateRaw = "";
   let pincode = "";
@@ -61,7 +64,7 @@ export function parseGoogleAddressComponents(components = []) {
     } else if (types.includes("neighborhood")) {
       neighborhood = comp.long_name;
     } else if (types.includes("administrative_area_level_3")) {
-      if (!locality) locality = comp.long_name;
+      adminLevel3 = comp.long_name;
     } else if (types.includes("administrative_area_level_2")) {
       district = comp.long_name;
     } else if (types.includes("administrative_area_level_1")) {
@@ -77,8 +80,8 @@ export function parseGoogleAddressComponents(components = []) {
     }
   }
 
-  // Priority for City field: exact locality -> sublocality -> neighborhood -> district
-  const city = sublocality || locality || neighborhood || district;
+  // Priority for City field: sublocality -> locality -> neighborhood -> adminLevel3 -> district
+  const city = sublocality || locality || neighborhood || adminLevel3 || district;
   const stateObj = resolveState(stateRaw) || { name: stateRaw, code: "" };
   const streetAddr = [streetNumber, route, landmark].filter(Boolean).join(", ");
 
@@ -99,6 +102,10 @@ export function parseGoogleAddressComponents(components = []) {
 export async function searchLocations(query) {
   const term = (query || "").trim();
   if (!term || term.length < 2) return [];
+
+  if (locationSearchCache.has(term.toLowerCase())) {
+    return locationSearchCache.get(term.toLowerCase());
+  }
 
   // Check state search first
   const stateMatches = searchStates(term);
@@ -149,7 +156,9 @@ export async function searchLocations(query) {
           };
         });
 
-        return [...stateMatches, ...placesResults];
+        const finalResults = [...stateMatches, ...placesResults];
+        locationSearchCache.set(term.toLowerCase(), finalResults);
+        return finalResults;
       }
     }
   } catch (e) {
@@ -171,7 +180,9 @@ export async function searchLocations(query) {
         source: "postal",
       }));
 
-      return [...stateMatches, ...postalResults];
+      const finalResults = [...stateMatches, ...postalResults];
+      locationSearchCache.set(term.toLowerCase(), finalResults);
+      return finalResults;
     }
   } catch (err) {
     console.warn("Backend postal lookup failed, using direct fallback", err);
@@ -196,10 +207,13 @@ export async function searchLocations(query) {
           source: "postal",
         };
       });
-      return [...stateMatches, ...mapped];
+      const finalResults = [...stateMatches, ...mapped];
+      locationSearchCache.set(term.toLowerCase(), finalResults);
+      return finalResults;
     }
   } catch (e) {}
 
+  locationSearchCache.set(term.toLowerCase(), stateMatches);
   return stateMatches;
 }
 
