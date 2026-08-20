@@ -223,15 +223,18 @@ export async function searchLocations(query) {
 export async function ensureDistrictAndPincode(locationObj) {
   if (!locationObj) return locationObj;
 
-  let city = (locationObj.city || locationObj.name || "").trim();
+  let rawCity = (locationObj.city || locationObj.name || "").trim();
+  // Clean comma suffixes like "Ichalkaranji, Maharashtra" -> "Ichalkaranji"
+  let cleanCity = rawCity.split(",")[0].trim();
+
   let district = (locationObj.district || locationObj.state_district || locationObj.county || locationObj.districtName || locationObj.admin_district || locationObj.administrative_area_level_2 || "").trim();
   let pincode = (locationObj.pincode || locationObj.postal_code || "").trim();
   let state = (locationObj.state || locationObj.administrative_area_level_1 || "").trim();
 
   // If district or pincode is missing and we have a city name, perform a quick postal lookup
-  if ((!district || !pincode) && city && city.length >= 2) {
+  if ((!district || !pincode) && cleanCity && cleanCity.length >= 2) {
     try {
-      const res = await api.get(`/location/city/${encodeURIComponent(city)}`);
+      const res = await api.get(`/location/city/${encodeURIComponent(cleanCity)}`);
       if (res.data?.results && res.data.results.length > 0) {
         let match = res.data.results[0];
         if (state) {
@@ -250,7 +253,7 @@ export async function ensureDistrictAndPincode(locationObj) {
         }
       }
     } catch (e) {
-      console.warn("Secondary postal lookup error for", city, e);
+      console.warn("Secondary postal lookup error for", cleanCity, e);
     }
   }
 
@@ -258,11 +261,108 @@ export async function ensureDistrictAndPincode(locationObj) {
 
   return {
     ...locationObj,
-    city: city || "",
+    city: cleanCity || rawCity || "",
     district: district || "",
     state: stObj.name || state || "",
     state_code: stObj.code || locationObj.state_code || "",
     pincode: pincode || "",
+  };
+}
+
+/**
+ * Resolves user's current GPS location via navigator.geolocation and reverse-geocodes lat/lng.
+ */
+export async function getCurrentLocationDetails() {
+  if (!navigator.geolocation) {
+    throw new Error("Location detection is not supported on this device/browser.");
+  }
+
+  const coords = await new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(pos.coords),
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) {
+          reject(new Error("Location permission was denied. Search your city or PIN code manually."));
+        } else {
+          reject(new Error("Unable to retrieve GPS coordinates. Search your city or PIN code manually."));
+        }
+      },
+      { timeout: 10000, enableHighAccuracy: true }
+    );
+  });
+
+  const lat = coords.latitude;
+  const lng = coords.longitude;
+
+  // Try Google reverse-geocoding if available
+  try {
+    const maps = await loadGoogleMapsScript();
+    if (maps && maps.Geocoder) {
+      const geocoder = new maps.Geocoder();
+      const res = await new Promise((resolve, reject) => {
+        geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+          if (status === "OK" && results && results.length > 0) resolve(results[0]);
+          else reject(new Error("Reverse geocode failed"));
+        });
+      });
+
+      const parsed = parseGoogleAddressComponents(res.address_components);
+      const rawDetails = {
+        name: parsed.city || res.formatted_address.split(",")[0],
+        city: parsed.city,
+        district: parsed.district,
+        state: parsed.state,
+        state_code: parsed.state_code,
+        pincode: parsed.pincode,
+        address: parsed.address,
+        landmark: parsed.landmark,
+        formatted_address: res.formatted_address || "",
+        latitude: lat,
+        longitude: lng,
+      };
+
+      return await ensureDistrictAndPincode(rawDetails);
+    }
+  } catch (e) {
+    console.warn("Google Geocoder reverse geocode fallback", e);
+  }
+
+  // Fallback via OpenStreetMap Nominatim
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`)
+      .then((r) => r.json())
+      .catch(() => null);
+
+    if (res && res.address) {
+      const addr = res.address;
+      const city = addr.city || addr.town || addr.village || addr.suburb || addr.municipality || "";
+      const district = addr.state_district || addr.county || addr.district || "";
+      const state = addr.state || "";
+      const pincode = addr.postcode || "";
+
+      const rawDetails = {
+        city,
+        district,
+        state,
+        pincode,
+        latitude: lat,
+        longitude: lng,
+      };
+
+      return await ensureDistrictAndPincode(rawDetails);
+    }
+  } catch (e) {
+    console.warn("Nominatim reverse geocode fallback error", e);
+  }
+
+  return {
+    city: "",
+    district: "",
+    state: "",
+    pincode: "",
+    latitude: lat,
+    longitude: lng,
+    error: "Location detected, but address details could not be resolved. Please search your city or PIN code."
   };
 }
 

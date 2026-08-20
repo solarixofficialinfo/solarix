@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Search, MapPin, Loader2 } from "lucide-react";
-import { searchLocations, getPlaceDetails, searchByPincode } from "@/lib/locationService";
+import { Button } from "@/components/ui/button";
+import { Search, MapPin, Loader2, Navigation } from "lucide-react";
+import { searchLocations, getPlaceDetails, searchByPincode, getCurrentLocationDetails } from "@/lib/locationService";
 import { resolveState } from "@/lib/indianStates";
+import { toast } from "sonner";
 
 export default function LocationAutoFill({
   city = "",
@@ -28,9 +30,12 @@ export default function LocationAutoFill({
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [apiError, setApiError] = useState(false);
+  const [detectingGps, setDetectingGps] = useState(false);
+  const [gpsNotice, setGpsNotice] = useState("");
 
   const wrapperRef = useRef(null);
   const latestRequestId = useRef(0);
+  const isSelectingRef = useRef(false);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -45,6 +50,8 @@ export default function LocationAutoFill({
 
   // Debounced place / location search (300ms) with stale request cancellation
   useEffect(() => {
+    if (isSelectingRef.current) return;
+
     const term = searchTerm.trim();
     if (!term || term.length < 2) {
       setResults([]);
@@ -63,6 +70,7 @@ export default function LocationAutoFill({
           setResults(matches || []);
           if (matches && matches.length > 0) {
             setOpen(true);
+            setApiError(false);
           } else {
             setApiError(true);
           }
@@ -85,8 +93,11 @@ export default function LocationAutoFill({
 
   // Handle selection from dropdown
   const selectLocation = async (item) => {
+    isSelectingRef.current = true;
     setOpen(false);
     setLoading(true);
+    setApiError(false);
+    setGpsNotice("");
 
     try {
       // Resolve full details
@@ -132,6 +143,43 @@ export default function LocationAutoFill({
       setSearchTerm(`${resCity}${resState ? `, ${resState}` : ""}`);
     } finally {
       setLoading(false);
+      setTimeout(() => {
+        isSelectingRef.current = false;
+      }, 600);
+    }
+  };
+
+  // GPS / My Location Handler
+  const handleUseMyLocation = async () => {
+    setDetectingGps(true);
+    setGpsNotice("");
+    try {
+      const details = await getCurrentLocationDetails();
+      if (details.error) {
+        setGpsNotice(details.error);
+        toast.info(details.error);
+      } else {
+        isSelectingRef.current = true;
+        setApiError(false);
+        emitChange({
+          city: details.city,
+          state: details.state,
+          pincode: details.pincode,
+          district: details.district,
+          latitude: details.latitude,
+          longitude: details.longitude,
+        });
+        setSearchTerm(`${details.city}${details.state ? `, ${details.state}` : ""}`);
+        toast.success("Location detected via GPS");
+        setTimeout(() => {
+          isSelectingRef.current = false;
+        }, 600);
+      }
+    } catch (err) {
+      toast.error(err.message || "Failed to detect GPS location");
+      setGpsNotice(err.message || "Location permission or GPS detection failed.");
+    } finally {
+      setDetectingGps(false);
     }
   };
 
@@ -191,14 +239,28 @@ export default function LocationAutoFill({
     <div ref={wrapperRef} className={`space-y-3 ${className}`}>
       {/* SEARCH / AUTOCOMPLETE EXPERIENCE */}
       <div className="relative">
-        <Label className={`text-xs font-semibold ${dark ? "text-slate-300" : "text-slate-700"} flex items-center gap-1 mb-1`}>
-          <MapPin className="w-3.5 h-3.5 text-blue-500" /> Search Location / City / PIN / State
-        </Label>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <Label className={`text-xs font-semibold ${dark ? "text-slate-300" : "text-slate-700"} flex items-center gap-1`}>
+            <MapPin className="w-3.5 h-3.5 text-blue-500" /> Search Location / City / PIN / State
+          </Label>
+          <button
+            type="button"
+            onClick={handleUseMyLocation}
+            disabled={detectingGps}
+            className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-1 disabled:opacity-50"
+            data-testid="use-my-location-btn"
+          >
+            {detectingGps ? <Loader2 className="w-3 h-3 animate-spin text-blue-600" /> : <Navigation className="w-3 h-3 text-blue-600" />} Use My Location
+          </button>
+        </div>
 
         <div className="relative">
           <Input
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              isSelectingRef.current = false;
+              setSearchTerm(e.target.value);
+            }}
             onFocus={() => { if (results.length > 0) setOpen(true); }}
             placeholder="Search city, village, locality or PIN code"
             className={`text-xs h-9 pr-8 font-medium ${bgInputClass}`}
@@ -254,10 +316,17 @@ export default function LocationAutoFill({
           </div>
         )}
 
-        {/* API ERROR / FALLBACK NOTICE */}
-        {apiError && !loading && searchTerm.trim().length >= 2 && results.length === 0 && (
+        {/* API ERROR / FALLBACK NOTICE — ONLY SHOWN IF NO VALID FIELDS POPULATED */}
+        {apiError && !loading && searchTerm.trim().length >= 2 && results.length === 0 && (!city && !district && !state && !pincode) && (
           <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 italic">
             Unable to find this location. You can enter the address manually below.
+          </div>
+        )}
+
+        {/* GPS NOTICE IF GEOLOCATION REVERSE-GEOCODING HAD ISSUES */}
+        {gpsNotice && (
+          <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-400 italic">
+            {gpsNotice}
           </div>
         )}
       </div>
