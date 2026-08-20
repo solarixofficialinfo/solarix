@@ -65,7 +65,7 @@ export default function ProductDrawer({ product, open, onClose, onChanged }) {
     try {
       const payload = { ...form, min_stock: Number(form.min_stock) || 0, rate: Number(form.rate) || 0 };
       await api.patch(`/inventory/products/${product.id}`, payload);
-      toast.success("Product updated");
+      toast.success("Product updated successfully.");
       onChanged?.();
       loadStats();
     } catch (e) { toast.error(formatApiError(e)); }
@@ -168,7 +168,7 @@ export default function ProductDrawer({ product, open, onClose, onChanged }) {
                 </div>
               </div>
               <div className="flex justify-end">
-                <Button className="bg-blue-600 hover:bg-blue-700" onClick={saveProduct} disabled={busy} data-testid="pd-save"><Save className="w-4 h-4 mr-1.5" /> {busy ? "Saving…" : "Save Product"}</Button>
+                <Button className="bg-blue-600 hover:bg-blue-700 font-semibold" onClick={saveProduct} disabled={busy} data-testid="pd-save"><Save className="w-4 h-4 mr-1.5" /> {busy ? "Applying…" : "Apply Changes"}</Button>
               </div>
             </div>
           )}

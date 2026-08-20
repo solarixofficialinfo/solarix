@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Pencil, Trash2, Plus, Boxes, Search, Download, FileSpreadsheet, FileText, Upload } from "lucide-react";
+import { Pencil, Trash2, Plus, Boxes, Search, Download, FileSpreadsheet, FileText, Upload, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { Field, SelectField, ConfirmDialog, UNIT_OPTIONS, CATEGORY_OPTIONS, normalizeSizeForMatching } from "./_shared";
 import ProductDrawer from "./ProductDrawer";
@@ -17,7 +17,7 @@ const STATUS_STYLES = {
   "Out Of Stock": "bg-red-50 text-red-700 border-red-200",
 };
 
-const EMPTY = () => ({ name: "", size: "", category: "Solar Panel", unit: "Nos", min_stock: 0, rate: "", status: "Active", high_value_goods: false, serial_number_required: false });
+const EMPTY = () => ({ name: "", size: "", category: "Solar Panel", unit: "Nos", min_stock: 0, rate: "", status: "Active", high_value_goods: false, serial_number_required: false, brand: "", sku: "" });
 
 export default function ProductMasterTab({ products, onChanged, globalSearch }) {
   const [open, setOpen] = useState(false);
@@ -40,10 +40,10 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
       const payload = { ...form, min_stock: Number(form.min_stock) || 0, rate: Number(form.rate) || 0 };
       if (editing) {
         await api.patch(`/inventory/products/${editing.id}`, payload);
-        toast.success("Product updated");
+        toast.success("Product updated successfully.");
       } else {
         await api.post("/inventory/products", payload);
-        toast.success("Product added");
+        toast.success("Product updated successfully.");
       }
       setOpen(false);
       onChanged?.();
@@ -54,8 +54,12 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
   const doDelete = async () => {
     if (!confirmDel) return;
     try {
-      await api.delete(`/inventory/products/${confirmDel.id}`);
-      toast.success("Product deleted");
+      const res = await api.delete(`/inventory/products/${confirmDel.id}`);
+      if (res.data?.action === "archived") {
+        toast.info(res.data.message || "Product archived because historical records exist.");
+      } else {
+        toast.success(res.data?.message || "Product deleted successfully.");
+      }
       setConfirmDel(null);
       onChanged?.();
     } catch (e) { toast.error(formatApiError(e)); setConfirmDel(null); }
@@ -174,6 +178,10 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
 
               <Button variant="outline" className="border-slate-300 text-slate-700 hover:bg-slate-50 text-xs" onClick={handleExportPDF} disabled={exportingPdf} data-testid="export-pdf-btn">
                 <FileText className="w-3.5 h-3.5 mr-1 text-red-600" /> {exportingPdf ? "Exporting PDF…" : "Export PDF"}
+              </Button>
+
+              <Button variant="outline" className="border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold" onClick={startAdd} data-testid="manage-products-btn">
+                <Settings className="w-3.5 h-3.5 mr-1 text-slate-600" /> Manage Products
               </Button>
 
               <Button className="bg-blue-600 hover:bg-blue-700 text-xs" onClick={startAdd} data-testid="add-product-btn">

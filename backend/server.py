@@ -6254,6 +6254,9 @@ class ProductIn(BaseModel):
     name: str
     size: Optional[str] = ""
     category: Optional[str] = ""
+    brand: Optional[str] = ""
+    sku: Optional[str] = ""
+    code: Optional[str] = ""
     unit: Optional[str] = "Nos"
     min_stock: Optional[float] = 0
     opening_stock: Optional[float] = 0.0
@@ -7028,6 +7031,8 @@ async def create_product(data: ProductIn, user=Depends(get_current_user)):
     doc = {
         "id": str(uuid.uuid4()), "company_id": user["company_id"], "name": name,
         "size": size, "category": data.category or "Solar",
+        "brand": data.brand or "",
+        "sku": data.sku or data.code or "",
         "unit": unit or "Nos", "min_stock": data.min_stock or 0.0,
         "opening_stock": data.opening_stock or 0.0,
         "rate": rate_val,
@@ -7068,6 +7073,8 @@ async def update_product(product_id: str, data: ProductIn, user=Depends(get_curr
         _save_local_high_value_product(new_name, data.high_value_goods)
     patch = {
         "name": new_name, "size": new_size, "category": data.category or "",
+        "brand": data.brand if data.brand is not None else existing.get("brand", ""),
+        "sku": data.sku or data.code if (data.sku or data.code) else existing.get("sku", existing.get("code", "")),
         "unit": new_unit or "Nos", "min_stock": float(data.min_stock or 0),
         "opening_stock": float(data.opening_stock if data.opening_stock is not None else existing.get("opening_stock", 0.0)),
         "rate": rate_val,
@@ -7092,14 +7099,26 @@ async def delete_product(product_id: str, user=Depends(get_current_user)):
     existing = await db.products.find_one({"id": product_id, "company_id": cid})
     if not existing:
         raise HTTPException(status_code=404, detail="Product not found")
-    in_count = await db.inward_entries.count_documents({"company_id": cid, "product": existing["name"], "size": existing.get("size", ""), "unit": existing.get("unit", "Nos")})
-    out_count = await db.outward_entries.count_documents({"company_id": cid, "product": existing["name"], "size": existing.get("size", ""), "unit": existing.get("unit", "Nos")})
-    if in_count + out_count > 0:
-        raise HTTPException(status_code=409, detail=f"Cannot delete — {in_count + out_count} transactions reference this product specification. Delete those first.")
+
+    pname = existing["name"]
+    psize = existing.get("size", "")
+    punit = existing.get("unit", "Nos")
+
+    in_count = await db.inward_entries.count_documents({"company_id": cid, "product": pname, "size": psize, "unit": punit})
+    out_count = await db.outward_entries.count_documents({"company_id": cid, "product": pname, "size": psize, "unit": punit})
+
+    total_refs = in_count + out_count
+
+    if total_refs > 0:
+        await db.products.update_one({"id": product_id, "company_id": cid}, {"$set": {"status": "Archived", "updated_at": now_iso()}})
+        invalidate_products_cache(cid)
+        await log_activity(cid, user["id"], user["name"], "Product Archived", f"{pname} ({psize})" if psize else pname)
+        return {"ok": True, "action": "archived", "message": f"Product archived as {total_refs} historical transactions reference it."}
+
     await db.products.delete_one({"id": product_id, "company_id": cid})
     invalidate_products_cache(cid)
-    await log_activity(cid, user["id"], user["name"], "Product Deleted", f"{existing['name']} ({existing.get('size', '')})" if existing.get("size") else existing["name"])
-    return {"ok": True}
+    await log_activity(cid, user["id"], user["name"], "Product Deleted", f"{pname} ({psize})" if psize else pname)
+    return {"ok": True, "action": "deleted", "message": "Product permanently deleted."}
 
 def parse_inward_client_info(entry):
     if not entry:
