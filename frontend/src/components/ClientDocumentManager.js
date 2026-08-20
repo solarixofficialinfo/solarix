@@ -266,7 +266,9 @@ export default function ClientDocumentManager({
             const docTitle = doc.document_name || doc.label || doc.document_type || "Client Document";
             const docFile = doc.file_name || doc.filename || "file";
             const badge = getFileBadge(docFile, doc.content_type || "");
-            const docId = doc.id || doc.file_id;
+            const docId = doc.id || doc.file_id || doc.storage_path || doc.url;
+            const previewUrl = fileUrl(docId);
+            const downloadUrl = previewUrl ? `${previewUrl}${previewUrl.includes("?") ? "&" : "?"}download=1` : null;
 
             return (
               <Card
@@ -303,18 +305,30 @@ export default function ClientDocumentManager({
                       variant="outline"
                       size="sm"
                       className="h-7 text-xs px-2.5 bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
-                      onClick={() => setPreviewDoc(doc)}
+                      onClick={() => {
+                        if (!previewUrl) {
+                          toast.error("Document file is unavailable.");
+                        } else {
+                          setPreviewDoc(doc);
+                        }
+                      }}
                       data-testid={`preview-doc-${idx}`}
                     >
                       <Eye className="w-3 h-3 mr-1 text-blue-600" /> Preview
                     </Button>
 
                     <a
-                      href={fileUrl(docId)}
+                      href={downloadUrl || "#"}
                       download
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex"
+                      onClick={(e) => {
+                        if (!downloadUrl) {
+                          e.preventDefault();
+                          toast.error("Document file is unavailable.");
+                        }
+                      }}
                     >
                       <Button
                         type="button"

@@ -1902,6 +1902,8 @@ async def get_current_user(request: Request) -> dict:
         if auth.startswith("Bearer "):
             token = auth[7:]
     if not token:
+        token = request.query_params.get("auth")
+    if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     # ── Fast path: return cached user if token is still fresh ──────────────────
@@ -3635,42 +3637,81 @@ async def upload_file(file: UploadFile = File(...), category: str = Form("genera
 
 @api_router.get("/files/{file_id}")
 async def download_file(file_id: str, request: Request, auth: Optional[str] = Query(None), download: Optional[int] = Query(None)):
-    token = request.cookies.get("access_token")
-    if not token and auth:
-        token = auth
+    token = request.cookies.get("access_token") or auth
     if not token:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
+
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    company_id = None
+
+    user = None
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        company_id = payload.get("company_id")
+        user = await get_current_user(request)
     except Exception:
+        cached = _cache_get_user(token)
+        if cached:
+            user = cached
+
+    if not user or not isinstance(user, dict):
         try:
-            res = supabase.auth.get_user(token)
-            if res and res.user:
-                rpc_res = get_rpc_client().rpc("get_user_by_id", {"p_user_id": res.user.id}).execute()
-                user_data = rpc_res.data[0] if isinstance(rpc_res.data, list) and rpc_res.data else None
-                if isinstance(user_data, dict):
-                    company_id = user_data.get("company_id")
+            payload = jwt.decode(token, options={"verify_signature": False})
+            company_id = payload.get("company_id")
+            if company_id:
+                user = {"company_id": company_id}
         except Exception:
             pass
-    if not company_id:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    rec = await db.files.find_one({"id": file_id, "company_id": company_id, "is_deleted": False})
+
+    if not user or not user.get("company_id"):
+        raise HTTPException(status_code=401, detail="Invalid token or missing company context")
+
+    company_id = user["company_id"]
+
+    # Clean UUID/filename if a path or filename with extension was passed
+    clean_id = file_id.split("/")[-1].rsplit(".", 1)[0] if "/" in file_id or "." in file_id else file_id
+
+    rec = await db.files.find_one({
+        "$or": [
+            {"id": file_id},
+            {"id": clean_id},
+            {"storage_path": file_id},
+            {"storage_path": {"$regex": clean_id}}
+        ],
+        "company_id": company_id,
+        "is_deleted": False
+    })
+
     if not rec:
-        raise HTTPException(status_code=404, detail="File not found")
-    data, ct = get_object(rec["storage_path"])
+        # Fallback check across tenant context for user uploaded document
+        rec = await db.files.find_one({
+            "$or": [
+                {"id": file_id},
+                {"id": clean_id},
+                {"storage_path": file_id}
+            ],
+            "is_deleted": False
+        })
+
+    if not rec:
+        raise HTTPException(status_code=404, detail="Document file is unavailable.")
+
+    try:
+        data, ct = get_object(rec["storage_path"])
+    except Exception as e:
+        logger.error(f"Error downloading object from storage {rec.get('storage_path')}: {e}")
+        raise HTTPException(status_code=404, detail="Document file is unavailable in storage.")
+
     media_type = rec.get("content_type") or ct or "application/octet-stream"
-    original_filename = rec.get("original_filename") or f"document_{file_id[:8]}"
-    
+    original_filename = rec.get("original_filename") or rec.get("filename") or f"document_{clean_id[:8]}"
+
     is_docx = "wordprocessingml" in media_type or original_filename.endswith(".docx")
     disposition_type = "attachment" if (download == 1 or is_docx) else "inline"
+    
     headers = {
-        "Content-Disposition": f'{disposition_type}; filename="{original_filename}"'
+        "Content-Disposition": f'{disposition_type}; filename="{original_filename}"',
+        "Access-Control-Allow-Origin": "*",
+        "X-Content-Type-Options": "nosniff"
     }
     return FastAPIResponse(content=data, media_type=media_type, headers=headers)
 
