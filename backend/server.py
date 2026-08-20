@@ -2517,7 +2517,15 @@ async def create_access_request(data: AccessRequestIn):
 @api_router.post("/auth/register")
 async def register_company(data: RegisterCompanyIn, response: Response):
     email = data.email.lower().strip()
-    mobile = data.mobile.strip()
+    mobile = (data.mobile or "").strip()
+    clean_mobile = "".join(filter(str.isdigit, mobile))
+
+    if not clean_mobile:
+        raise HTTPException(status_code=400, detail="Mobile Number is required.")
+    if len(clean_mobile) != 10 or len(mobile) != len(clean_mobile):
+        raise HTTPException(status_code=400, detail="Enter a valid 10-digit mobile number.")
+    if not clean_mobile.startswith(('6', '7', '8', '9')):
+        raise HTTPException(status_code=400, detail="Enter a valid Indian mobile number.")
 
     if not email:
         raise HTTPException(status_code=400, detail="Email address is required.")

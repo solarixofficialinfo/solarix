@@ -32,6 +32,26 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
+  const handleMobileChange = (e) => {
+    const clean = e.target.value.replace(/\D/g, "").slice(0, 10);
+    setForm((prev) => ({ ...prev, mobile: clean }));
+  };
+
+  const handleAltMobileChange = (e) => {
+    const clean = e.target.value.replace(/\D/g, "").slice(0, 10);
+    setForm((prev) => ({ ...prev, alt_mobile: clean }));
+  };
+
+  const getMobileError = (m) => {
+    if (!m) return "";
+    if (m.length < 10) return "Enter a valid 10-digit mobile number.";
+    if (!/^[6-9]/.test(m)) return "Enter a valid Indian mobile number.";
+    return "";
+  };
+
+  const mobileError = getMobileError(form.mobile);
+  const isMobileValid = form.mobile.length === 10 && /^[6-9]\d{9}$/.test(form.mobile);
+
   const submit = async (e) => {
     e.preventDefault();
     if (!form.owner_name.trim()) {
@@ -44,6 +64,14 @@ export default function Register() {
     }
     if (!form.mobile.trim()) {
       toast.error("Mobile Number is required");
+      return;
+    }
+    if (form.mobile.length < 10) {
+      toast.error("Enter a valid 10-digit mobile number.");
+      return;
+    }
+    if (!/^[6-9]\d{9}$/.test(form.mobile)) {
+      toast.error("Enter a valid Indian mobile number.");
       return;
     }
     if (!form.email.trim()) {
@@ -203,20 +231,29 @@ export default function Register() {
                     <Label className="text-xs font-semibold text-slate-700">Mobile Number *</Label>
                     <Input
                       value={form.mobile}
-                      onChange={set("mobile")}
-                      placeholder="Primary 10-digit mobile"
-                      className="mt-1 text-xs h-9 bg-white border-slate-200 font-mono focus:border-blue-600"
+                      onChange={handleMobileChange}
+                      placeholder="10-digit mobile number"
+                      maxLength={10}
+                      className={`mt-1 text-xs h-9 bg-white font-mono ${
+                        mobileError ? "border-red-500 focus:border-red-600 focus:ring-red-500/20" : "border-slate-200 focus:border-blue-600"
+                      }`}
                       required
                       data-testid="reg-mobile"
                     />
+                    {mobileError && (
+                      <p className="mt-1 text-[11px] font-semibold text-red-600" data-testid="reg-mobile-error">
+                        {mobileError}
+                      </p>
+                    )}
                   </div>
 
                   <div>
                     <Label className="text-xs font-semibold text-slate-700">Alternate Mobile</Label>
                     <Input
                       value={form.alt_mobile}
-                      onChange={set("alt_mobile")}
-                      placeholder="Secondary contact number"
+                      onChange={handleAltMobileChange}
+                      placeholder="Secondary 10-digit mobile"
+                      maxLength={10}
                       className="mt-1 text-xs h-9 bg-white border-slate-200 font-mono focus:border-blue-600"
                     />
                   </div>
@@ -309,8 +346,8 @@ export default function Register() {
 
                 <Button
                   type="submit"
-                  disabled={loading}
-                  className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-6 h-10 shadow-sm rounded-xl"
+                  disabled={loading || !isMobileValid}
+                  className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs px-6 h-10 shadow-sm rounded-xl transition-all"
                   data-testid="vendor-submit-btn"
                 >
                   {loading ? "Creating your workspace..." : "Create Vendor Account"}
