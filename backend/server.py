@@ -2534,15 +2534,21 @@ async def register_company(data: RegisterCompanyIn, response: Response):
         raise HTTPException(status_code=400, detail="Email address is required.")
     if not data.password:
         raise HTTPException(status_code=400, detail="Password is required.")
-    if not data.owner_name.strip():
-        raise HTTPException(status_code=400, detail="Owner Name is required.")
-    if not data.company_name.strip():
-        raise HTTPException(status_code=400, detail="Company Name is required.")
+    if not data.owner_name or not data.owner_name.strip():
+        raise HTTPException(status_code=400, detail="Owner name is required.")
+    if not data.company_name or not data.company_name.strip():
+        raise HTTPException(status_code=400, detail="Company name is required.")
 
-    if data.pincode and data.pincode.strip():
-        pin_val = data.pincode.strip()
-        if len(pin_val) != 6 or not pin_val.isdigit():
-            raise HTTPException(status_code=400, detail="Pincode must be a 6-digit number.")
+    if not data.address or not data.address.strip():
+        raise HTTPException(status_code=400, detail="Street address is required.")
+    if not data.city or not data.city.strip():
+        raise HTTPException(status_code=400, detail="City is required.")
+    if not data.state or not data.state.strip():
+        raise HTTPException(status_code=400, detail="State is required.")
+
+    pin_val = (data.pincode or "").strip()
+    if not pin_val or len(pin_val) != 6 or not pin_val.isdigit():
+        raise HTTPException(status_code=400, detail="Enter a valid 6-digit PIN code.")
 
     # 1. Inspect existing application database records
     existing_user = await db.users.find_one({"email": email})

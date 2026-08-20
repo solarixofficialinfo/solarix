@@ -51,23 +51,40 @@ export default function Register() {
   };
 
   const mobileError = getMobileError(form.mobile);
-  const isMobileValid = form.mobile.length === 10 && /^[6-9]\d{9}$/.test(form.mobile);
+  const isOwnerValid = Boolean(form.owner_name?.trim());
+  const isCompanyValid = Boolean(form.company_name?.trim());
+  const isMobileValid = form.mobile?.length === 10 && /^[6-9]\d{9}$/.test(form.mobile);
+  const isEmailValid = Boolean(form.email?.trim() && form.email.includes("@"));
+  const isPasswordValid = Boolean(form.password && form.password.length >= 6);
+  const isConfirmPasswordValid = Boolean(form.confirm_password && form.password === form.confirm_password);
+  const isAddressValid = Boolean(form.address?.trim());
+  const isCityValid = Boolean(form.city?.trim());
+  const isStateValid = Boolean(form.state?.trim());
+  const isPincodeValid = Boolean(form.pincode?.trim() && /^\d{6}$/.test(form.pincode.trim()));
+
+  const isFormValid =
+    isOwnerValid &&
+    isCompanyValid &&
+    isMobileValid &&
+    isEmailValid &&
+    isPasswordValid &&
+    isConfirmPasswordValid &&
+    isAddressValid &&
+    isCityValid &&
+    isStateValid &&
+    isPincodeValid;
 
   const submit = async (e) => {
     e.preventDefault();
     if (!form.owner_name.trim()) {
-      toast.error("Owner Name is required");
+      toast.error("Owner name is required.");
       return;
     }
     if (!form.company_name.trim()) {
-      toast.error("Company Name is required");
+      toast.error("Company name is required.");
       return;
     }
-    if (!form.mobile.trim()) {
-      toast.error("Mobile Number is required");
-      return;
-    }
-    if (form.mobile.length < 10) {
+    if (!form.mobile.trim() || form.mobile.length !== 10) {
       toast.error("Enter a valid 10-digit mobile number.");
       return;
     }
@@ -76,15 +93,31 @@ export default function Register() {
       return;
     }
     if (!form.email.trim()) {
-      toast.error("Email Address is required");
+      toast.error("Email address is required.");
       return;
     }
-    if (!form.password) {
-      toast.error("Password is required");
+    if (!form.password || form.password.length < 6) {
+      toast.error("Password must be at least 6 characters.");
       return;
     }
     if (form.password !== form.confirm_password) {
-      toast.error("Passwords do not match. Please verify password.");
+      toast.error("Passwords do not match.");
+      return;
+    }
+    if (!form.address.trim()) {
+      toast.error("Street address is required.");
+      return;
+    }
+    if (!form.city.trim()) {
+      toast.error("City is required.");
+      return;
+    }
+    if (!form.state.trim()) {
+      toast.error("State is required.");
+      return;
+    }
+    if (!form.pincode.trim() || !/^\d{6}$/.test(form.pincode.trim())) {
+      toast.error("Enter a valid 6-digit PIN code.");
       return;
     }
 
@@ -92,18 +125,18 @@ export default function Register() {
     setLoading(true);
     try {
       const payload = {
-        owner_name: form.owner_name,
-        company_name: form.company_name,
-        mobile: form.mobile,
-        alt_mobile: form.alt_mobile,
-        email: form.email,
+        owner_name: form.owner_name.trim(),
+        company_name: form.company_name.trim(),
+        mobile: form.mobile.trim(),
+        alt_mobile: form.alt_mobile?.trim() || "",
+        email: form.email.trim(),
         password: form.password,
-        gst_number: form.gst_number,
-        address: form.address,
-        city: form.city,
-        district: form.district,
-        state: form.state,
-        pincode: form.pincode,
+        gst_number: form.gst_number?.trim() || "",
+        address: form.address.trim(),
+        city: form.city.trim(),
+        district: form.district?.trim() || "",
+        state: form.state.trim(),
+        pincode: form.pincode.trim(),
         business_type: form.business_type
       };
       const res = await register(payload);
@@ -351,7 +384,7 @@ export default function Register() {
 
                 <Button
                   type="submit"
-                  disabled={loading || !isMobileValid}
+                  disabled={loading || !isFormValid}
                   className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs px-6 h-10 shadow-sm rounded-xl transition-all"
                   data-testid="vendor-submit-btn"
                 >
