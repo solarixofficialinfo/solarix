@@ -30,6 +30,7 @@ export default function LocationAutoFill({
   const [apiError, setApiError] = useState(false);
 
   const wrapperRef = useRef(null);
+  const latestRequestId = useRef(0);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -42,7 +43,7 @@ export default function LocationAutoFill({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Debounced place / location search (300ms)
+  // Debounced place / location search (300ms) with stale request cancellation
   useEffect(() => {
     const term = searchTerm.trim();
     if (!term || term.length < 2) {
@@ -51,23 +52,31 @@ export default function LocationAutoFill({
       return;
     }
 
+    const requestId = ++latestRequestId.current;
+
     const timer = setTimeout(async () => {
       setLoading(true);
       setApiError(false);
       try {
         const matches = await searchLocations(term);
-        setResults(matches || []);
-        if (matches && matches.length > 0) {
-          setOpen(true);
-        } else {
-          setApiError(true);
+        if (requestId === latestRequestId.current) {
+          setResults(matches || []);
+          if (matches && matches.length > 0) {
+            setOpen(true);
+          } else {
+            setApiError(true);
+          }
         }
       } catch (err) {
-        console.warn("Location search error:", err);
-        setApiError(true);
-        setResults([]);
+        if (requestId === latestRequestId.current) {
+          console.warn("Location search error:", err);
+          setApiError(true);
+          setResults([]);
+        }
       } finally {
-        setLoading(false);
+        if (requestId === latestRequestId.current) {
+          setLoading(false);
+        }
       }
     }, 300);
 

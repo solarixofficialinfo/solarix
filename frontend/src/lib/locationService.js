@@ -218,6 +218,55 @@ export async function searchLocations(query) {
 }
 
 /**
+ * Normalizes location details and resolves missing district or pincode via secondary postal lookup if required.
+ */
+export async function ensureDistrictAndPincode(locationObj) {
+  if (!locationObj) return locationObj;
+
+  let city = (locationObj.city || locationObj.name || "").trim();
+  let district = (locationObj.district || locationObj.state_district || locationObj.county || locationObj.districtName || locationObj.admin_district || locationObj.administrative_area_level_2 || "").trim();
+  let pincode = (locationObj.pincode || locationObj.postal_code || "").trim();
+  let state = (locationObj.state || locationObj.administrative_area_level_1 || "").trim();
+
+  // If district or pincode is missing and we have a city name, perform a quick postal lookup
+  if ((!district || !pincode) && city && city.length >= 2) {
+    try {
+      const res = await api.get(`/location/city/${encodeURIComponent(city)}`);
+      if (res.data?.results && res.data.results.length > 0) {
+        let match = res.data.results[0];
+        if (state) {
+          const stateMatch = res.data.results.find(r => (r.state || "").toLowerCase().includes(state.toLowerCase()) || state.toLowerCase().includes((r.state || "").toLowerCase()));
+          if (stateMatch) match = stateMatch;
+        }
+        if (!district && match.district) {
+          district = match.district;
+        }
+        if (!pincode && match.pincode) {
+          pincode = match.pincode;
+        }
+        if (!state && match.state) {
+          const st = resolveState(match.state);
+          state = st ? st.name : match.state;
+        }
+      }
+    } catch (e) {
+      console.warn("Secondary postal lookup error for", city, e);
+    }
+  }
+
+  const stObj = resolveState(state) || { name: state, code: locationObj.state_code || "" };
+
+  return {
+    ...locationObj,
+    city: city || "",
+    district: district || "",
+    state: stObj.name || state || "",
+    state_code: stObj.code || locationObj.state_code || "",
+    pincode: pincode || "",
+  };
+}
+
+/**
  * Detailed Place Resolution (fetches full address components & lat/lng for a selected item)
  */
 export async function getPlaceDetails(item) {
@@ -237,6 +286,8 @@ export async function getPlaceDetails(item) {
       longitude: null,
     };
   }
+
+  let result = null;
 
   // Google Place ID details resolution
   if (item.source === "google" && item.place_id) {
@@ -262,7 +313,7 @@ export async function getPlaceDetails(item) {
       const lat = place.geometry?.location?.lat() ?? null;
       const lng = place.geometry?.location?.lng() ?? null;
 
-      return {
+      result = {
         name: place.name || parsed.city || item.name,
         city: parsed.city || place.name || item.name,
         district: parsed.district,
@@ -280,18 +331,22 @@ export async function getPlaceDetails(item) {
     }
   }
 
-  // Fallback for postal items
-  const st = resolveState(item.state);
-  return {
-    name: item.name || item.city,
-    city: item.city || item.name,
-    district: item.district || "",
-    state: st ? st.name : (item.state || ""),
-    state_code: st ? st.code : "",
-    pincode: item.pincode || "",
-    latitude: item.latitude || null,
-    longitude: item.longitude || null,
-  };
+  if (!result) {
+    // Fallback for postal items
+    const st = resolveState(item.state);
+    result = {
+      name: item.name || item.city,
+      city: item.city || item.name,
+      district: item.district || "",
+      state: st ? st.name : (item.state || ""),
+      state_code: st ? st.code : "",
+      pincode: item.pincode || "",
+      latitude: item.latitude || null,
+      longitude: item.longitude || null,
+    };
+  }
+
+  return await ensureDistrictAndPincode(result);
 }
 
 /**
