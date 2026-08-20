@@ -29,6 +29,9 @@ export default function ClientNew() {
       city: fromLead?.city || "",
       state: "",
       pincode: "",
+      district: "",
+      latitude: null,
+      longitude: null,
       aadhaar: "",
       system_kw: Number(fromLead?.estimated_kw) || 0,
       panel_make: "",
@@ -308,7 +311,22 @@ export default function ClientNew() {
                   city={form.city}
                   state={form.state}
                   pincode={form.pincode}
-                  onChange={({ city, state, pincode }) => setForm({ ...form, city, state, pincode })}
+                  district={form.district}
+                  latitude={form.latitude}
+                  longitude={form.longitude}
+                  landmark={form.address}
+                  onChange={({ city, state, pincode, district, latitude, longitude, address }) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      city: city !== undefined ? city : prev.city,
+                      state: state !== undefined ? state : prev.state,
+                      pincode: pincode !== undefined ? pincode : prev.pincode,
+                      district: district !== undefined ? district : prev.district,
+                      latitude: latitude !== undefined ? latitude : prev.latitude,
+                      longitude: longitude !== undefined ? longitude : prev.longitude,
+                      address: address ? address : prev.address,
+                    }))
+                  }
                 />
               </div>
               <F label="Consumer Category">

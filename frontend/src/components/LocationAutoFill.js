@@ -2,16 +2,26 @@ import React, { useState, useEffect, useRef } from "react";
 import api from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Search, MapPin, Loader2, Check, ChevronDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Search, MapPin, Loader2, Map, Check, ChevronDown, Compass, Globe } from "lucide-react";
+import LocationMapPickerModal from "./LocationMapPickerModal";
+import { searchLocations, getPlaceDetails, searchByPincode } from "@/lib/locationService";
+import { resolveState } from "@/lib/indianStates";
 
 export default function LocationAutoFill({
   city = "",
   state = "",
   pincode = "",
+  district = "",
+  latitude = null,
+  longitude = null,
+  landmark = "",
   onChange,
   onCityChange,
   onStateChange,
   onPincodeChange,
+  onDistrictChange,
+  onCoordinatesChange,
   required = false,
   className = "",
   dark = false,
@@ -20,8 +30,9 @@ export default function LocationAutoFill({
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
-  const [availablePins, setAvailablePins] = useState([]);
+  const [availableLocalities, setAvailableLocalities] = useState([]);
   const [apiError, setApiError] = useState(false);
+  const [isMapModalOpen, setIsMapModalOpen] = useState(false);
 
   const wrapperRef = useRef(null);
 
@@ -36,9 +47,10 @@ export default function LocationAutoFill({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Debounced search when user types in search box or city
+  // Debounced place / location search
   useEffect(() => {
-    if (!searchTerm || searchTerm.length < 2) {
+    const term = searchTerm.trim();
+    if (!term || term.length < 2) {
       setResults([]);
       return;
     }
@@ -47,56 +59,10 @@ export default function LocationAutoFill({
       setLoading(true);
       setApiError(false);
       try {
-        // If 6 digits numeric, search pincode
-        if (/^\d{6}$/.test(searchTerm.strip ? searchTerm.strip() : searchTerm.trim())) {
-          const res = await api.get(`/location/pincode/${searchTerm.trim()}`);
-          if (res.data && res.data.state) {
-            const poList = res.data.post_offices || [];
-            const mapped = poList.length > 0
-              ? poList.map((po) => ({
-                  name: po,
-                  city: res.data.city || res.data.district || po,
-                  district: res.data.district,
-                  state: res.data.state,
-                  pincode: res.data.pincode,
-                }))
-              : [{
-                  name: res.data.city,
-                  city: res.data.city,
-                  district: res.data.district,
-                  state: res.data.state,
-                  pincode: res.data.pincode,
-                }];
-            setResults(mapped);
-            setOpen(true);
-          } else {
-            setResults([]);
-          }
-        } else {
-          // Otherwise search city / post office name
-          const res = await api.get(`/location/city/${encodeURIComponent(searchTerm.trim())}`);
-          if (res.data && res.data.results && res.data.results.length > 0) {
-            setResults(res.data.results);
-            setOpen(true);
-          } else {
-            // Direct fallback to postal pincode API
-            const fallbackRes = await fetch(`https://api.postalpincode.in/postoffice/${encodeURIComponent(searchTerm.trim())}`)
-              .then((r) => r.json())
-              .catch(() => null);
-            if (fallbackRes && fallbackRes[0]?.Status === "Success") {
-              const mapped = (fallbackRes[0].PostOffice || []).map((po) => ({
-                name: po.Name,
-                city: po.District || po.Name,
-                district: po.District,
-                state: po.State,
-                pincode: po.Pincode,
-              }));
-              setResults(mapped);
-              setOpen(true);
-            } else {
-              setResults([]);
-            }
-          }
+        const matches = await searchLocations(term);
+        setResults(matches || []);
+        if (matches && matches.length > 0) {
+          setOpen(true);
         }
       } catch (err) {
         console.warn("Location search error:", err);
@@ -110,48 +76,139 @@ export default function LocationAutoFill({
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  const selectLocation = (item) => {
-    const resolvedCity = item.district || item.city || item.name;
-    const resolvedState = item.state || "";
-    const resolvedPin = item.pincode || "";
-
-    if (onChange) {
-      onChange({ city: resolvedCity, state: resolvedState, pincode: resolvedPin });
-    } else {
-      if (onCityChange) onCityChange(resolvedCity);
-      if (onStateChange) onStateChange(resolvedState);
-      if (onPincodeChange) onPincodeChange(resolvedPin);
-    }
-
-    // Collect all available unique PINs for this city if multiple
-    const matchingPins = Array.from(
-      new Set(results.filter((r) => r.district === item.district || r.city === item.city).map((r) => r.pincode))
-    ).filter(Boolean);
-
-    setAvailablePins(matchingPins);
-    setSearchTerm(`${resolvedCity}, ${resolvedState}`);
+  // Handle selection from dropdown
+  const selectLocation = async (item) => {
     setOpen(false);
+    setLoading(true);
+
+    try {
+      // Resolve full details
+      const details = await getPlaceDetails(item);
+      const resCity = details?.city || item.city || item.name || "";
+      const resState = details?.state || item.state || "";
+      const resPin = details?.pincode || item.pincode || "";
+      const resDistrict = details?.district || item.district || "";
+      const resLat = details?.latitude ?? latitude;
+      const resLng = details?.longitude ?? longitude;
+      const resAddr = details?.address || "";
+      const resLandmark = details?.landmark || landmark;
+
+      // Update parent component
+      emitChange({
+        city: resCity,
+        state: resState,
+        pincode: resPin,
+        district: resDistrict,
+        latitude: resLat,
+        longitude: resLng,
+        address: resAddr,
+        landmark: resLandmark,
+      });
+
+      setSearchTerm(`${resCity}${resState ? `, ${resState}` : ""}`);
+    } catch (e) {
+      // Fallback direct assignment without breaking
+      const resCity = item.city || item.name || "";
+      const resState = item.state || "";
+      const resPin = item.pincode || "";
+      const resDistrict = item.district || "";
+
+      emitChange({
+        city: resCity,
+        state: resState,
+        pincode: resPin,
+        district: resDistrict,
+        latitude,
+        longitude,
+      });
+
+      setSearchTerm(`${resCity}${resState ? `, ${resState}` : ""}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Direct PIN Code input blur/change auto-resolution
-  const handlePincodeBlur = async (e) => {
-    const val = e.target.value.trim();
-    if (/^\d{6}$/.test(val) && (!city || !state)) {
+  // Helper to trigger all registered parent change handlers safely
+  const emitChange = (data) => {
+    if (onChange) {
+      onChange(data);
+    }
+    if (onCityChange && data.city !== undefined) onCityChange(data.city);
+    if (onStateChange && data.state !== undefined) onStateChange(data.state);
+    if (onPincodeChange && data.pincode !== undefined) onPincodeChange(data.pincode);
+    if (onDistrictChange && data.district !== undefined) onDistrictChange(data.district);
+    if (onCoordinatesChange && (data.latitude !== undefined || data.longitude !== undefined)) {
+      onCoordinatesChange(data.latitude, data.longitude);
+    }
+  };
+
+  // 6-Digit PIN Code Blur / Multi-Locality Handler
+  const handlePincodeChange = async (val) => {
+    const cleanPin = val.replace(/\D/g, "").slice(0, 6);
+    emitChange({ city, state, pincode: cleanPin, district, latitude, longitude });
+
+    if (cleanPin.length === 6) {
       try {
-        const res = await api.get(`/location/pincode/${val}`);
-        if (res.data && res.data.state) {
-          const resolvedCity = res.data.city || res.data.district || "";
-          const resolvedState = res.data.state || "";
-          if (onChange) {
-            onChange({ city: resolvedCity, state: resolvedState, pincode: val });
-          } else {
-            if (onCityChange) onCityChange(resolvedCity);
-            if (onStateChange) onStateChange(resolvedState);
-            if (onPincodeChange) onPincodeChange(val);
+        const matches = await searchByPincode(cleanPin);
+        if (matches && matches.length > 0) {
+          setAvailableLocalities(matches);
+          // If only 1 locality match, auto populate
+          if (matches.length === 1) {
+            const first = matches[0];
+            emitChange({
+              city: first.city || first.name,
+              state: first.state || state,
+              pincode: cleanPin,
+              district: first.district || district,
+              latitude,
+              longitude,
+            });
           }
         }
       } catch (e) {}
+    } else {
+      setAvailableLocalities([]);
     }
+  };
+
+  // Select locality from PIN dropdown
+  const handleLocalitySelect = (localityName) => {
+    const found = availableLocalities.find((l) => l.name === localityName || l.city === localityName);
+    if (found) {
+      emitChange({
+        city: found.city || found.name,
+        state: found.state || state,
+        pincode: pincode,
+        district: found.district || district,
+        latitude,
+        longitude,
+      });
+    }
+  };
+
+  // State code / alias normalization on state blur/change
+  const handleStateBlur = (e) => {
+    const val = e.target.value;
+    if (val) {
+      const resolved = resolveState(val);
+      if (resolved) {
+        emitChange({ city, state: resolved.name, pincode, district, latitude, longitude });
+      }
+    }
+  };
+
+  // Map Picker Modal confirm handler
+  const handleMapConfirm = (coordsData) => {
+    emitChange({
+      city: coordsData.city || city,
+      state: coordsData.state || state,
+      pincode: coordsData.pincode || pincode,
+      district: coordsData.district || district,
+      address: coordsData.address,
+      landmark: coordsData.landmark,
+      latitude: coordsData.latitude,
+      longitude: coordsData.longitude,
+    });
   };
 
   const bgInputClass = dark
@@ -160,20 +217,30 @@ export default function LocationAutoFill({
 
   return (
     <div ref={wrapperRef} className={`space-y-3 ${className}`}>
-      {/* SEARCH / AUTOCOMPLETE CONTROL */}
+      {/* SEARCH / AUTOCOMPLETE & MAP PICKER ACTION */}
       <div className="relative">
-        <Label className={`text-xs font-semibold ${dark ? "text-slate-300" : "text-slate-700"} flex items-center justify-between`}>
-          <span className="flex items-center gap-1">
-            <MapPin className="w-3.5 h-3.5 text-blue-500" /> Search Location / City / PIN
-          </span>
-          {apiError && <span className="text-[10px] text-amber-500 font-normal">Manual entry mode active</span>}
-        </Label>
-        <div className="relative mt-1">
+        <div className="flex items-center justify-between mb-1">
+          <Label className={`text-xs font-semibold ${dark ? "text-slate-300" : "text-slate-700"} flex items-center gap-1`}>
+            <MapPin className="w-3.5 h-3.5 text-blue-500" /> Search Location / City / PIN / State
+          </Label>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setIsMapModalOpen(true)}
+            className="h-7 px-2.5 text-[11px] font-semibold border-blue-300 text-blue-700 hover:bg-blue-50 gap-1"
+          >
+            <Map className="w-3.5 h-3.5 text-blue-600" /> Pick Exact Location on Map
+          </Button>
+        </div>
+
+        <div className="relative">
           <Input
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             onFocus={() => { if (results.length > 0) setOpen(true); }}
-            placeholder="Type City or PIN (e.g. Ichalkaranji, 416115)..."
+            placeholder="Type City, Town, Village, State or PIN (e.g. MH, Kolhapur, 416115)..."
             className={`text-xs h-9 pr-8 font-medium ${bgInputClass}`}
           />
           <div className="absolute right-2.5 top-2.5 text-slate-400">
@@ -181,16 +248,18 @@ export default function LocationAutoFill({
           </div>
         </div>
 
-        {/* DROPDOWN RESULTS MENU */}
+        {/* DROPDOWN SEARCH RESULTS MENU */}
         {open && results.length > 0 && (
-          <div className={`absolute left-0 right-0 top-full mt-1 z-50 rounded-xl shadow-xl border overflow-hidden max-h-60 overflow-y-auto ${
+          <div className={`absolute left-0 right-0 top-full mt-1 z-50 rounded-xl shadow-2xl border overflow-hidden max-h-64 overflow-y-auto ${
             dark ? "bg-slate-950 border-slate-800 text-white" : "bg-white border-slate-200 text-slate-900"
           }`}>
-            <div className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider border-b ${
+            <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b flex items-center justify-between ${
               dark ? "bg-slate-900 border-slate-800 text-slate-400" : "bg-slate-50 border-slate-100 text-slate-500"
             }`}>
-              Select Location ({results.length} matches)
+              <span>Matching Locations ({results.length})</span>
+              <span className="text-[9px] font-normal text-slate-400">Select to populate</span>
             </div>
+
             {results.map((r, idx) => (
               <button
                 key={idx}
@@ -201,32 +270,86 @@ export default function LocationAutoFill({
                 }`}
               >
                 <div>
-                  <div className="font-bold">{r.name}</div>
-                  <div className={`text-[11px] ${dark ? "text-slate-400" : "text-slate-500"}`}>
-                    {r.district ? `${r.district}, ` : ""}{r.state}
+                  <div className="font-bold flex items-center gap-1.5">
+                    {r.name}
+                    {r.type && (
+                      <span className={`text-[10px] px-1.5 py-0.2 rounded font-medium ${
+                        r.type === "State"
+                          ? "bg-purple-100 text-purple-700"
+                          : r.type === "District"
+                          ? "bg-amber-100 text-amber-800"
+                          : r.type === "City"
+                          ? "bg-blue-100 text-blue-800"
+                          : "bg-emerald-100 text-emerald-800"
+                      }`}>
+                        {r.type}
+                      </span>
+                    )}
+                  </div>
+                  <div className={`text-[11px] mt-0.5 ${dark ? "text-slate-400" : "text-slate-500"}`}>
+                    {r.secondary || (r.district ? `${r.district}, ` : "") + r.state}
                   </div>
                 </div>
-                <div className="text-right font-mono font-semibold text-blue-500 text-xs">
-                  {r.pincode}
-                </div>
+
+                {r.pincode && (
+                  <div className="text-right font-mono font-semibold text-blue-500 text-xs">
+                    {r.pincode}
+                  </div>
+                )}
               </button>
             ))}
           </div>
         )}
       </div>
 
-      {/* STRUCTURED CITY, STATE, PINCODE FIELDS */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      {/* MULTI-LOCALITY PICKER FOR SHARED PIN CODES */}
+      {availableLocalities.length > 1 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs space-y-1">
+          <div className="font-semibold text-amber-900 flex items-center gap-1">
+            <Compass className="w-3.5 h-3.5 text-amber-600" />
+            Multiple Localities / Post Offices found for PIN {pincode}:
+          </div>
+          <select
+            onChange={(e) => handleLocalitySelect(e.target.value)}
+            className="w-full text-xs h-8 rounded-md px-2 bg-white border border-amber-300 font-medium"
+          >
+            <option value="">Select Local Post Office / Village...</option>
+            {availableLocalities.map((loc, i) => (
+              <option key={i} value={loc.city || loc.name}>
+                {loc.name} {loc.district ? `(${loc.district})` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* LATITUDE & LONGITUDE PREVIEW BADGE */}
+      {(latitude || longitude) && (
+        <div className="flex items-center gap-2 text-[11px] font-mono bg-blue-50 text-blue-800 px-2.5 py-1 rounded-md border border-blue-200 w-fit">
+          <Globe className="w-3 h-3 text-blue-600" />
+          <span>Coordinates: {latitude ? Number(latitude).toFixed(5) : "—"}, {longitude ? Number(longitude).toFixed(5) : "—"}</span>
+        </div>
+      )}
+
+      {/* STRUCTURED CITY, DISTRICT, STATE, PINCODE FIELDS */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <div>
-          <Label className={`text-xs font-semibold ${dark ? "text-slate-300" : "text-slate-700"}`}>City *</Label>
+          <Label className={`text-xs font-semibold ${dark ? "text-slate-300" : "text-slate-700"}`}>City / Locality *</Label>
           <Input
             value={city}
-            onChange={(e) => {
-              if (onChange) onChange({ city: e.target.value, state, pincode });
-              else if (onCityChange) onCityChange(e.target.value);
-            }}
-            placeholder="City"
+            onChange={(e) => emitChange({ city: e.target.value, state, pincode, district, latitude, longitude })}
+            placeholder="City or Town"
             required={required}
+            className={`mt-1 text-xs h-9 ${bgInputClass}`}
+          />
+        </div>
+
+        <div>
+          <Label className={`text-xs font-semibold ${dark ? "text-slate-300" : "text-slate-700"}`}>District</Label>
+          <Input
+            value={district}
+            onChange={(e) => emitChange({ city, state, pincode, district: e.target.value, latitude, longitude })}
+            placeholder="District"
             className={`mt-1 text-xs h-9 ${bgInputClass}`}
           />
         </div>
@@ -235,11 +358,9 @@ export default function LocationAutoFill({
           <Label className={`text-xs font-semibold ${dark ? "text-slate-300" : "text-slate-700"}`}>State *</Label>
           <Input
             value={state}
-            onChange={(e) => {
-              if (onChange) onChange({ city, state: e.target.value, pincode });
-              else if (onStateChange) onStateChange(e.target.value);
-            }}
-            placeholder="State"
+            onChange={(e) => emitChange({ city, state: e.target.value, pincode, district, latitude, longitude })}
+            onBlur={handleStateBlur}
+            placeholder="State (e.g. Maharashtra or MH)"
             required={required}
             className={`mt-1 text-xs h-9 ${bgInputClass}`}
           />
@@ -247,38 +368,30 @@ export default function LocationAutoFill({
 
         <div>
           <Label className={`text-xs font-semibold ${dark ? "text-slate-300" : "text-slate-700"}`}>PIN Code *</Label>
-          {availablePins.length > 1 ? (
-            <select
-              value={pincode}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (onChange) onChange({ city, state, pincode: val });
-                else if (onPincodeChange) onPincodeChange(val);
-              }}
-              className={`mt-1 w-full text-xs h-9 rounded-md px-3 font-mono border ${bgInputClass}`}
-            >
-              <option value="">Select PIN</option>
-              {availablePins.map((pin) => (
-                <option key={pin} value={pin}>{pin}</option>
-              ))}
-            </select>
-          ) : (
-            <Input
-              value={pincode}
-              onChange={(e) => {
-                const val = e.target.value.replace(/\D/g, "").slice(0, 6);
-                if (onChange) onChange({ city, state, pincode: val });
-                else if (onPincodeChange) onPincodeChange(val);
-              }}
-              onBlur={handlePincodeBlur}
-              placeholder="6-digit PIN"
-              maxLength={6}
-              required={required}
-              className={`mt-1 text-xs h-9 font-mono ${bgInputClass}`}
-            />
-          )}
+          <Input
+            value={pincode}
+            onChange={(e) => handlePincodeChange(e.target.value)}
+            placeholder="6-digit PIN"
+            maxLength={6}
+            required={required}
+            className={`mt-1 text-xs h-9 font-mono ${bgInputClass}`}
+          />
         </div>
       </div>
+
+      {/* MAP PICKER MODAL */}
+      <LocationMapPickerModal
+        isOpen={isMapModalOpen}
+        onClose={() => setIsMapModalOpen(false)}
+        initialLat={latitude}
+        initialLng={longitude}
+        initialCity={city}
+        initialState={state}
+        initialPincode={pincode}
+        initialAddress={landmark}
+        onConfirm={handleMapConfirm}
+        dark={dark}
+      />
     </div>
   );
 }

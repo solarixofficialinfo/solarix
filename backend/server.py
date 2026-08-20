@@ -659,6 +659,11 @@ def _prepare_client_supabase_payload(payload: dict) -> dict:
     if "address_no" in payload and payload["address_no"] is not None:
         extra_onboarding["add_no"] = payload["address_no"]
 
+    # Extended Location Fields
+    for loc_key in ["district", "landmark", "latitude", "longitude", "state_code", "formatted_address"]:
+        if loc_key in payload and payload[loc_key] is not None:
+            extra_onboarding[loc_key] = payload[loc_key]
+
     if "inverters" in payload and payload["inverters"] is not None:
         extra_onboarding["inverters"] = payload["inverters"]
         cleaned["inverters"] = payload["inverters"]
@@ -2069,6 +2074,12 @@ class ClientIn(BaseModel):
     city: Optional[str] = ""
     state: Optional[str] = ""
     pincode: Optional[str] = ""
+    district: Optional[str] = ""
+    landmark: Optional[str] = ""
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    state_code: Optional[str] = ""
+    formatted_address: Optional[str] = ""
     aadhaar: Optional[str] = ""
     aadhaar_name: Optional[str] = ""
     aadhaar_image: Optional[str] = ""
@@ -13439,7 +13450,7 @@ async def lookup_pincode(pincode: str):
                     po_list = data[0].get("PostOffice") or []
                     if po_list and isinstance(po_list, list) and len(po_list) > 0:
                         first_po = po_list[0]
-                        city = first_po.get("District") or first_po.get("Block") or first_po.get("Name") or ""
+                        city = first_po.get("Name") or first_po.get("Block") or first_po.get("District") or ""
                         district = first_po.get("District") or ""
                         state = first_po.get("State") or ""
                         return {
@@ -13481,7 +13492,7 @@ async def lookup_city(city: str):
                             seen_combos.add(combo_key)
                             results.append({
                                 "name": post_name,
-                                "city": district or post_name,
+                                "city": post_name or district,
                                 "district": district,
                                 "state": state,
                                 "pincode": pincode

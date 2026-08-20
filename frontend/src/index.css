@@ -92,3 +92,19 @@ h1, h2, h3, h4, h5, h6 {
         display: contents !important;
     }
 }
+
+/* A4 Page & Print Layout Styles */
+@page {
+    size: A4 portrait;
+    margin: 12mm 12mm 15mm 12mm;
+}
+
+@media print {
+    body {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+    }
+    .no-print {
+        display: none !important;
+    }
+}

@@ -95,6 +95,10 @@ export default function Quotation() {
     if (companyData?.owner_name) {
       setPreparedBy((prev) => prev || companyData.owner_name);
     }
+    const customTerms = companyData?.quotation_terms || companyData?.terms;
+    if (customTerms) {
+      setTerms((prev) => (prev && prev !== "Payment due within 15 days. Goods once supplied will not be taken back." ? prev : customTerms));
+    }
   }, [companyData]); // eslint-disable-line react-hooks/exhaustive-deps
 
 

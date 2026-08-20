@@ -154,7 +154,7 @@ def _safe_client_name(client: dict) -> str:
 
 
 def _table(rows, col_widths=None, header_row=False):
-    t = Table(rows, colWidths=col_widths)
+    t = Table(rows, colWidths=col_widths, repeatRows=1 if header_row else 0)
     style = TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#6b7280")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -941,6 +941,7 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
     comp_addr = (company.get("address") or company.get("address_line_1") or company.get("office_address") or "").strip()
     comp_phone = (company.get("mobile") or company.get("mobile_number") or company.get("phone") or company.get("phone_number") or "").strip()
     comp_email = (company.get("email") or "").strip()
+    comp_website = (company.get("website") or "").strip()
     comp_state = (company.get("state") or "Maharashtra").strip()
     comp_state_code = (company.get("state_code") or "27").strip()
     comp_bank_name = (company.get("bank_name") or "").strip()
@@ -1064,6 +1065,7 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
             "address": comp_addr,
             "phone": comp_phone,
             "email": comp_email,
+            "website": comp_website,
             "gstin": comp_gst,
             "state": comp_state,
             "state_code": comp_state_code,
@@ -1117,6 +1119,76 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
     }
 
 
+def make_sales_doc_canvas(company: dict, doc_type: str = "tax_invoice"):
+    comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "").strip()
+    mobile = (company.get("mobile") or company.get("mobile_number") or company.get("phone") or company.get("phone_number") or "").strip()
+    email = (company.get("email") or "").strip()
+    website = (company.get("website") or "").strip()
+    gstin = (company.get("gst_number") or company.get("gstin") or company.get("gst") or "").strip()
+    addr = (company.get("address") or company.get("address_line_1") or company.get("office_address") or "").strip()
+    city = (company.get("city") or "").strip()
+    state = (company.get("state") or "").strip()
+    pincode = (company.get("pincode") or "").strip()
+
+    full_addr_parts = [addr]
+    if city: full_addr_parts.append(city)
+    if state: full_addr_parts.append(state)
+    if pincode: full_addr_parts.append(f"- {pincode}")
+    full_addr = ", ".join(p for p in full_addr_parts if p).replace(", -", " -")
+
+    footer_items = []
+    if comp_name: footer_items.append(comp_name)
+    if mobile: footer_items.append(f"Ph: {mobile}")
+    if email: footer_items.append(f"Email: {email}")
+    if website: footer_items.append(f"Web: {website}")
+    if gstin: footer_items.append(f"GSTIN: {gstin}")
+
+    line1 = " | ".join(footer_items)
+    line2 = f"Office: {full_addr}" if full_addr else ""
+
+    class SalesDocCanvas(canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_page_states = []
+
+        def showPage(self):
+            self._saved_page_states.append(dict(self.__dict__))
+            getattr(self, '_startPage')()
+
+        def save(self):
+            num_pages = len(self._saved_page_states)
+            for state in self._saved_page_states:
+                self.__dict__.update(state)
+                self.draw_page_decorations(num_pages)
+                super().showPage()
+            super().save()
+
+        def draw_page_decorations(self, page_count):
+            self.saveState()
+            # Divider line
+            self.setStrokeColor(colors.HexColor('#1e3a8a'))
+            self.setLineWidth(0.8)
+            self.line(1.2 * cm, 1.35 * cm, 21.0 * cm - 1.2 * cm, 1.35 * cm)
+
+            self.setFont("Helvetica-Bold", 7.5)
+            self.setFillColor(colors.HexColor('#1e3a8a'))
+            if line1:
+                self.drawString(1.2 * cm, 0.95 * cm, line1[:115])
+
+            self.setFont("Helvetica", 7.0)
+            self.setFillColor(colors.HexColor('#475569'))
+            if line2:
+                self.drawString(1.2 * cm, 0.60 * cm, line2[:115])
+
+            self.setFont("Helvetica-Bold", 7.5)
+            self.setFillColor(colors.HexColor('#334155'))
+            page_num = getattr(self, '_pageNumber', 1)
+            self.drawRightString(21.0 * cm - 1.2 * cm, 0.60 * cm, f"Page {page_num} of {page_count}")
+            self.restoreState()
+
+    return SalesDocCanvas
+
+
 def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     """Generate professional PDF for Tax Invoice, Proforma, Payment Receipt, Credit Note, Debit Note."""
     norm = _normalize_invoice_document_data(data, company)
@@ -1139,7 +1211,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         leftMargin=1.2 * cm,
         rightMargin=1.2 * cm,
         topMargin=1.2 * cm,
-        bottomMargin=1.2 * cm
+        bottomMargin=1.8 * cm
     )
     story = []
 
@@ -1298,7 +1370,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
             Paragraph(_format_currency(it["amount"]), tb_r),
         ])
 
-    items_table = Table(item_rows, colWidths=[0.9 * cm, 5.5 * cm, 1.6 * cm, 1.1 * cm, 1.1 * cm, 2.0 * cm, 2.2 * cm, 1.4 * cm, 2.8 * cm])
+    items_table = Table(item_rows, colWidths=[0.9 * cm, 5.5 * cm, 1.6 * cm, 1.1 * cm, 1.1 * cm, 2.0 * cm, 2.2 * cm, 1.4 * cm, 2.8 * cm], repeatRows=1)
     items_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e3a8a')),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
@@ -1381,18 +1453,13 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         ('LEFTPADDING', (0,0), (-1,-1), 0),
         ('RIGHTPADDING', (0,0), (-1,-1), 0),
     ]))
-    story.append(sig_table)
-    story.append(Spacer(1, 0.3 * cm))
-
-    # 6. FOOTER & DOCUMENT TYPE NOTICE
-    footer_p = Paragraph(f"Enquiries: {seller['email']} | Contact: {seller['phone']} | Registered Office: {seller['address']}", ParagraphStyle('inv_ftr', parent=styles['Normal'], fontSize=7.5, leading=10, textColor=colors.HexColor('#64748b'), alignment=1))
-    story.append(footer_p)
+    story.append(KeepTogether([sig_table]))
 
     if doc_type == "proforma":
         story.append(Spacer(1, 0.2 * cm))
         story.append(Paragraph("<font size='9' color='#d97706'><b>THIS IS A PROFORMA INVOICE — NOT A TAX INVOICE</b></font>", ParagraphStyle('pf_not_tax', parent=styles['Normal'], alignment=1)))
 
-    pdf.build(story)
+    pdf.build(story, canvasmaker=make_sales_doc_canvas(company, doc_type))
     return buf.getvalue()
 
 
@@ -1637,7 +1704,7 @@ def generate_document(doc_type: str, data: dict, company: dict) -> bytes:
     if doc_type == "purchase_order":
         return generate_po_pdf(data, company)
     buf = BytesIO()
-    pdf = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.5 * cm, rightMargin=1.5 * cm, topMargin=1.5 * cm, bottomMargin=1.5 * cm)
+    pdf = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.2 * cm, rightMargin=1.2 * cm, topMargin=1.2 * cm, bottomMargin=1.8 * cm)
     
     prepared_by = data.get("prepared_by", "")
     show_owner = data.get("show_owner") is not False and str(data.get("show_owner")).lower() != "false"
@@ -1756,7 +1823,7 @@ def generate_document(doc_type: str, data: dict, company: dict) -> bytes:
         ('ALIGN', (0, 0), (0, -1), 'LEFT'),
         ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
     ]))
-    story.append(KeepTogether([Spacer(1, 0.6 * cm), sig_table]))
+    story.append(KeepTogether([sig_table]))
 
     # Legal notice at bottom: THIS IS NOT TAX INVOICE ! (Omitted for Quotation, Tax Invoice, Delivery Challan, and Purchase Order)
     if data.get("show_not_tax_invoice", False) and doc_type not in ("quotation", "tax_invoice", "delivery_bill", "purchase_order"):
@@ -1764,7 +1831,7 @@ def generate_document(doc_type: str, data: dict, company: dict) -> bytes:
         not_tax_p = Paragraph("<font size='10' color='#dc2626'><b>THIS IS NOT TAX INVOICE !</b></font>", ParagraphStyle('not_tax', parent=styles['BodyText'], alignment=1))
         story.append(not_tax_p)
 
-    pdf.build(story)
+    pdf.build(story, canvasmaker=make_sales_doc_canvas(company, doc_type))
     return buf.getvalue()
 
 

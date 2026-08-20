@@ -6,7 +6,7 @@ import api, { formatApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
-import { Check, Sparkles, ArrowRight, ShieldCheck, Zap, HelpCircle, Briefcase } from "lucide-react";
+import { Check, Sparkles, ArrowRight, ShieldCheck, Zap, HelpCircle, Briefcase, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Pricing() {
@@ -14,6 +14,14 @@ export default function Pricing() {
   const nav = useNavigate();
   const [cycle, setCycle] = useState("monthly"); // "monthly" | "yearly"
   const [loadingPlan, setLoadingPlan] = useState(null);
+
+  const handleBack = () => {
+    if (window.history.length > 1 && window.history.state?.idx > 0) {
+      nav(-1);
+    } else {
+      nav("/dashboard");
+    }
+  };
 
   const loadRazorpayScript = () => {
     return new Promise((resolve) => {
@@ -110,7 +118,19 @@ export default function Pricing() {
 
   return (
     <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-7xl mx-auto space-y-12">
+      <div className="max-w-7xl mx-auto space-y-8">
+        {/* Top Navigation */}
+        <div className="flex items-center justify-start">
+          <button
+            onClick={handleBack}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-100 hover:text-slate-900 transition-all shadow-xs"
+            data-testid="pricing-back-btn"
+          >
+            <ArrowLeft className="w-4 h-4 text-slate-500" />
+            <span>Back</span>
+          </button>
+        </div>
+
         {/* Header */}
         <div className="text-center space-y-4 max-w-3xl mx-auto">
           <Badge variant="outline" className="px-3 py-1 bg-blue-50 text-blue-700 border-blue-200 text-xs font-semibold uppercase tracking-wider">
