@@ -2020,6 +2020,7 @@ class RegisterCompanyIn(BaseModel):
     gst_number: Optional[str] = ""
     address: Optional[str] = ""
     city: Optional[str] = ""
+    district: Optional[str] = ""
     state: Optional[str] = ""
     pincode: Optional[str] = ""
     business_type: str = "Solar EPC"
@@ -2636,6 +2637,7 @@ async def register_company(data: RegisterCompanyIn, response: Response):
         "gst_number": data.gst_number or "",
         "address": data.address or "",
         "city": data.city or "",
+        "district": data.district or "",
         "state": data.state or "",
         "pincode": data.pincode or "",
         "business_type": data.business_type,

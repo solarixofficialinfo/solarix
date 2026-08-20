@@ -25,6 +25,7 @@ export default function Register() {
     gst_number: "",
     address: "",
     city: "",
+    district: "",
     state: "",
     pincode: "",
     business_type: "Solar EPC",
@@ -100,6 +101,7 @@ export default function Register() {
         gst_number: form.gst_number,
         address: form.address,
         city: form.city,
+        district: form.district,
         state: form.state,
         pincode: form.pincode,
         business_type: form.business_type
@@ -328,9 +330,12 @@ export default function Register() {
 
                   <LocationAutoFill
                     city={form.city}
+                    district={form.district}
                     state={form.state}
                     pincode={form.pincode}
-                    onChange={({ city, state, pincode }) => setForm({ ...form, city, state, pincode })}
+                    onChange={({ city, state, pincode, district }) =>
+                      setForm((prev) => ({ ...prev, city, state, pincode, district: district || prev.district || "" }))
+                    }
                   />
                 </div>
               </div>
