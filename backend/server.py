@@ -14355,6 +14355,18 @@ env_origins = [o.strip() for o in cors_origins_env.split(',') if o.strip()]
 
 allowed_cors_origins = list(dict.fromkeys(DEFAULT_CORS_ORIGINS + env_origins))
 
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -14363,14 +14375,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"],
+    max_age=86400,
 )
-app.add_middleware(GZipMiddleware, minimum_size=1000)
-
-@app.middleware("http")
-async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    return response
 
