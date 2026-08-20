@@ -31,6 +31,7 @@ import {
 
 import RaiseComplaintDialog from "@/components/RaiseComplaintDialog";
 import TemplateGenerateDialog from "@/components/TemplateGenerateDialog";
+import ClientDocumentManager from "@/components/ClientDocumentManager";
 
 dayjs.extend(relativeTime);
 
@@ -988,58 +989,20 @@ export default function ClientDataDetail() {
         {/* SECTION 5: DOCUMENTS */}
         <TabsContent value="documents" className="space-y-4">
           <Card className="border-slate-200 p-5 space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                <FileText className="w-4 h-4 text-violet-600" /> Client Documents & Official Forms
+                <FileText className="w-4 h-4 text-violet-600" /> Official EPC Document Generator
               </h3>
-              <Button size="sm" className="bg-indigo-600 text-xs" onClick={() => setTplOpen(true)}>
-                + Generate Document
+              <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold" onClick={() => setTplOpen(true)}>
+                + Generate Document Template
               </Button>
             </div>
 
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {OFFICIAL_DOC_TYPES.map((docType) => {
-                const foundDoc = documents.find((d) => (d.doc_type || d.label || "").toLowerCase().includes(docType.key.toLowerCase()));
-                const isAvailable = Boolean(foundDoc);
-                const Icon = docType.icon;
-
-                return (
-                  <div key={docType.key} className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 card-lift">
-                    <div className="flex items-center justify-between">
-                      <div className="w-8 h-8 rounded-lg bg-white text-indigo-600 flex items-center justify-center border shadow-xs">
-                        <Icon className="w-4 h-4" />
-                      </div>
-                      <Badge variant="outline" className={`text-[10px] ${
-                        isAvailable ? "bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold" : "bg-slate-100 text-slate-500"
-                      }`}>
-                        {isAvailable ? "Generated / Ready" : "Pending"}
-                      </Badge>
-                    </div>
-
-                    <div>
-                      <div className="font-bold text-slate-900 text-xs">{docType.label}</div>
-                      <div className="text-[11px] text-slate-500 mt-0.5">
-                        {foundDoc ? `Updated: ${dayjs(foundDoc.created_at || foundDoc.updated_at).format("D MMM YYYY")}` : "Not generated yet"}
-                      </div>
-                    </div>
-
-                    <div className="pt-2 border-t border-slate-200 flex items-center justify-end">
-                      {foundDoc ? (
-                        <a href={fileUrl(foundDoc.storage_path || foundDoc.url)} target="_blank" rel="noreferrer">
-                          <Button size="sm" variant="outline" className="h-7 text-xs bg-white text-blue-700 border-blue-200">
-                            <Eye className="w-3 h-3 mr-1" /> View Doc
-                          </Button>
-                        </a>
-                      ) : (
-                        <Button size="sm" variant="outline" className="h-7 text-xs bg-white text-indigo-700 border-indigo-200" onClick={() => setTplOpen(true)}>
-                          Generate →
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <ClientDocumentManager
+              documents={c.documents || []}
+              onChange={() => refetch()}
+              clientId={c.id || id}
+            />
           </Card>
         </TabsContent>
 

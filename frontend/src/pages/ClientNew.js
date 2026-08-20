@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { ArrowLeft, Upload, FileText, X, Plus, Trash2, DollarSign, Landmark, Layers } from "lucide-react";
 import LocationAutoFill from "@/components/LocationAutoFill";
+import ClientDocumentManager from "@/components/ClientDocumentManager";
 
 export default function ClientNew() {
   const nav = useNavigate();
@@ -740,35 +741,11 @@ export default function ClientNew() {
         {/* TAB 4: DOCUMENTS */}
         <TabsContent value="docs">
           <Card className="border-slate-200">
-            <CardContent className="p-6 space-y-4">
-              <div className="grid md:grid-cols-2 gap-4">
-                {["Aadhaar", "Electricity Bill", "Site Photo", "Other Document"].map((label) => (
-                  <label key={label} className="flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded-xl p-6 hover:border-blue-400 hover:bg-blue-50/30 cursor-pointer transition-colors" data-testid={`upload-${label.replace(/\s/g, "-").toLowerCase()}`}>
-                    <Upload className="w-6 h-6 text-slate-400 mb-2" />
-                    <div className="text-sm font-medium text-slate-700">{label}</div>
-                    <div className="text-xs text-slate-500 mt-1">PDF, JPG, PNG (max 10MB)</div>
-                    <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={(e) => upload(e, label)} />
-                  </label>
-                ))}
-              </div>
-              {uploading && <div className="text-sm text-blue-600">Uploading…</div>}
-              {form.documents?.length > 0 && (
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Uploaded ({form.documents.length})</div>
-                  {form.documents.map((d, i) => (
-                    <div key={i} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
-                      <FileText className="w-4 h-4 text-blue-600" />
-                      <div className="flex-1">
-                        <div className="text-sm font-medium text-slate-900">{d.label}</div>
-                        <div className="text-xs text-slate-500">{d.filename}</div>
-                      </div>
-                      <button type="button" className="text-slate-400 hover:text-red-500" onClick={() => setForm((f) => ({ ...f, documents: f.documents.filter((_, idx) => idx !== i) }))}>
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+            <CardContent className="p-6">
+              <ClientDocumentManager
+                documents={form.documents || []}
+                onChange={(newDocs) => setForm((f) => ({ ...f, documents: newDocs }))}
+              />
             </CardContent>
           </Card>
         </TabsContent>
