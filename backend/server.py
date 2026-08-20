@@ -3656,12 +3656,26 @@ async def download_file(file_id: str, request: Request, auth: Optional[str] = Qu
         if cached:
             user = cached
 
-    if not user or not isinstance(user, dict):
+    if not user or not isinstance(user, dict) or not user.get("company_id"):
         try:
             payload = jwt.decode(token, options={"verify_signature": False})
-            company_id = payload.get("company_id")
-            if company_id:
-                user = {"company_id": company_id}
+            if isinstance(payload, dict):
+                company_id = (
+                    payload.get("company_id") or
+                    (payload.get("user_metadata") or {}).get("company_id") or
+                    (payload.get("app_metadata") or {}).get("company_id")
+                )
+                user_id = payload.get("sub") or payload.get("user_id") or payload.get("id")
+                if not company_id and user_id:
+                    u_rec = await db.users.find_one({"$or": [{"id": user_id}, {"email": payload.get("email")}]}, {"_id": 0, "company_id": 1})
+                    if u_rec and u_rec.get("company_id"):
+                        company_id = u_rec["company_id"]
+                    else:
+                        c_rec = await db.companies.find_one({"owner_id": user_id}, {"_id": 0, "id": 1})
+                        if c_rec:
+                            company_id = c_rec["id"]
+                if company_id:
+                    user = {"company_id": company_id, "id": user_id or "user"}
         except Exception:
             pass
 
@@ -3694,6 +3708,8 @@ async def download_file(file_id: str, request: Request, auth: Optional[str] = Qu
             ],
             "is_deleted": False
         })
+        if rec and rec.get("company_id") and rec["company_id"] != company_id:
+            raise HTTPException(status_code=403, detail="You do not have permission to access this document.")
 
     if not rec:
         raise HTTPException(status_code=404, detail="Document file is unavailable.")

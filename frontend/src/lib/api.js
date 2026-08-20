@@ -326,6 +326,6 @@ export function fileUrl(fileId) {
     }
   }
 
-  const token = localStorage.getItem("solarix_token");
+  const token = localStorage.getItem("solarix_token") || localStorage.getItem("token") || localStorage.getItem("access_token");
   return `${API}/files/${resolvedId}${token ? `?auth=${token}` : ""}`;
 }
