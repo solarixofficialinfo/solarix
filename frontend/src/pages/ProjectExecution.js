@@ -113,6 +113,83 @@ export default function ProjectExecution() {
     catch (e) { toast.error(formatApiError(e)); }
   };
 
+  // Rejection & Reassignment States for Verifications
+  const [rejectTargetVerif, setRejectTargetVerif] = useState(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejecting, setRejecting] = useState(false);
+
+  const [reassignTargetVerif, setReassignTargetVerif] = useState(null);
+  const [reassignTo, setReassignTo] = useState("");
+  const [reassignNotes, setReassignNotes] = useState("");
+  const [reassigning, setReassigning] = useState(false);
+
+  const handleConfirmReject = async () => {
+    if (!rejectTargetVerif) return;
+    if (!rejectReason.trim()) {
+      toast.error("Please provide a rejection reason");
+      return;
+    }
+    setRejecting(true);
+    try {
+      await api.patch(`/verifications/${rejectTargetVerif.id}`, {
+        status: "rejected",
+        rejection_reason: rejectReason.trim()
+      });
+      toast.success("Verification marked as rejected");
+      setRejectTargetVerif(null);
+      setRejectReason("");
+      invalidateProjects();
+      queryClient.invalidateQueries({ queryKey: ["verifications"] });
+    } catch (e) {
+      toast.error(formatApiError(e));
+    } finally {
+      setRejecting(false);
+    }
+  };
+
+  const handleConfirmReassign = async () => {
+    if (!reassignTargetVerif) return;
+    if (!reassignTo) {
+      toast.error("Please select a team member to reassign to");
+      return;
+    }
+    setReassigning(true);
+    try {
+      const selectedEmp = employees.find(e => e.id === reassignTo);
+      await api.patch(`/verifications/${reassignTargetVerif.id}`, {
+        status: "reassign",
+        assigned_to: reassignTo,
+        assigned_to_name: selectedEmp?.name || "Team Member",
+        notes: reassignNotes.trim()
+      });
+      toast.success(`Verification reassigned to ${selectedEmp?.name || "team member"}`);
+      setReassignTargetVerif(null);
+      setReassignTo("");
+      setReassignNotes("");
+      invalidateProjects();
+      queryClient.invalidateQueries({ queryKey: ["verifications"] });
+    } catch (e) {
+      toast.error(formatApiError(e));
+    } finally {
+      setReassigning(false);
+    }
+  };
+
+  const handleCancelVerif = async (id) => {
+    if (!window.confirm("Are you sure you want to cancel this verification request? Historical records will remain preserved.")) return;
+    try {
+      await api.patch(`/verifications/${id}`, {
+        status: "cancelled",
+        rejection_reason: "Verification request cancelled"
+      });
+      toast.success("Verification request cancelled");
+      invalidateProjects();
+      queryClient.invalidateQueries({ queryKey: ["verifications"] });
+    } catch (e) {
+      toast.error(formatApiError(e));
+    }
+  };
+
   const cards = [
     { label: "Total Projects", v: stats.total || 0, icon: Briefcase, color: "blue" },
     { label: "Pending Installation", v: stats.pending_install || 0, icon: Clock, color: "amber" },
@@ -437,8 +514,8 @@ export default function ProjectExecution() {
                         {v.status === "pending" && (
                           <>
                             {canRetry && <Button size="sm" variant="outline" onClick={() => reviewVerif(v.id, "rework")} data-testid={`verif-rework-${v.id}`}>Request Rework</Button>}
-                            {canReject && <Button size="sm" variant="outline" className="text-red-600" onClick={() => reviewVerif(v.id, "rejected")} data-testid={`verif-reject-${v.id}`}>Reject</Button>}
-                            {canApproval && <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => reviewVerif(v.id, "approved")} data-testid={`verif-approve-${v.id}`}>Approve</Button>}
+                            {canReject && <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50 font-semibold" onClick={() => { setRejectTargetVerif(v); setRejectReason(""); }} data-testid={`verif-reject-${v.id}`}>Reject</Button>}
+                            {canApproval && <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 font-semibold" onClick={() => reviewVerif(v.id, "approved")} data-testid={`verif-approve-${v.id}`}>Approve</Button>}
                           </>
                         )}
                       </div>
@@ -463,12 +540,47 @@ export default function ProjectExecution() {
                       <div className="flex items-center gap-2">
                         <div className="font-semibold text-slate-900">{v.client_name}</div>
                         <span className="text-xs text-slate-500">{v.sol_id}</span>
-                        <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">REJECTED VERIFICATION</Badge>
+                        <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 font-bold text-[11px]">REJECTED VERIFICATION</Badge>
                       </div>
                       <div className="text-xs text-slate-500 mt-0.5">Submitted by {v.submitted_by_name} · {dayjs(v.created_at).format("MMM D, h:mm A")}</div>
-                      {v.notes && <div className="text-sm text-slate-600 mt-1">{v.notes}</div>}
+                      {v.rejection_reason && (
+                        <div className="mt-2 p-2.5 bg-red-50/80 border border-red-200 rounded-lg text-xs text-red-900 leading-relaxed">
+                          <strong className="font-semibold text-red-800">Rejection Reason:</strong> {v.rejection_reason}
+                        </div>
+                      )}
+                      {v.notes && <div className="text-xs text-slate-600 mt-1">{v.notes}</div>}
+                      {v.reassignment_history && v.reassignment_history.length > 0 && (
+                        <div className="mt-2 text-[11px] text-slate-500 bg-slate-50 p-2 rounded border border-slate-200">
+                          <span className="font-semibold text-slate-700">Reassignment History:</span>{" "}
+                          {v.reassignment_history.map((h, i) => (
+                            <span key={i} className="inline-block mr-2">
+                              {h.reassigned_to_name} (by {h.reassigned_by} on {dayjs(h.at).format("MMM D")})
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <VerificationDetailsButton verification={v} />
+                    <div className="flex gap-2 flex-wrap items-center">
+                      <VerificationDetailsButton verification={v} />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-blue-300 text-blue-700 hover:bg-blue-50 font-semibold"
+                        onClick={() => { setReassignTargetVerif(v); setReassignTo(v.assigned_to || ""); setReassignNotes(""); }}
+                        data-testid={`verif-reassign-${v.id}`}
+                      >
+                        Reassign
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold"
+                        onClick={() => handleCancelVerif(v.id)}
+                        data-testid={`verif-cancel-${v.id}`}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -537,6 +649,87 @@ export default function ProjectExecution() {
             <Button variant="outline" onClick={() => setAssignOpen(false)}>Cancel</Button>
             <Button onClick={submitTask} className="bg-blue-600 hover:bg-blue-700" data-testid="assign-submit" disabled={assigning}>
               {assigning ? "Assigning..." : "Assign"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Verification Reject Reason Dialog */}
+      <Dialog open={!!rejectTargetVerif} onOpenChange={(open) => { if (!open) setRejectTargetVerif(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reject Verification — {rejectTargetVerif?.client_name}</DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Provide a clear rejection reason. This will be recorded with the project and visible in the rejected workflow.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <FF label="Rejection Reason">
+              <Textarea
+                rows={3}
+                placeholder="e.g. Inverter serial number does not match nameplate photo..."
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                className="text-xs"
+                data-testid="rejection-reason-input"
+              />
+            </FF>
+          </div>
+          <DialogFooter className="mt-3">
+            <Button variant="outline" size="sm" onClick={() => setRejectTargetVerif(null)}>Back</Button>
+            <Button
+              size="sm"
+              className="bg-red-600 hover:bg-red-700 text-white font-semibold"
+              onClick={handleConfirmReject}
+              disabled={rejecting}
+              data-testid="confirm-reject-btn"
+            >
+              {rejecting ? "Rejecting..." : "Confirm Rejection"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Verification Reassign Dialog */}
+      <Dialog open={!!reassignTargetVerif} onOpenChange={(open) => { if (!open) setReassignTargetVerif(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reassign Verification — {reassignTargetVerif?.client_name}</DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Reassign this rejected verification to another eligible team member. Historical records and notes will be preserved.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <FF label="Assign to Verifier / Team Member">
+              <Select value={reassignTo} onValueChange={setReassignTo}>
+                <SelectTrigger data-testid="reassign-select"><SelectValue placeholder="Select team member" /></SelectTrigger>
+                <SelectContent>
+                  {employees.map((e) => (
+                    <SelectItem key={e.id} value={e.id}>{e.name} ({e.role || "Team"})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FF>
+            <FF label="Reassignment Notes (Optional)">
+              <Textarea
+                rows={2}
+                placeholder="Instructions or context for the new verifier..."
+                value={reassignNotes}
+                onChange={(e) => setReassignNotes(e.target.value)}
+                className="text-xs"
+              />
+            </FF>
+          </div>
+          <DialogFooter className="mt-3">
+            <Button variant="outline" size="sm" onClick={() => setReassignTargetVerif(null)}>Cancel</Button>
+            <Button
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+              onClick={handleConfirmReassign}
+              disabled={reassigning}
+              data-testid="confirm-reassign-btn"
+            >
+              {reassigning ? "Reassigning..." : "Reassign Verification"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -584,7 +584,8 @@ _INWARD_VALID_COLS = {
     "reference_number", "reference_type", "bill_number", "source_type",
     "source_name", "date", "remarks", "attachment_file_id",
     "attachment_filename", "source", "created_by", "created_by_name",
-    "created_at", "import_batch", "updated_at"
+    "created_at", "import_batch", "updated_at", "serial_numbers",
+    "serial_number_required", "serial_number", "product_id"
 }
 
 _OUTWARD_VALID_COLS = {
@@ -592,14 +593,63 @@ _OUTWARD_VALID_COLS = {
     "product", "size", "quantity", "unit", "outward_challan_no", "reference_number",
     "reference_type", "date", "status", "remarks", "source", "material_request_id",
     "delivery_photo_file_id", "challan_photo_file_id", "attachment_file_id", "attachment_filename",
-    "created_by", "created_by_name", "created_at", "import_batch", "updated_at"
+    "created_by", "created_by_name", "created_at", "import_batch", "updated_at",
+    "serial_numbers", "serial_number_required", "serial_number", "product_id"
 }
 
 def _clean_inward_doc(doc: dict) -> dict:
-    return {k: v for k, v in doc.items() if k in _INWARD_VALID_COLS}
+    cleaned = {k: v for k, v in doc.items() if k in _INWARD_VALID_COLS}
+    sns = doc.get("serial_numbers") or []
+    if sns and isinstance(sns, list):
+        rem = str(cleaned.get("remarks") or "")
+        if "__SERIALS__:" not in rem:
+            cleaned["remarks"] = f"__SERIALS__:{json.dumps(sns)}:{rem}"
+    return cleaned
 
 def _clean_outward_doc(doc: dict) -> dict:
-    return {k: v for k, v in doc.items() if k in _OUTWARD_VALID_COLS}
+    cleaned = {k: v for k, v in doc.items() if k in _OUTWARD_VALID_COLS}
+    sns = doc.get("serial_numbers") or []
+    if sns and isinstance(sns, list):
+        rem = str(cleaned.get("remarks") or "")
+        if "__SERIALS__:" not in rem:
+            cleaned["remarks"] = f"__SERIALS__:{json.dumps(sns)}:{rem}"
+    return cleaned
+
+def _enrich_inward_doc(doc: dict) -> dict:
+    if not isinstance(doc, dict):
+        return doc
+    rem = str(doc.get("remarks") or "")
+    if "__SERIALS__:" in rem:
+        try:
+            parts = rem.split(":", 2)
+            parsed_sns = json.loads(parts[1])
+            if isinstance(parsed_sns, list) and parsed_sns:
+                doc["serial_numbers"] = parsed_sns
+                doc["serial_number_required"] = True
+            doc["remarks"] = parts[2] if len(parts) > 2 else ""
+        except Exception:
+            pass
+    if not doc.get("serial_numbers"):
+        doc["serial_numbers"] = []
+    return doc
+
+def _enrich_outward_doc(doc: dict) -> dict:
+    if not isinstance(doc, dict):
+        return doc
+    rem = str(doc.get("remarks") or "")
+    if "__SERIALS__:" in rem:
+        try:
+            parts = rem.split(":", 2)
+            parsed_sns = json.loads(parts[1])
+            if isinstance(parsed_sns, list) and parsed_sns:
+                doc["serial_numbers"] = parsed_sns
+                doc["serial_number_required"] = True
+            doc["remarks"] = parts[2] if len(parts) > 2 else ""
+        except Exception:
+            pass
+    if not doc.get("serial_numbers"):
+        doc["serial_numbers"] = []
+    return doc
 
 VALID_CLIENT_COLUMNS = {
     "id", "sol_id", "company_id", "created_by", "full_name", "mobile", "alt_mobile",
@@ -670,14 +720,18 @@ def _prepare_client_supabase_payload(payload: dict) -> dict:
     if "address_no" in payload and payload["address_no"] is not None:
         extra_onboarding["add_no"] = payload["address_no"]
 
-    # Extended Location Fields
-    for loc_key in ["district", "landmark", "latitude", "longitude", "state_code", "formatted_address"]:
+    # Extended Location & DISCOM Fields
+    for loc_key in ["district", "landmark", "latitude", "longitude", "state_code", "formatted_address", "discom", "discom_code", "discom_name", "distribution_licensee", "division", "sub_division"]:
         if loc_key in payload and payload[loc_key] is not None:
             extra_onboarding[loc_key] = payload[loc_key]
 
     if "inverters" in payload and payload["inverters"] is not None:
         extra_onboarding["inverters"] = payload["inverters"]
         cleaned["inverters"] = payload["inverters"]
+
+    if "documents" in payload and payload["documents"] is not None:
+        extra_onboarding["documents"] = payload["documents"]
+        cleaned["documents"] = payload["documents"]
 
     for k, v in payload.items():
         if k in VALID_CLIENT_COLUMNS:
@@ -723,6 +777,50 @@ def _enrich_client_doc(c: dict) -> dict:
     c["pan_card_number"] = c["pan_number"]
     c["add_no"] = ob.get("add_no") or ob.get("address_no") or c.get("add_no") or c.get("address_no") or ""
     c["address_no"] = c["add_no"]
+    c["division"] = ob.get("division") or c.get("division") or ""
+    c["sub_division"] = ob.get("sub_division") or c.get("sub_division") or ""
+
+    # Ensure documents list is always retrieved from root or onboarding stages
+    c["documents"] = c.get("documents") if (isinstance(c.get("documents"), list) and len(c.get("documents")) > 0) else (ob.get("documents") if isinstance(ob.get("documents"), list) else [])
+
+    # DISCOM Resolution
+    discom_val = c.get("discom") or ob.get("discom") or c.get("discom_name") or ob.get("discom_name") or c.get("discom_code") or ob.get("discom_code") or ""
+    d_meta = None
+    try:
+        from discom_master import get_discom_by_identifier
+        d_meta = get_discom_by_identifier(discom_val)
+    except Exception:
+        d_meta = None
+
+    if d_meta:
+        c["discom"] = d_meta["code"]
+        c["discom_code"] = d_meta["code"]
+        c["discom_name"] = d_meta["name"]
+        c["discom_short_name"] = d_meta["short_name"]
+        c["distribution_licensee"] = ob.get("distribution_licensee") or c.get("distribution_licensee") or d_meta["licensee_title"]
+        if not c.get("state") or not str(c.get("state")).strip():
+            c["state"] = d_meta["state"]
+    else:
+        state_str = str(c.get("state") or ob.get("state") or "").strip().lower()
+        if "rajasthan" in state_str:
+            c["discom"] = c.get("discom") or "JVVNL"
+            c["discom_code"] = c.get("discom_code") or "JVVNL"
+            c["discom_name"] = c.get("discom_name") or "Jaipur Vidyut Vitran Nigam Limited"
+            c["discom_short_name"] = c.get("discom_short_name") or "JVVNL"
+            c["distribution_licensee"] = ob.get("distribution_licensee") or c.get("distribution_licensee") or "Executive Engineer (O&M), JVVNL"
+        elif "gujarat" in state_str:
+            c["discom"] = c.get("discom") or "DGVCL"
+            c["discom_code"] = c.get("discom_code") or "DGVCL"
+            c["discom_name"] = c.get("discom_name") or "Dakshin Gujarat Vij Company Limited"
+            c["discom_short_name"] = c.get("discom_short_name") or "DGVCL"
+            c["distribution_licensee"] = ob.get("distribution_licensee") or c.get("distribution_licensee") or "Executive Engineer, DGVCL"
+        else:
+            c["discom"] = c.get("discom") or "MSEDCL"
+            c["discom_code"] = c.get("discom_code") or "MSEDCL"
+            c["discom_name"] = c.get("discom_name") or "Maharashtra State Electricity Distribution Company Limited (Mahavitaran)"
+            c["discom_short_name"] = c.get("discom_short_name") or "MSEDCL"
+            c["distribution_licensee"] = ob.get("distribution_licensee") or c.get("distribution_licensee") or "Additional Executive Engineer, MSEDCL"
+
     c["inverters"] = c.get("inverters") if (isinstance(c.get("inverters"), list) and len(c.get("inverters")) > 0) else (ob.get("inverters") if (isinstance(ob.get("inverters"), list) and len(ob.get("inverters")) > 0) else ([{"brand": inv_brand, "capacity": str(c.get("inverter_capacity") or ""), "quantity": 1, "serials": [c["inverter_serial"]] if c.get("inverter_serial") else [], "serial": c.get("inverter_serial") or ""}] if (c.get("inverter_capacity") or inv_brand) else []))
     return c
 
@@ -743,7 +841,7 @@ class CollectionAdapter:
         return extracted, cleaned
 
     def _deserialize_document(self, doc):
-        if not doc:
+        if not doc or not isinstance(doc, dict):
             return doc
         if self.table_name == "files" and "original_filename" in doc:
             orig_filename = doc["original_filename"] or ""
@@ -763,6 +861,12 @@ class CollectionAdapter:
                         doc["original_filename"] = actual_filename
                 except Exception as e:
                     logger.warning(f"Failed to deserialize files metadata: {e}")
+        elif self.table_name == "inward_entries":
+            doc = _enrich_inward_doc(doc)
+        elif self.table_name == "outward_entries":
+            doc = _enrich_outward_doc(doc)
+        elif self.table_name == "clients":
+            doc = _enrich_client_doc(doc)
         return doc
 
     def _matches_filter(self, doc, extracted_filters):
@@ -1884,14 +1988,55 @@ def put_object(path: str, data: bytes, content_type: str) -> dict:
 
 def get_object(path: str):
     bucket, file_path = _map_path_to_bucket_and_name(path)
+    data = None
+    
+    # 1. Primary attempt: mapped bucket + file_path
     try:
         data = supabase.storage.from_(bucket).download(file_path)
-    except Exception as e:
-        logger.error(f"Error downloading from bucket {bucket} at {file_path}: {e}")
+    except Exception as e1:
+        logger.debug(f"Primary download attempt failed ({bucket}/{file_path}): {e1}")
+
+    # 2. Secondary attempt: raw path in primary bucket
+    if not data and path != file_path:
+        try:
+            data = supabase.storage.from_(bucket).download(path)
+        except Exception:
+            pass
+
+    # 3. Tertiary attempt: filename only in primary bucket
+    filename = path.split("/")[-1]
+    if not data and filename:
+        try:
+            data = supabase.storage.from_(bucket).download(filename)
+        except Exception:
+            pass
+
+    # 4. Multi-bucket fallback scan across all storage buckets
+    if not data:
+        all_buckets = ["customer-documents", "vendor-documents", "project-images", "generated-pdfs", "user-profile-images"]
+        for b in all_buckets:
+            if b == bucket:
+                continue
+            for test_p in [file_path, path, filename]:
+                if not test_p:
+                    continue
+                try:
+                    data = supabase.storage.from_(b).download(test_p)
+                    if data:
+                        bucket = b
+                        file_path = test_p
+                        break
+                except Exception:
+                    continue
+            if data:
+                break
+
+    if not data:
+        logger.error(f"Error downloading file from storage for path={path}")
         raise HTTPException(status_code=404, detail="File not found")
     
     import mimetypes
-    content_type, _ = mimetypes.guess_type(file_path)
+    content_type, _ = mimetypes.guess_type(file_path or path)
     if not content_type:
         content_type = "application/octet-stream"
         
@@ -2433,11 +2578,15 @@ def has_perm(user: Dict[str, Any], page: str, action: str) -> bool:
     if not isinstance(perms, dict):
         perms = default_perms_for_role(user.get("role", ""))
     page_perms = perms.get(page) or {}
+    if isinstance(page_perms, list):
+        return action in page_perms
+    if not isinstance(page_perms, dict):
+        return False
     val = page_perms.get(action)
     if val is None and page == "project_execution" and action in PROJ_EXEC_TABS:
         return page_perms.get("view") is True
     if val is None and page == "data_management" and action == "view":
-        return any(perms.get(k, {}).get("view") is True for k in perms if k.startswith("dm_"))
+        return any(isinstance(perms.get(k), dict) and perms.get(k, {}).get("view") is True for k in perms if k.startswith("dm_"))
     return val is True
 
 
@@ -3785,24 +3934,51 @@ async def download_file(file_id: str, request: Request, auth: Optional[str] = Qu
             "$or": [
                 {"id": file_id},
                 {"id": clean_id},
-                {"storage_path": file_id}
+                {"storage_path": file_id},
+                {"storage_path": {"$regex": clean_id}}
             ],
             "is_deleted": False
         })
-        if rec and rec.get("company_id") and rec["company_id"] != company_id:
+        if rec and rec.get("company_id") and rec["company_id"] != company_id and not is_super_admin_user(user):
             raise HTTPException(status_code=403, detail="You do not have permission to access this document.")
 
-    if not rec:
-        raise HTTPException(status_code=404, detail="Document file is unavailable.")
+    data = None
+    ct = None
+    if rec and rec.get("storage_path"):
+        try:
+            data, ct = get_object(rec["storage_path"])
+        except Exception as e:
+            logger.warning(f"Failed get_object for rec storage_path {rec.get('storage_path')}: {e}")
 
-    try:
-        data, ct = get_object(rec["storage_path"])
-    except Exception as e:
-        logger.error(f"Error downloading object from storage {rec.get('storage_path')}: {e}")
+    if not data:
+        # Direct storage fallback paths
+        candidate_paths = [
+            file_id,
+            f"{APP_NAME}/{company_id}/client/{clean_id}",
+            f"{APP_NAME}/{company_id}/general/{clean_id}",
+            f"{APP_NAME}/{company_id}/templates/{clean_id}",
+            f"customer-documents/{clean_id}",
+            f"project-images/{clean_id}",
+            f"vendor-documents/{clean_id}"
+        ]
+        for cp in candidate_paths:
+            try:
+                data, ct = get_object(cp)
+                if data:
+                    break
+            except Exception:
+                continue
+
+    if not data:
         raise HTTPException(status_code=404, detail="Document file is unavailable in storage.")
 
-    media_type = rec.get("content_type") or ct or "application/octet-stream"
-    original_filename = rec.get("original_filename") or rec.get("filename") or f"document_{clean_id[:8]}"
+    media_type = (rec.get("content_type") if rec else None) or ct or "application/octet-stream"
+    original_filename = (rec.get("original_filename") or rec.get("filename") if rec else None) or f"document_{clean_id[:8]}"
+    if "." not in original_filename and ct:
+        import mimetypes
+        guess_ext = mimetypes.guess_extension(ct)
+        if guess_ext:
+            original_filename += guess_ext
 
     is_docx = "wordprocessingml" in media_type or original_filename.endswith(".docx")
     disposition_type = "attachment" if (download == 1 or is_docx) else "inline"
@@ -5116,6 +5292,78 @@ async def delete_generated_document(file_id: str, user=Depends(get_current_user)
     return {"status": "success"}
 
 
+# ==================== DISCOM & DOCUMENT MAPPINGS ====================
+@api_router.get("/discoms")
+async def list_discoms_endpoint(
+    q: Optional[str] = None,
+    state: Optional[str] = None,
+    user=Depends(get_current_user)
+):
+    """Search and list normalized electricity distribution companies across Indian states."""
+    from discom_master import search_discoms
+    return search_discoms(query=q, state=state)
+
+@api_router.get("/document-mappings")
+async def get_document_mappings(
+    discom: Optional[str] = None,
+    user=Depends(get_current_user)
+):
+    """Retrieve document-to-DISCOM mappings for this tenant."""
+    from discom_master import DEFAULT_DOCUMENT_MAPPINGS
+    company_id = user["company_id"]
+    q = {"company_id": company_id}
+    if discom:
+        q["discom_code"] = discom.upper()
+    saved = await db.discom_document_mappings.find(q, {"_id": 0}).to_list(500)
+    saved_map = {item["discom_code"]: item["mapped_docs"] for item in saved}
+
+    result = {}
+    for code, docs in DEFAULT_DOCUMENT_MAPPINGS.items():
+        result[code] = saved_map.get(code, docs)
+    for code, docs in saved_map.items():
+        result[code] = docs
+
+    if discom:
+        d_code = discom.upper()
+        return {
+            "discom_code": d_code,
+            "mapped_docs": result.get(d_code, DEFAULT_DOCUMENT_MAPPINGS.get(d_code, DEFAULT_DOCUMENT_MAPPINGS["DEFAULT"]))
+        }
+    return result
+
+@api_router.post("/document-mappings")
+async def save_document_mapping(
+    payload: Dict[str, Any],
+    user=Depends(get_current_user)
+):
+    """Save or update document-to-DISCOM mapping."""
+    if not (is_owner(user) or has_perm(user, "documents", "edit") or has_perm(user, "documents", "create")):
+        raise HTTPException(status_code=403, detail="Missing permission: documents.edit")
+
+    discom_code = str(payload.get("discom_code") or "").strip().upper()
+    if not discom_code:
+        raise HTTPException(status_code=400, detail="discom_code is required")
+
+    mapped_docs = payload.get("mapped_docs")
+    if not isinstance(mapped_docs, list):
+        raise HTTPException(status_code=400, detail="mapped_docs must be a list")
+
+    company_id = user["company_id"]
+    doc = {
+        "company_id": company_id,
+        "discom_code": discom_code,
+        "mapped_docs": [str(d).lower().strip() for d in mapped_docs if d],
+        "updated_at": now_iso(),
+        "updated_by": user["name"]
+    }
+    await db.discom_document_mappings.update_one(
+        {"company_id": company_id, "discom_code": discom_code},
+        {"$set": doc},
+        upsert=True
+    )
+    return {"status": "success", "discom_code": discom_code, "mapped_docs": doc["mapped_docs"]}
+
+
 PROJECT_STAGES = [
     "Onboarding",
     "Survey",
@@ -5184,6 +5432,14 @@ class VerificationIn(BaseModel):
     inverters: Optional[List[Dict[str, str]]] = None  # [{serial, monitoring_id}]
     gps: Optional[str] = ""
     notes: Optional[str] = ""
+
+class VerificationReviewIn(BaseModel):
+    status: str  # approved | rejected | rework | reassign | cancelled
+    remarks: Optional[str] = ""
+    rejection_reason: Optional[str] = None
+    assigned_to: Optional[str] = None
+    assigned_to_name: Optional[str] = None
+    notes: Optional[str] = None
 
 # Statuses that indicate a client has been onboarded and should appear in Project Execution
 ACTIVE_PROJECT_STATUSES = ["Approved", "Installation Pending", "Installation Complete", "Handover Complete"]
@@ -5904,6 +6160,16 @@ async def submit_verification(data: VerificationIn, user=Depends(get_current_use
     client = await db.clients.find_one({"id": data.client_id, "company_id": user["company_id"]}, {"_id": 0})
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+
+    # Guard: Return existing pending verification if already submitted to prevent rapid duplicates
+    existing_pending = await db.verifications.find_one({
+        "client_id": data.client_id,
+        "company_id": user["company_id"],
+        "status": "pending"
+    }, {"_id": 0})
+    if existing_pending:
+        return existing_pending
+
     doc = {
         "id": str(uuid.uuid4()), "company_id": user["company_id"], "client_id": data.client_id,
         "client_name": client.get("full_name"), "sol_id": client.get("sol_id"),
@@ -5911,6 +6177,8 @@ async def submit_verification(data: VerificationIn, user=Depends(get_current_use
         "photos": data.photos, "inverters": data.inverters or [],
         "gps": data.gps or "", "notes": data.notes or "",
         "status": "pending", "review": None,
+        "rejection_reason": None,
+        "reassignment_history": [],
         "created_at": now_iso(),
     }
     await db.verifications.insert_one(doc)
@@ -5935,29 +6203,105 @@ async def list_verifications(user=Depends(get_current_user), client_id: Optional
         "sol_id": 1,
         "submitted_by": 1,
         "submitted_by_name": 1,
+        "assigned_to": 1,
+        "assigned_to_name": 1,
         "photos": 1,
         "inverters": 1,
         "gps": 1,
         "notes": 1,
         "status": 1,
         "review": 1,
+        "rejection_reason": 1,
+        "reassignment_history": 1,
+        "cancelled_by": 1,
+        "cancelled_at": 1,
+        "cancellation_reason": 1,
         "created_at": 1,
+        "updated_at": 1,
     }
     return await db.verifications.find(q, projection).sort("created_at", -1).to_list(500)
 
 @api_router.patch("/verifications/{v_id}")
-async def review_verification(v_id: str, data: MaterialApproval, user=Depends(get_current_user)):
+async def review_verification(v_id: str, data: VerificationReviewIn, user=Depends(get_current_user)):
     if not (is_owner(user) or has_perm(user, "task_portal", "approve") or has_perm(user, "project_execution", "approval") or has_perm(user, "project_execution", "verification")):
         raise HTTPException(status_code=403, detail="Missing permission: project_execution.approval")
     v = await db.verifications.find_one({"id": v_id, "company_id": user["company_id"]})
     if not v:
         raise HTTPException(status_code=404, detail="Not found")
-    update = {"status": data.status, "review": {"by": user["name"], "at": now_iso(), "remarks": data.remarks or ""}}
-    await db.verifications.update_one({"id": v_id}, {"$set": update})
-    if data.status == "approved":
+
+    status_lower = (data.status or "").lower().strip()
+
+    if status_lower in ("reassign", "reassigned"):
+        new_user_id = data.assigned_to
+        new_user_name = data.assigned_to_name or "Team Member"
+        if new_user_id:
+            u_doc = await db.users.find_one({"id": new_user_id, "company_id": user["company_id"]}, {"_id": 0, "name": 1})
+            if u_doc:
+                new_user_name = u_doc.get("name") or new_user_name
+
+        history_entry = {
+            "reassigned_to": new_user_id,
+            "reassigned_to_name": new_user_name,
+            "reassigned_by": user["name"],
+            "reassigned_by_id": user["id"],
+            "at": now_iso(),
+            "previous_status": v.get("status"),
+            "notes": data.notes or data.remarks or ""
+        }
+        reassignment_history = list(v.get("reassignment_history") or [])
+        reassignment_history.append(history_entry)
+
+        update = {
+            "status": "pending",
+            "assigned_to": new_user_id,
+            "assigned_to_name": new_user_name,
+            "reassignment_history": reassignment_history,
+            "review": {"by": user["name"], "at": now_iso(), "remarks": f"Reassigned to {new_user_name}"},
+            "updated_at": now_iso()
+        }
+        await db.verifications.update_one({"id": v_id}, {"$set": update})
+        if new_user_id:
+            await push_notification(v["company_id"], "user", "Verification Assigned to You", v.get("client_name", ""), to_user_id=new_user_id)
+        await log_activity(user["company_id"], user["id"], user["name"], f"Reassigned Verification to {new_user_name}", v.get("client_name", ""))
+        return await db.verifications.find_one({"id": v_id}, {"_id": 0})
+
+    elif status_lower in ("cancelled", "canceled"):
+        update = {
+            "status": "cancelled",
+            "cancelled_by": user["name"],
+            "cancelled_by_id": user["id"],
+            "cancelled_at": now_iso(),
+            "cancellation_reason": data.rejection_reason or data.remarks or data.notes or "Verification Request Cancelled",
+            "review": {"by": user["name"], "at": now_iso(), "remarks": data.remarks or "Cancelled"},
+            "updated_at": now_iso()
+        }
+        await db.verifications.update_one({"id": v_id}, {"$set": update})
+        await log_activity(user["company_id"], user["id"], user["name"], "Cancelled Verification", v.get("client_name", ""))
+        return await db.verifications.find_one({"id": v_id}, {"_id": 0})
+
+    elif status_lower == "rejected":
+        rej_reason = data.rejection_reason or data.remarks or data.notes or "Verification Rejected"
+        update = {
+            "status": "rejected",
+            "rejection_reason": rej_reason,
+            "review": {"by": user["name"], "at": now_iso(), "remarks": rej_reason},
+            "updated_at": now_iso()
+        }
+        await db.verifications.update_one({"id": v_id}, {"$set": update})
+        await push_notification(v["company_id"], "user", "Verification Rejected", f"{v.get('client_name', '')}: {rej_reason}", to_user_id=v.get("submitted_by"))
+        await log_activity(user["company_id"], user["id"], user["name"], "Rejected Verification", v.get("client_name", ""))
+        return await db.verifications.find_one({"id": v_id}, {"_id": 0})
+
+    elif status_lower == "approved":
+        update = {
+            "status": "approved",
+            "review": {"by": user["name"], "at": now_iso(), "remarks": data.remarks or "Approved"},
+            "updated_at": now_iso()
+        }
+        await db.verifications.update_one({"id": v_id}, {"$set": update})
         client_doc = await db.clients.find_one({"id": v["client_id"], "company_id": v["company_id"]})
         if client_doc:
-            new_stages = {**(client_doc.get("stages") or {}), "Verification": True, "Onboarding": True}
+            new_stages = {**(client_doc.get("stages") or {}), "Verification": True, "Installation": True, "Onboarding": True}
             await db.clients.update_one({"id": v["client_id"]}, {"$set": {"stages": new_stages, "progress": calc_progress(new_stages), "updated_at": now_iso()}})
         await push_notification(v["company_id"], "user", "Verification Approved", v.get("client_name", ""), to_user_id=v.get("submitted_by"))
         # Auto-save verification assets into client documents so the Client Data → Assets
@@ -5991,10 +6335,15 @@ async def review_verification(v_id: str, data: MaterialApproval, user=Depends(ge
                                    v.get("client_name", ""))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to auto-copy verification assets for %s: %s", v_id, exc)
-    elif data.status in ("rejected", "rework"):
-        await push_notification(v["company_id"], "user", "Verification Needs Rework", v.get("client_name", ""), to_user_id=v.get("submitted_by"))
-    await log_activity(user["company_id"], user["id"], user["name"], f"Verification {data.status.title()}", v.get("client_name", ""))
-    return await db.verifications.find_one({"id": v_id}, {"_id": 0})
+        await log_activity(user["company_id"], user["id"], user["name"], "Approved Verification", v.get("client_name", ""))
+        return await db.verifications.find_one({"id": v_id}, {"_id": 0})
+    else:
+        update = {"status": data.status, "review": {"by": user["name"], "at": now_iso(), "remarks": data.remarks or ""}, "updated_at": now_iso()}
+        await db.verifications.update_one({"id": v_id}, {"$set": update})
+        if data.status in ("rejected", "rework"):
+            await push_notification(v["company_id"], "user", "Verification Needs Rework", v.get("client_name", ""), to_user_id=v.get("submitted_by"))
+        await log_activity(user["company_id"], user["id"], user["name"], f"Verification {data.status.title()}", v.get("client_name", ""))
+        return await db.verifications.find_one({"id": v_id}, {"_id": 0})
 
 
 

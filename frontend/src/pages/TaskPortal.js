@@ -48,7 +48,7 @@ const TASK_TYPE_WORKFLOWS = {
   "Document Making": "document_making",
   "Document Signed": "document_signed",
   "PM Surya Ghar Upload": "pm_surya_ghar",
-  "MSEDCL Upload": "document_making",
+  "MSEDCL Upload": "msedcl_upload",
   "Meter Testing Request": "meter_testing",
   "Meter Testing Completed": "meter_testing",
   "Material Dispatch": "material_dispatch",
@@ -976,6 +976,7 @@ function TaskDetail({ task, onClose, onMutate, canMutate = true }) {
                   {workflow === "survey" && <SurveyWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
                   {workflow === "installation" && <InstallationWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} clientId={task.client_id} onDone={onClose} />}
                   {workflow === "document_making" && <DocumentMakingWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
+                  {workflow === "msedcl_upload" && <MSEDCLUploadWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
                   {workflow === "pm_surya_ghar" && <PMSuryaGharWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
                   {workflow === "document_signed" && <DocumentSignedWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} onDone={onClose} />}
                   {workflow === "meter_testing" && <MeterTestingWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} onDone={onClose} />}
@@ -1279,27 +1280,224 @@ function SurveyWorkflow({ task, canMutate, updateStatus }) {
 
 function InstallationWorkflow({ task, canMutate, updateStatus, clientId, onDone }) {
   const effectiveClientId = clientId || task?.client_id;
+  const [selectedTab, setSelectedTab] = useState("actions");
+  const [submittingVerif, setSubmittingVerif] = useState(false);
+
+  // Check if active verification exists
+  const { data: verifs = [] } = useQuery({
+    queryKey: ["verifications-check", effectiveClientId],
+    queryFn: async () => {
+      if (!effectiveClientId) return [];
+      try {
+        const { data } = await api.get(`/verifications?client_id=${effectiveClientId}`);
+        return Array.isArray(data) ? data : [];
+      } catch (_) { return []; }
+    },
+    enabled: !!effectiveClientId,
+  });
+
+  const activeVerif = verifs.find(v => v.status === "pending" || v.status === "approved");
+  const isPendingVerif = task.status === "verification_pending" || task.status === "completed" || !!activeVerif;
+
+  const handleSendForVerification = async () => {
+    if (isPendingVerif || submittingVerif) return;
+    setSubmittingVerif(true);
+    try {
+      await api.post("/verifications", {
+        client_id: effectiveClientId,
+        photos: {},
+        inverters: [],
+        gps: "",
+        notes: `Installation submitted for verification from task ${task.id || ""}`
+      });
+      await updateStatus("verification_pending", {
+        submission: {
+          submitted_at: dayjs().toISOString(),
+          type: "installation_verification"
+        }
+      });
+      toast.success("Installation submitted for verification!");
+    } catch (e) {
+      toast.error(formatApiError(e) || "Failed to submit verification");
+    } finally {
+      setSubmittingVerif(false);
+    }
+  };
+
   return (
-    <Tabs defaultValue="actions">
-      <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600 bg-indigo-50 rounded-lg px-3 py-2 mb-3">Installation Workflow</div>
+    <Tabs value={selectedTab} onValueChange={setSelectedTab}>
+      <div className="text-xs font-semibold uppercase tracking-wider text-indigo-600 bg-indigo-50 rounded-lg px-3 py-2 mb-3">
+        Installation Workflow
+      </div>
       <TabsList className="bg-white border border-slate-200">
         <TabsTrigger value="actions">Actions</TabsTrigger>
         <TabsTrigger value="material">Request Material</TabsTrigger>
         <TabsTrigger value="verify">Submit Verification</TabsTrigger>
       </TabsList>
       <TabsContent value="actions">
-        <ActionBar>
-          {canMutate && task.status !== "in_progress" && task.status !== "completed" && (
-            <Button onClick={() => updateStatus("in_progress")} className="bg-blue-600 hover:bg-blue-700" data-testid="start-task">Start Task / Installation</Button>
+        <div className="space-y-3">
+          {isPendingVerif ? (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-xs space-y-2">
+              <div className="flex items-center gap-2 font-bold text-amber-900">
+                <Clock className="w-4 h-4 text-amber-600" />
+                Submitted for Verification / Verification Pending
+              </div>
+              <p className="text-amber-800">
+                This installation has been submitted for verification and is awaiting review in Project Execution.
+              </p>
+              <div className="pt-1 flex gap-2">
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => setSelectedTab("verify")}
+                  className="bg-white border-amber-300 text-amber-900 hover:bg-amber-100"
+                >
+                  View / Edit Verification Details
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <ActionBar>
+              {canMutate && task.status !== "in_progress" && task.status !== "completed" && (
+                <Button onClick={() => updateStatus("in_progress")} className="bg-blue-600 hover:bg-blue-700" data-testid="start-task">
+                  Start Task / Installation
+                </Button>
+              )}
+              {canMutate && (
+                <Button
+                  disabled={submittingVerif}
+                  onClick={handleSendForVerification}
+                  className="bg-emerald-600 hover:bg-emerald-700 font-semibold"
+                  data-testid="complete-task"
+                >
+                  <ShieldCheck className="w-4 h-4 mr-1.5" />
+                  {submittingVerif ? "Submitting..." : "Send For Verification"}
+                </Button>
+              )}
+            </ActionBar>
           )}
-          {canMutate && task.status !== "completed" && (
-            <Button onClick={() => updateStatus("completed")} className="bg-emerald-600 hover:bg-emerald-700" data-testid="complete-task">Send For Verification</Button>
-          )}
-        </ActionBar>
+        </div>
       </TabsContent>
       <TabsContent value="material"><MaterialRequest clientId={effectiveClientId} onDone={onDone} /></TabsContent>
       <TabsContent value="verify"><VerificationForm clientId={effectiveClientId} onDone={onDone} /></TabsContent>
     </Tabs>
+  );
+}
+
+function MSEDCLUploadWorkflow({ task, canMutate, updateStatus }) {
+  const [photoId, setPhotoId] = useState("");
+  const [photoName, setPhotoName] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const handlePhotoUpload = async (e) => {
+    let file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      file = await compressImageIfNeeded(file);
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("category", "msedcl-upload");
+      const { data } = await api.post("/files/upload", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      setPhotoId(data.id);
+      setPhotoName(data.original_filename || file.name);
+      await api.patch(`/clients/${task.client_id}/stages`, {
+        stages: { "MSEDCL Upload": true }
+      });
+      toast.success("MSEDCL photo uploaded & attached to project");
+    } catch (err) {
+      toast.error(formatApiError(err) || "Failed to upload photo");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await updateStatus("completed", {
+        submission: {
+          photo_id: photoId || null,
+          photo_name: photoName || null,
+          submitted_at: dayjs().toISOString(),
+          type: "msedcl_upload"
+        }
+      });
+      await api.patch(`/clients/${task.client_id}/stages`, {
+        stages: { "MSEDCL Upload": true }
+      });
+      toast.success("MSEDCL Upload task completed successfully");
+    } catch (e) {
+      toast.error(formatApiError(e) || "Failed to submit task");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs font-semibold uppercase tracking-wider text-sky-600 bg-sky-50 rounded-lg px-3 py-2">
+        MSEDCL Upload Task
+      </div>
+      <Card className="border-slate-200 bg-white shadow-2xs">
+        <CardContent className="p-4 space-y-3">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+              DISCOM Portal Screenshot / Completion Photo <span className="text-slate-400 font-normal lowercase">(optional)</span>
+            </div>
+            {photoId ? (
+              <div className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-lg">
+                <div className="flex items-center gap-2 truncate">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="truncate font-medium">{photoName || "Photo uploaded"}</span>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => { setPhotoId(""); setPhotoName(""); }}
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50 text-[11px] h-6 px-2"
+                >
+                  Remove
+                </Button>
+              </div>
+            ) : (
+              <label className="border-2 border-dashed border-slate-200 rounded-lg p-5 text-center block cursor-pointer hover:border-sky-400 hover:bg-sky-50/30 transition-all bg-slate-50/50">
+                <Camera className="w-6 h-6 mx-auto text-slate-400 mb-1.5" />
+                <div className="text-xs font-medium text-slate-700">Click to upload DISCOM / MSEDCL Photo (Optional)</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">JPG, PNG, WebP or PDF</div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,.pdf"
+                  className="hidden"
+                  onChange={handlePhotoUpload}
+                  disabled={uploading}
+                />
+              </label>
+            )}
+            {uploading && <div className="text-xs text-sky-600 mt-1.5 animate-pulse">Uploading photo…</div>}
+          </div>
+        </CardContent>
+      </Card>
+      <ActionBar>
+        {canMutate && (
+          <Button
+            disabled={submitting || uploading}
+            onClick={handleSubmit}
+            className="bg-emerald-600 hover:bg-emerald-700 font-semibold"
+            data-testid="complete-task"
+          >
+            <CheckCircle2 className="w-4 h-4 mr-1.5" />
+            {submitting ? "Submitting..." : "Submit / Complete Task"}
+          </Button>
+        )}
+      </ActionBar>
+    </div>
   );
 }
 

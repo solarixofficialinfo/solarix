@@ -23,25 +23,20 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
-  // Detect Supabase Google OAuth callback on mount
+  // Detect Supabase Google OAuth callback on mount and on auth state change
   useEffect(() => {
     let mounted = true;
+    let handled = false;
 
-    const processOAuthSession = async () => {
+    const processSession = async (session) => {
+      if (handled || !session || !session.user || !session.user.email) return;
+      handled = true;
+      if (mounted) setGoogleLoading(true);
       try {
-        const { data: { session }, error } = await supabase.auth.getSession();
-        if (error) {
-          if (mounted) setGoogleLoading(false);
-          return;
-        }
-
-        if (session && session.user && session.user.email) {
-          if (mounted) setGoogleLoading(true);
-          await handleGoogleCallback(session);
-          if (mounted) {
-            toast.success("Signed in with Google!");
-            nav("/dashboard");
-          }
+        await handleGoogleCallback(session);
+        if (mounted) {
+          toast.success("Signed in with Google!");
+          nav("/dashboard");
         }
       } catch (err) {
         if (mounted) {
@@ -54,10 +49,23 @@ export default function Login() {
       }
     };
 
-    processOAuthSession();
+    // 1. Initial check
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (mounted && session) {
+        processSession(session);
+      }
+    }).catch(() => {});
+
+    // 2. Auth state change listener (catches hash token completion)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (mounted && session && (event === "SIGNED_IN" || event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED")) {
+        processSession(session);
+      }
+    });
 
     return () => {
       mounted = false;
+      subscription?.unsubscribe();
     };
   }, [handleGoogleCallback, nav]);
 

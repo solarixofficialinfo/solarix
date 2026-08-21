@@ -1494,7 +1494,7 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     if logo_bytes:
         try:
             p_logo = cell_l.paragraphs[0]
-            p_logo.add_run().add_picture(BytesIO(logo_bytes), width=Inches(3.6))
+            p_logo.add_run().add_picture(BytesIO(logo_bytes), width=Inches(1.8))
         except Exception:
             pass
 
@@ -2164,6 +2164,7 @@ def generate_wcr_pdf(client: dict, company: dict) -> bytes:
     story.append(PageBreak())
 
     # --- PAGE 2: DECLARATION & UNDERTAKING ---
+    discom_code = client.get("discom_code") or client.get("discom") or "MSEDCL"
     for item in _build_header():
         story.append(item)
 
@@ -2172,7 +2173,7 @@ def generate_wcr_pdf(client: dict, company: dict) -> bytes:
         f"We <b>{company_name}</b> [Vendor] & <b>{client_name}</b> [Consumer] bearing Consumer Number "
         f"<b>{consumer_num}</b> Ensured structural stability of installed solar power plant and obtained "
         f"requisite permissions from the concerned authority. If in future, by virtue of any means "
-        f"due to collapsing or damage to the installed solar power plant, MSEDCL will not be held "
+        f"due to collapsing or damage to the installed solar power plant, {discom_code} will not be held "
         f"responsible for any loss to property or human life, if any."
     )
     story.append(Paragraph(p1_text, STYLE_BODY_JUSTIFY))
@@ -2717,13 +2718,17 @@ def generate_net_meter_agreement_pdf(client: dict, company: dict) -> bytes:
     story.append(Paragraph("<b>Net Metering Connection Agreement</b>", style_h2))
     story.append(Spacer(1, 0.4 * cm))
 
+    discom_code = client.get("discom_code") or client.get("discom") or "MSEDCL"
+    discom_name = client.get("discom_name") or "Maharashtra State Electricity Distribution Company Limited"
+    licensee_title = client.get("distribution_licensee") or f"Additional Executive Engineer{licensee_sub}, {discom_code}"
+
     preamble_p1 = (
         f"This Agreement is made and entered into at (location) <b>{city}</b> on this "
         f"<b>(date {date_str})</b> between the Eligible Consumer <b>{client_name}</b> "
         f"having premises at <b>{full_address}</b> and Consumer No <b>{consumer_no}</b> "
         f"as the first Party<br/>"
         f"AND<br/>"
-        f"The Distribution Licensee <b>Additional Executive Engineer{licensee_sub}, MSEDCL</b>, "
+        f"The Distribution Licensee <b>{licensee_title}</b>, "
         f"(hereinafter referred to as 'the Licensee') and having its Registered Office at <b>{division}</b> as second Party of this Agreement;"
     )
     story.append(Paragraph(preamble_p1, style_body))
@@ -2731,7 +2736,7 @@ def generate_net_meter_agreement_pdf(client: dict, company: dict) -> bytes:
 
     preamble_p2 = (
         "Whereas, the Eligible Consumer has applied to the Licensee for approval of a Net Metering Arrangement "
-        "under the provisions of the Maharashtra Electricity Regulatory Commission (Net Metering for Roof-top Solar Photo Voltaic Systems) Regulations, 2019 "
+        "under the provisions of the State Electricity Regulatory Commission (Net Metering for Roof-top Solar Photo Voltaic Systems) Regulations "
         "('the Net Metering Regulations') and sought its connectivity to the Licensee's Distribution Network;"
     )
     story.append(Paragraph(preamble_p2, style_body))
@@ -2899,15 +2904,15 @@ def generate_net_meter_agreement_pdf(client: dict, company: dict) -> bytes:
 
     witness_intro = Paragraph(
         f"In the witness where of <b>{client_name}</b> for and on behalf of Eligible Consumer and Shri. "
-        f"Additional Executive Engineer <b>{sub_div}/ MSEDCL</b>, for and on behalf of MSEDCL agree to this agreement.",
+        f"<b>{licensee_title}</b>, for and on behalf of {discom_code} agree to this agreement.",
         style_body
     )
 
-    # Signature Table (Aligned cleanly with consumer left, MSEDCL right, Witnesses aligned)
+    # Signature Table (Aligned cleanly with consumer left, DISCOM right, Witnesses aligned)
     sig_table_data = [
         [
             Paragraph(f"<b>Signature of Eligible Consumer</b><br/><br/><br/>___________________________<br/><b>{client_name}</b><br/>Eligible Consumer", style_body),
-            Paragraph(f"<b>Signature of Licensee</b><br/><br/><br/>Shri. ___________________________<br/>Additional Executive Engineer<br/>for and on behalf of MSEDCL", style_body)
+            Paragraph(f"<b>Signature of Licensee</b><br/><br/><br/>Shri. ___________________________<br/>{licensee_title}<br/>for and on behalf of {discom_code}", style_body)
         ],
         [
             Paragraph("<br/><b>Witness 1:</b> ___________________________", style_body),
@@ -3038,17 +3043,19 @@ def generate_vendor_agreement_pdf(client: dict, company: dict) -> bytes:
     story.append(Paragraph(exec_p, style_body))
     story.append(Spacer(1, 0.2 * cm))
 
+    discom_code = client.get("discom_code") or client.get("discom") or "MSEDCL"
+
     story.append(Paragraph("<b>Between</b>", style_center_b))
     applicant_p = (
         f"<b>{client_name}</b> has residential electricity connection with consumer number <b>{consumer_no}</b> "
-        f"from MSEDCL (DISCOM) at <b>{full_address} PIN code : {pincode}</b> (Hereinafter referred to as Applicant)."
+        f"from {discom_code} (DISCOM) at <b>{full_address} PIN code : {pincode}</b> (Hereinafter referred to as Applicant)."
     )
     story.append(Paragraph(applicant_p, style_body))
     story.append(Spacer(1, 0.2 * cm))
 
     story.append(Paragraph("<b>And</b>", style_center_b))
     vendor_p = (
-        f"<b>{company_name}</b> (Name of Vendor) is registered/ empaneled with the MSEDCL (hereinafter referred as DISCOM) "
+        f"<b>{company_name}</b> (Name of Vendor) is registered/ empaneled with the {discom_code} (hereinafter referred as DISCOM) "
         f"and is having registered/functional office at <b>{company_address} . PIN CODE- {company_pincode}</b> . "
         f"Both Applicant and the Vendor are jointly referred as Parties."
     )
@@ -3346,8 +3353,10 @@ def generate_meter_testing_request_pdf(client: dict, company: dict) -> bytes:
     STYLE_BOLD_SERIF = ParagraphStyle('mtr_bold', parent=styles['Normal'], fontSize=10, fontName='Helvetica-Bold', textColor=colors.HexColor('#000000'), leading=14)
     STYLE_BODY = ParagraphStyle('mtr_body', parent=styles['Normal'], fontSize=10, fontName='Helvetica', textColor=colors.HexColor('#000000'), leading=14.5, alignment=4, spaceAfter=8)
 
-    city_line = f"MSEDCL Meter Lab {city}." if city else "MSEDCL Meter Lab."
-    to_text_parts = ["<b>To,</b>", "<b>Additional Executive Engineer</b>", f"<b>{city_line}</b>"]
+    discom_code = client.get("discom_code") or client.get("discom") or "MSEDCL"
+    licensee_title = client.get("distribution_licensee") or "Additional Executive Engineer"
+    city_line = f"{discom_code} Meter Lab {city}." if city else f"{discom_code} Meter Lab."
+    to_text_parts = ["<b>To,</b>", f"<b>{licensee_title}</b>", f"<b>{city_line}</b>"]
     if pincode:
         to_text_parts.append(f"<b>{pincode}</b>")
     to_text = "<br/>".join(to_text_parts)
@@ -4162,11 +4171,12 @@ def _generate_wcr_docx(client: dict, company: dict) -> bytes:
     doc.add_page_break()
     _docx_header_block(doc, company)
     _docx_add_spacer(doc, 6)
+    discom_code = client.get("discom_code") or client.get("discom") or "MSEDCL"
     _docx_add_body_paragraph(doc,
         f"We {company_name} [Vendor] & {client_name} [Consumer] bearing Consumer Number "
         f"{consumer_num} Ensured structural stability of installed solar power plant and obtained "
         "requisite permissions from the concerned authority. If in future, by virtue of any means "
-        "due to collapsing or damage to the installed solar power plant, MSEDCL will not be held "
+        f"due to collapsing or damage to the installed solar power plant, {discom_code} will not be held "
         "responsible for any loss to property or human life, if any.",
         font_size=9.5, justify=True)
     _docx_add_spacer(doc, 4)
@@ -4431,88 +4441,60 @@ def _generate_net_meter_docx(client: dict, company: dict) -> bytes:
     _body(f"This Agreement is made and entered into at (location) {city} on this (date {date_str}) "
           f"between the Eligible Consumer {client_name} having premises at {full_address} "
           f"and Consumer No {consumer_no} as the first Party\nAND\n"
-          f"The Distribution Licensee Additional Executive Engineer{licensee_sub}, MSEDCL, "
+          f"The Distribution Licensee {licensee_title}, {discom_code}, "
           f"(hereinafter referred to as 'the Licensee') and having its Registered Office at {division} "
           f"as second Party of this Agreement;")
     _docx_add_spacer(doc, 4)
     _body("Whereas, the Eligible Consumer has applied to the Licensee for approval of a Net Metering Arrangement "
-          "under the provisions of the Maharashtra Electricity Regulatory Commission (Net Metering for Roof-top "
-          "Solar Photo Voltaic Systems) Regulations, 2019 ('the Net Metering Regulations') and sought its "
+          "under the provisions of the State Electricity Regulatory Commission (Net Metering for Roof-top "
+          "Solar Photo Voltaic Systems) Regulations and sought its "
           "connectivity to the Licensee's Distribution Network;")
     _docx_add_spacer(doc, 4)
     _body(f"And whereas, the Licensee has agreed to provide Network connectivity to the Eligible Consumer for "
           f"injection of electricity generated from its Roof-top Solar PV System of {system_kw} kilowatt;")
     _docx_add_spacer(doc, 4)
-    _body("Both Parties hereby agree as follows")
+    _body("Both Parties hereby agree as follows:")
 
-    _clause("1. Eligibility:")
-    _body("The Roof-top Solar PV System meets the applicable norms for being integrated into the Distribution Network, "
+    _clause("1. Eligibility & System Standards:")
+    _body("1.1 The Roof-top Solar PV System meets the applicable norms for being integrated into the Distribution Network, "
           "and that the Eligible Consumer shall maintain the System accordingly for the duration of this Agreement.")
+    _body("1.2 The Solar PV system shall conform to the applicable State Net Metering Regulations, CEA Regulations, "
+          "and relevant safety standards.")
+
     _clause("2. Technical and Inter-connection Requirements:")
-    _body("2.1. The metering arrangement and the inter-connection of the Roof-top Solar PV System with the Network of the "
-          "Licensee shall be as per the provisions of the Net Metering Regulations and the technical standards and norms "
-          "specified by the Central Electricity Authority.")
-    _body("2.2. The Eligible Consumer agrees, that he shall install, prior to connection of the Roof-top Solar PV System "
-          "to the Network of the Licensee, an isolation device (both automatic and in built within inverter and external "
-          "manual relays); and the Licensee shall have access to it if required for the repair and maintenance of the "
-          "Distribution Network.")
-    _body("2.3. The Licensee shall specify the interface/inter-connection point and metering point.")
-    _body("2.4. The Eligible Consumer shall specify relevant data, such as voltage, frequency, circuit breaker, isolator "
-          "position in his System, as and when required by the Licensee.")
-    _clause("3. Safety:")
-    _body("3.1 The equipment connected to the Licensee's Distribution System shall be compliant with relevant International "
-          "(IEEE/IEC) or Indian Standards (BIS), as the case may be.")
-    _body("3.2 The design, installation, maintenance and operation of the Roof-top Solar PV System shall be undertaken "
-          "in a manner conducive to the safety of the Roof-top Solar PV System as well as the Licensee's Network.")
-    _body("3.3 If, at any time, the Licensee determines that the Eligible Consumer's Roof-top Solar PV System is causing "
-          "or may cause damage to and/or results in the Licensee's other consumers or its assets, the Eligible Consumer "
-          "shall disconnect the Roof-top Solar PV System from the distribution Network upon direction from the Licensee.")
-    _body("3.4 The Licensee shall not be responsible for any accident resulting in injury to human beings or animals or "
-          "damage to property that may occur due to back-feeding from the Roof-top Solar PV System when the grid supply is off.")
-    _clause("Other Clearances and Approvals:")
-    _body("The Eligible Consumer shall obtain any statutory approvals and clearances that may be required, such as from "
-          "the Electrical Inspector or the municipal or other authorities, before connecting the Roof-top Solar PV System "
-          "to the distribution Network.")
-    _clause("4. Period of Agreement, and Termination:")
-    _body("This Agreement shall be for a period of 20 years, but may be terminated prematurely")
-    _body("(a) By mutual consent; or")
-    _body("(b) By the Eligible Consumer, by giving 30 days' notice to the Licensee ;")
-    _body("(c) By the Licensee, by giving 30 days' notice, if the Eligible Consumer breaches any terms of this Agreement "
-          "or the provisions of the Net Metering Regulations and does not remedy such breach within 30 days.")
-    _clause("6. Access and Disconnection:")
-    _body("6.1. The Eligible Consumer shall provide access to the Licensee to the metering equipment and disconnecting "
-          "devices of Roof-top Solar PV System, both automatic and manual, by the Eligible Consumer.")
-    _body("6.2. If, in an emergent or outage situation, the Licensee cannot access the disconnecting devices of the "
-          "Roof-top Solar PV System, both automatic and manual, it may disconnect power supply to the premises.")
-    _body("6.3 Upon termination of this Agreement under Clause 5, the Eligible Consumer shall disconnect the Roof-top "
-          "Solar PV System forthwith from the Network of the Licensee.")
-    _clause("7. Liabilities:")
-    _body("7.1. The Parties shall indemnify each other for damages or adverse effects of either Party's negligence or "
-          "misconduct during the installation of the Roof-top Solar PV System.")
-    _body("7.2. The Parties shall not be liable to each other for any loss of profits or revenues, business interruption "
-          "losses, loss of contract or goodwill, or for indirect, consequential, incidental or special damages.")
-    _clause("8. Commercial Settlement:")
-    _body("8.1. The commercial settlements under this Agreement shall be in accordance with the Net Metering Regulations.")
-    _body("8.2. The Licensee shall not be liable to compensate the Eligible Consumer if his Rooftop Solar PV System is "
-          "unable to inject surplus power generated into the Licensee's Network on account of failure of power supply.")
-    _body("8.3. The existing metering System, if not in accordance with the Net Metering Regulations, shall be replaced "
-          "by a bi-directional meter or a pair of meters.")
-    _body("8.4. The uni-directional and bi-directional or pair of meters shall be fixed in separate meter boxes in the same proximity.")
-    _body("8.5. The Licensee shall issue monthly electricity bill for the net metered energy on the scheduled date of "
-          "meter reading.")
-    _clause("9. Connection Costs:")
-    _body("The Eligible Consumer shall bear all costs related to the setting up of the Roof-top Solar PV System, "
-          "excluding the Net Metering Arrangement costs.")
-    _clause("10. Dispute Resolution:")
-    _body("10.1 Any dispute arising under this Agreement shall be resolved promptly, in good faith and in an equitable "
-          "manner by both the Parties.")
-    _body("10.2 The Eligible Consumer shall have recourse to the concerned Consumer Grievance Redressal Forum constituted "
-          "under the relevant Regulations in respect of any grievance regarding billing which has not been redressed by "
-          "the Licensee.")
+    _body(f"2.1 The Solar PV system capacity is {system_kw} kW. Metering and inter-connection with the Network of the "
+          f"Licensee shall be as per {discom_code} standards and norms specified by the Central Electricity Authority.")
+    _body("2.2 The Eligible Consumer agrees to install prior to connection an isolation device (both automatic and manual); "
+          "and the Licensee shall have access to it at all times for repair and maintenance of the Distribution Network.")
+    _body("2.3 The Licensee shall specify the interface/inter-connection point and metering point.")
+
+    _clause("3. Safety & Protection:")
+    _body("3.1 The equipment connected to the Licensee's Distribution System shall be compliant with relevant IEEE/IEC or BIS standards.")
+    _body("3.2 The design, installation, maintenance and operation of the Solar PV System shall ensure the safety of both "
+          "the Solar PV System and the Licensee's Network.")
+    _body("3.3 Consumer shall provide islanding mechanism to ensure Solar PV system disconnects automatically during grid failure.")
+
+    _clause("4. Period of Agreement & Termination:")
+    _body("4.1 This Agreement shall remain in force for a period of 25 years from commissioning unless terminated prematurely "
+          "by mutual consent or 30 days written notice upon uncured breach.")
+
+    _clause("5. Access and Disconnection:")
+    _body("5.1 The Eligible Consumer shall provide access to authorized personnel of the Licensee to the metering equipment "
+          "and disconnecting devices at all times.")
+    _body("5.2 In emergent outage situations, the Licensee may disconnect supply to ensure grid safety.")
+
+    _clause("6. Metering Arrangement & Energy Accounting:")
+    _body("6.1 Net metering system shall include a bi-directional meter recording both export and import of electricity, "
+          "and a Solar Generation Meter to measure total solar output.")
+    _body("6.2 Energy accounting, billing and settlement of excess generation shall be strictly governed by applicable Regulations.")
+
+    _clause("7. Dispute Resolution:")
+    _body("7.1 Any dispute arising under this Agreement shall be resolved promptly and amicably, or through the concerned "
+          "Consumer Grievance Redressal Forum.")
 
     _docx_add_spacer(doc, 4)
     _body(f"In the witness where of {client_name} for and on behalf of Eligible Consumer and Shri. "
-          f"Additional Executive Engineer {sub_div}/ MSEDCL, for and on behalf of MSEDCL agree to this agreement.")
+          f"{licensee_title}, for and on behalf of {discom_code} agree to this agreement.")
     _docx_add_spacer(doc, 12)
 
     sig_tbl = doc.add_table(rows=4, cols=2)
@@ -4520,7 +4502,7 @@ def _generate_net_meter_docx(client: dict, company: dict) -> bytes:
     _remove_tbl_borders(sig_tbl)
     sig_data = [
         (f"Signature of Eligible Consumer\n\n\n___________________________\n{client_name}\nEligible Consumer",
-         "Signature of Licensee\n\n\nShri. ___________________________\nAdditional Executive Engineer\nfor and on behalf of MSEDCL"),
+         f"Signature of Licensee\n\n\nShri. ___________________________\n{licensee_title}\nfor and on behalf of {discom_code}"),
         ("\nWitness 1: ___________________________", "\nWitness 1: ___________________________"),
         ("Witness 2: ___________________________", "Witness 2: ___________________________"),
         (f"\n\n{company_name}\nProprietor / Authorized Manager", "\n\nOfficial Stamp / Seal"),
@@ -4559,9 +4541,8 @@ def _generate_vendor_docx(client: dict, company: dict) -> bytes:
     system_kw    = str(client.get("system_kw") or client.get("capacity") or "").strip()
     panel_make   = (client.get("panel_brand") or client.get("panel_make") or "").strip()
     panel_wattage = str(client.get("panel_wattage") or "").strip()
-    inverter_make = (client.get("inverter_make") or "").strip()
-    inverter_kw  = str(client.get("inverter_capacity") or client.get("system_kw") or "").strip()
     total_cost   = str(client.get("total_cost") or client.get("quotation_amount") or "").strip()
+    discom_code  = client.get("discom_code") or client.get("discom") or "MSEDCL"
     date_obj = datetime.now()
     day_str = date_obj.strftime("%d")
     month_str = date_obj.strftime("%m")
@@ -4606,16 +4587,16 @@ def _generate_vendor_docx(client: dict, company: dict) -> bytes:
     _docx_add_spacer(doc, 4)
     _hdr("Between", size=10)
     _body(f"{client_name} has residential electricity connection with consumer number {consumer_no} "
-          f"from MSEDCL (DISCOM) at {full_address} PIN code : {pincode} (Hereinafter referred to as Applicant).")
+          f"from {discom_code} (DISCOM) at {full_address} PIN code : {pincode} (Hereinafter referred to as Applicant).")
     _docx_add_spacer(doc, 4)
     _hdr("And", size=10)
-    _body(f"{company_name} (Name of Vendor) is registered/empaneled with the MSEDCL (hereinafter referred "
+    _body(f"{company_name} (Name of Vendor) is registered/empaneled with the {discom_code} (hereinafter referred "
           f"as DISCOM) and is having registered/functional office at {company_address}. PIN CODE- {company_pincode}. "
           "Both Applicant and the Vendor are jointly referred as Parties.")
     _docx_add_spacer(doc, 4)
     for wh in [
         "- The Applicant intends to install rooftop solar system under simplified procedure of Rooftop Solar Programmed Ph-II of the MNRE.",
-        "- The Vendor is registered/empaneled vendor with DISCOM for installation of rooftop solar under MNRE Schemes. The Vendor satisfies all the existing regulation pertaining to electrical safety.",
+        f"- The Vendor is registered/empaneled vendor with {discom_code} for installation of rooftop solar under MNRE Schemes. The Vendor satisfies all the existing regulation pertaining to electrical safety.",
         "- Both the parties are mutually agreed and understand their roles and responsibilities and have no liability to any other agency/firm/stakeholder.",
     ]:
         _body(wh)
@@ -4756,8 +4737,10 @@ def _generate_meter_testing_docx(client: dict, company: dict) -> bytes:
         r.font.size = Pt(size)
         r.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
 
-    city_line = f"MSEDCL Meter Lab {city}." if city else "MSEDCL Meter Lab."
-    _body_bold(f"To,\nAdditional Executive Engineer\n{city_line}" + (f"\n{pincode}" if pincode else ""))
+    discom_code = client.get("discom_code") or client.get("discom") or "MSEDCL"
+    licensee_title = client.get("distribution_licensee") or "Additional Executive Engineer"
+    city_line = f"{discom_code} Meter Lab {city}." if city else f"{discom_code} Meter Lab."
+    _body_bold(f"To,\n{licensee_title}\n{city_line}" + (f"\n{pincode}" if pincode else ""))
     _docx_add_spacer(doc, 6)
     _body_bold("Sub: Request for Gen-meter Letter.")
     _docx_add_spacer(doc, 4)
