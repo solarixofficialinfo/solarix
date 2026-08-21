@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import api, { formatApiError, fileUrl } from "@/lib/api";
+import api, { formatApiError, fileUrl, downloadFile } from "@/lib/api";
 import { useClientList, useCompany } from "@/hooks/useClients";
 import { useSalesDocuments, useDeleteSalesDocument } from "@/hooks/useSalesDocuments";
 import { useProductList } from "@/hooks/useInventory";
@@ -291,7 +291,7 @@ export default function TaxInvoice() {
     return `Rupees ${formatMoney(amount)} Only`;
   };
 
-  const saveInvoice = async () => {
+  const saveInvoice = async (format = "pdf") => {
     if (busy) return;
     if (!invoiceNumber.trim()) { toast.error("Invoice number is required"); return; }
     if (items.length === 0 || items.every((r) => !r.product?.trim())) { toast.error("Add at least one product row"); return; }
@@ -331,23 +331,22 @@ export default function TaxInvoice() {
         terms: notes,
       };
 
-      const payload = { doc_type: "tax_invoice", doc_data: docData };
+      const payload = {
+        doc_type: "tax_invoice",
+        format: format,
+        doc_data: docData
+      };
       payload.client_id = selectedClientId || undefined;
       if (clientSource === "manual" || !selectedClientId) payload.doc_data.buyer = clientForm;
 
       const { data } = await api.post("/documents/generate", payload);
       const files = data?.files ?? (data?.id ? [{ id: data.id, filename: data.filename, label: data.label }] : []);
       setGeneratedFiles(files);
-      toast.success("Tax Invoice generated successfully");
+      toast.success(format === "docx" ? "Tax Invoice Word (.docx) document generated successfully" : "Tax Invoice generated successfully");
       fetchHistory();
       if (files[0] && files[0].id) {
-        const downloadUrl = fileUrl(files[0].id) + "?download=1";
-        const link = document.createElement("a");
-        link.href = downloadUrl;
-        link.setAttribute("download", files[0].filename || files[0].original_filename || "Tax_Invoice.pdf");
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+        const defaultName = files[0].filename || (format === "docx" ? `Invoice-${invoiceNumber}.docx` : `Invoice-${invoiceNumber}.pdf`);
+        await downloadFile(files[0].id, defaultName);
       }
     } catch (err) {
       toast.error(formatApiError(err));
@@ -370,12 +369,27 @@ export default function TaxInvoice() {
         <div className="flex flex-wrap gap-2 items-center">
           {generatedFiles.length > 0 && (
             <Button variant="outline" className="border-slate-300 text-slate-700 h-10 text-xs font-semibold rounded-xl" onClick={() => window.open(fileUrl(generatedFiles[0].id), "_blank")}>
-              Open PDF
+              Open {generatedFiles[0].filename?.endsWith(".docx") ? "Document" : "PDF"}
             </Button>
           )}
-          <Button className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-10 px-5 rounded-xl shadow-xs transition gap-2" onClick={saveInvoice} disabled={busy}>
+          <Button
+            variant="outline"
+            className="border-blue-300 text-blue-700 hover:bg-blue-50 font-semibold text-xs h-10 px-4 rounded-xl shadow-xs transition gap-1.5"
+            onClick={() => saveInvoice("docx")}
+            disabled={busy}
+            data-testid="download-word-btn"
+          >
+            <FileText className="w-4 h-4 text-blue-600" />
+            {busy ? "Generating…" : "Download Word"}
+          </Button>
+          <Button
+            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-10 px-5 rounded-xl shadow-xs transition gap-2"
+            onClick={() => saveInvoice("pdf")}
+            disabled={busy}
+            data-testid="download-pdf-btn"
+          >
             <Sparkles className="w-4 h-4" />
-            {busy ? "Generating Invoice…" : "Generate Invoice"}
+            {busy ? "Generating Invoice…" : "Download PDF"}
           </Button>
         </div>
       </div>
@@ -597,7 +611,9 @@ export default function TaxInvoice() {
       {generatedFiles.length > 0 && (
         <Card className="border-slate-200/80 shadow-2xs bg-white rounded-2xl">
           <CardContent className="p-5 sm:p-6">
-            <div className="text-sm font-bold text-slate-900 mb-3" style={{ fontFamily: "Outfit" }}>Generated Files</div>
+            <div className="text-sm font-bold text-slate-900 mb-3" style={{ fontFamily: "Outfit" }}>
+              Generated Files
+            </div>
             <div className="grid gap-3 md:grid-cols-2">
               {generatedFiles.map((file) => (
                 <div key={file.id} className="rounded-xl border border-slate-200 p-4 bg-slate-50 flex items-center justify-between gap-3">
@@ -607,9 +623,9 @@ export default function TaxInvoice() {
                   </div>
                   <div className="flex gap-2">
                     <Button variant="outline" size="sm" onClick={() => window.open(fileUrl(file.id), "_blank")} className="h-8 text-xs rounded-lg border-slate-200">Open</Button>
-                    <a href={fileUrl(file.id)} download>
-                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-slate-200 text-slate-700"><Download className="w-3.5 h-3.5" /></Button>
-                    </a>
+                    <Button variant="outline" size="sm" onClick={() => downloadFile(file.id, file.filename || "Tax_Invoice.pdf")} className="h-8 text-xs rounded-lg border-slate-200 text-slate-700" title="Download">
+                      <Download className="w-3.5 h-3.5 mr-1" /> Download
+                    </Button>
                   </div>
                 </div>
               ))}
@@ -661,9 +677,9 @@ export default function TaxInvoice() {
                       </td>
                       <td className="p-3 text-right space-x-1.5 whitespace-nowrap">
                         <Button variant="outline" size="sm" onClick={() => window.open(fileUrl(doc.id), "_blank")} className="h-8 text-xs rounded-lg border-slate-200">View</Button>
-                        <a href={fileUrl(doc.id)} download={doc.filename} className="inline-block">
-                          <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-slate-200 text-slate-700">Download</Button>
-                        </a>
+                        <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-slate-200 text-slate-700" onClick={() => downloadFile(doc.id, doc.filename || "Tax_Invoice.pdf")}>
+                          <Download className="w-3.5 h-3.5 mr-1" /> Download
+                        </Button>
                         <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-red-200 text-red-600 hover:bg-red-50" onClick={() => handleDeleteHistory(doc.id)}>Delete</Button>
                       </td>
                     </tr>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,32 +12,50 @@ import PlanBadge from "@/components/PlanBadge";
 export default function CustomerList() {
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [planFilter, setPlanFilter] = useState("all");
   const navigate = useNavigate();
 
-  useEffect(() => {
-    fetchCustomers();
-  }, [statusFilter, planFilter]);
-
-  const fetchCustomers = async () => {
-    setLoading(true);
+  const fetchCustomers = useCallback(async (isManual = false) => {
+    if (isManual) setRefreshing(true);
+    else if (customers.length === 0) setLoading(true);
     try {
       const res = await api.get("/platform-owner/customers", {
         params: { search, status: statusFilter, plan: planFilter }
       });
-      setCustomers(res.data);
+      setCustomers(res.data || []);
     } catch (err) {
       console.error("Failed to fetch customers:", err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, [search, statusFilter, planFilter, customers.length]);
+
+  useEffect(() => {
+    fetchCustomers(false);
+  }, [statusFilter, planFilter]);
+
+  useEffect(() => {
+    // Auto-refresh every 12 seconds
+    const interval = setInterval(() => {
+      fetchCustomers(false);
+    }, 12000);
+
+    const handleFocus = () => fetchCustomers(false);
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [fetchCustomers]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
-    fetchCustomers();
+    fetchCustomers(true);
   };
 
   return (
@@ -45,11 +63,23 @@ export default function CustomerList() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
         <div>
           <h2 className="text-xl font-bold text-white tracking-tight">Customer Workspaces Directory</h2>
-          <p className="text-xs text-slate-400">Manage all registered Solar EPC companies, subscriptions, and usage.</p>
+          <p className="text-xs text-slate-400">Manage all registered Solar EPC companies, subscriptions, and usage in real-time.</p>
         </div>
-        <Badge variant="outline" className="bg-blue-500/10 text-blue-300 border-blue-500/30 font-mono text-xs self-start sm:self-auto">
-          {customers.length} Workspaces
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fetchCustomers(true)}
+            disabled={refreshing}
+            className="border-slate-800 text-slate-300 hover:bg-slate-900 text-xs h-8 gap-1.5"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin text-blue-400" : ""}`} />
+            <span>Refresh</span>
+          </Button>
+          <Badge variant="outline" className="bg-blue-500/10 text-blue-300 border-blue-500/30 font-mono text-xs self-start sm:self-auto h-8 px-3 flex items-center">
+            {customers.length} Workspaces
+          </Badge>
+        </div>
       </div>
 
       {/* SEARCH AND FILTERS BAR */}

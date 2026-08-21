@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import api, { formatApiError, fileUrl } from "@/lib/api";
+import api, { formatApiError, fileUrl, downloadFile } from "@/lib/api";
 import { useClientList, useCompany } from "@/hooks/useClients";
 import { useSalesDocuments, useDeleteSalesDocument } from "@/hooks/useSalesDocuments";
 import { useProductList } from "@/hooks/useInventory";
@@ -282,13 +282,7 @@ export default function Quotation() {
       toast.success("Quotation generated successfully.");
       fetchHistory();
       if (files[0] && files[0].id) {
-        const downloadUrl = fileUrl(files[0].id) + "?download=1";
-        const link = document.createElement("a");
-        link.href = downloadUrl;
-        link.setAttribute("download", files[0].filename || files[0].original_filename || "Quotation.pdf");
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+        await downloadFile(files[0].id, files[0].filename || files[0].original_filename || "Quotation.pdf");
       }
     } catch (err) {
       toast.error(formatApiError(err));
@@ -724,9 +718,7 @@ export default function Quotation() {
                   </div>
                   <div className="flex gap-2">
                     <Button variant="outline" size="sm" onClick={() => window.open(fileUrl(file.id), "_blank")}>Open</Button>
-                    <a href={fileUrl(file.id)} download>
-                      <Button variant="outline" size="sm" className="border-slate-300 text-slate-700"><Download className="w-4 h-4" /></Button>
-                    </a>
+                    <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-slate-200 text-slate-700" onClick={() => downloadFile(file.id, file.filename || "Quotation.pdf")}><Download className="w-3.5 h-3.5" /></Button>
                   </div>
                 </div>
               ))}
@@ -778,9 +770,7 @@ export default function Quotation() {
                       </td>
                       <td className="p-3 text-right space-x-1.5 whitespace-nowrap">
                         <Button variant="outline" size="sm" onClick={() => window.open(fileUrl(doc.id), "_blank")} className="h-8 text-xs rounded-lg border-slate-200">View</Button>
-                        <a href={fileUrl(doc.id)} download={doc.filename} className="inline-block">
-                          <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-slate-200 text-slate-700">Download</Button>
-                        </a>
+                        <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-slate-200 text-slate-700" onClick={() => downloadFile(doc.id, doc.filename || "Quotation.pdf")}>Download</Button>
                         <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-red-200 text-red-600 hover:bg-red-50" onClick={() => handleDeleteHistory(doc.id)}>Delete</Button>
                       </td>
                     </tr>

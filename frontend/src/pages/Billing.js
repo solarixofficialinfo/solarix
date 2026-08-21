@@ -118,6 +118,25 @@ export default function Billing() {
       </div>
 
       {/* Warnings & Alerts */}
+      {data?.warnings && data.warnings.length > 0 && (
+        <div className="space-y-3">
+          {data.warnings.map((w, idx) => (
+            <Alert key={idx} className={`border ${w.level === "danger" ? "bg-rose-50 border-rose-300 text-rose-900" : "bg-amber-50 border-amber-300 text-amber-900"}`}>
+              <AlertTriangle className={`w-5 h-5 ${w.level === "danger" ? "text-rose-600" : "text-amber-600"}`} />
+              <AlertTitle className="font-bold text-sm">
+                {w.level === "danger" ? "Approaching Plan Limit (90%+)" : "Resource Usage Notice (80%+)"}
+              </AlertTitle>
+              <AlertDescription className="text-xs mt-1 flex items-center justify-between gap-4">
+                <span>{w.message} Upgrade your plan to increase limits seamlessly.</span>
+                <Button size="xs" onClick={() => nav("/pricing")} className="bg-blue-600 hover:bg-blue-700 text-white font-bold shrink-0">
+                  Upgrade Plan
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ))}
+        </div>
+      )}
+
       {data?.is_trial && data?.days_remaining <= 7 && (
         <Alert className={`border ${data.days_remaining <= 3 ? "bg-amber-50 border-amber-300 text-amber-900" : "bg-blue-50 border-blue-200 text-blue-900"}`}>
           <Clock className="w-5 h-5 text-amber-600" />
@@ -143,101 +162,217 @@ export default function Billing() {
       {/* Main Grid: Plan Overview + Resource Usage */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Current Plan Card */}
-        <Card className="md:col-span-2 border-slate-200 shadow-xs bg-white">
-          <CardHeader className="border-b border-slate-100 pb-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                  Current Plan: {data?.plan_name}
-                </CardTitle>
-                <CardDescription className="text-xs text-slate-500">
-                  Billing cycle: <span className="font-semibold uppercase text-slate-700">{data?.billing_cycle}</span>
-                </CardDescription>
+        <Card className="md:col-span-1 border-slate-200 shadow-xs bg-white flex flex-col justify-between">
+          <div>
+            <CardHeader className="border-b border-slate-100 pb-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
+                    {data?.plan_name} PLAN
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-500">
+                    Cycle: <span className="font-semibold uppercase text-slate-700">{data?.billing_cycle}</span>
+                  </CardDescription>
+                </div>
+                <div>{getStatusBadge(data?.subscription_status)}</div>
               </div>
-              <div>{getStatusBadge(data?.subscription_status)}</div>
-            </div>
-          </CardHeader>
+            </CardHeader>
 
-          <CardContent className="pt-6 space-y-6">
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-xs">
-              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                <div className="text-slate-400 uppercase font-semibold text-[10px]">Organization</div>
-                <div className="font-bold text-slate-900 text-sm mt-0.5 truncate">{data?.company_name}</div>
-              </div>
-              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                <div className="text-slate-400 uppercase font-semibold text-[10px]">Trial End Date</div>
-                <div className="font-bold text-slate-900 text-sm mt-0.5">{dayjs(data?.trial_ends_at).format("MMM D, YYYY")}</div>
-              </div>
-              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                <div className="text-slate-400 uppercase font-semibold text-[10px]">Auto Renewal</div>
-                <div className="font-bold text-slate-900 text-sm mt-0.5">
-                  {data?.cancel_at_period_end ? "Cancelled (Expires at end)" : "Active"}
+            <CardContent className="pt-4 space-y-4">
+              <div className="space-y-2 text-xs">
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  <div className="text-slate-400 uppercase font-semibold text-[10px]">Workspace</div>
+                  <div className="font-bold text-slate-900 text-sm mt-0.5 truncate">{data?.company_name}</div>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  <div className="text-slate-400 uppercase font-semibold text-[10px]">
+                    {data?.subscription_status === "active" ? "Renewal / Expiry Date" : "Trial End Date"}
+                  </div>
+                  <div className="font-bold text-slate-900 text-sm mt-0.5">
+                    {dayjs(data?.subscription_expires_at || data?.trial_ends_at).format("MMM D, YYYY")}
+                  </div>
                 </div>
               </div>
-            </div>
+            </CardContent>
+          </div>
 
-            {/* Plan Action Buttons */}
-            <div className="flex flex-wrap items-center gap-3 pt-2">
-              <Button onClick={() => nav("/pricing")} className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold">
-                Change or Upgrade Plan
+          <div className="p-5 pt-0 space-y-2">
+            <Button onClick={() => nav("/pricing")} className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold">
+              Change or Upgrade Plan
+            </Button>
+            {data?.subscription_status === "active" && !data?.cancel_at_period_end && (
+              <Button variant="outline" onClick={handleCancelSubscription} disabled={cancelling} className="w-full text-red-600 border-red-200 hover:bg-red-50 text-xs">
+                {cancelling ? "Cancelling..." : "Cancel Auto-Renewal"}
               </Button>
-              {data?.subscription_status === "active" && !data?.cancel_at_period_end && (
-                <Button variant="outline" onClick={handleCancelSubscription} disabled={cancelling} className="text-red-600 border-red-200 hover:bg-red-50 text-xs">
-                  {cancelling ? "Cancelling..." : "Cancel Auto-Renewal"}
-                </Button>
-              )}
-            </div>
-          </CardContent>
+            )}
+          </div>
         </Card>
 
-        {/* Plan Limits & Usage */}
-        <Card className="border-slate-200 shadow-xs bg-white">
-          <CardHeader className="border-b border-slate-100 pb-4">
-            <CardTitle className="text-sm font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-              Plan Limits & Usage
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-6 space-y-6">
-            {/* Users Progress */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-slate-700">Team Users</span>
-                <span className="text-slate-500 font-bold">
-                  {data?.usage?.users} / {data?.limits?.max_users} Allowed
-                </span>
-              </div>
-              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div
-                  className={`h-full transition-all duration-300 ${
-                    userUsagePercent >= 100 ? "bg-red-500" : userUsagePercent >= 80 ? "bg-amber-500" : "bg-blue-600"
-                  }`}
-                  style={{ width: `${userUsagePercent}%` }}
-                />
-              </div>
+        {/* Real-time Plan Limits & Usage Matrix */}
+        <Card className="md:col-span-2 border-slate-200 shadow-xs bg-white">
+          <CardHeader className="border-b border-slate-100 pb-3 flex flex-row items-center justify-between">
+            <div>
+              <CardTitle className="text-sm font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
+                Resource Usage & Smart Plan Limits
+              </CardTitle>
+              <CardDescription className="text-[11px] text-slate-500">
+                Monthly quotas automatically reset on the 1st of each month (Current billing period: {data?.usage?.period || "current"}).
+              </CardDescription>
             </div>
-
-            {/* Clients Progress */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-slate-700">Active Clients / Projects</span>
-                <span className="text-slate-500 font-bold">
-                  {data?.usage?.clients} / {data?.limits?.max_clients >= 99999 ? "Unlimited" : data?.limits?.max_clients}
-                </span>
-              </div>
-              {data?.limits?.max_clients < 99999 && (
-                <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+            <Badge variant="outline" className="text-[10px] bg-slate-50 border-slate-200 text-slate-600 font-mono">
+              Live DB Sync
+            </Badge>
+          </CardHeader>
+          <CardContent className="pt-5 space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Users */}
+              <div className="p-3 rounded-lg border border-slate-100 bg-slate-50/60 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700">Team Users</span>
+                  <span className="font-mono text-slate-600 font-bold">
+                    {data?.usage?.users || 0} / {data?.limits?.max_users || 3}
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
                   <div
                     className={`h-full transition-all duration-300 ${
-                      clientUsagePercent >= 100 ? "bg-red-500" : clientUsagePercent >= 80 ? "bg-amber-500" : "bg-emerald-600"
+                      (data?.percentages?.users || 0) >= 100 ? "bg-rose-500" : (data?.percentages?.users || 0) >= 80 ? "bg-amber-500" : "bg-blue-600"
                     }`}
-                    style={{ width: `${clientUsagePercent}%` }}
+                    style={{ width: `${data?.percentages?.users || 0}%` }}
                   />
                 </div>
-              )}
+              </div>
+
+              {/* Active Clients */}
+              <div className="p-3 rounded-lg border border-slate-100 bg-slate-50/60 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700">Active Clients & Projects</span>
+                  <span className="font-mono text-slate-600 font-bold">
+                    {data?.usage?.clients || 0} / {data?.limits?.max_clients || 100}
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      (data?.percentages?.clients || 0) >= 100 ? "bg-rose-500" : (data?.percentages?.clients || 0) >= 80 ? "bg-amber-500" : "bg-emerald-600"
+                    }`}
+                    style={{ width: `${data?.percentages?.clients || 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Products */}
+              <div className="p-3 rounded-lg border border-slate-100 bg-slate-50/60 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700">Product Master</span>
+                  <span className="font-mono text-slate-600 font-bold">
+                    {data?.usage?.products || 0} / {data?.limits?.max_products || 1000}
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      (data?.percentages?.products || 0) >= 100 ? "bg-rose-500" : (data?.percentages?.products || 0) >= 80 ? "bg-amber-500" : "bg-indigo-600"
+                    }`}
+                    style={{ width: `${data?.percentages?.products || 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Storage */}
+              <div className="p-3 rounded-lg border border-slate-100 bg-slate-50/60 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700">Document & Photo Storage</span>
+                  <span className="font-mono text-slate-600 font-bold">
+                    {data?.usage?.storage_gb || 0} GB / {data?.limits?.storage_gb || 5} GB
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      (data?.percentages?.storage || 0) >= 100 ? "bg-rose-500" : (data?.percentages?.storage || 0) >= 80 ? "bg-amber-500" : "bg-purple-600"
+                    }`}
+                    style={{ width: `${data?.percentages?.storage || 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* PDF/DOCX Generation */}
+              <div className="p-3 rounded-lg border border-slate-100 bg-slate-50/60 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700">PDF / DOCX Generation (Monthly)</span>
+                  <span className="font-mono text-slate-600 font-bold">
+                    {data?.usage?.monthly_pdf_docx || 0} / {data?.limits?.monthly_pdf_docx || 200}
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      (data?.percentages?.monthly_pdf_docx || 0) >= 100 ? "bg-rose-500" : (data?.percentages?.monthly_pdf_docx || 0) >= 80 ? "bg-amber-500" : "bg-cyan-600"
+                    }`}
+                    style={{ width: `${data?.percentages?.monthly_pdf_docx || 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Exports */}
+              <div className="p-3 rounded-lg border border-slate-100 bg-slate-50/60 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700">Excel / PDF Exports (Monthly)</span>
+                  <span className="font-mono text-slate-600 font-bold">
+                    {data?.usage?.monthly_exports || 0} / {data?.limits?.monthly_exports || 50}
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      (data?.percentages?.monthly_exports || 0) >= 100 ? "bg-rose-500" : (data?.percentages?.monthly_exports || 0) >= 80 ? "bg-amber-500" : "bg-teal-600"
+                    }`}
+                    style={{ width: `${data?.percentages?.monthly_exports || 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Material Requests */}
+              <div className="p-3 rounded-lg border border-slate-100 bg-slate-50/60 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700">Material Requests (Monthly)</span>
+                  <span className="font-mono text-slate-600 font-bold">
+                    {data?.usage?.monthly_material_requests || 0} / {data?.limits?.monthly_material_requests || 1000}
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      (data?.percentages?.monthly_material_requests || 0) >= 100 ? "bg-rose-500" : (data?.percentages?.monthly_material_requests || 0) >= 80 ? "bg-amber-500" : "bg-orange-600"
+                    }`}
+                    style={{ width: `${data?.percentages?.monthly_material_requests || 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Inventory Transactions */}
+              <div className="p-3 rounded-lg border border-slate-100 bg-slate-50/60 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700">Inward / Outward Stock (Monthly)</span>
+                  <span className="font-mono text-slate-600 font-bold">
+                    {data?.usage?.monthly_inventory_transactions || 0} / {data?.limits?.monthly_inventory_transactions || 2500}
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      (data?.percentages?.monthly_inventory_transactions || 0) >= 100 ? "bg-rose-500" : (data?.percentages?.monthly_inventory_transactions || 0) >= 80 ? "bg-amber-500" : "bg-emerald-600"
+                    }`}
+                    style={{ width: `${data?.percentages?.monthly_inventory_transactions || 0}%` }}
+                  />
+                </div>
+              </div>
             </div>
 
-            <div className="pt-2 text-[11px] text-slate-400">
-              Limits are enforced on backend. Existing data is never deleted when plan limits are reached or changed.
+            <div className="pt-2 text-[11px] text-slate-500 border-t border-slate-100 flex items-center justify-between">
+              <span>All limits are strictly enforced on backend. Existing stored data is never deleted.</span>
+              <span className="font-semibold text-slate-700">Isolated Quota Architecture</span>
             </div>
           </CardContent>
         </Card>

@@ -146,7 +146,7 @@ export default function Team() {
   const invalidateTeam = useInvalidateTeam();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
-  const [activeTab, setActiveTab] = useState("basic");
+  const [activeTab, setActiveTab] = useState("permissions");
   const [preset, setPreset] = useState("Role Default");
   const [expandedGroups, setExpandedGroups] = useState({ data_management: true });
 
@@ -164,7 +164,7 @@ export default function Team() {
 
   const openCreate = () => {
     setEditingUser(null);
-    setActiveTab("basic");
+    setActiveTab("permissions");
     setPreset("Role Default");
     setForm({
       name: "",
@@ -181,7 +181,7 @@ export default function Team() {
 
   const openEdit = (u) => {
     setEditingUser(u);
-    setActiveTab("basic");
+    setActiveTab("permissions");
     setPreset("Custom");
     setForm({
       name: u.name || "",
@@ -439,33 +439,162 @@ export default function Team() {
         </div>
       </Card>
 
-      {/* ─── TEAM MEMBER MODAL WITH TABS ───────────────────────────────────── */}
+      {/* ─── TEAM MEMBER MODAL (COMPACT 2-TAB PREMIUM LAYOUT) ───────────────── */}
       <Dialog open={modalOpen} onOpenChange={setModalOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl p-6">
-          <DialogHeader className="border-b border-slate-100 pb-3">
-            <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-lg">
-              <ShieldCheck className="w-5 h-5 text-blue-600" />
-              {editingUser ? `Edit Team Member — ${editingUser.name}` : "Add New Team Member"}
+        <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col rounded-2xl p-5 sm:p-6 overflow-hidden bg-white shadow-xl">
+          <DialogHeader className="border-b border-slate-100 pb-3 shrink-0">
+            <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-base sm:text-lg">
+              <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0" />
+              <span className="truncate">{editingUser ? `Edit Team Member — ${editingUser.name}` : "Add New Team Member"}</span>
             </DialogTitle>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit} className="py-2 text-xs">
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-              <TabsList className="grid grid-cols-3 w-full bg-slate-100 p-1 rounded-xl">
-                <TabsTrigger value="basic" className="text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 py-1.5">
-                  <User className="w-3.5 h-3.5" /> Basic Information
-                </TabsTrigger>
-                <TabsTrigger value="permissions" className="text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 py-1.5">
+          <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden min-h-0 text-xs pt-2">
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 overflow-hidden min-h-0 space-y-3">
+              <TabsList className="grid grid-cols-2 w-full bg-slate-100 p-1 rounded-xl shrink-0">
+                <TabsTrigger value="permissions" className="text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 py-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-700 data-[state=active]:shadow-xs">
                   <ShieldCheck className="w-3.5 h-3.5" /> Access Permissions
                 </TabsTrigger>
-                <TabsTrigger value="security" className="text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 py-1.5">
-                  <Lock className="w-3.5 h-3.5" /> Security & Account
+                <TabsTrigger value="settings" className="text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 py-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-700 data-[state=active]:shadow-xs">
+                  <User className="w-3.5 h-3.5" /> Role / Settings
                 </TabsTrigger>
               </TabsList>
 
-              {/* TAB 1: BASIC INFORMATION */}
-              <TabsContent value="basic" className="space-y-4 pt-2">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* TAB 1: ACCESS PERMISSIONS MATRIX */}
+              <TabsContent value="permissions" className="flex flex-col flex-1 overflow-hidden min-h-0 space-y-2.5 m-0 data-[state=inactive]:hidden">
+                {/* PRESETS HEADER BAR */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50/90 px-3 py-2 rounded-xl border border-slate-200 shrink-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-700 text-xs">Permission Preset:</span>
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 font-mono text-[11px] font-semibold px-2 py-0.5">
+                      {preset}
+                    </Badge>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 sm:pb-0">
+                    {["Role Default", "Full Access", "Manager", "Staff", "Installer", "Viewer"].map((pr) => (
+                      <Button
+                        key={pr}
+                        type="button"
+                        size="xs"
+                        variant={preset === pr ? "default" : "outline"}
+                        onClick={() => handlePresetSelect(pr === "Role Default" ? form.role : pr)}
+                        className={`h-7 text-[11px] font-medium shrink-0 ${
+                          preset === pr ? "bg-blue-600 text-white shadow-2xs hover:bg-blue-700" : "bg-white text-slate-700 hover:bg-slate-100 border-slate-200"
+                        }`}
+                      >
+                        {pr}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* PERMISSION MATRIX TABLE */}
+                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs bg-white flex-1 min-h-0 flex flex-col">
+                  <div className="overflow-y-auto overflow-x-auto flex-1 max-h-[52vh]">
+                    <table className="w-full text-xs text-left min-w-[540px]">
+                      <thead className="bg-slate-100/90 text-slate-700 font-semibold border-b border-slate-200 sticky top-0 z-10 backdrop-blur-xs">
+                        <tr>
+                          <th className="py-2 px-3 min-w-[200px]">Module / Page</th>
+                          {["view", "create", "edit", "delete", "approve"].map((action) => (
+                            <th key={action} className="py-2 px-2 text-center capitalize w-16">
+                              <button
+                                type="button"
+                                onClick={() => toggleColumnAll(action)}
+                                className="hover:text-blue-700 text-slate-700 font-bold transition-colors"
+                                title={`Toggle ${action} for all modules`}
+                              >
+                                {action}
+                              </button>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {MODULE_GROUPS.map((grp) => (
+                          <React.Fragment key={grp.group}>
+                            <tr className="bg-slate-50/80">
+                              <td colSpan={6} className="px-3 py-1 font-bold text-[10px] text-slate-500 tracking-wider uppercase">
+                                {grp.group}
+                              </td>
+                            </tr>
+                            {grp.modules.map((m) => (
+                              <React.Fragment key={m.key}>
+                                <tr className="hover:bg-slate-50/70 transition-colors">
+                                  <td className="py-2 px-3 font-semibold text-slate-900 flex items-center justify-between">
+                                    <span className="truncate pr-2">{m.label}</span>
+                                    {m.hasSubModules && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setExpandedGroups((prev) => ({ ...prev, [m.key]: !prev[m.key] }))}
+                                        className="text-blue-600 text-[11px] font-medium flex items-center gap-0.5 hover:underline shrink-0"
+                                      >
+                                        {expandedGroups[m.key] ? "Hide Detail" : "Granular"}
+                                        {expandedGroups[m.key] ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                      </button>
+                                    )}
+                                  </td>
+                                  {["view", "create", "edit", "delete", "approve"].map((action) => {
+                                    const isApplicable = m.actions.includes(action);
+                                    const isChecked = !!form.permissions?.[m.key]?.[action];
+                                    return (
+                                      <td key={action} className="py-1.5 px-2 text-center">
+                                        {isApplicable ? (
+                                          <div className="flex items-center justify-center">
+                                            <Checkbox
+                                              checked={isChecked}
+                                              onCheckedChange={() => togglePermission(m.key, action)}
+                                              className="data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
+                                            />
+                                          </div>
+                                        ) : (
+                                          <span className="text-slate-300 select-none">—</span>
+                                        )}
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+
+                                {/* GRANULAR SUB-MODULES FOR DATA MANAGEMENT */}
+                                {m.hasSubModules && expandedGroups[m.key] && m.subModules.map((sm) => (
+                                  <tr key={sm.key} className="bg-slate-50/40 border-t border-slate-100 hover:bg-slate-50 transition-colors">
+                                    <td className="py-1.5 pl-7 pr-3 text-slate-700 font-mono text-[11px]">
+                                      ↳ {sm.label}
+                                    </td>
+                                    {["view", "create", "edit", "delete", "approve"].map((action) => {
+                                      const isApp = sm.actions.includes(action);
+                                      const isChecked = !!form.permissions?.[`dm_${sm.key}`]?.[action];
+                                      return (
+                                        <td key={action} className="py-1.5 px-2 text-center">
+                                          {isApp ? (
+                                            <div className="flex items-center justify-center">
+                                              <Checkbox
+                                                checked={isChecked}
+                                                onCheckedChange={() => togglePermission(`dm_${sm.key}`, action)}
+                                                className="data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
+                                              />
+                                            </div>
+                                          ) : (
+                                            <span className="text-slate-300 select-none">—</span>
+                                          )}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                ))}
+                              </React.Fragment>
+                            ))}
+                          </React.Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </TabsContent>
+
+              {/* TAB 2: ROLE / SETTINGS (CONSOLIDATED) */}
+              <TabsContent value="settings" className="overflow-y-auto space-y-3.5 m-0 data-[state=inactive]:hidden pr-0.5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
                   <div>
                     <Label className="text-xs font-semibold text-slate-700">Full Name *</Label>
                     <Input
@@ -506,7 +635,7 @@ export default function Team() {
                     <Input
                       value={form.employee_id}
                       onChange={(e) => setForm({ ...form, employee_id: e.target.value })}
-                      placeholder="e.g. EMP-2026-001 (Optional, auto-generated if blank)"
+                      placeholder="e.g. EMP-2026-001 (Auto-generated if blank)"
                       className="mt-1 h-9 text-xs font-mono"
                     />
                   </div>
@@ -554,179 +683,31 @@ export default function Team() {
                       <span className="font-semibold text-xs text-slate-800">{form.status}</span>
                     </div>
                   </div>
-                </div>
-              </TabsContent>
 
-              {/* TAB 2: ACCESS PERMISSIONS MATRIX */}
-              <TabsContent value="permissions" className="space-y-4 pt-1">
-                {/* PRESETS HEADER BAR */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-slate-800 text-xs">Permission Preset:</span>
-                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300 font-mono text-[11px]">
-                      {preset}
-                    </Badge>
-                  </div>
-
-                  <div className="flex flex-wrap gap-1.5">
-                    {["Role Default", "Full Access", "Manager", "Staff", "Installer", "Viewer"].map((pr) => (
-                      <Button
-                        key={pr}
-                        type="button"
-                        size="xs"
-                        variant={preset === pr ? "default" : "outline"}
-                        onClick={() => handlePresetSelect(pr === "Role Default" ? form.role : pr)}
-                        className="h-7 text-[11px]"
-                      >
-                        {pr}
-                      </Button>
-                    ))}
-                  </div>
+                  {editingUser && (
+                    <div className="flex flex-col justify-center">
+                      <Label className="text-xs font-semibold text-slate-700">Last Login</Label>
+                      <div className="mt-1 font-mono text-xs text-slate-600">
+                        {editingUser.last_login_at ? new Date(editingUser.last_login_at).toLocaleString() : "Never logged in"}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {/* PERMISSION MATRIX TABLE */}
-                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-                  <table className="w-full text-xs text-left">
-                    <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
-                      <tr>
-                        <th className="p-2.5">Module / Page</th>
-                        {["view", "create", "edit", "delete", "approve"].map((action) => (
-                          <th key={action} className="p-2.5 text-center capitalize">
-                            <button
-                              type="button"
-                              onClick={() => toggleColumnAll(action)}
-                              className="hover:underline text-slate-800 font-bold"
-                              title={`Toggle ${action} for all modules`}
-                            >
-                              {action}
-                            </button>
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {MODULE_GROUPS.map((grp) => (
-                        <React.Fragment key={grp.group}>
-                          <tr className="bg-slate-50/80">
-                            <td colSpan={6} className="px-3 py-1.5 font-bold text-[11px] text-slate-500 tracking-wider">
-                              {grp.group}
-                            </td>
-                          </tr>
-                          {grp.modules.map((m) => (
-                            <React.Fragment key={m.key}>
-                              <tr className="hover:bg-slate-50 transition-colors">
-                                <td className="p-2.5 font-semibold text-slate-900 flex items-center justify-between">
-                                  <span>{m.label}</span>
-                                  {m.hasSubModules && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setExpandedGroups((prev) => ({ ...prev, [m.key]: !prev[m.key] }))}
-                                      className="text-blue-600 text-[11px] flex items-center gap-0.5 hover:underline"
-                                    >
-                                      {expandedGroups[m.key] ? "Hide Detail" : "Granular Modules"}
-                                      {expandedGroups[m.key] ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                                    </button>
-                                  )}
-                                </td>
-                                {["view", "create", "edit", "delete", "approve"].map((action) => {
-                                  const isApplicable = m.actions.includes(action);
-                                  const isChecked = !!form.permissions?.[m.key]?.[action];
-                                  return (
-                                    <td key={action} className="p-2.5 text-center">
-                                      {isApplicable ? (
-                                        <Checkbox
-                                          checked={isChecked}
-                                          onCheckedChange={() => togglePermission(m.key, action)}
-                                        />
-                                      ) : (
-                                        <span className="text-slate-300">—</span>
-                                      )}
-                                    </td>
-                                  );
-                                })}
-                              </tr>
-
-                              {/* GRANULAR SUB-MODULES FOR DATA MANAGEMENT */}
-                              {m.hasSubModules && expandedGroups[m.key] && m.subModules.map((sm) => (
-                                <tr key={sm.key} className="bg-slate-50/40 border-t border-slate-100">
-                                  <td className="py-2 pl-8 pr-2.5 text-slate-700 font-mono text-[11px]">
-                                    ↳ {sm.label}
-                                  </td>
-                                  {["view", "create", "edit", "delete", "approve"].map((action) => {
-                                    const isApp = sm.actions.includes(action);
-                                    const isChecked = !!form.permissions?.[`dm_${sm.key}`]?.[action];
-                                    return (
-                                      <td key={action} className="p-2 text-center">
-                                        {isApp ? (
-                                          <Checkbox
-                                            checked={isChecked}
-                                            onCheckedChange={() => togglePermission(`dm_${sm.key}`, action)}
-                                          />
-                                        ) : (
-                                          <span className="text-slate-300">—</span>
-                                        )}
-                                      </td>
-                                    );
-                                  })}
-                                </tr>
-                              ))}
-                            </React.Fragment>
-                          ))}
-                        </React.Fragment>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </TabsContent>
-
-              {/* TAB 3: SECURITY & ACCOUNT */}
-              <TabsContent value="security" className="space-y-4 pt-2">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                  <div>
-                    <Label className="text-xs font-semibold text-slate-700">Account Type</Label>
-                    <div className="mt-1 font-mono text-xs font-bold text-slate-900">
-                      {editingUser?.user_type === "owner" ? "Workspace Owner (Super Admin)" : "Employee Account"}
-                    </div>
-                  </div>
-
-                  <div>
-                    <Label className="text-xs font-semibold text-slate-700">Employee ID</Label>
-                    <div className="mt-1 font-mono text-xs font-bold text-slate-900">
-                      {editingUser?.employee_id || "Auto-generated on save"}
-                    </div>
-                  </div>
-
-                  <div>
-                    <Label className="text-xs font-semibold text-slate-700">Last Login</Label>
-                    <div className="mt-1 font-mono text-xs text-slate-600">
-                      {editingUser?.last_login_at ? new Date(editingUser.last_login_at).toLocaleString() : "Never logged in"}
-                    </div>
-                  </div>
-
-                  <div>
-                    <Label className="text-xs font-semibold text-slate-700">Two-Factor Auth (2FA)</Label>
-                    <div className="mt-1 text-xs text-slate-600 flex items-center gap-1.5">
-                      <Badge variant="outline" className="bg-slate-100 text-slate-600">Disabled</Badge>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 space-y-1">
-                  <div className="font-bold flex items-center gap-1.5 text-xs">
-                    <AlertTriangle className="w-4 h-4 text-amber-600" /> Security Notice:
-                  </div>
-                  <div className="text-[11px] text-amber-800">
+                <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200 text-amber-900 flex items-start gap-2 text-xs">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="text-[11px] text-amber-800 leading-relaxed">
                     Changes to team permissions take effect on the next session refresh or login. Super Admin credentials cannot be deleted or revoked.
                   </div>
                 </div>
               </TabsContent>
             </Tabs>
 
-            <DialogFooter className="pt-4 border-t border-slate-100 flex items-center justify-between">
-              <Button type="button" variant="outline" size="sm" onClick={() => setModalOpen(false)} disabled={saving}>
+            <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-between shrink-0 mt-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setModalOpen(false)} disabled={saving} className="h-8 text-xs font-medium">
                 Cancel
               </Button>
-              <Button type="submit" size="sm" disabled={saving} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-2xs">
+              <Button type="submit" size="sm" disabled={saving} className="h-8 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-2xs">
                 {saving ? "Saving Changes..." : "Save Team Member"}
               </Button>
             </DialogFooter>

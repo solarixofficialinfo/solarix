@@ -91,6 +91,18 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
   });
 
   const { data: allAssets = [] } = useAssetList();
+  const [stockSerials, setStockSerials] = useState([]);
+
+  useEffect(() => {
+    if (form.product) {
+      api.get("/inventory/available-serials", { params: { product: form.product, size: form.size } })
+        .then((res) => setStockSerials(res.data?.serials || []))
+        .catch(() => setStockSerials([]));
+    } else {
+      setStockSerials([]);
+    }
+  }, [form.product, form.size, editing]);
+
   const availableSerials = useMemo(() => {
     if (!form.product) return [];
     return allAssets.filter((a) =>
@@ -131,9 +143,14 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
   const submitOutwardActual = async (hvData = {}) => {
     setBusy(true);
     try {
+      const parsedSns = form.serial_number_required
+        ? (form.serial_text || "").split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+        : (form.serial_numbers || []);
       const payload = {
         ...form,
         quantity: Number(form.quantity),
+        serial_numbers: parsedSns,
+        serial_number_required: Boolean(form.serial_number_required || parsedSns.length > 0),
         ...hvData
       };
       if (editing) {
@@ -444,8 +461,8 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
               <SelectField label="Unit" value={form.unit} onChange={(v) => setForm({ ...form, unit: v })} options={UNIT_OPTIONS} testid="out-unit" />
             </div>
 
-            {/* High Value Goods Checkbox & Inside Sub-option */}
-            <div className="md:col-span-3 lg:col-span-4 flex flex-col gap-2 py-2 border-t border-slate-100 mt-2">
+            {/* High Value Goods & Serial Number Tracking Controls */}
+            <div className="md:col-span-3 lg:col-span-4 flex flex-wrap items-center gap-6 py-2 border-t border-slate-100 mt-2">
               <label className="flex items-center gap-2.5 text-xs font-semibold text-slate-700 cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -455,8 +472,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
                     setForm(prev => ({
                       ...prev,
                       high_value_goods: checked,
-                      high_value_asset: checked,
-                      serial_number_required: checked ? prev.serial_number_required : false
+                      high_value_asset: checked
                     }));
                   }}
                   className="w-4 h-4 accent-blue-600 rounded border-slate-300"
@@ -465,25 +481,87 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
                 High Value Goods
               </label>
 
-              {/* Sub-option inside High Value Goods */}
-              {form.high_value_goods && (
-                <div className="ml-6 flex items-center gap-2 py-1 bg-slate-50 p-2 rounded-md border border-slate-200 w-fit">
-                  <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={form.serial_number_required || false}
-                      onChange={(e) => {
-                        const checked = e.target.checked;
-                        setForm(prev => ({ ...prev, serial_number_required: checked }));
-                      }}
-                      className="w-3.5 h-3.5 accent-blue-600 rounded border-slate-300"
-                      data-testid="out-serial-number-toggle"
-                    />
-                    Serial No. (ON / OFF)
-                  </label>
-                </div>
-              )}
+              <label className="flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={form.serial_number_required || false}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setForm(prev => ({ ...prev, serial_number_required: checked }));
+                  }}
+                  className="w-4 h-4 accent-blue-600 rounded border-slate-300"
+                  data-testid="out-serial-number-toggle"
+                />
+                <span className="font-semibold text-slate-800">Serial No. (ON / OFF)</span>
+              </label>
             </div>
+
+            {form.serial_number_required && (
+              <div className="md:col-span-3 lg:col-span-4 p-3 bg-blue-50/50 border border-blue-200 rounded-xl space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-blue-900 uppercase tracking-wider text-[11px]">Enter / Select Outward Serial Numbers</span>
+                  <span className="text-[11px] font-mono text-slate-600">
+                    Entered: <strong className="text-blue-700">{(form.serial_text || "").split(/[\n,]+/).filter(s => s.trim()).length}</strong> / <strong>{Math.floor(Number(form.quantity) || 0)}</strong>
+                  </span>
+                </div>
+                <textarea
+                  rows={3}
+                  value={form.serial_text || ""}
+                  onChange={(e) => {
+                    const text = e.target.value;
+                    const parsed = text.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+                    setForm(prev => ({ ...prev, serial_text: text, serial_numbers: parsed }));
+                  }}
+                  placeholder="Enter or scan outward serial numbers (1 per line or comma separated)&#10;e.g.&#10;SN001&#10;SN002"
+                  className="w-full text-xs font-mono p-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  data-testid="out-serial-textarea"
+                />
+
+                {stockSerials.length > 0 && (
+                  <div className="pt-1 space-y-1">
+                    <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                      Available in Stock (Click to add):
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-1.5 bg-white border border-slate-200 rounded-lg">
+                      {stockSerials.map((sn) => {
+                        const current = (form.serial_numbers || []);
+                        const isSelected = current.includes(sn);
+                        return (
+                          <button
+                            key={sn}
+                            type="button"
+                            onClick={() => {
+                              let updated;
+                              if (isSelected) {
+                                updated = current.filter(x => x !== sn);
+                              } else {
+                                if (current.length >= Number(form.quantity || 1)) {
+                                  toast.error(`Already selected ${form.quantity} serial numbers.`);
+                                  return;
+                                }
+                                updated = [...current, sn];
+                              }
+                              setForm(prev => ({
+                                ...prev,
+                                serial_numbers: updated,
+                                serial_text: updated.join("\n")
+                              }));
+                            }}
+                            className={`px-2 py-0.5 text-[11px] font-mono rounded border transition-colors ${
+                              isSelected
+                                ? "bg-blue-600 text-white border-blue-600 font-bold"
+                                : "bg-slate-50 text-slate-700 border-slate-300 hover:bg-blue-50 hover:border-blue-300"
+                            }`}
+                          >
+                            {sn} {isSelected ? "✓" : "+"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <TextareaField label="Remarks" value={form.remarks} onChange={(v) => setForm({ ...form, remarks: v })} testid="out-remarks" full />
 

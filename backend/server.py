@@ -2468,6 +2468,25 @@ def require_super_admin():
 is_platform_owner_user = is_super_admin_user
 require_platform_owner = require_super_admin
 
+def require_active_subscription():
+    """FastAPI dependency requiring an active trial or paid subscription for write operations."""
+    async def _checker(user=Depends(get_current_user)):
+        if is_super_admin_user(user):
+            return user
+        cid = user.get("company_id")
+        if not cid:
+            raise HTTPException(status_code=403, detail="SUBSCRIPTION_REQUIRED: No company workspace found")
+        from plan_config import get_company_entitlement
+        entitlement = await get_company_entitlement(cid, db=db)
+        if not entitlement["can_write"]:
+            raise HTTPException(
+                status_code=403,
+                detail="SUBSCRIPTION_EXPIRED: Your trial/subscription has expired. Upgrade your plan to continue using this feature."
+            )
+        return user
+    return _checker
+
+
 
 class AccessRequestIn(BaseModel):
     full_name: str
@@ -3390,6 +3409,17 @@ async def get_company(user=Depends(get_current_user)):
         "support_number": 1,
         "logo_file_id": 1,
         "documents": 1,
+        "trial_started_at": 1,
+        "trial_ends_at": 1,
+        "subscription_started_at": 1,
+        "subscription_expires_at": 1,
+        "subscription_status": 1,
+        "plan_id": 1,
+        "billing_cycle": 1,
+        "razorpay_subscription_id": 1,
+        "cancel_at_period_end": 1,
+        "feature_entitlements": 1,
+        "temporary_features": 1,
         "trial_start": 1,
         "trial_end": 1,
         "plan": 1,
@@ -3469,6 +3499,17 @@ async def update_company(data: CompanyUpdate, request: Request, user=Depends(get
         "support_number": 1,
         "logo_file_id": 1,
         "documents": 1,
+        "trial_started_at": 1,
+        "trial_ends_at": 1,
+        "subscription_started_at": 1,
+        "subscription_expires_at": 1,
+        "subscription_status": 1,
+        "plan_id": 1,
+        "billing_cycle": 1,
+        "razorpay_subscription_id": 1,
+        "cancel_at_period_end": 1,
+        "feature_entitlements": 1,
+        "temporary_features": 1,
         "trial_start": 1,
         "trial_end": 1,
         "plan": 1,
@@ -3624,14 +3665,25 @@ async def delete_company(response: Response, user=Depends(get_current_user)):
 
 # ---------- Files ----------
 @api_router.post("/files/upload")
-async def upload_file(file: UploadFile = File(...), category: str = Form("general"), user=Depends(get_current_user)):
+async def upload_file(file: UploadFile = File(...), category: str = Form("general"), user=Depends(require_active_subscription())):
     filename = file.filename or ""
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
-    file_id = str(uuid.uuid4())
-    path = f"{APP_NAME}/{user['company_id']}/{category}/{file_id}.{ext}"
     data = await file.read()
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+
+    # Enforce storage and document upload quotas
+    from plan_config import check_plan_limit, increment_usage
+    chk_storage = await check_plan_limit(user["company_id"], "storage_bytes", increment=len(data), db=db)
+    if not chk_storage["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_storage["message"])
+
+    chk_docs = await check_plan_limit(user["company_id"], "uploaded_documents", increment=1, db=db)
+    if not chk_docs["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_docs["message"])
+
+    file_id = str(uuid.uuid4())
+    path = f"{APP_NAME}/{user['company_id']}/{category}/{file_id}.{ext}"
     content_type = file.content_type or "application/octet-stream"
     result = put_object(path, data, content_type)
     doc = {
@@ -3641,15 +3693,25 @@ async def upload_file(file: UploadFile = File(...), category: str = Form("genera
         "category": category, "is_deleted": False, "created_at": now_iso(),
     }
     await db.files.insert_one(doc)
+    await increment_usage(user["company_id"], "uploaded_documents", 1, db=db)
     return {"id": file_id, "filename": file.filename, "content_type": content_type, "size": doc["size"]}
 
 @api_router.get("/files/{file_id}")
 async def download_file(file_id: str, request: Request, auth: Optional[str] = Query(None), download: Optional[int] = Query(None)):
     token = request.cookies.get("access_token") or auth
+    if token:
+        if "?download=" in token:
+            token = token.split("?download=")[0]
+        if "&download=" in token:
+            token = token.split("&download=")[0]
+        if "?" in token:
+            token = token.split("?")[0]
+        token = token.strip()
+
     if not token:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
+            token = auth_header[7:].strip()
 
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -3735,6 +3797,7 @@ async def download_file(file_id: str, request: Request, auth: Optional[str] = Qu
     headers = {
         "Content-Disposition": f'{disposition_type}; filename="{original_filename}"',
         "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Disposition, Content-Type",
         "X-Content-Type-Options": "nosniff"
     }
     return FastAPIResponse(content=data, media_type=media_type, headers=headers)
@@ -3801,22 +3864,19 @@ async def client_stats(user=Depends(get_current_user)):
     }
 
 @api_router.post("/clients")
-async def create_client(data: ClientIn, user=Depends(get_current_user)):
+async def create_client(data: ClientIn, user=Depends(require_active_subscription())):
     if not has_perm(user, "clients", "create"):
         raise HTTPException(status_code=403, detail="Missing permission: clients.create")
 
     # Check plan client limit
-    from plan_config import get_plan_limits
-    c_doc = await db.companies.find_one({"id": user["company_id"]}) or {}
-    st = c_doc.get("subscription_status") or "trialing"
-    pid = c_doc.get("plan_id") or "starter"
-    is_trial = st == "trialing"
-    limits = get_plan_limits(pid, is_trial=is_trial)
+    from plan_config import get_company_entitlement
+    entitlement = await get_company_entitlement(user["company_id"], db=db)
+    limits = entitlement["limits"]
     curr_clients = await db.clients.count_documents({"company_id": user["company_id"]})
     if curr_clients >= limits["max_clients"]:
         raise HTTPException(
             status_code=403,
-            detail=f"PLAN_LIMIT_REACHED: Your current {pid.upper()} plan allows a maximum of {limits['max_clients']} active clients/projects. Please upgrade your plan to add more clients."
+            detail=f"PLAN_LIMIT_REACHED: Your current {entitlement['plan_name']} plan allows a maximum of {limits['max_clients']} active clients/projects. Please upgrade your plan to add more clients."
         )
     client_id = str(uuid.uuid4())
     sol_id = await next_client_id(user["company_id"])
@@ -4784,6 +4844,12 @@ async def generate_document_preview(payload: Dict[str, Any], user=Depends(get_cu
         "status": "Active"
     })
     
+    # Enforce monthly PDF/DOCX generation limit
+    from plan_config import check_plan_limit, increment_usage
+    chk_gen = await check_plan_limit(user["company_id"], "document_generations", increment=1, db=db)
+    if not chk_gen["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_gen["message"])
+
     if client_doc:
         docs = list(client_doc.get("documents") or [])
         docs.append({"id": file_id, "filename": filename, "label": _document_label(doc_type), "content_type": gen_content_type, "created_at": now_iso()})
@@ -4792,12 +4858,13 @@ async def generate_document_preview(payload: Dict[str, Any], user=Depends(get_cu
             {"id": client_id, "company_id": user["company_id"]},
             {"$set": {"documents": docs, "stages": stages, "progress": calc_progress(stages), "updated_at": now_iso()}}
         )
+    await increment_usage(user["company_id"], "document_generations", 1, db=db)
     log_client_name = (client_doc.get("full_name") if client_doc else "") or "Manual"
     await log_activity(user["company_id"], user["id"], user["name"], f"Generated {_document_label(doc_type).upper()}", log_client_name)
     return {"id": file_id, "filename": filename, "label": _document_label(doc_type)}
 
 @api_router.post("/documents/generate")
-async def generate_public_document(payload: Dict[str, Any], user=Depends(get_current_user)):
+async def generate_public_document(payload: Dict[str, Any], user=Depends(require_active_subscription())):
     doc_type = payload.get("doc_type", "")
     if doc_type not in ALLOWED_DOC_TYPES:
         raise HTTPException(status_code=400, detail="Invalid doc_type")
@@ -4808,6 +4875,13 @@ async def generate_public_document(payload: Dict[str, Any], user=Depends(get_cur
     else:
         if not has_perm(user, "clients", "create"):
             raise HTTPException(status_code=403, detail="Missing permission: clients.create")
+
+    # Enforce monthly PDF/DOCX generation limit
+    from plan_config import check_plan_limit
+    chk_gen = await check_plan_limit(user["company_id"], "document_generations", increment=1, db=db)
+    if not chk_gen["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_gen["message"])
+
     company_doc = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}
     company_doc = await _enrich_company_doc(company_doc)
 
@@ -4890,6 +4964,7 @@ async def generate_public_document(payload: Dict[str, Any], user=Depends(get_cur
             {"id": client_id, "company_id": user["company_id"]},
             {"$set": {"documents": docs, "stages": stages, "progress": calc_progress(stages), "updated_at": now_iso()}}
         )
+    await increment_usage(user["company_id"], "document_generations", 1, db=db)
     await log_activity(user["company_id"], user["id"], user["name"], f"Generated {_document_label(doc_type).upper()}", client_doc.get("full_name", "Manual") if client_doc else "Manual")
     
     return {"id": file_id, "filename": filename, "label": _document_label(doc_type)}
@@ -5169,7 +5244,7 @@ async def list_projects(user=Depends(get_current_user)):
 
 # Tasks
 @api_router.post("/tasks")
-async def create_task(data: TaskIn, user=Depends(get_current_user)):
+async def create_task(data: TaskIn, user=Depends(require_active_subscription())):
     if not (is_owner(user) or has_perm(user, "task_portal", "create")):
         raise HTTPException(status_code=403, detail="Missing permission: task_portal.create")
         
@@ -5416,7 +5491,7 @@ async def update_task(task_id: str, data: TaskUpdate, user=Depends(get_current_u
 
 # Material Requests
 @api_router.post("/material-requests")
-async def create_material_request(data: MaterialRequestIn, user=Depends(get_current_user)):
+async def create_material_request(data: MaterialRequestIn, user=Depends(require_active_subscription())):
     client = await db.clients.find_one({"id": data.client_id, "company_id": user["company_id"]}, {"_id": 0})
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -5446,6 +5521,12 @@ async def create_material_request(data: MaterialRequestIn, user=Depends(get_curr
     seq_val = seq_doc.get("seq") if (seq_doc and isinstance(seq_doc, dict)) else 1
     request_no = f"MR-{year}-{seq_val:04d}"
 
+    # Enforce material requests quota
+    from plan_config import check_plan_limit, increment_usage
+    chk_mr = await check_plan_limit(user["company_id"], "material_requests", increment=1, db=db)
+    if not chk_mr["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_mr["message"])
+
     doc = {
         "id": str(uuid.uuid4()), "company_id": user["company_id"], "client_id": data.client_id,
         "client_name": client.get("full_name"), "sol_id": client.get("sol_id"),
@@ -5456,6 +5537,7 @@ async def create_material_request(data: MaterialRequestIn, user=Depends(get_curr
         "created_at": now_iso(), "updated_at": now_iso(),
     }
     await db.material_requests.insert_one(doc)
+    await increment_usage(user["company_id"], "material_requests", 1, db=db)
     doc.pop("_id", None)
     await push_notification(
         user["company_id"],
@@ -5946,7 +6028,7 @@ async def list_employees(user=Depends(get_current_user)):
     return team_members
 
 @api_router.post("/employees")
-async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
+async def create_employee(data: EmployeeIn, user=Depends(require_active_subscription())):
     if is_external_user(user) or not (is_owner(user) or has_perm(user, "team", "create")):
         raise HTTPException(status_code=403, detail="Team creation permission required")
 
@@ -5962,17 +6044,14 @@ async def create_employee(data: EmployeeIn, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Password maximum length exceeded (128 chars)")
 
     # Check plan user limit
-    from plan_config import get_plan_limits
-    c_doc = await db.companies.find_one({"id": user["company_id"]}) or {}
-    st = c_doc.get("subscription_status") or "trialing"
-    pid = c_doc.get("plan_id") or "starter"
-    is_trial = st == "trialing"
-    limits = get_plan_limits(pid, is_trial=is_trial)
+    from plan_config import get_company_entitlement
+    entitlement = await get_company_entitlement(user["company_id"], db=db)
+    limits = entitlement["limits"]
     active_users = await db.users.count_documents({"company_id": user["company_id"], "status": "Active", "user_type": {"$nin": list(EXTERNAL_USER_TYPES)}})
     if active_users >= limits["max_users"]:
         raise HTTPException(
             status_code=403,
-            detail=f"PLAN_LIMIT_REACHED: Your current {pid.upper()} plan allows a maximum of {limits['max_users']} active users. Please upgrade your plan to add more team members."
+            detail=f"PLAN_LIMIT_REACHED: Your current {entitlement['plan_name']} plan allows a maximum of {limits['max_users']} active users. Please upgrade your plan to add more team members."
         )
 
     email = data.email.lower().strip()
@@ -6314,6 +6393,10 @@ class AssetEditIn(BaseModel):
     serial_number: Optional[str] = None
     site_location: Optional[str] = None
     remarks: Optional[str] = None
+
+class EditSerialIn(BaseModel):
+    old_serial: str
+    new_serial: str
 
 class ProductIn(BaseModel):
     name: str
@@ -7059,29 +7142,53 @@ async def get_high_value_ledger(search: Optional[str] = None, user=Depends(get_c
 @api_router.get("/inventory/available-serials")
 async def get_available_serials(product: Optional[str] = None, size: Optional[str] = None, user=Depends(get_current_user)):
     cid = user["company_id"]
-    all_assets = await db.high_value_assets.find({"company_id": cid}).to_list(10000)
     p_norm = norm_product_name(product) if product else ""
     s_norm = norm_str(size) if size else ""
 
-    available = []
+    # 1. Collect all outwarded serials
+    outwards = await db.outward_entries.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+    outwarded_sns = {str(s).strip().upper() for o in outwards for s in (o.get("serial_numbers") or []) if str(s).strip()}
+
+    available = set()
+    # 2. Collect inwarded serials
+    inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+    for inw in inwards:
+        if p_norm and norm_product_name(inw.get("product")) != p_norm:
+            continue
+        if s_norm and norm_str(inw.get("size")) != s_norm:
+            continue
+        for s in inw.get("serial_numbers") or []:
+            sn_c = str(s).strip()
+            if sn_c and sn_c.upper() not in outwarded_sns:
+                available.add(sn_c)
+
+    # 3. High value assets
+    all_assets = await db.high_value_assets.find({"company_id": cid}, {"_id": 0}).to_list(10000)
     for a in all_assets:
-        if a.get("company_id") == cid and a.get("status") == "Available":
-            sn = (a.get("serial_number") or "").strip().upper()
-            if not sn:
+        if a.get("status") == "Available":
+            sn = (a.get("serial_number") or "").strip()
+            if not sn or sn.upper() in outwarded_sns:
                 continue
             if p_norm and norm_product_name(a.get("product_name")) != p_norm:
                 continue
             if s_norm and norm_str(a.get("size_model")) != s_norm:
                 continue
-            available.append(sn)
+            available.add(sn)
 
-    unique_serials = sorted(list(set(available)))
+    unique_serials = sorted(list(available))
     return {"serials": unique_serials}
 
 @api_router.post("/inventory/products")
-async def create_product(data: ProductIn, user=Depends(get_current_user)):
+async def create_product(data: ProductIn, user=Depends(require_active_subscription())):
     if not has_perm(user, "data_management", "create"):
         raise HTTPException(status_code=403, detail="Missing permission: data_management.create")
+
+    # Check product master limit
+    from plan_config import check_plan_limit
+    chk = await check_plan_limit(user["company_id"], "products", increment=1, db=db)
+    if not chk["allowed"]:
+        raise HTTPException(status_code=403, detail=chk["message"])
+
     name = norm_product_name(data.name)
     size = norm_str(data.size)
     unit = norm_unit(data.unit)
@@ -7209,15 +7316,18 @@ def _enrich_inward_with_assets(inward_doc: Optional[dict]) -> Optional[dict]:
     entry_assets = [a for a in assets if a.get("inward_entry_id") == inward_doc.get("id")]
     p_name = (inward_doc.get("product") or "").strip().upper()
     is_hv = _load_local_high_value_products().get(p_name, False)
+    doc_sns = [str(s).strip() for s in (inward_doc.get("serial_numbers") or []) if str(s).strip()]
     
     if entry_assets:
+        asset_sns = [a["serial_number"] for a in entry_assets if a.get("serial_number")]
+        combined_sns = list(dict.fromkeys(doc_sns + asset_sns))
         inward_doc["high_value_asset"] = True
         inward_doc["high_value_goods"] = True
-        inward_doc["serial_numbers"] = [a["serial_number"] for a in entry_assets]
+        inward_doc["serial_numbers"] = combined_sns
     else:
         inward_doc["high_value_asset"] = is_hv
         inward_doc["high_value_goods"] = is_hv
-        inward_doc["serial_numbers"] = []
+        inward_doc["serial_numbers"] = doc_sns
     return inward_doc
 
 def _enrich_outward_with_assets(outward_doc: Optional[dict]) -> Optional[dict]:
@@ -7227,18 +7337,21 @@ def _enrich_outward_with_assets(outward_doc: Optional[dict]) -> Optional[dict]:
     entry_assets = [a for a in assets if a.get("outward_entry_id") == outward_doc.get("id")]
     p_name = (outward_doc.get("product") or "").strip().upper()
     is_hv = _load_local_high_value_products().get(p_name, False)
+    doc_sns = [str(s).strip() for s in (outward_doc.get("serial_numbers") or []) if str(s).strip()]
     
     if entry_assets:
+        asset_sns = [a["serial_number"] for a in entry_assets if a.get("serial_number")]
+        combined_sns = list(dict.fromkeys(doc_sns + asset_sns))
         outward_doc["high_value_asset"] = True
         outward_doc["high_value_goods"] = True
-        outward_doc["serial_numbers"] = [a["serial_number"] for a in entry_assets]
+        outward_doc["serial_numbers"] = combined_sns
         outward_doc["installation_notes"] = entry_assets[0].get("installation_notes") or ""
         outward_doc["warranty_start_date"] = entry_assets[0].get("warranty_start_date") or ""
         outward_doc["asset_remarks"] = entry_assets[0].get("asset_remarks") or ""
     else:
         outward_doc["high_value_asset"] = is_hv
         outward_doc["high_value_goods"] = is_hv
-        outward_doc["serial_numbers"] = []
+        outward_doc["serial_numbers"] = doc_sns
         outward_doc["installation_notes"] = ""
         outward_doc["warranty_start_date"] = ""
         outward_doc["asset_remarks"] = ""
@@ -7373,6 +7486,26 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
     if source_type_val == "Return From Client" and client_id_val:
         remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
         
+    sns = [str(sn).strip() for sn in (data.serial_numbers or []) if str(sn).strip()]
+    if data.serial_number_required or len(sns) > 0:
+        if data.serial_number_required and len(sns) != int(data.quantity):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Serial numbers count ({len(sns)}) must match quantity ({int(data.quantity)})"
+            )
+        if len(sns) != len(set(sns)):
+            raise HTTPException(status_code=400, detail="Duplicate serial numbers found in entry")
+        
+        existing_inwards = await db.inward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
+        existing_outwards = await db.outward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
+        outwarded_sns_set = {str(s).strip().upper() for o in existing_outwards for s in (o.get("serial_numbers") or []) if str(s).strip()}
+
+        for sn in sns:
+            sn_up = sn.upper()
+            for inw in existing_inwards:
+                inw_sns = [str(s).strip().upper() for s in (inw.get("serial_numbers") or []) if str(s).strip()]
+                if sn_up in inw_sns and sn_up not in outwarded_sns_set:
+                    raise HTTPException(status_code=400, detail=f"Serial number '{sn}' already exists in active stock.")
     doc = {
         "id": str(uuid.uuid4()),
         "company_id": company_id,
@@ -7398,6 +7531,10 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
         "payment_status": data.payment_status or "Unpaid",
         "vendor_id": vendor_id_val,
         "bill_type": data.bill_type or "Product Bill",
+        "serial_numbers": sns,
+        "serial_number_required": bool(data.serial_number_required or len(sns) > 0),
+        "high_value_asset": bool(data.high_value_asset or data.high_value_goods),
+        "high_value_goods": bool(data.high_value_asset or data.high_value_goods),
         "created_by": user_id,
         "created_by_name": user_name,
         "created_at": now_iso()
@@ -7408,11 +7545,10 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
     await db.inward_entries.insert_one(doc)
     doc.pop("_id", None)
     
-    is_hv = data.high_value_asset or data.high_value_goods or _load_local_high_value_products().get(pn, False) or any(kw in pn for kw in ["SOLAR PANEL", "PANEL", "INVERTER", "ACDB", "DCDB", "METER", "BATTERY"])
+    is_hv = data.high_value_asset or data.high_value_goods or len(sns) > 0 or _load_local_high_value_products().get(pn, False) or any(kw in pn for kw in ["SOLAR PANEL", "PANEL", "INVERTER", "ACDB", "DCDB", "METER", "BATTERY"])
     if is_hv:
         all_assets = _load_local_assets()
         qty = float(data.quantity or 0)
-        sns = [sn.strip().upper() for sn in (data.serial_numbers or []) if sn.strip()]
         
         if sns:
             for sn in sns:
@@ -7496,6 +7632,23 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
         if not project_name_val:
             project_name_val = client_name_val
 
+    sns = [str(sn).strip() for sn in (data.serial_numbers or []) if str(sn).strip()]
+    if data.serial_number_required or len(sns) > 0:
+        if data.serial_number_required and len(sns) != int(data.quantity):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Serial numbers count ({len(sns)}) must match quantity ({int(data.quantity)})"
+            )
+        if len(sns) != len(set(sns)):
+            raise HTTPException(status_code=400, detail="Duplicate serial numbers in outward entry")
+        
+        existing_outwards = await db.outward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
+        outwarded_sns_set = {str(s).strip().upper() for o in existing_outwards for s in (o.get("serial_numbers") or []) if str(s).strip()}
+
+        for sn in sns:
+            sn_up = sn.upper()
+            if sn_up in outwarded_sns_set:
+                raise HTTPException(status_code=400, detail=f"Serial number '{sn}' is already OUT / issued.")
     doc = {
         "id": str(uuid.uuid4()),
         "company_id": company_id,
@@ -7516,6 +7669,10 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
         "attachment_file_id": data.attachment_file_id or "",
         "attachment_filename": data.attachment_filename or "",
         "source": source,
+        "serial_numbers": sns,
+        "serial_number_required": bool(data.serial_number_required or len(sns) > 0),
+        "high_value_asset": bool(data.high_value_asset or data.high_value_goods),
+        "high_value_goods": bool(data.high_value_asset or data.high_value_goods),
         "created_by": user_id,
         "created_by_name": user_name,
         "created_at": now_iso()
@@ -7526,11 +7683,10 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
     await db.outward_entries.insert_one(doc)
     doc.pop("_id", None)
     
-    is_hv = data.high_value_asset or data.high_value_goods or _load_local_high_value_products().get(pn, False) or any(kw in pn for kw in ["SOLAR PANEL", "PANEL", "INVERTER", "ACDB", "DCDB", "METER", "BATTERY"])
+    is_hv = data.high_value_asset or data.high_value_goods or len(sns) > 0 or _load_local_high_value_products().get(pn, False) or any(kw in pn for kw in ["SOLAR PANEL", "PANEL", "INVERTER", "ACDB", "DCDB", "METER", "BATTERY"])
     if is_hv:
         all_assets = _load_local_assets()
         qty = float(data.quantity or 0)
-        sns = [sn.strip().upper() for sn in (data.serial_numbers or []) if sn.strip()]
         
         available = [a for a in all_assets if a.get("product_name") == pn and a.get("status") == "Available" and a.get("company_id") == company_id]
         
@@ -7697,13 +7853,21 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
     return doc
 
 @api_router.post("/inventory/inward")
-async def add_inward(data: InwardIn, user=Depends(get_current_user)):
+async def add_inward(data: InwardIn, user=Depends(require_active_subscription())):
     if not has_perm(user, "data_management", "create"):
         raise HTTPException(status_code=403, detail="Missing permission: data_management.create")
     cid = user.get("company_id") or "COMP-001"
     uid = user.get("id") or user.get("sub") or "user"
     uname = user.get("name") or user.get("full_name") or "User"
+
+    # Enforce inventory transactions monthly quota
+    from plan_config import check_plan_limit, increment_usage
+    chk_inv = await check_plan_limit(cid, "inventory_transactions", increment=1, db=db)
+    if not chk_inv["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_inv["message"])
+
     doc = await save_inward_entry_logic(data, cid, uid, uname, source="manual")
+    await increment_usage(cid, "inventory_transactions", 1, db=db)
     return _enrich_inward_with_assets(parse_inward_client_info(doc))
 
 
@@ -7851,11 +8015,20 @@ async def delete_inward(entry_id: str, user=Depends(get_current_user)):
     return {"ok": True}
 
 @api_router.post("/inventory/outward")
-async def add_outward(data: OutwardIn, user=Depends(get_current_user)):
+async def add_outward(data: OutwardIn, user=Depends(require_active_subscription())):
     if not has_perm(user, "data_management", "create"):
         raise HTTPException(status_code=403, detail="Missing permission: data_management.create")
+    cid = user.get("company_id") or "COMP-001"
     user_name = user.get("name") or user.get("full_name") or "User"
-    doc = await save_outward_entry_logic(data, user.get("company_id") or "COMP-001", user.get("id") or "user", user_name, source="manual")
+
+    # Enforce inventory transactions monthly quota
+    from plan_config import check_plan_limit, increment_usage
+    chk_inv = await check_plan_limit(cid, "inventory_transactions", increment=1, db=db)
+    if not chk_inv["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_inv["message"])
+
+    doc = await save_outward_entry_logic(data, cid, user.get("id") or "user", user_name, source="manual")
+    await increment_usage(cid, "inventory_transactions", 1, db=db)
     return _enrich_outward_with_assets(doc)
 
 @api_router.get("/inventory/outward")
@@ -8445,6 +8618,10 @@ async def inv_history(
         "source_name": 1,
         "source_type": 1,
         "remarks": 1,
+        "serial_numbers": 1,
+        "serial_number_required": 1,
+        "high_value_asset": 1,
+        "high_value_goods": 1,
         "created_by": 1,
         "created_by_name": 1,
         "attachment_file_id": 1,
@@ -8461,10 +8638,17 @@ async def inv_history(
         "quantity": 1,
         "unit": 1,
         "outward_challan_no": 1,
+        "reference_number": 1,
         "client_name": 1,
+        "client_id": 1,
         "project_name": 1,
+        "project_id": 1,
         "status": 1,
         "remarks": 1,
+        "serial_numbers": 1,
+        "serial_number_required": 1,
+        "high_value_asset": 1,
+        "high_value_goods": 1,
         "created_by": 1,
         "created_by_name": 1,
         "attachment_file_id": 1,
@@ -8623,6 +8807,317 @@ async def bulk_delete_history(data: BulkDeleteIn, user=Depends(get_current_user)
         await log_activity(cid, user["id"], user["name"], "Bulk Inventory Delete",
                            f"{deleted_in} inward + {deleted_out} outward")
     return {"deleted_inward": deleted_in, "deleted_outward": deleted_out, "total": total}
+
+
+@api_router.get("/inventory/serial-tracking")
+async def list_serial_tracking(
+    request: Request = None,  # type: ignore
+    user=Depends(get_current_user),
+    type: Optional[str] = None,  # all | inward | outward
+    product: Optional[str] = None,
+    vendor: Optional[str] = None,
+    client: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+):
+    cid = user["company_id"]
+    rows = []
+    
+    # 0. Fetch all outwarded serial numbers for company to compute status accurately
+    outwards_all = await db.outward_entries.find({"company_id": cid}, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(10000)
+    outwarded_sn_set = {str(sn).strip().upper() for entry in outwards_all for sn in (entry.get("serial_numbers") or []) if str(sn).strip()}
+
+    # 1. Fetch Inward serial records
+    sn_to_vendor = {}
+    inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(10000)
+    for entry in inwards:
+        sns = entry.get("serial_numbers") or []
+        p_name = entry.get("product") or ""
+        p_size = entry.get("size") or ""
+        v_name = entry.get("source_name") or ""
+        d_str = (entry.get("date") or entry.get("created_at") or "")[:10]
+        ref = entry.get("reference_number") or entry.get("challan_no") or entry.get("challan_number") or ""
+        b_num = entry.get("bill_number") or ""
+        
+        for sn in sns:
+            sn_clean = str(sn).strip()
+            if not sn_clean:
+                continue
+            if v_name:
+                sn_to_vendor[sn_clean] = v_name
+            if not type or type.lower() in ("all", "inward", "in"):
+                is_out = sn_clean.upper() in outwarded_sn_set
+                rows.append({
+                    "id": f"inward_{entry['id']}_{sn_clean}",
+                    "transaction_id": entry["id"],
+                    "type": "IN",
+                    "product": p_name,
+                    "size": p_size,
+                    "vendor": v_name or "—",
+                    "client_name": "—",
+                    "client_id": None,
+                    "serial_number": sn_clean,
+                    "quantity": 1,
+                    "status": "OUT / ISSUED" if is_out else "IN STOCK",
+                    "date": d_str,
+                    "reference_number": ref or (f"Bill {b_num}" if b_num else "—"),
+                    "bill_number": b_num,
+                    "created_at": entry.get("created_at") or d_str,
+                })
+                
+    # 2. Fetch Outward serial records
+    if not type or type.lower() in ("all", "outward", "out"):
+        for entry in outwards_all:
+            sns = entry.get("serial_numbers") or []
+            p_name = entry.get("product") or ""
+            p_size = entry.get("size") or ""
+            c_name = entry.get("client_name") or ""
+            c_id = entry.get("client_id") or ""
+            d_str = (entry.get("date") or entry.get("created_at") or "")[:10]
+            ref = entry.get("reference_number") or entry.get("outward_challan_no") or ""
+            
+            for sn in sns:
+                sn_clean = str(sn).strip()
+                if not sn_clean:
+                    continue
+                rows.append({
+                    "id": f"outward_{entry['id']}_{sn_clean}",
+                    "transaction_id": entry["id"],
+                    "type": "OUT",
+                    "product": p_name,
+                    "size": p_size,
+                    "vendor": sn_to_vendor.get(sn_clean) or "—",
+                    "client_name": c_name or "—",
+                    "client_id": c_id,
+                    "serial_number": sn_clean,
+                    "quantity": 1,
+                    "status": "OUT / ISSUED",
+                    "date": d_str,
+                    "reference_number": ref or "—",
+                    "bill_number": "",
+                    "created_at": entry.get("created_at") or d_str,
+                })
+
+    # Also check local assets in case any serials were registered via High Value Goods
+    assets = _load_local_assets()
+    known_keys = {(r["type"], r["transaction_id"], r["serial_number"]) for r in rows}
+    for a in assets:
+        if a.get("company_id") == cid and a.get("serial_number"):
+            sn_val = str(a["serial_number"]).strip()
+            if not sn_val:
+                continue
+            # If in inward
+            if a.get("inward_entry_id") and ("IN", a["inward_entry_id"], sn_val) not in known_keys:
+                if not type or type.lower() in ("all", "inward", "in"):
+                    is_out = sn_val.upper() in outwarded_sn_set
+                    rows.append({
+                        "id": f"inward_{a['inward_entry_id']}_{sn_val}",
+                        "transaction_id": a["inward_entry_id"],
+                        "type": "IN",
+                        "product": a.get("product_name") or "",
+                        "size": a.get("size_model") or "",
+                        "vendor": a.get("vendor") or "—",
+                        "client_name": "—",
+                        "client_id": None,
+                        "serial_number": sn_val,
+                        "quantity": 1,
+                        "status": "OUT / ISSUED" if is_out else "IN STOCK",
+                        "date": (a.get("purchase_date") or a.get("created_at") or "")[:10],
+                        "reference_number": a.get("challan_number") or "—",
+                        "bill_number": "",
+                        "created_at": a.get("created_at") or "",
+                    })
+                    known_keys.add(("IN", a["inward_entry_id"], sn_val))
+            # If in outward
+            if a.get("outward_entry_id") and ("OUT", a["outward_entry_id"], sn_val) not in known_keys:
+                if not type or type.lower() in ("all", "outward", "out"):
+                    rows.append({
+                        "id": f"outward_{a['outward_entry_id']}_{sn_val}",
+                        "transaction_id": a["outward_entry_id"],
+                        "type": "OUT",
+                        "product": a.get("product_name") or "",
+                        "size": a.get("size_model") or "",
+                        "vendor": "—",
+                        "client_name": a.get("client_name") or "—",
+                        "client_id": a.get("client_id"),
+                        "serial_number": sn_val,
+                        "quantity": 1,
+                        "status": "OUT / ISSUED",
+                        "date": (a.get("outward_date") or a.get("installation_date") or a.get("created_at") or "")[:10],
+                        "reference_number": a.get("challan_number") or "—",
+                        "bill_number": "",
+                        "created_at": a.get("created_at") or "",
+                    })
+                    known_keys.add(("OUT", a["outward_entry_id"], sn_val))
+
+    # Apply search and filters
+    filtered = []
+    for r in rows:
+        if from_date and r["date"] < from_date:
+            continue
+        if to_date and r["date"] > to_date:
+            continue
+        if product and product.lower() not in r["product"].lower():
+            continue
+        if vendor and vendor.lower() not in r["vendor"].lower():
+            continue
+        if client and client.lower() not in r["client_name"].lower():
+            continue
+        if search and search.strip():
+            s_low = search.lower().strip()
+            text = f"{r['serial_number']} {r['product']} {r['size']} {r['vendor']} {r['client_name']} {r['reference_number']}".lower()
+            if s_low not in text:
+                continue
+        filtered.append(r)
+
+    # Sort descending by date
+    filtered.sort(key=lambda x: (x.get("date") or "", x.get("created_at") or ""), reverse=True)
+
+    total = len(filtered)
+    pages = max(1, math.ceil(total / page_size)) if page_size > 0 else 1
+    start = (page - 1) * page_size
+    paged = filtered[start:start + page_size]
+
+    return {
+        "items": paged,
+        "rows": paged,
+        "total": total,
+        "page": page,
+        "pages": pages,
+        "page_size": page_size
+    }
+
+
+@api_router.get("/inventory/serial-tracking.csv")
+async def export_serial_tracking_csv(
+    request: Request = None,  # type: ignore
+    user=Depends(get_current_user),
+    type: Optional[str] = None,
+    product: Optional[str] = None,
+    vendor: Optional[str] = None,
+    client: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    search: Optional[str] = None,
+):
+    result = await list_serial_tracking(
+        request=request,
+        user=user,
+        type=type,
+        product=product,
+        vendor=vendor,
+        client=client,
+        from_date=from_date,
+        to_date=to_date,
+        search=search,
+        page=1,
+        page_size=100000
+    )
+    rows = result.get("rows", [])
+    import csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Product", "Size / Spec", "Vendor", "Client / Purchased By", "Serial No.", "Type", "Date", "Reference"])
+    for r in rows:
+        w.writerow([
+            r.get("product") or "",
+            r.get("size") or "",
+            r.get("vendor") or "",
+            r.get("client_name") or "",
+            r.get("serial_number") or "",
+            r.get("type") or "",
+            r.get("date") or "",
+            r.get("reference_number") or "",
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=solarix-serial-numbers-tracking.csv"}
+    )
+
+
+@api_router.put("/inventory/serial-numbers/{entry_type}/{entry_id}")
+async def edit_serial_number(
+    entry_type: str,
+    entry_id: str,
+    data: EditSerialIn,
+    user=Depends(require_active_subscription())
+):
+    if not has_perm(user, "data_management", "edit"):
+        raise HTTPException(status_code=403, detail="Missing permission: data_management.edit")
+
+    cid = user["company_id"]
+    old_sn = (data.old_serial or "").strip()
+    new_sn = (data.new_serial or "").strip()
+
+    if not new_sn:
+        raise HTTPException(status_code=400, detail="New serial number cannot be empty")
+
+    if old_sn == new_sn:
+        return {"ok": True, "message": "No change"}
+
+    # 1. Check uniqueness across company
+    inward_dup = await db.inward_entries.find_one({
+        "company_id": cid,
+        "serial_numbers": new_sn,
+        "id": {"$ne": entry_id if entry_type.lower() == "inward" else ""}
+    })
+    outward_dup = await db.outward_entries.find_one({
+        "company_id": cid,
+        "serial_numbers": new_sn,
+        "id": {"$ne": entry_id if entry_type.lower() == "outward" else ""}
+    })
+
+    if inward_dup or outward_dup:
+        raise HTTPException(status_code=400, detail="Serial number already exists.")
+
+    # 2. Update target transaction
+    if entry_type.lower() == "inward":
+        entry = await db.inward_entries.find_one({"id": entry_id, "company_id": cid})
+        if not entry:
+            raise HTTPException(status_code=404, detail="Inward entry not found")
+        sns = list(entry.get("serial_numbers") or [])
+        if old_sn in sns:
+            sns = [new_sn if s == old_sn else s for s in sns]
+        else:
+            sns.append(new_sn)
+        await db.inward_entries.update_one(
+            {"id": entry_id, "company_id": cid},
+            {"$set": {"serial_numbers": sns, "updated_at": now_iso()}}
+        )
+    elif entry_type.lower() == "outward":
+        entry = await db.outward_entries.find_one({"id": entry_id, "company_id": cid})
+        if not entry:
+            raise HTTPException(status_code=404, detail="Outward entry not found")
+        sns = list(entry.get("serial_numbers") or [])
+        if old_sn in sns:
+            sns = [new_sn if s == old_sn else s for s in sns]
+        else:
+            sns.append(new_sn)
+        await db.outward_entries.update_one(
+            {"id": entry_id, "company_id": cid},
+            {"$set": {"serial_numbers": sns, "updated_at": now_iso()}}
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Invalid entry_type")
+
+    # 3. Update local assets if present
+    assets = _load_local_assets()
+    updated_assets = False
+    for a in assets:
+        if a.get("company_id") == cid and a.get("serial_number") == old_sn:
+            if (entry_type.lower() == "inward" and a.get("inward_entry_id") == entry_id) or \
+               (entry_type.lower() == "outward" and a.get("outward_entry_id") == entry_id):
+                a["serial_number"] = new_sn
+                updated_assets = True
+    if updated_assets:
+        _save_local_assets(assets)
+
+    await log_activity(cid, user["id"], user["name"], f"Updated Serial Number ({entry_type.title()})", f"{old_sn} → {new_sn}")
+    return {"ok": True, "message": "Serial number updated successfully", "old_serial": old_sn, "new_serial": new_sn}
 
 
 @api_router.get("/inventory/next-challan")
@@ -10192,8 +10687,13 @@ async def update_ticket(ticket_id: str, data: TicketUpdate, user=Depends(get_cur
 
 
 @api_router.get("/client-data/export.csv")
-async def export_clients_csv(user=Depends(get_current_user)):
+async def export_clients_csv(user=Depends(require_active_subscription())):
     """Download CSV (Excel-compatible) of all handed-over clients."""
+    from plan_config import check_plan_limit, increment_usage
+    chk_exp = await check_plan_limit(user["company_id"], "exports", increment=1, db=db)
+    if not chk_exp["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_exp["message"])
+
     items = await list_client_data(user=user)  # type: ignore
     import csv
     buf = io.StringIO()
@@ -10210,6 +10710,7 @@ async def export_clients_csv(user=Depends(get_current_user)):
             r.get("inverter_status", ""), r.get("open_tickets", 0), r.get("last_updated", ""),
         ])
     from fastapi.responses import StreamingResponse
+    await increment_usage(user["company_id"], "exports", 1, db=db)
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]),
@@ -11135,6 +11636,13 @@ async def get_client_ledger(client_id: str, user=Depends(require_perm("reports",
 @api_router.get("/inventory/ledger/{client_id}/export")
 async def export_client_ledger(client_id: str, format: str = "csv", user=Depends(require_perm("reports", "view"))):
     cid = user["company_id"]
+    from plan_config import check_plan_limit, increment_usage
+    chk_exp = await check_plan_limit(cid, "exports", increment=1, db=db)
+    if not chk_exp["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_exp["message"])
+
+    await increment_usage(cid, "exports", 1, db=db)
+
     ledger = await calculate_client_ledger(cid, client_id)
     if not ledger or not isinstance(ledger, dict):
         raise HTTPException(status_code=404, detail="Client not found")
@@ -11362,15 +11870,13 @@ async def parse_pdf_products(file: UploadFile = File(...), user=Depends(get_curr
 
 
 @api_router.post("/inventory/products/export-pdf")
-async def export_product_master_pdf_endpoint(request: Request, user=Depends(get_current_user)):
-    """Generates an A4 Landscape PDF export for the Product Master view.
+async def export_product_master_pdf_endpoint(request: Request, user=Depends(require_active_subscription())):
+    """Generates an A4 Landscape PDF export for the Product Master view."""
+    from plan_config import check_plan_limit, increment_usage
+    chk_exp = await check_plan_limit(user["company_id"], "exports", increment=1, db=db)
+    if not chk_exp["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_exp["message"])
 
-    Bugs fixed:
-      1. db.company_details → db.companies (correct table name)
-      2. Filter by user company_id (not empty filter which returned wrong company)
-      3. await _enrich_company_doc (it is async)
-      4. Use Request.json() to parse body (FastAPI dict annotation fails on raw JSON POST)
-    """
     try:
         payload = await request.json()
     except Exception:
@@ -11388,6 +11894,7 @@ async def export_product_master_pdf_endpoint(request: Request, user=Depends(get_
     try:
         from pdf_generator import generate_product_master_pdf
         pdf_bytes = generate_product_master_pdf(products, company)
+        await increment_usage(user["company_id"], "exports", 1, db=db)
     except Exception as e:
         logger.exception("export-pdf: PDF generation failed")
         raise HTTPException(status_code=500, detail="PDF generation failed. Please try again.")
@@ -13961,20 +14468,25 @@ async def update_platform_customer_subscription(
 
     old_plan = company.get("plan_id", "starter")
     old_status = company.get("subscription_status", "trialing")
-    update_doc = {}
+    update_doc = {"updated_at": now_iso()}
 
     if data.action == "assign_plan" or data.plan_id:
-        update_doc["plan_id"] = data.plan_id or old_plan
+        update_doc["plan_id"] = (data.plan_id or old_plan).lower()
     if data.status:
-        update_doc["subscription_status"] = data.status
+        update_doc["subscription_status"] = data.status.lower()
+        if data.status.lower() == "active" and not company.get("subscription_started_at"):
+            update_doc["subscription_started_at"] = now_iso()
+
     if data.action == "extend_trial" and data.trial_days:
         curr_end = company.get("trial_ends_at")
-        curr_dt = datetime.fromisoformat(curr_end.replace("Z", "+00:00")) if curr_end else datetime.now(timezone.utc)
+        curr_dt = parse_iso(curr_end) if curr_end else datetime.now(timezone.utc)
         new_dt = curr_dt + timedelta(days=data.trial_days)
         update_doc["trial_ends_at"] = new_dt.isoformat()
         update_doc["subscription_status"] = "trialing"
+
     if data.expiry_date:
         update_doc["trial_ends_at"] = data.expiry_date
+        update_doc["subscription_expires_at"] = data.expiry_date
 
     if update_doc:
         await db.companies.update_one({"id": company_id}, {"$set": update_doc}, upsert=True)
@@ -13982,12 +14494,12 @@ async def update_platform_customer_subscription(
 
     await _log_platform_audit(
         user=user,
-        action=f"Subscription Action: {data.action}",
+        action=f"Subscription Action: {data.action} ({data.plan_id or old_plan} / {data.status or old_status})",
         target_company_id=company_id,
         target_name=company.get("company_name", company_id),
         old_val={"plan_id": old_plan, "status": old_status},
         new_val=update_doc,
-        reason=data.reason or ""
+        reason=data.reason or "Super Admin manual subscription update"
     )
 
     return {"message": "Subscription updated successfully", "updated": update_doc}
@@ -14034,6 +14546,14 @@ class PlatformPlanUpdateIn(BaseModel):
     yearly_price: float
     max_users: int
     max_clients: int
+    max_products: Optional[int] = 1000
+    storage_gb: Optional[int] = 5
+    monthly_documents: Optional[int] = 500
+    monthly_pdf_docx: Optional[int] = 200
+    monthly_exports: Optional[int] = 50
+    monthly_material_requests: Optional[int] = 1000
+    monthly_inventory_transactions: Optional[int] = 2500
+    monthly_api_requests: Optional[int] = 0
     active: Optional[bool] = True
     features: Dict[str, bool]
 
@@ -14079,6 +14599,14 @@ async def update_platform_plan(plan_id: str, data: PlatformPlanUpdateIn, user=De
         "yearly_price": data.yearly_price,
         "max_users": data.max_users,
         "max_clients": data.max_clients,
+        "max_products": data.max_products or (15000 if plan_id.lower() == "pro" else 5000 if plan_id.lower() == "growth" else 1000),
+        "storage_gb": data.storage_gb or (100 if plan_id.lower() == "pro" else 25 if plan_id.lower() == "growth" else 5),
+        "monthly_documents": data.monthly_documents or (10000 if plan_id.lower() == "pro" else 2000 if plan_id.lower() == "growth" else 500),
+        "monthly_pdf_docx": data.monthly_pdf_docx or (5000 if plan_id.lower() == "pro" else 1000 if plan_id.lower() == "growth" else 200),
+        "monthly_exports": data.monthly_exports or (1000 if plan_id.lower() == "pro" else 250 if plan_id.lower() == "growth" else 50),
+        "monthly_material_requests": data.monthly_material_requests or (20000 if plan_id.lower() == "pro" else 5000 if plan_id.lower() == "growth" else 1000),
+        "monthly_inventory_transactions": data.monthly_inventory_transactions or (50000 if plan_id.lower() == "pro" else 10000 if plan_id.lower() == "growth" else 2500),
+        "monthly_api_requests": data.monthly_api_requests or (50000 if plan_id.lower() == "pro" else 5000 if plan_id.lower() == "growth" else 0),
         "active": data.active if data.active is not None else True,
         "features": data.features,
         "updated_at": now_iso()
@@ -14086,7 +14614,7 @@ async def update_platform_plan(plan_id: str, data: PlatformPlanUpdateIn, user=De
     await db.plans_config.update_one({"id": doc["id"]}, {"$set": doc}, upsert=True)
     await _log_platform_audit(
         user=user,
-        action="Updated Plan Entitlements & Pricing",
+        action="Updated Plan Entitlements & Limits",
         target_company_id="ALL",
         target_name=f"Plan: {data.name}",
         new_val=doc

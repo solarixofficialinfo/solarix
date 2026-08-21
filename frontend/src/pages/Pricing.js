@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { PLANS, calcSavings } from "@/constants/plans";
 import { useAuth } from "@/context/AuthContext";
@@ -14,6 +14,39 @@ export default function Pricing() {
   const nav = useNavigate();
   const [cycle, setCycle] = useState("monthly"); // "monthly" | "yearly"
   const [loadingPlan, setLoadingPlan] = useState(null);
+  const [plansData, setPlansData] = useState(PLANS);
+
+  useEffect(() => {
+    let active = true;
+    api.get("/billing/plans")
+      .then((res) => {
+        if (!active) return;
+        const fetched = res.data?.plans || res.data;
+        if (fetched && typeof fetched === "object") {
+          setPlansData((prev) => {
+            const next = { ...prev };
+            Object.keys(next).forEach((key) => {
+              const matched = fetched[key] || fetched[key.toLowerCase()] || fetched[key.toUpperCase()];
+              if (matched) {
+                next[key] = {
+                  ...next[key],
+                  monthly_price: typeof matched.monthly_price === "number" ? matched.monthly_price : (Number(matched.monthly_price) || next[key].monthly_price),
+                  yearly_price: typeof matched.yearly_price === "number" ? matched.yearly_price : (Number(matched.yearly_price) || next[key].yearly_price),
+                  name: matched.name || next[key].name,
+                  tagline: matched.tagline || next[key].tagline,
+                  turnover: matched.target_turnover || matched.turnover || next[key].turnover,
+                };
+              }
+            });
+            return next;
+          });
+        }
+      })
+      .catch(() => {
+        // Silently fallback to default PLANS
+      });
+    return () => { active = false; };
+  }, []);
 
   const handleBack = () => {
     if (window.history.length > 1 && window.history.state?.idx > 0) {
@@ -172,8 +205,8 @@ export default function Pricing() {
 
         {/* Pricing Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {Object.keys(PLANS).map((planKey) => {
-            const plan = PLANS[planKey];
+          {Object.keys(plansData).map((planKey) => {
+            const plan = plansData[planKey];
             const isPopular = plan.badge === "MOST POPULAR";
             const savings = calcSavings(plan.monthly_price, plan.yearly_price);
             const displayPrice = cycle === "yearly" ? Math.round(plan.yearly_price / 12) : plan.monthly_price;

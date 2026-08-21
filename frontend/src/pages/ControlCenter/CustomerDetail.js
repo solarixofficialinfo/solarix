@@ -46,7 +46,14 @@ export default function CustomerDetail() {
 
   // Subscription Edit Dialog state
   const [subOpen, setSubOpen] = useState(false);
-  const [subForm, setSubForm] = useState({ plan_id: "starter", status: "active", trial_days: 15, reason: "" });
+  const [subForm, setSubForm] = useState({
+    action: "assign_plan",
+    plan_id: "starter",
+    status: "active",
+    trial_days: 15,
+    expiry_date: "",
+    reason: ""
+  });
   const [notifyCustomer, setNotifyCustomer] = useState(true);
   const [submittingSub, setSubmittingSub] = useState(false);
 
@@ -55,38 +62,51 @@ export default function CustomerDetail() {
   const [tempFeatures, setTempFeatures] = useState({});
   const [savingFeatures, setSavingFeatures] = useState(false);
 
-  useEffect(() => {
-    fetchCustomerDetail();
-  }, [id]);
-
-  const fetchCustomerDetail = async () => {
-    setLoading(true);
+  const fetchCustomerDetail = useCallback(async () => {
     try {
       const res = await api.get(`/platform-owner/customers/${id}`);
       setData(res.data);
-      setSubForm({
+      setSubForm((prev) => ({
+        ...prev,
         plan_id: res.data?.company?.plan_id || "starter",
         status: res.data?.company?.subscription_status || "active",
-        trial_days: 15,
+        expiry_date: res.data?.company?.subscription_expires_at || res.data?.company?.trial_ends_at || "",
         reason: ""
-      });
+      }));
       setFeatures(res.data?.company?.feature_entitlements || {});
       setTempFeatures(res.data?.company?.temporary_features || {});
     } catch (err) {
-      toast.error(formatApiError(err));
+      console.error(err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchCustomerDetail();
+
+    // Auto-refresh customer details every 15s
+    const interval = setInterval(fetchCustomerDetail, 15000);
+    const handleFocus = () => fetchCustomerDetail();
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [fetchCustomerDetail]);
 
   const handleSubSubmit = async (e) => {
     e.preventDefault();
     setSubmittingSub(true);
     try {
       await api.post(`/platform-owner/customers/${id}/subscription`, {
-        action: "assign_plan",
+        action: subForm.action || "assign_plan",
         plan_id: subForm.plan_id,
         status: subForm.status,
+        trial_days: subForm.action === "extend_trial" ? parseInt(subForm.trial_days || 15) : undefined,
+        expiry_date: subForm.expiry_date || undefined,
         reason: subForm.reason || "Manual plan update by Super Admin",
         notify: notifyCustomer
       });
@@ -281,16 +301,39 @@ export default function CustomerDetail() {
 
               <div className="p-4 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
                 <span className="text-slate-400 text-[10px] uppercase font-semibold">SUBSCRIPTION STATUS</span>
-                <div className="text-lg font-bold text-emerald-400 uppercase pt-1">{company.subscription_status || "Active"}</div>
-                <div className="text-[10px] text-slate-400 font-sans">Workspace Active</div>
+                <div className={`text-lg font-bold uppercase pt-1 ${company.subscription_status === "active" ? "text-emerald-400" : company.subscription_status === "trialing" ? "text-blue-400" : "text-rose-400"}`}>
+                  {company.subscription_status || "Active"}
+                </div>
+                <div className="text-[10px] text-slate-400 font-sans">Billing Cycle: {company.billing_cycle || "monthly"}</div>
               </div>
 
               <div className="p-4 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
                 <span className="text-slate-400 text-[10px] uppercase font-semibold">TRIAL / SUBSCRIPTION EXPIRY</span>
                 <div className="text-sm font-bold text-amber-300 pt-1">
-                  {company.trial_ends_at ? new Date(company.trial_ends_at).toLocaleDateString() : "No Expiry"}
+                  {company.subscription_expires_at ? new Date(company.subscription_expires_at).toLocaleDateString() : company.trial_ends_at ? new Date(company.trial_ends_at).toLocaleDateString() : "No Expiry"}
                 </div>
-                <div className="text-[10px] text-slate-400 font-sans">Auto-Renewal Active</div>
+                <div className="text-[10px] text-slate-400 font-sans">
+                  {company.subscription_status === "active" ? "Subscription Active" : "Trial Active"}
+                </div>
+              </div>
+            </div>
+
+            {/* BILLING & PAYMENT GATEWAY RECORD */}
+            <div className="p-4 bg-slate-900/60 rounded-xl border border-slate-800/80 space-y-2">
+              <span className="text-slate-400 text-[10px] uppercase font-semibold">PAYMENT & GATEWAY DETAILS</span>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-slate-300 font-mono pt-1">
+                <div>
+                  <span className="text-slate-500 text-[10px] block">GATEWAY REF ID</span>
+                  <span>{company.razorpay_subscription_id || "Manual Super Admin / Direct"}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] block">TRIAL STARTED</span>
+                  <span>{company.trial_started_at ? new Date(company.trial_started_at).toLocaleDateString() : "—"}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] block">SUBSCRIPTION STARTED</span>
+                  <span>{company.subscription_started_at ? new Date(company.subscription_started_at).toLocaleDateString() : "—"}</span>
+                </div>
               </div>
             </div>
           </Card>

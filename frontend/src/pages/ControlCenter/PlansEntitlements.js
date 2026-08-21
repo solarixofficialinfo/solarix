@@ -26,6 +26,7 @@ const ALL_FEATURES = [
   { key: "advanced_reports", label: "Advanced Analytics & Audit Reports" },
   { key: "advanced_permissions", label: "Custom Role & Page Permissions" },
   { key: "multi_branch", label: "Multi-Branch & State Support" },
+  { key: "api_integrations", label: "API & External Integrations" },
   { key: "custom_branding", label: "Custom Branding & Whitelabel Docs" },
 ];
 
@@ -98,10 +99,18 @@ export default function PlansEntitlements() {
         yearly_price: planData.yearly_price,
         max_users: planData.max_users,
         max_clients: planData.max_clients,
+        max_products: planData.max_products || 1000,
+        storage_gb: planData.storage_gb || 5,
+        monthly_documents: planData.monthly_documents || 500,
+        monthly_pdf_docx: planData.monthly_pdf_docx || 200,
+        monthly_exports: planData.monthly_exports || 50,
+        monthly_material_requests: planData.monthly_material_requests || 1000,
+        monthly_inventory_transactions: planData.monthly_inventory_transactions || 2500,
+        monthly_api_requests: planData.monthly_api_requests || 0,
         active: planData.active !== false,
         features: planData.features || {},
       });
-      toast.success(`Plan '${planData.name}' entitlements saved successfully!`);
+      toast.success(`Plan '${planData.name}' limits and entitlements saved successfully!`);
     } catch (err) {
       toast.error(`Failed to save plan '${pid}'`);
     } finally {
@@ -119,10 +128,10 @@ export default function PlansEntitlements() {
     <div className="space-y-6 max-w-7xl">
       <div>
         <h1 className="text-xl font-bold text-white tracking-tight flex items-center gap-2" style={{ fontFamily: "Outfit" }}>
-          <CreditCard className="w-5 h-5 text-blue-400" /> Plans & Feature Entitlements
+          <CreditCard className="w-5 h-5 text-blue-400" /> Plans, Smart Limits & Feature Entitlements
         </h1>
         <p className="text-xs text-slate-400">
-          Configure subscription plan pricing, limits, and granular feature entitlement matrices.
+          Configure subscription plan pricing, storage quotas, monthly document/export limits, and feature entitlement matrices.
         </p>
       </div>
 
@@ -164,7 +173,7 @@ export default function PlansEntitlements() {
                     </div>
                   </div>
 
-                  {/* Limits */}
+                  {/* Core State Limits */}
                   <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-800">
                     <div>
                       <label className="text-[10px] text-slate-400 font-semibold uppercase">Max Users</label>
@@ -186,6 +195,71 @@ export default function PlansEntitlements() {
                     </div>
                   </div>
 
+                  {/* EPC Resource Limits */}
+                  <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-800">
+                    <div>
+                      <label className="text-[10px] text-slate-400 font-semibold uppercase">Max Products</label>
+                      <Input
+                        type="number"
+                        value={p.max_products || 1000}
+                        onChange={(e) => handleLimitChange(pid, "max_products", e.target.value)}
+                        className="h-8 bg-slate-900 border-slate-700 text-white text-xs font-mono mt-1"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-400 font-semibold uppercase">Storage (GB)</label>
+                      <Input
+                        type="number"
+                        value={p.storage_gb || 5}
+                        onChange={(e) => handleLimitChange(pid, "storage_gb", e.target.value)}
+                        className="h-8 bg-slate-900 border-slate-700 text-white text-xs font-mono mt-1"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Monthly Activity Limits */}
+                  <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-800">
+                    <div>
+                      <label className="text-[10px] text-slate-400 font-semibold uppercase">Monthly PDFs</label>
+                      <Input
+                        type="number"
+                        value={p.monthly_pdf_docx || 200}
+                        onChange={(e) => handleLimitChange(pid, "monthly_pdf_docx", e.target.value)}
+                        className="h-8 bg-slate-900 border-slate-700 text-white text-xs font-mono mt-1"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-400 font-semibold uppercase">Monthly Exports</label>
+                      <Input
+                        type="number"
+                        value={p.monthly_exports || 50}
+                        onChange={(e) => handleLimitChange(pid, "monthly_exports", e.target.value)}
+                        className="h-8 bg-slate-900 border-slate-700 text-white text-xs font-mono mt-1"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-800">
+                    <div>
+                      <label className="text-[10px] text-slate-400 font-semibold uppercase">Inventory Txns/mo</label>
+                      <Input
+                        type="number"
+                        value={p.monthly_inventory_transactions || 2500}
+                        onChange={(e) => handleLimitChange(pid, "monthly_inventory_transactions", e.target.value)}
+                        className="h-8 bg-slate-900 border-slate-700 text-white text-xs font-mono mt-1"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-400 font-semibold uppercase">API Calls/mo</label>
+                      <Input
+                        type="number"
+                        value={p.monthly_api_requests || 0}
+                        onChange={(e) => handleLimitChange(pid, "monthly_api_requests", e.target.value)}
+                        className="h-8 bg-slate-900 border-slate-700 text-white text-xs font-mono mt-1"
+                      />
+                    </div>
+                  </div>
+
                   {/* Feature Entitlements Toggle Matrix */}
                   <div className="pt-3 border-t border-slate-800 space-y-2">
                     <div className="text-[11px] font-semibold text-slate-300 flex items-center justify-between">
@@ -195,7 +269,7 @@ export default function PlansEntitlements() {
                       </span>
                     </div>
 
-                    <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+                    <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
                       {ALL_FEATURES.map((feat) => {
                         const enabled = Boolean(p.features?.[feat.key]);
                         return (

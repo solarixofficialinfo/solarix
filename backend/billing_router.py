@@ -13,7 +13,10 @@ from fastapi import APIRouter, HTTPException, Depends, Request, Header, Response
 from pydantic import BaseModel
 import httpx
 
-from plan_config import get_all_plans, get_plan_details, get_plan_limits, check_feature_access
+from plan_config import (
+    get_all_plans, get_plan_details, get_plan_limits, check_feature_access,
+    get_company_entitlement, parse_iso
+)
 
 logger = logging.getLogger("solarix_billing")
 
@@ -31,17 +34,6 @@ def get_razorpay_key_secret() -> str:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-def parse_iso(dt_str: Optional[str]) -> Optional[datetime]:
-    if not dt_str:
-        return None
-    try:
-        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return None
 
 # Helper to access main database from server module
 def get_db():
@@ -84,73 +76,67 @@ async def list_plans():
 
 @billing_router.get("/subscription")
 async def get_company_subscription(user=Depends(get_current_user_dep())):
-    """Return subscription status, trial details, limit usage, and payment history for authenticated company."""
+    """Return authoritative subscription status, trial details, comprehensive limit usage, and payment history."""
     db = get_db()
     company_id = user.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=404, detail="Company not found")
+
     company = await db.companies.find_one({"id": company_id}, {"_id": 0})
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    now = datetime.now(timezone.utc)
-    
-    # Defaults & migration fallback for existing companies
-    trial_start = parse_iso(company.get("trial_started_at") or company.get("created_at")) or now
-    trial_end = parse_iso(company.get("trial_ends_at"))
-    
-    # If trial_ends_at is missing, set 15-day trial from trial_start
-    if not trial_end:
-        trial_end = trial_start + timedelta(days=15)
-
-    subscription_status = company.get("subscription_status") or company.get("plan") or "trialing"
-    
-    # Normalize old "active" plan field if necessary
-    if subscription_status in ["active", "active_trial"]:
-        if not company.get("subscription_status"):
-            subscription_status = "trialing" if now < trial_end else "active"
-
-    # Evaluate trial expiration
-    is_trial = subscription_status == "trialing"
-    days_remaining = max(0, (trial_end - now).days) if is_trial else 0
-
-    if is_trial and now > trial_end:
-        subscription_status = "expired"
-        # Update database status silently
-        await db.companies.update_one(
-            {"id": company_id},
-            {"$set": {"subscription_status": "expired"}}
-        )
-
-    current_plan_id = company.get("plan_id") or "starter"
-    db_plan_override = await db.plans_config.find_one({"id": current_plan_id.lower()}, {"_id": 0})
-    plan_info = get_plan_details(current_plan_id, db_override=db_plan_override)
-    limits = get_plan_limits(current_plan_id, is_trial=is_trial, db_override=db_plan_override)
-
-    # Current resource usage counts
-    active_users_count = await db.users.count_documents({"company_id": company_id, "status": "Active"})
-    active_clients_count = await db.clients.count_documents({"company_id": company_id})
+    entitlement = await get_company_entitlement(company_id, db=db)
+    from plan_config import get_company_usage
+    usage = await get_company_usage(company_id, db=db)
 
     # Payment history
     history_cursor = db.payment_history.find({"company_id": company_id}, {"_id": 0}).sort("paid_at", -1)
     history = await history_cursor.to_list(100)
 
+    limits = entitlement.get("limits", {})
+    storage_limit_gb = limits.get("storage_gb", 5)
+    storage_used_gb = usage.get("storage_gb", 0)
+
+    percentages = {
+        "users": min(100, int((usage.get("active_users", 0) / max(1, limits.get("max_users", 1))) * 100)),
+        "clients": min(100, int((usage.get("active_clients", 0) / max(1, limits.get("max_clients", 1))) * 100)),
+        "products": min(100, int((usage.get("products", 0) / max(1, limits.get("max_products", 1))) * 100)),
+        "storage": min(100, int((storage_used_gb / max(0.1, storage_limit_gb)) * 100)),
+        "monthly_documents": min(100, int((usage.get("monthly_documents", 0) / max(1, limits.get("monthly_documents", 1))) * 100)),
+        "monthly_pdf_docx": min(100, int((usage.get("monthly_pdf_docx", 0) / max(1, limits.get("monthly_pdf_docx", 1))) * 100)),
+        "monthly_exports": min(100, int((usage.get("monthly_exports", 0) / max(1, limits.get("monthly_exports", 1))) * 100)),
+        "monthly_material_requests": min(100, int((usage.get("monthly_material_requests", 0) / max(1, limits.get("monthly_material_requests", 1))) * 100)),
+        "monthly_inventory_transactions": min(100, int((usage.get("monthly_inventory_transactions", 0) / max(1, limits.get("monthly_inventory_transactions", 1))) * 100)),
+        "monthly_api_requests": min(100, int((usage.get("monthly_api_requests", 0) / max(1, limits.get("monthly_api_requests", 1))) * 100)),
+    }
+
+    # Warnings for UI proactive banners
+    warnings = []
+    for k, pct in percentages.items():
+        if pct >= 90:
+            warnings.append({"resource": k, "percentage": pct, "level": "danger", "message": f"You are using {pct}% of your plan limit for {k.replace('_', ' ')}."})
+        elif pct >= 80:
+            warnings.append({"resource": k, "percentage": pct, "level": "warning", "message": f"You are using {pct}% of your plan limit for {k.replace('_', ' ')}."})
+
     return {
-        "company_id": company_id,
-        "company_name": company.get("company_name"),
-        "subscription_status": subscription_status,  # trialing, active, past_due, cancelled, expired, suspended
-        "plan_id": current_plan_id,
-        "plan_name": plan_info["name"],
-        "billing_cycle": company.get("billing_cycle", "monthly"),
-        "trial_started_at": trial_start.isoformat(),
-        "trial_ends_at": trial_end.isoformat(),
-        "days_remaining": days_remaining,
-        "is_trial": is_trial,
-        "cancel_at_period_end": bool(company.get("cancel_at_period_end", False)),
-        "razorpay_subscription_id": company.get("razorpay_subscription_id"),
-        "limits": limits,
+        **entitlement,
         "usage": {
-            "users": active_users_count,
-            "clients": active_clients_count,
+            "users": usage.get("active_users", 0),
+            "clients": usage.get("active_clients", 0),
+            "products": usage.get("products", 0),
+            "storage_bytes": usage.get("storage_bytes", 0),
+            "storage_gb": storage_used_gb,
+            "monthly_documents": usage.get("monthly_documents", 0),
+            "monthly_pdf_docx": usage.get("monthly_pdf_docx", 0),
+            "monthly_exports": usage.get("monthly_exports", 0),
+            "monthly_material_requests": usage.get("monthly_material_requests", 0),
+            "monthly_inventory_transactions": usage.get("monthly_inventory_transactions", 0),
+            "monthly_api_requests": usage.get("monthly_api_requests", 0),
+            "period": usage.get("period")
         },
+        "percentages": percentages,
+        "warnings": warnings,
         "history": history
     }
 
@@ -163,7 +149,8 @@ async def create_razorpay_subscription(data: CreateSubscriptionIn, user=Depends(
 
     db = get_db()
     company_id = user["company_id"]
-    plan = get_plan_details(data.plan_id)
+    db_plan = await db.plans_config.find_one({"id": data.plan_id.lower()}, {"_id": 0})
+    plan = get_plan_details(data.plan_id, db_override=db_plan)
     
     amount = plan["yearly_price"] if data.billing_cycle == "yearly" else plan["monthly_price"]
     
@@ -297,23 +284,35 @@ async def verify_razorpay_subscription(data: VerifySubscriptionIn, user=Depends(
         logger.error("Razorpay signature verification failed")
         raise HTTPException(status_code=400, detail="Invalid payment signature")
 
-    plan = get_plan_details(data.plan_id)
+    db_plan = await db.plans_config.find_one({"id": data.plan_id.lower()}, {"_id": 0})
+    plan = get_plan_details(data.plan_id, db_override=db_plan)
     amount = plan["yearly_price"] if data.billing_cycle == "yearly" else plan["monthly_price"]
 
-    # Activate subscription in company record
+    # Activate subscription in company record with explicit start and expiration timestamps
     now = now_iso()
+    sub_days = 365 if data.billing_cycle == "yearly" else 30
+    sub_expires = (datetime.now(timezone.utc) + timedelta(days=sub_days)).isoformat()
     sub_ref = data.razorpay_subscription_id or data.razorpay_order_id or data.razorpay_payment_id
+
     await db.companies.update_one(
         {"id": company_id},
         {"$set": {
             "subscription_status": "active",
             "plan_id": data.plan_id,
             "billing_cycle": data.billing_cycle,
+            "subscription_started_at": now,
+            "subscription_expires_at": sub_expires,
             "razorpay_subscription_id": sub_ref,
             "cancel_at_period_end": False,
             "updated_at": now
         }}
     )
+
+    try:
+        from server import _cache_invalidate_company
+        _cache_invalidate_company(company_id)
+    except Exception:
+        pass
 
     # Insert into payment history
     payment_record = {
@@ -339,7 +338,8 @@ async def verify_razorpay_subscription(data: VerifySubscriptionIn, user=Depends(
         "status": "success",
         "message": f"Successfully subscribed to {plan['name']} plan!",
         "subscription_status": "active",
-        "plan_id": data.plan_id
+        "plan_id": data.plan_id,
+        "subscription_expires_at": sub_expires
     }
 
 
@@ -510,10 +510,13 @@ async def get_admin_metrics(
 
     mrr = 0.0
 
+    db_plans = await db.plans_config.find({}, {"_id": 0}).to_list(100)
+    all_plans_map = get_all_plans(db_plans_list=db_plans)
+
     for c in companies:
-        st = c.get("subscription_status") or c.get("plan") or "trialing"
-        pid = c.get("plan_id") or "starter"
-        cycle = c.get("billing_cycle") or "monthly"
+        st = c.get("subscription_status", "trialing")
+        cycle = c.get("billing_cycle", "monthly")
+        pid = c.get("plan_id", "starter").lower()
         
         trial_end = parse_iso(c.get("trial_ends_at"))
         if st == "trialing" and trial_end and now > trial_end:
@@ -521,7 +524,7 @@ async def get_admin_metrics(
 
         if st == "active":
             active_paid_count += 1
-            plan_info = get_plan_details(pid)
+            plan_info = all_plans_map.get(pid, get_plan_details(pid))
             plan_mrr = (plan_info["yearly_price"] / 12.0) if cycle == "yearly" else float(plan_info["monthly_price"])
             mrr += plan_mrr
 

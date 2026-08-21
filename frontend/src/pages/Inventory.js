@@ -6,13 +6,14 @@ import { queryKeys } from "@/lib/queryKeys";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Boxes, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, ClipboardList, Layers, Search, Activity, History } from "lucide-react";
+import { Boxes, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, ClipboardList, Layers, Search, Activity, History, Hash } from "lucide-react";
 import { toast } from "sonner";
 import InwardTab from "@/components/Inventory/InwardTab";
 import OutwardTab from "@/components/Inventory/OutwardTab";
 import ProductMasterTab from "@/components/Inventory/ProductMasterTab";
 import BalanceTab from "@/components/Inventory/BalanceTab";
 import HistoryTab from "@/components/Inventory/HistoryTab";
+import SerialTrackingTab from "@/components/Inventory/SerialTrackingTab";
 import PageHeader from "@/components/PageHeader";
 const HighValueAssets = React.lazy(() => import("@/pages/HighValueAssets"));
 
@@ -123,6 +124,7 @@ export default function Inventory() {
             <TabsTrigger value="balance" data-testid="tab-balance" className="shrink-0 whitespace-nowrap"><Activity className="w-3.5 h-3.5 mr-1.5" /> Balance Report</TabsTrigger>
             <TabsTrigger value="history" data-testid="tab-history" className="shrink-0 whitespace-nowrap"><History className="w-3.5 h-3.5 mr-1.5" /> History</TabsTrigger>
             <TabsTrigger value="high-value-goods" data-testid="tab-high-value-goods" className="shrink-0 whitespace-nowrap"><ClipboardList className="w-3.5 h-3.5 mr-1.5" /> High Value Goods</TabsTrigger>
+            <TabsTrigger value="serial-tracking" data-testid="tab-serial-tracking" className="shrink-0 whitespace-nowrap"><Hash className="w-3.5 h-3.5 mr-1.5" /> Serial No. Tracking</TabsTrigger>
           </TabsList>
         </div>
 
@@ -147,6 +149,9 @@ export default function Inventory() {
               <HighValueAssets />
             </Suspense>
           )}
+        </div>
+        <div style={{ display: tab === "serial-tracking" ? "block" : "none" }}>
+          {visitedTabs.has("serial-tracking") && <SerialTrackingTab globalSearch={search} />}
         </div>
       </Tabs>
     </div>

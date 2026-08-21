@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState, useRef } from "react";
-import api, { formatApiError, fileUrl } from "@/lib/api";
+import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
+import api, { formatApiError, fileUrl, downloadFile } from "@/lib/api";
 import { useClientList, useCompany } from "@/hooks/useClients";
 import { useSalesDocuments, useDeleteSalesDocument } from "@/hooks/useSalesDocuments";
 import { useProductList, useOutwardList } from "@/hooks/useInventory";
@@ -371,13 +371,7 @@ export default function DeliveryBill() {
       toast.success("Delivery Bill generated successfully");
       fetchHistory();
       if (files[0] && files[0].id) {
-        const downloadUrl = fileUrl(files[0].id) + "?download=1";
-        const link = document.createElement("a");
-        link.href = downloadUrl;
-        link.setAttribute("download", files[0].filename || files[0].original_filename || "Delivery_Bill.pdf");
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+        await downloadFile(files[0].id, files[0].filename || files[0].original_filename || "Delivery_Bill.pdf");
       }
     } catch (err) {
       toast.error(formatApiError(err));
@@ -637,6 +631,7 @@ export default function DeliveryBill() {
                       <td className="p-3"><span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">{doc.status || "Active"}</span></td>
                       <td className="p-3 text-right space-x-1.5 whitespace-nowrap">
                         <Button variant="outline" size="sm" onClick={() => window.open(fileUrl(doc.id), "_blank")} className="h-8 text-xs rounded-lg border-slate-200">View</Button>
+                        <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-slate-200 text-slate-700" onClick={() => downloadFile(doc.id, doc.filename || "Delivery_Bill.pdf")}>Download</Button>
                         <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-red-200 text-red-600 hover:bg-red-50" onClick={() => handleDeleteHistory(doc.id)}>Delete</Button>
                       </td>
                     </tr>

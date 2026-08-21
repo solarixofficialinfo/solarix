@@ -6,6 +6,7 @@ dayjs.extend(relativeTime);
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { Toaster } from "sonner";
+import SubscriptionGuardModal from "@/components/SubscriptionGuardModal";
 // Eager load Login for instant auth rendering
 import Login from "@/pages/Login";
 
@@ -298,6 +299,7 @@ function App() {
 
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
+          <SubscriptionGuardModal />
         </Suspense>
       </BrowserRouter>
     </AuthProvider>

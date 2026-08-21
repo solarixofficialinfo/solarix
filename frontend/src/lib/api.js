@@ -185,6 +185,29 @@ api.interceptors.response.use(
       }
     }
 
+    // ── 403: Check for Subscription / Plan Expiration or Limit ──────────────
+    if (status === 403) {
+      const detail = error.response?.data?.detail;
+      const detailStr = typeof detail === "string" ? detail : JSON.stringify(detail || {});
+      if (
+        detailStr.includes("SUBSCRIPTION_EXPIRED") ||
+        detailStr.includes("SUBSCRIPTION_REQUIRED") ||
+        detailStr.includes("PLAN_LIMIT_REACHED") ||
+        detailStr.includes("trial has expired") ||
+        detailStr.includes("subscription has expired")
+      ) {
+        window.dispatchEvent(
+          new CustomEvent("solarix:subscription-required", {
+            detail: {
+              message: typeof detail === "string" ? detail : detail?.message || "Subscription upgrade required",
+              planId: detail?.plan_id,
+              status: detail?.subscription_status
+            }
+          })
+        );
+      }
+    }
+
     return Promise.reject(error);
   }
 );
@@ -278,7 +301,7 @@ export function formatApiError(err) {
   }
 }
 
-export function fileUrl(fileId) {
+export function fileUrl(fileId, download = false) {
   if (!fileId) return null;
   if (typeof fileId !== "string") return null;
 
@@ -293,7 +316,6 @@ export function fileUrl(fileId) {
 
   // If a full HTTP/HTTPS URL is provided
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-    // If it points to localhost, 127.0.0.1, or port 7071
     if (
       trimmed.includes("localhost") ||
       trimmed.includes("127.0.0.1") ||
@@ -303,10 +325,13 @@ export function fileUrl(fileId) {
         // In production, check if the URL contains a file ID pattern like /files/{id}
         const fileMatch = trimmed.match(/\/files\/([a-zA-Z0-9_-]+)/);
         if (fileMatch && fileMatch[1]) {
-          const token = localStorage.getItem("solarix_token");
-          return `${API}/files/${fileMatch[1]}${token ? `?auth=${token}` : ""}`;
+          const token = localStorage.getItem("solarix_token") || localStorage.getItem("token") || localStorage.getItem("access_token");
+          const q = [];
+          if (token) q.push(`auth=${encodeURIComponent(token)}`);
+          if (download) q.push("download=1");
+          return `${API}/files/${fileMatch[1]}${q.length > 0 ? `?${q.join("&")}` : ""}`;
         }
-        // Dead local URL (e.g. http://localhost:7071/3697880.png) - prevent broken browser request
+        // Dead local URL - prevent broken browser request
         return null;
       }
     } else {
@@ -316,7 +341,6 @@ export function fileUrl(fileId) {
   }
 
   // If storage path was passed (e.g. "solrix_work/.../b191ae8e-54cc-4773-a0a5-6a6b22b32a1c.png")
-  // Extract the UUID file_id if present
   let resolvedId = trimmed;
   if (trimmed.includes("/")) {
     const filename = trimmed.split("/").pop();
@@ -327,5 +351,58 @@ export function fileUrl(fileId) {
   }
 
   const token = localStorage.getItem("solarix_token") || localStorage.getItem("token") || localStorage.getItem("access_token");
-  return `${API}/files/${resolvedId}${token ? `?auth=${token}` : ""}`;
+  const q = [];
+  if (token) q.push(`auth=${encodeURIComponent(token)}`);
+  if (download) q.push("download=1");
+  return `${API}/files/${resolvedId}${q.length > 0 ? `?${q.join("&")}` : ""}`;
+}
+
+export async function downloadFile(fileId, defaultFilename = "document.pdf") {
+  if (!fileId) {
+    toast.error("File identifier is missing.");
+    return false;
+  }
+  try {
+    const res = await api.get(`/files/${fileId}`, {
+      params: { download: 1 },
+      responseType: "blob",
+    });
+
+    if (res.data && res.data.type === "application/json") {
+      const text = await res.data.text();
+      let errorMsg = "Failed to download file.";
+      try {
+        const json = JSON.parse(text);
+        errorMsg = json.detail || json.message || errorMsg;
+      } catch {
+        errorMsg = text || errorMsg;
+      }
+      toast.error(errorMsg);
+      return false;
+    }
+
+    let filename = defaultFilename;
+    const disposition = res.headers ? res.headers["content-disposition"] : null;
+    if (disposition && disposition.includes("filename=")) {
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      if (match && match[1]) {
+        filename = match[1];
+      }
+    }
+
+    const contentType = (res.headers && res.headers["content-type"]) || "application/octet-stream";
+    const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: contentType }));
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
+    return true;
+  } catch (err) {
+    const errMsg = formatApiError(err);
+    toast.error(errMsg);
+    return false;
+  }
 }

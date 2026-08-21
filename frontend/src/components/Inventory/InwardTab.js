@@ -52,6 +52,9 @@ const EMPTY_FORM = () => ({
   quantity: "",
   unit: "Nos",
   high_value_asset: false,
+  serial_number_required: false,
+  serial_numbers: [],
+  serial_text: "",
   remarks: "",
   attachment_file_id: "",
   attachment_filename: "",
@@ -217,6 +220,10 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
       const matchedVendor = vendors.find((v) => v.name === form.source_name);
       const vendorId = matchedVendor?.id || form.source_id || "";
 
+      const sns = form.serial_number_required
+        ? (form.serial_text || "").split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
+        : (form.serial_numbers || []);
+
       const payload = {
         date: form.date,
         bill_type: "Product Bill",
@@ -236,6 +243,8 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
         total_amount: 0.0,
         payment_status: "Unpaid",
         high_value_asset: Boolean(form.high_value_asset),
+        serial_number_required: Boolean(form.serial_number_required || sns.length > 0),
+        serial_numbers: sns,
         remarks: form.remarks,
         attachment_file_id: form.attachment_file_id,
         attachment_filename: form.attachment_filename
@@ -271,6 +280,9 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
           size: "",
           quantity: "",
           high_value_asset: false,
+          serial_number_required: false,
+          serial_numbers: [],
+          serial_text: "",
           attachment_file_id: "",
           attachment_filename: ""
         }));
@@ -308,6 +320,9 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
       quantity: String(entry.quantity || ""),
       unit: entry.unit || "Nos",
       high_value_asset: Boolean(entry.high_value_asset),
+      serial_number_required: (entry.serial_numbers || []).length > 0 || Boolean(entry.serial_number_required),
+      serial_numbers: entry.serial_numbers || [],
+      serial_text: (entry.serial_numbers || []).join("\n"),
       remarks: entry.remarks || "",
       attachment_file_id: entry.attachment_file_id || "",
       attachment_filename: entry.attachment_filename || ""
@@ -602,8 +617,8 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                 </div>
               </div>
 
-              {/* High Value Asset Checkbox */}
-              <div className="pt-1">
+              {/* High Value Asset & Serial Number Tracking Controls */}
+              <div className="pt-2 flex flex-wrap items-center gap-6">
                 <label className="flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -613,7 +628,41 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                   />
                   High Value Asset
                 </label>
+
+                <label className="flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={form.serial_number_required}
+                    onChange={(e) => setForm({ ...form, serial_number_required: e.target.checked })}
+                    className="w-4 h-4 accent-blue-600 rounded"
+                    data-testid="inw-serial-number-toggle"
+                  />
+                  <span className="font-semibold text-slate-800">Serial No. (ON / OFF)</span>
+                </label>
               </div>
+
+              {form.serial_number_required && (
+                <div className="p-3 bg-blue-50/50 border border-blue-200 rounded-xl space-y-2 mt-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-blue-900 uppercase tracking-wider text-[11px]">Enter / Paste Serial Numbers</span>
+                    <span className="text-[11px] font-mono text-slate-600">
+                      Entered: <strong className="text-blue-700">{(form.serial_text || "").split(/[\n,]+/).filter(s => s.trim()).length}</strong> / <strong>{Math.floor(Number(form.quantity) || 0)}</strong>
+                    </span>
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={form.serial_text || ""}
+                    onChange={(e) => {
+                      const text = e.target.value;
+                      const parsed = text.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+                      setForm(prev => ({ ...prev, serial_text: text, serial_numbers: parsed }));
+                    }}
+                    placeholder="Enter or scan serial numbers (1 per line or comma separated)&#10;e.g.&#10;SN001&#10;SN002"
+                    className="w-full text-xs font-mono p-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    data-testid="inw-serial-textarea"
+                  />
+                </div>
+              )}
             </div>
 
             {/* 4. ADDITIONAL INFORMATION */}

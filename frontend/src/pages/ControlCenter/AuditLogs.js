@@ -1,28 +1,44 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ScrollText, UserCheck, Shield } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ScrollText, UserCheck, Shield, RefreshCw } from "lucide-react";
 
 export default function AuditLogs() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    fetchLogs();
-  }, []);
-
-  const fetchLogs = async () => {
-    setLoading(true);
+  const fetchLogs = useCallback(async (isManual = false) => {
+    if (isManual) setRefreshing(true);
     try {
       const res = await api.get("/platform-owner/audit-logs");
-      setLogs(res.data);
+      setLogs(res.data || []);
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchLogs();
+
+    // Auto-refresh every 10 seconds
+    const interval = setInterval(() => {
+      fetchLogs(false);
+    }, 10000);
+
+    const handleFocus = () => fetchLogs(false);
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [fetchLogs]);
 
   return (
     <div className="space-y-6 font-sans">
@@ -31,8 +47,18 @@ export default function AuditLogs() {
           <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
             <ScrollText className="w-5 h-5 text-blue-400" /> Platform Owner Audit Logs
           </h2>
-          <p className="text-xs text-slate-400">Complete, tamper-evident log of all administrative actions performed across workspaces.</p>
+          <p className="text-xs text-slate-400">Complete, tamper-evident log of all administrative actions performed across workspaces in real-time.</p>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => fetchLogs(true)}
+          disabled={refreshing}
+          className="border-slate-800 text-slate-300 hover:bg-slate-900 text-xs h-8 gap-1.5"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin text-blue-400" : ""}`} />
+          <span>Refresh</span>
+        </Button>
       </div>
 
       <Card className="bg-slate-950/60 border-slate-800 overflow-hidden">
