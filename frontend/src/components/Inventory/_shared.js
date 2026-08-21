@@ -265,3 +265,167 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
     </Popover>
   );
 }
+
+export function VendorAutocompleteInput({ value, onChange, vendors = [], placeholder = "Supplier company name", className, testid, required }) {
+  const [open, setOpen] = useState(false);
+  const [inputVal, setInputVal] = useState(value || "");
+
+  useEffect(() => {
+    setInputVal(value || "");
+  }, [value]);
+
+  const filtered = useMemo(() => {
+    const q = (inputVal || "").trim().toLowerCase();
+    if (!q) return vendors.slice(0, 50);
+    return vendors.filter((v) => {
+      const n = (v.name || "").toLowerCase();
+      const g = (v.gstin || "").toLowerCase();
+      const c = (v.contact_person || "").toLowerCase();
+      return n.includes(q) || g.includes(q) || c.includes(q);
+    }).slice(0, 50);
+  }, [vendors, inputVal]);
+
+  const handleTextChange = (val) => {
+    setInputVal(val);
+    const matched = vendors.find(v => (v.name || "").trim().toLowerCase() === val.trim().toLowerCase());
+    onChange(val, matched);
+  };
+
+  const handleSelect = (v) => {
+    setInputVal(v.name);
+    onChange(v.name, v);
+    setOpen(false);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <div className="relative w-full">
+          <Input
+            value={inputVal}
+            onChange={(e) => handleTextChange(e.target.value)}
+            onFocus={() => setOpen(true)}
+            placeholder={placeholder}
+            className={className}
+            data-testid={testid}
+            required={required}
+          />
+        </div>
+      </PopoverTrigger>
+      {open && filtered.length > 0 && (
+        <PopoverContent
+          className="p-0 border border-slate-200 bg-white rounded-xl shadow-2xl z-[99999] min-w-[280px] w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto text-xs py-1 text-left"
+          align="start"
+          sideOffset={4}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider bg-slate-50 sticky top-0 z-10 border-b border-slate-100">
+            EXISTING VENDORS
+          </div>
+          {filtered.map((v) => (
+            <button
+              key={v.id || v.name}
+              type="button"
+              className="w-full text-left px-4 py-2 hover:bg-blue-50/80 font-medium text-slate-800 transition-colors border-b border-slate-50 last:border-0"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleSelect(v);
+              }}
+            >
+              <div className="flex flex-col">
+                <span className="font-semibold text-slate-900">{v.name}</span>
+                {(v.gstin || v.contact_person) && (
+                  <span className="text-[10px] text-slate-400 font-normal mt-0.5">
+                    {v.gstin ? `GST: ${v.gstin}` : ""} {v.contact_person ? `· ${v.contact_person}` : ""}
+                  </span>
+                )}
+              </div>
+            </button>
+          ))}
+        </PopoverContent>
+      )}
+    </Popover>
+  );
+}
+
+export function ClientAutocompleteInput({ value, onChange, clients = [], placeholder = "Search client name...", className, testid, required }) {
+  const [open, setOpen] = useState(false);
+  const [inputVal, setInputVal] = useState(value || "");
+
+  useEffect(() => {
+    setInputVal(value || "");
+  }, [value]);
+
+  const filtered = useMemo(() => {
+    const q = (inputVal || "").trim().toLowerCase();
+    if (!q) return clients.slice(0, 50);
+    return clients.filter((c) => {
+      const n = (c.full_name || "").toLowerCase();
+      const p = (c.mobile || c.phone || "").toLowerCase();
+      const pr = (c.project_name || "").toLowerCase();
+      return n.includes(q) || p.includes(q) || pr.includes(q);
+    }).slice(0, 50);
+  }, [clients, inputVal]);
+
+  const handleTextChange = (val) => {
+    setInputVal(val);
+    const matched = clients.find(c => (c.full_name || "").trim().toLowerCase() === val.trim().toLowerCase());
+    onChange(val, matched);
+  };
+
+  const handleSelect = (c) => {
+    setInputVal(c.full_name);
+    onChange(c.full_name, c);
+    setOpen(false);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <div className="relative w-full">
+          <Input
+            value={inputVal}
+            onChange={(e) => handleTextChange(e.target.value)}
+            onFocus={() => setOpen(true)}
+            placeholder={placeholder}
+            className={className}
+            data-testid={testid}
+            required={required}
+          />
+        </div>
+      </PopoverTrigger>
+      {open && filtered.length > 0 && (
+        <PopoverContent
+          className="p-0 border border-slate-200 bg-white rounded-xl shadow-2xl z-[99999] min-w-[280px] w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto text-xs py-1 text-left"
+          align="start"
+          sideOffset={4}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider bg-slate-50 sticky top-0 z-10 border-b border-slate-100">
+            EXISTING CLIENTS
+          </div>
+          {filtered.map((c) => (
+            <button
+              key={c.id || c.full_name}
+              type="button"
+              className="w-full text-left px-4 py-2 hover:bg-blue-50/80 font-medium text-slate-800 transition-colors border-b border-slate-50 last:border-0"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleSelect(c);
+              }}
+            >
+              <div className="flex flex-col">
+                <span className="font-semibold text-slate-900">{c.full_name}</span>
+                {(c.project_name || c.mobile) && (
+                  <span className="text-[10px] text-slate-400 font-normal mt-0.5">
+                    {c.project_name ? `Project: ${c.project_name}` : ""} {c.mobile ? `· ${c.mobile}` : ""}
+                  </span>
+                )}
+              </div>
+            </button>
+          ))}
+        </PopoverContent>
+      )}
+    </Popover>
+  );
+}

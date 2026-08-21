@@ -3,8 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { useInwardList } from "@/hooks/useInventory";
 import { useClientList } from "@/hooks/useClients";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import PortalCombobox from "../PortalCombobox";
-import { ProductAutocompleteInput, UNIT_OPTIONS } from "./_shared";
+import { ProductAutocompleteInput, VendorAutocompleteInput, ClientAutocompleteInput, UNIT_OPTIONS } from "./_shared";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -431,10 +430,10 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5 text-xs">
-            {/* 1. TRANSACTION DETAILS */}
+            {/* TRANSACTION DETAILS */}
             <div className="space-y-3">
               <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono">
-                1. TRANSACTION DETAILS
+                TRANSACTION DETAILS
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                 <div>
@@ -495,10 +494,10 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
               </div>
             </div>
 
-            {/* 2. SOURCE DETAILS */}
+            {/* SOURCE DETAILS */}
             <div className="space-y-3 pt-2">
               <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono">
-                2. SOURCE DETAILS
+                SOURCE DETAILS
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
@@ -520,28 +519,34 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                     {isVendorSource ? "Vendor / Source Name *" : isClientSource ? "Client / Source Name *" : "Source Name *"}
                   </Label>
                   {isVendorSource ? (
-                    <PortalCombobox
+                    <VendorAutocompleteInput
                       value={form.source_name}
-                      onChange={(val) => {
-                        const matched = vendors.find((v) => v.name === val);
-                        setForm({ ...form, source_name: val, source_id: matched?.id || "" });
+                      onChange={(val, matchedVendor) => {
+                        setForm((prev) => ({
+                          ...prev,
+                          source_name: val,
+                          source_id: matchedVendor?.id || ""
+                        }));
                       }}
-                      options={vendorOptions}
+                      vendors={vendors}
                       placeholder="Supplier company name"
-                      searchPlaceholder="Search vendor name..."
-                      className="w-full mt-1 rounded-xl"
+                      className="h-10 text-xs bg-white mt-1 rounded-xl"
+                      testid="inw-vendor-input"
                     />
                   ) : isClientSource ? (
-                    <PortalCombobox
+                    <ClientAutocompleteInput
                       value={form.source_name}
-                      onChange={(val) => {
-                        const matched = clients.find((c) => c.full_name === val);
-                        setForm({ ...form, source_name: val, source_id: matched?.id || "" });
+                      onChange={(val, matchedClient) => {
+                        setForm((prev) => ({
+                          ...prev,
+                          source_name: val,
+                          source_id: matchedClient?.id || ""
+                        }));
                       }}
-                      options={clientOptions}
+                      clients={clients}
                       placeholder="Search client name..."
-                      searchPlaceholder="Search client..."
-                      className="w-full mt-1 rounded-xl"
+                      className="h-10 text-xs bg-white mt-1 rounded-xl"
+                      testid="inw-client-input"
                     />
                   ) : (
                     <Input
@@ -549,16 +554,17 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                       onChange={(e) => setForm({ ...form, source_name: e.target.value })}
                       placeholder="Supplier company name"
                       className="h-10 text-xs bg-white mt-1 rounded-xl"
+                      data-testid="inw-source-input"
                     />
                   )}
                 </div>
               </div>
             </div>
 
-            {/* 3. ITEM DETAILS */}
+            {/* ITEM DETAILS */}
             <div className="space-y-3 pt-2">
               <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono">
-                3. ITEM DETAILS
+                ITEM DETAILS
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 items-end">
                 {/* Product Name Autocomplete */}
