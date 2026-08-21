@@ -66,11 +66,12 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
   const canEdit = usePermission("data_management", "edit");
   const canDelete = usePermission("data_management", "delete");
 
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [form, setForm] = useState(EMPTY_FORM());
   const [editing, setEditing] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
   const [manualOpen, setManualOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const submittingRef = useRef(false);
   const [uploading, setUploading] = useState(false);
   const [autoContinue, setAutoContinue] = useState(() => localStorage.getItem("inward_auto_continue") === "true");
   const [carryFields, setCarryFields] = useState(() => {
@@ -205,6 +206,8 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
   // Execute Save Inward Entry (Original Basic Inward Logic)
   const handleSubmit = async (e) => {
     e?.preventDefault();
+    if (submittingRef.current || busy) return;
+
     if (!form.source_name?.trim()) {
       toast.error("Vendor / Source Name is required!");
       return;
@@ -214,6 +217,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
       return;
     }
 
+    submittingRef.current = true;
     setBusy(true);
     try {
       const matchedVendor = vendors.find((v) => v.name === form.source_name);
@@ -292,6 +296,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
     } catch (err) {
       toast.error(formatApiError(err));
     } finally {
+      submittingRef.current = false;
       setBusy(false);
     }
   };

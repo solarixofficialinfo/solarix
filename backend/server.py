@@ -587,8 +587,19 @@ _INWARD_VALID_COLS = {
     "created_at", "import_batch", "updated_at"
 }
 
+_OUTWARD_VALID_COLS = {
+    "id", "company_id", "client_id", "client_name", "project_id", "project_name",
+    "product", "size", "quantity", "unit", "outward_challan_no", "reference_number",
+    "reference_type", "date", "status", "remarks", "source", "material_request_id",
+    "delivery_photo_file_id", "challan_photo_file_id", "attachment_file_id", "attachment_filename",
+    "created_by", "created_by_name", "created_at", "import_batch", "updated_at"
+}
+
 def _clean_inward_doc(doc: dict) -> dict:
     return {k: v for k, v in doc.items() if k in _INWARD_VALID_COLS}
+
+def _clean_outward_doc(doc: dict) -> dict:
+    return {k: v for k, v in doc.items() if k in _OUTWARD_VALID_COLS}
 
 VALID_CLIENT_COLUMNS = {
     "id", "sol_id", "company_id", "created_by", "full_name", "mobile", "alt_mobile",
@@ -971,6 +982,8 @@ class CollectionAdapter:
             document = _clean_products_doc(document)
         elif self.table_name == "inward_entries":
             document = _clean_inward_doc(document)
+        elif self.table_name == "outward_entries":
+            document = _clean_outward_doc(document)
         
         while True:
             try:
@@ -7383,88 +7396,302 @@ async def _enrich_bill_challan(bill: Dict[str, Any], company_id: str) -> Dict[st
         bill["reference_number"] = ch
     return bill
 
+_company_locks: Dict[str, asyncio.Lock] = {}
+_recent_inward_txs: Dict[str, tuple] = {}
+_recent_outward_txs: Dict[str, tuple] = {}
+
+def _get_company_lock(cid: str) -> asyncio.Lock:
+    if cid not in _company_locks:
+        _company_locks[cid] = asyncio.Lock()
+    return _company_locks[cid]
+
 async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str, user_name: str, source: str = "manual", import_batch: str = "", skip_activity_log: bool = False):
-    source_type_val = data.source_type or "Vendor / Supplier"
-    source_name_val = data.source_name or ""
-    client_id_val = data.client_id or ""
-    client_name_val = data.client_name or ""
+    lock = _get_company_lock(company_id)
+    async with lock:
+        pn_raw = (data.product or "").strip().upper()
+        challan_raw = (data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None) or "").strip()
+        source_raw = (data.source_name or "").strip().upper()
+        sns_raw = [str(sn).strip().upper() for sn in (data.serial_numbers or []) if str(sn).strip()]
 
-    # Vendor Purchase Bill Flow: Save/upsert purchase bill in db.purchase_bills if Vendor/Supplier is specified
-    vendor_id_val = data.vendor_id or data.source_id or ""
-    if not vendor_id_val and source_name_val and source_type_val in ("Vendor / Supplier", "Supplier", "Vendor"):
-        v_doc = await db.vendors.find_one({"company_id": company_id, "name": {"$regex": f"^{re.escape(source_name_val.strip())}$", "$options": "i"}})
-        if v_doc:
-            vendor_id_val = v_doc["id"]
+        # Immediate in-memory deduplication for rapid multi-clicks
+        inw_tx_key = f"{company_id}:{pn_raw}:{float(data.quantity or 0)}:{challan_raw}:{source_raw}:{','.join(sorted(sns_raw))}"
+        now_ts = time.time()
+        if inw_tx_key in _recent_inward_txs:
+            prev_ts, prev_doc = _recent_inward_txs[inw_tx_key]
+            if now_ts - prev_ts <= 6.0:
+                return dict(prev_doc)
 
-    challan_val = (data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None) or "").strip()
-    raw_bill_num = (data.bill_number or "").strip()
+        source_type_val = data.source_type or "Vendor / Supplier"
+        source_name_val = data.source_name or ""
+        client_id_val = data.client_id or ""
+        client_name_val = data.client_name or ""
 
-    if source_type_val in ("Vendor / Supplier", "Supplier", "Vendor") and (vendor_id_val or source_name_val):
-        existing_pbill = None
-        if raw_bill_num:
-            existing_pbill = await db.purchase_bills.find_one({
-                "company_id": company_id,
-                "bill_number": raw_bill_num
-            })
-        if not existing_pbill and challan_val and vendor_id_val:
-            existing_pbill = await db.purchase_bills.find_one({
-                "company_id": company_id,
-                "vendor_id": vendor_id_val,
-                "challan_number": challan_val
-            })
+        # Vendor Purchase Bill Flow: Save/upsert purchase bill in db.purchase_bills if Vendor/Supplier is specified
+        vendor_id_val = data.vendor_id or data.source_id or ""
+        if not vendor_id_val and source_name_val and source_type_val in ("Vendor / Supplier", "Supplier", "Vendor"):
+            v_doc = await db.vendors.find_one({"company_id": company_id, "name": {"$regex": f"^{re.escape(source_name_val.strip())}$", "$options": "i"}})
+            if v_doc:
+                vendor_id_val = v_doc["id"]
 
-        if existing_pbill:
-            if challan_val:
-                await db.purchase_bills.update_one(
-                    {"id": existing_pbill["id"], "company_id": company_id},
-                    {"$set": {
-                        "challan_number": challan_val,
-                        "challan_no": challan_val,
-                        "reference_number": challan_val,
-                        "updated_at": now_iso()
-                    }}
+        challan_val = (data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None) or "").strip()
+        raw_bill_num = (data.bill_number or "").strip()
+
+        if source_type_val in ("Vendor / Supplier", "Supplier", "Vendor") and (vendor_id_val or source_name_val):
+            existing_pbill = None
+            if raw_bill_num:
+                existing_pbill = await db.purchase_bills.find_one({
+                    "company_id": company_id,
+                    "bill_number": raw_bill_num
+                })
+            if not existing_pbill and challan_val and vendor_id_val:
+                existing_pbill = await db.purchase_bills.find_one({
+                    "company_id": company_id,
+                    "vendor_id": vendor_id_val,
+                    "challan_number": challan_val
+                })
+
+            if existing_pbill:
+                if challan_val:
+                    await db.purchase_bills.update_one(
+                        {"id": existing_pbill["id"], "company_id": company_id},
+                        {"$set": {
+                            "challan_number": challan_val,
+                            "challan_no": challan_val,
+                            "reference_number": challan_val,
+                            "updated_at": now_iso()
+                        }}
+                    )
+            elif raw_bill_num or float(data.total_amount or 0.0) > 0 or challan_val:
+                pbill_id = f"pbill_{uuid.uuid4().hex[:12]}"
+                pbill_doc = {
+                    "id": pbill_id,
+                    "company_id": company_id,
+                    "vendor_id": vendor_id_val,
+                    "vendor_name": source_name_val or "Unknown Vendor",
+                    "bill_number": raw_bill_num or (f"BILL-{challan_val}" if challan_val else f"INV-{uuid.uuid4().hex[:6]}"),
+                    "challan_number": challan_val,
+                    "challan_no": challan_val,
+                    "reference_number": challan_val,
+                    "bill_date": (data.date or now_iso())[:10],
+                    "due_date": "",
+                    "items": [],
+                    "subtotal": float(data.total_amount or 0.0),
+                    "gst_total": 0.0,
+                    "grand_total": float(data.total_amount or 0.0),
+                    "payment_status": data.payment_status or "Unpaid",
+                    "status": data.payment_status or "Unpaid",
+                    "inward_status": "Received",
+                    "bill_type": data.bill_type or "Product Bill",
+                    "notes": data.remarks or "",
+                    "remarks": data.remarks or "",
+                    "attachment_file_id": data.attachment_file_id or "",
+                    "attachment_filename": data.attachment_filename or "",
+                    "paid_amount": float(data.total_amount or 0.0) if data.payment_status == "Paid" else 0.0,
+                    "created_by": user_name,
+                    "created_at": now_iso(),
+                    "updated_at": now_iso()
+                }
+                await db.purchase_bills.insert_one(pbill_doc)
+                if not skip_activity_log:
+                    await log_activity(company_id, user_id, user_name, "Created Purchase Bill", f"Bill: {pbill_doc['bill_number']} Amount: ₹{pbill_doc['grand_total']} Vendor: {pbill_doc['vendor_name']}")
+
+        # Material Stock Inward Entry
+        pn = data.product.strip().upper()
+        is_hv = data.high_value_asset or data.high_value_goods or _load_local_high_value_products().get(pn, False) or any(kw in pn for kw in ["SOLAR PANEL", "PANEL", "INVERTER", "ACDB", "DCDB", "METER", "BATTERY"])
+        await ensure_product(company_id, pn, size=data.size or "", unit=data.unit or "Nos", brand=data.source_name or "", high_value_goods=is_hv)
+        
+        # Client ID resolution from name case-insensitively
+        if source_type_val == "Return From Client":
+            if client_name_val and not client_id_val:
+                client = await db.clients.find_one({
+                    "company_id": company_id,
+                    "full_name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}
+                })
+                if client:
+                    client_id_val = client["id"]
+                    client_name_val = client["full_name"]
+            elif client_id_val and not client_name_val:
+                client = await db.clients.find_one({"company_id": company_id, "id": client_id_val})
+                if client:
+                    client_name_val = client["full_name"]
+            
+            # Inward Return From Client stores client name in source_name
+            if client_name_val:
+                source_name_val = client_name_val
+
+        remarks_val = data.remarks or ""
+        if source_type_val == "Return From Client" and client_id_val:
+            remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
+            
+        sns = [str(sn).strip() for sn in (data.serial_numbers or []) if str(sn).strip()]
+
+        # Fast in-memory idempotency check (protects against rapid multi-clicks within 5s)
+        tx_key = f"{company_id}:{pn}:{data.quantity}:{challan_val}:{source_name_val}:{','.join(sorted(sns))}"
+        now_ts = time.time()
+        if tx_key in _recent_inward_txs:
+            prev_ts, prev_doc = _recent_inward_txs[tx_key]
+            if now_ts - prev_ts <= 5.0:
+                return dict(prev_doc)
+
+        # Idempotency check: if identical transaction created in last 4 seconds in DB, return existing
+        existing_recent = await db.inward_entries.find_one({
+            "company_id": company_id,
+            "product": pn,
+            "quantity": data.quantity,
+            "reference_number": challan_val or "",
+            "source_name": source_name_val,
+        })
+        if existing_recent and existing_recent.get("created_at"):
+            try:
+                rec_sns = [str(s).strip() for s in (existing_recent.get("serial_numbers") or []) if str(s).strip()]
+                if (sns and sorted(rec_sns) == sorted(sns)) or (not sns and not rec_sns):
+                    dt = datetime.fromisoformat(str(existing_recent["created_at"]).replace("Z", "+00:00"))
+                    if 0 <= (datetime.now(timezone.utc) - dt).total_seconds() <= 4.0:
+                        existing_recent.pop("_id", None)
+                        return existing_recent
+            except Exception:
+                pass
+
+        if data.serial_number_required or len(sns) > 0:
+            if data.serial_number_required and len(sns) != int(data.quantity):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Serial numbers count ({len(sns)}) must match quantity ({int(data.quantity)})"
                 )
-        elif raw_bill_num or float(data.total_amount or 0.0) > 0 or challan_val:
-            pbill_id = f"pbill_{uuid.uuid4().hex[:12]}"
-            pbill_doc = {
-                "id": pbill_id,
-                "company_id": company_id,
-                "vendor_id": vendor_id_val,
-                "vendor_name": source_name_val or "Unknown Vendor",
-                "bill_number": raw_bill_num or (f"BILL-{challan_val}" if challan_val else f"INV-{uuid.uuid4().hex[:6]}"),
-                "challan_number": challan_val,
-                "challan_no": challan_val,
-                "reference_number": challan_val,
-                "bill_date": (data.date or now_iso())[:10],
-                "due_date": "",
-                "items": [],
-                "subtotal": float(data.total_amount or 0.0),
-                "gst_total": 0.0,
-                "grand_total": float(data.total_amount or 0.0),
-                "payment_status": data.payment_status or "Unpaid",
-                "status": data.payment_status or "Unpaid",
-                "inward_status": "Received",
-                "bill_type": data.bill_type or "Product Bill",
-                "notes": data.remarks or "",
-                "remarks": data.remarks or "",
-                "attachment_file_id": data.attachment_file_id or "",
-                "attachment_filename": data.attachment_filename or "",
-                "paid_amount": float(data.total_amount or 0.0) if data.payment_status == "Paid" else 0.0,
-                "created_by": user_name,
-                "created_at": now_iso(),
-                "updated_at": now_iso()
-            }
-            await db.purchase_bills.insert_one(pbill_doc)
-            if not skip_activity_log:
-                await log_activity(company_id, user_id, user_name, "Created Purchase Bill", f"Bill: {pbill_doc['bill_number']} Amount: ₹{pbill_doc['grand_total']} Vendor: {pbill_doc['vendor_name']}")
+            if len(sns) != len(set(sns)):
+                raise HTTPException(status_code=400, detail="Duplicate serial numbers found in entry")
+            
+            existing_inwards = await db.inward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
+            existing_outwards = await db.outward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
+            outwarded_sns_set = {str(s).strip().upper() for o in existing_outwards for s in (o.get("serial_numbers") or []) if str(s).strip()}
 
-    # Material Stock Inward Entry
-    pn = data.product.strip().upper()
-    is_hv = data.high_value_asset or data.high_value_goods or _load_local_high_value_products().get(pn, False) or any(kw in pn for kw in ["SOLAR PANEL", "PANEL", "INVERTER", "ACDB", "DCDB", "METER", "BATTERY"])
-    await ensure_product(company_id, pn, size=data.size or "", unit=data.unit or "Nos", brand=data.source_name or "", high_value_goods=is_hv)
-    
-    # Client ID resolution from name case-insensitively
-    if source_type_val == "Return From Client":
+            for sn in sns:
+                sn_up = sn.upper()
+                for inw in existing_inwards:
+                    inw_sns = [str(s).strip().upper() for s in (inw.get("serial_numbers") or []) if str(s).strip()]
+                    if sn_up in inw_sns and sn_up not in outwarded_sns_set:
+                        raise HTTPException(status_code=400, detail=f"Serial number '{sn}' already exists in active stock.")
+        doc = {
+            "id": str(uuid.uuid4()),
+            "company_id": company_id,
+            "product": pn,
+            "size": data.size or "",
+            "quantity": data.quantity,
+            "unit": data.unit or "Nos",
+            "reference_number": challan_val or numeric_only(data.reference_number or data.challan_no),
+            "challan_no": challan_val or numeric_only(data.reference_number or data.challan_no),
+            "challan_number": challan_val or numeric_only(data.reference_number or data.challan_no),
+            "reference_type": data.reference_type or "Challan Number",
+            "bill_number": (data.bill_number or "").strip() or numeric_only(data.bill_number),
+            "source_type": source_type_val,
+            "source_name": source_name_val,
+            "date": data.date or now_iso(),
+            "remarks": remarks_val,
+            "attachment_file_id": data.attachment_file_id or "",
+            "attachment_filename": data.attachment_filename or "",
+            "source": source,
+            "unit_price": float(data.unit_price or 0.0) if data.bill_type != "Amount Bill" else 0.0,
+            "line_total": float(data.line_total or (data.quantity * float(data.unit_price or 0.0))) if data.bill_type != "Amount Bill" else 0.0,
+            "total_amount": float(data.total_amount or 0.0),
+            "payment_status": data.payment_status or "Unpaid",
+            "vendor_id": vendor_id_val,
+            "bill_type": data.bill_type or "Product Bill",
+            "serial_numbers": sns,
+            "serial_number_required": bool(data.serial_number_required or len(sns) > 0),
+            "high_value_asset": bool(data.high_value_asset or data.high_value_goods),
+            "high_value_goods": bool(data.high_value_asset or data.high_value_goods),
+            "created_by": user_id,
+            "created_by_name": user_name,
+            "created_at": now_iso()
+        }
+        if import_batch:
+            doc["import_batch"] = import_batch
+            
+        await db.inward_entries.insert_one(doc)
+        doc.pop("_id", None)
+        
+        is_hv = data.high_value_asset or data.high_value_goods or len(sns) > 0 or _load_local_high_value_products().get(pn, False) or any(kw in pn for kw in ["SOLAR PANEL", "PANEL", "INVERTER", "ACDB", "DCDB", "METER", "BATTERY"])
+        if is_hv:
+            all_assets = _load_local_assets()
+            qty = float(data.quantity or 0)
+            
+            if sns:
+                for sn in sns:
+                    asset_id = str(uuid.uuid4())
+                    asset_doc = {
+                        "id": asset_id,
+                        "company_id": company_id,
+                        "inward_entry_id": doc["id"],
+                        "product_name": pn,
+                        "brand": source_name_val or "Unknown",
+                        "size_model": data.size or "",
+                        "quantity": 1.0,
+                        "serial_number": sn,
+                        "vendor": source_name_val or "",
+                        "purchase_date": (data.date or now_iso())[:10],
+                        "challan_number": data.reference_number or "",
+                        "client_id": None,
+                        "client_name": None,
+                        "installation_date": None,
+                        "warranty_status": "Active",
+                        "status": "Available",
+                        "created_at": now_iso()
+                    }
+                    all_assets.append(asset_doc)
+            else:
+                asset_id = str(uuid.uuid4())
+                asset_doc = {
+                    "id": asset_id,
+                    "company_id": company_id,
+                    "inward_entry_id": doc["id"],
+                    "product_name": pn,
+                    "brand": source_name_val or "Unknown",
+                    "size_model": data.size or "",
+                    "quantity": qty,
+                    "serial_number": "",
+                    "vendor": source_name_val or "",
+                    "purchase_date": (data.date or now_iso())[:10],
+                    "challan_number": data.reference_number or "",
+                    "client_id": None,
+                    "client_name": None,
+                    "installation_date": None,
+                    "warranty_status": "Active",
+                    "status": "Available",
+                    "created_at": now_iso()
+                }
+                all_assets.append(asset_doc)
+            _save_local_assets(all_assets)
+            
+        if not skip_activity_log:
+            await log_activity(company_id, user_id, user_name, "Inward Entry", f"{pn} × {data.quantity}")
+        invalidate_products_cache(company_id)
+        _recent_inward_txs[inw_tx_key] = (time.time(), dict(doc))
+        return doc
+
+async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: str, user_name: str, source: str = "manual", import_batch: str = ""):
+    lock = _get_company_lock(company_id)
+    async with lock:
+        pn_raw = (data.product or "").strip().upper()
+        challan_raw = (data.outward_challan_no or data.reference_number or "").strip()
+        client_raw = (data.client_name or "").strip().upper()
+        sns_raw = [str(sn).strip().upper() for sn in (data.serial_numbers or []) if str(sn).strip()]
+
+        out_tx_key = f"{company_id}:{pn_raw}:{float(data.quantity or 0)}:{challan_raw}:{client_raw}:{','.join(sorted(sns_raw))}"
+        now_ts = time.time()
+        if out_tx_key in _recent_outward_txs:
+            prev_ts, prev_doc = _recent_outward_txs[out_tx_key]
+            if now_ts - prev_ts <= 6.0:
+                return dict(prev_doc)
+
+        pn = pn_raw
+        await ensure_product(company_id, pn, size=data.size or "", unit=data.unit or "Nos")
+        
+        client_id_val = data.client_id or ""
+        client_name_val = data.client_name or ""
+        project_id_val = data.project_id or ""
+        project_name_val = data.project_name or ""
+        
+        # Client ID and Name resolution case-insensitively
         if client_name_val and not client_id_val:
             client = await db.clients.find_one({
                 "company_id": company_id,
@@ -7477,211 +7704,86 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
             client = await db.clients.find_one({"company_id": company_id, "id": client_id_val})
             if client:
                 client_name_val = client["full_name"]
-        
-        # Inward Return From Client stores client name in source_name
-        if client_name_val:
-            source_name_val = client_name_val
 
-    remarks_val = data.remarks or ""
-    if source_type_val == "Return From Client" and client_id_val:
-        remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
-        
-    sns = [str(sn).strip() for sn in (data.serial_numbers or []) if str(sn).strip()]
-    if data.serial_number_required or len(sns) > 0:
-        if data.serial_number_required and len(sns) != int(data.quantity):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Serial numbers count ({len(sns)}) must match quantity ({int(data.quantity)})"
-            )
-        if len(sns) != len(set(sns)):
-            raise HTTPException(status_code=400, detail="Duplicate serial numbers found in entry")
-        
-        existing_inwards = await db.inward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
-        existing_outwards = await db.outward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
-        outwarded_sns_set = {str(s).strip().upper() for o in existing_outwards for s in (o.get("serial_numbers") or []) if str(s).strip()}
+        # Align project ID and project Name with client if empty or missing (same as Normal UI entry)
+        if client_id_val:
+            if not project_id_val:
+                project_id_val = client_id_val
+            if not project_name_val:
+                project_name_val = client_name_val
 
-        for sn in sns:
-            sn_up = sn.upper()
-            for inw in existing_inwards:
-                inw_sns = [str(s).strip().upper() for s in (inw.get("serial_numbers") or []) if str(s).strip()]
-                if sn_up in inw_sns and sn_up not in outwarded_sns_set:
-                    raise HTTPException(status_code=400, detail=f"Serial number '{sn}' already exists in active stock.")
-    doc = {
-        "id": str(uuid.uuid4()),
-        "company_id": company_id,
-        "product": pn,
-        "size": data.size or "",
-        "quantity": data.quantity,
-        "unit": data.unit or "Nos",
-        "reference_number": challan_val or numeric_only(data.reference_number or data.challan_no),
-        "challan_no": challan_val or numeric_only(data.reference_number or data.challan_no),
-        "challan_number": challan_val or numeric_only(data.reference_number or data.challan_no),
-        "reference_type": data.reference_type or "Challan Number",
-        "bill_number": (data.bill_number or "").strip() or numeric_only(data.bill_number),
-        "source_type": source_type_val,
-        "source_name": source_name_val,
-        "date": data.date or now_iso(),
-        "remarks": remarks_val,
-        "attachment_file_id": data.attachment_file_id or "",
-        "attachment_filename": data.attachment_filename or "",
-        "source": source,
-        "unit_price": float(data.unit_price or 0.0) if data.bill_type != "Amount Bill" else 0.0,
-        "line_total": float(data.line_total or (data.quantity * float(data.unit_price or 0.0))) if data.bill_type != "Amount Bill" else 0.0,
-        "total_amount": float(data.total_amount or 0.0),
-        "payment_status": data.payment_status or "Unpaid",
-        "vendor_id": vendor_id_val,
-        "bill_type": data.bill_type or "Product Bill",
-        "serial_numbers": sns,
-        "serial_number_required": bool(data.serial_number_required or len(sns) > 0),
-        "high_value_asset": bool(data.high_value_asset or data.high_value_goods),
-        "high_value_goods": bool(data.high_value_asset or data.high_value_goods),
-        "created_by": user_id,
-        "created_by_name": user_name,
-        "created_at": now_iso()
-    }
-    if import_batch:
-        doc["import_batch"] = import_batch
-        
-    await db.inward_entries.insert_one(doc)
-    doc.pop("_id", None)
-    
-    is_hv = data.high_value_asset or data.high_value_goods or len(sns) > 0 or _load_local_high_value_products().get(pn, False) or any(kw in pn for kw in ["SOLAR PANEL", "PANEL", "INVERTER", "ACDB", "DCDB", "METER", "BATTERY"])
-    if is_hv:
-        all_assets = _load_local_assets()
-        qty = float(data.quantity or 0)
-        
-        if sns:
-            for sn in sns:
-                asset_id = str(uuid.uuid4())
-                asset_doc = {
-                    "id": asset_id,
-                    "company_id": company_id,
-                    "inward_entry_id": doc["id"],
-                    "product_name": pn,
-                    "brand": source_name_val or "Unknown",
-                    "size_model": data.size or "",
-                    "quantity": 1.0,
-                    "serial_number": sn,
-                    "vendor": source_name_val or "",
-                    "purchase_date": (data.date or now_iso())[:10],
-                    "challan_number": data.reference_number or "",
-                    "client_id": None,
-                    "client_name": None,
-                    "installation_date": None,
-                    "warranty_status": "Active",
-                    "status": "Available",
-                    "created_at": now_iso()
-                }
-                all_assets.append(asset_doc)
-        else:
-            asset_id = str(uuid.uuid4())
-            asset_doc = {
-                "id": asset_id,
-                "company_id": company_id,
-                "inward_entry_id": doc["id"],
-                "product_name": pn,
-                "brand": source_name_val or "Unknown",
-                "size_model": data.size or "",
-                "quantity": qty,
-                "serial_number": "",
-                "vendor": source_name_val or "",
-                "purchase_date": (data.date or now_iso())[:10],
-                "challan_number": data.reference_number or "",
-                "client_id": None,
-                "client_name": None,
-                "installation_date": None,
-                "warranty_status": "Active",
-                "status": "Available",
-                "created_at": now_iso()
-            }
-            all_assets.append(asset_doc)
-        _save_local_assets(all_assets)
-        
-    if not skip_activity_log:
-        await log_activity(company_id, user_id, user_name, "Inward Entry", f"{pn} × {data.quantity}")
-    invalidate_products_cache(company_id)
-    return doc
+        challan_val = (data.outward_challan_no or data.reference_number or "").strip()
+        sns = [str(sn).strip() for sn in (data.serial_numbers or []) if str(sn).strip()]
 
-async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: str, user_name: str, source: str = "manual", import_batch: str = ""):
-    pn = data.product.strip().upper()
-    await ensure_product(company_id, pn, size=data.size or "", unit=data.unit or "Nos")
-    
-    client_id_val = data.client_id or ""
-    client_name_val = data.client_name or ""
-    project_id_val = data.project_id or ""
-    project_name_val = data.project_name or ""
-    
-    # Client ID and Name resolution case-insensitively
-    if client_name_val and not client_id_val:
-        client = await db.clients.find_one({
+        # Idempotency check: if identical outward created in last 4 seconds, return existing
+        existing_recent = await db.outward_entries.find_one({
             "company_id": company_id,
-            "full_name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}
+            "product": pn,
+            "quantity": data.quantity,
+            "outward_challan_no": challan_val,
+            "client_name": client_name_val,
         })
-        if client:
-            client_id_val = client["id"]
-            client_name_val = client["full_name"]
-    elif client_id_val and not client_name_val:
-        client = await db.clients.find_one({"company_id": company_id, "id": client_id_val})
-        if client:
-            client_name_val = client["full_name"]
+        if existing_recent and existing_recent.get("created_at"):
+            try:
+                rec_sns = [str(s).strip() for s in (existing_recent.get("serial_numbers") or []) if str(s).strip()]
+                if (sns and sorted(rec_sns) == sorted(sns)) or (not sns and not rec_sns):
+                    dt = datetime.fromisoformat(str(existing_recent["created_at"]).replace("Z", "+00:00"))
+                    if 0 <= (datetime.now(timezone.utc) - dt).total_seconds() <= 4.0:
+                        existing_recent.pop("_id", None)
+                        return existing_recent
+            except Exception:
+                pass
 
-    # Align project ID and project Name with client if empty or missing (same as Normal UI entry)
-    if client_id_val:
-        if not project_id_val:
-            project_id_val = client_id_val
-        if not project_name_val:
-            project_name_val = client_name_val
+        if data.serial_number_required or len(sns) > 0:
+            if data.serial_number_required and len(sns) != int(data.quantity):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Serial numbers count ({len(sns)}) must match quantity ({int(data.quantity)})"
+                )
+            if len(sns) != len(set(sns)):
+                raise HTTPException(status_code=400, detail="Duplicate serial numbers in outward entry")
+            
+            existing_outwards = await db.outward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
+            outwarded_sns_set = {str(s).strip().upper() for o in existing_outwards for s in (o.get("serial_numbers") or []) if str(s).strip()}
 
-    sns = [str(sn).strip() for sn in (data.serial_numbers or []) if str(sn).strip()]
-    if data.serial_number_required or len(sns) > 0:
-        if data.serial_number_required and len(sns) != int(data.quantity):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Serial numbers count ({len(sns)}) must match quantity ({int(data.quantity)})"
-            )
-        if len(sns) != len(set(sns)):
-            raise HTTPException(status_code=400, detail="Duplicate serial numbers in outward entry")
-        
-        existing_outwards = await db.outward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
-        outwarded_sns_set = {str(s).strip().upper() for o in existing_outwards for s in (o.get("serial_numbers") or []) if str(s).strip()}
+            for sn in sns:
+                sn_up = sn.upper()
+                if sn_up in outwarded_sns_set:
+                    raise HTTPException(status_code=400, detail=f"Serial number '{sn}' is already OUT / issued.")
 
-        for sn in sns:
-            sn_up = sn.upper()
-            if sn_up in outwarded_sns_set:
-                raise HTTPException(status_code=400, detail=f"Serial number '{sn}' is already OUT / issued.")
-    doc = {
-        "id": str(uuid.uuid4()),
-        "company_id": company_id,
-        "product": pn,
-        "size": data.size or "",
-        "quantity": data.quantity,
-        "unit": data.unit or "Nos",
-        "client_id": client_id_val,
-        "client_name": client_name_val,
-        "project_id": project_id_val,
-        "project_name": project_name_val,
-        "outward_challan_no": numeric_only(data.outward_challan_no),
-        "reference_number": numeric_only(data.reference_number or data.outward_challan_no),
-        "reference_type": data.reference_type or "Challan Number",
-        "date": data.date or now_iso(),
-        "remarks": data.remarks or "",
-        "status": data.status or "Dispatched",
-        "attachment_file_id": data.attachment_file_id or "",
-        "attachment_filename": data.attachment_filename or "",
-        "source": source,
-        "serial_numbers": sns,
-        "serial_number_required": bool(data.serial_number_required or len(sns) > 0),
-        "high_value_asset": bool(data.high_value_asset or data.high_value_goods),
-        "high_value_goods": bool(data.high_value_asset or data.high_value_goods),
-        "created_by": user_id,
-        "created_by_name": user_name,
-        "created_at": now_iso()
-    }
-    if import_batch:
-        doc["import_batch"] = import_batch
-        
-    await db.outward_entries.insert_one(doc)
-    doc.pop("_id", None)
+        doc = {
+            "id": str(uuid.uuid4()),
+            "company_id": company_id,
+            "product": pn,
+            "size": data.size or "",
+            "quantity": data.quantity,
+            "unit": data.unit or "Nos",
+            "client_id": client_id_val,
+            "client_name": client_name_val,
+            "project_id": project_id_val,
+            "project_name": project_name_val,
+            "outward_challan_no": numeric_only(data.outward_challan_no),
+            "reference_number": numeric_only(data.reference_number or data.outward_challan_no),
+            "reference_type": data.reference_type or "Challan Number",
+            "date": data.date or now_iso(),
+            "remarks": data.remarks or "",
+            "status": data.status or "Dispatched",
+            "attachment_file_id": data.attachment_file_id or "",
+            "attachment_filename": data.attachment_filename or "",
+            "source": source,
+            "serial_numbers": sns,
+            "serial_number_required": bool(data.serial_number_required or len(sns) > 0),
+            "high_value_asset": bool(data.high_value_asset or data.high_value_goods),
+            "high_value_goods": bool(data.high_value_asset or data.high_value_goods),
+            "created_by": user_id,
+            "created_by_name": user_name,
+            "created_at": now_iso()
+        }
+        if import_batch:
+            doc["import_batch"] = import_batch
+            
+        await db.outward_entries.insert_one(doc)
+        doc.pop("_id", None)
     
     is_hv = data.high_value_asset or data.high_value_goods or len(sns) > 0 or _load_local_high_value_products().get(pn, False) or any(kw in pn for kw in ["SOLAR PANEL", "PANEL", "INVERTER", "ACDB", "DCDB", "METER", "BATTERY"])
     if is_hv:
@@ -7848,9 +7950,10 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
                 a["asset_remarks"] = data.asset_remarks or ""
         _save_local_assets(all_assets)
         
-    await log_activity(company_id, user_id, user_name, "Outward Entry", f"{pn} × {data.quantity}")
-    invalidate_products_cache(company_id)
-    return doc
+        await log_activity(company_id, user_id, user_name, "Outward Entry", f"{pn} × {data.quantity}")
+        invalidate_products_cache(company_id)
+        _recent_outward_txs[out_tx_key] = (time.time(), dict(doc))
+        return doc
 
 @api_router.post("/inventory/inward")
 async def add_inward(data: InwardIn, user=Depends(require_active_subscription())):
@@ -8826,15 +8929,41 @@ async def list_serial_tracking(
     cid = user["company_id"]
     rows = []
     
-    # 0. Fetch all outwarded serial numbers for company to compute status accurately
-    outwards_all = await db.outward_entries.find({"company_id": cid}, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(10000)
-    outwarded_sn_set = {str(sn).strip().upper() for entry in outwards_all for sn in (entry.get("serial_numbers") or []) if str(sn).strip()}
+    # 0. Fetch all outwarded serial numbers and local asset serial maps
+    local_assets = _load_local_assets()
+    inward_asset_map = {}
+    outward_asset_map = {}
+    for a in local_assets:
+        if a.get("company_id") == cid and a.get("serial_number"):
+            inw_id = a.get("inward_entry_id")
+            if inw_id:
+                inward_asset_map.setdefault(inw_id, []).append(str(a["serial_number"]).strip())
+            out_id = a.get("outward_entry_id")
+            if out_id:
+                outward_asset_map.setdefault(out_id, []).append(str(a["serial_number"]).strip())
 
-    # 1. Fetch Inward serial records
+    outwards_all = await db.outward_entries.find({"company_id": cid}, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(10000)
+    outwarded_sn_set = {str(sn).strip().upper() for entry in outwards_all for sn in (entry.get("serial_numbers") or outward_asset_map.get(entry.get("id"), [])) if str(sn).strip()}
+    for a in local_assets:
+        if a.get("company_id") == cid and a.get("status") == "Installed" and a.get("serial_number"):
+            outwarded_sn_set.add(str(a["serial_number"]).strip().upper())
+
+    # Map serial number to vendor from inward
     sn_to_vendor = {}
     inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(10000)
     for entry in inwards:
-        sns = entry.get("serial_numbers") or []
+        v_name = entry.get("source_name") or ""
+        entry_sns = entry.get("serial_numbers") or inward_asset_map.get(entry.get("id"), [])
+        for sn in entry_sns:
+            sn_clean = str(sn).strip()
+            if sn_clean and v_name:
+                sn_to_vendor[sn_clean] = v_name
+
+    # 1. Fetch Inward transaction rows (each entry = 1 row with full serials attached)
+    for entry in inwards:
+        sns = [str(sn).strip() for sn in (entry.get("serial_numbers") or inward_asset_map.get(entry.get("id"), [])) if str(sn).strip()]
+        if not sns and not entry.get("serial_number_required"):
+            continue
         p_name = entry.get("product") or ""
         p_size = entry.get("size") or ""
         v_name = entry.get("source_name") or ""
@@ -8842,36 +8971,50 @@ async def list_serial_tracking(
         ref = entry.get("reference_number") or entry.get("challan_no") or entry.get("challan_number") or ""
         b_num = entry.get("bill_number") or ""
         
-        for sn in sns:
-            sn_clean = str(sn).strip()
-            if not sn_clean:
-                continue
-            if v_name:
-                sn_to_vendor[sn_clean] = v_name
-            if not type or type.lower() in ("all", "inward", "in"):
-                is_out = sn_clean.upper() in outwarded_sn_set
-                rows.append({
-                    "id": f"inward_{entry['id']}_{sn_clean}",
-                    "transaction_id": entry["id"],
-                    "type": "IN",
-                    "product": p_name,
-                    "size": p_size,
-                    "vendor": v_name or "—",
-                    "client_name": "—",
-                    "client_id": None,
-                    "serial_number": sn_clean,
-                    "quantity": 1,
-                    "status": "OUT / ISSUED" if is_out else "IN STOCK",
-                    "date": d_str,
-                    "reference_number": ref or (f"Bill {b_num}" if b_num else "—"),
-                    "bill_number": b_num,
-                    "created_at": entry.get("created_at") or d_str,
-                })
+        # Calculate in-stock vs outwarded counts
+        in_stock_count = sum(1 for s in sns if s.upper() not in outwarded_sn_set)
+        out_count = len(sns) - in_stock_count
+
+        if not sns:
+            tx_status = "IN STOCK"
+        elif out_count == 0:
+            tx_status = "IN STOCK"
+        elif in_stock_count == 0:
+            tx_status = "OUT / ISSUED"
+        else:
+            tx_status = f"{in_stock_count} IN STOCK / {out_count} OUT"
+
+        detailed_serials = [
+            {"serial_number": s, "status": "OUT / ISSUED" if s.upper() in outwarded_sn_set else "IN STOCK"}
+            for s in sns
+        ]
+
+        if not type or type.lower() in ("all", "inward", "in"):
+            rows.append({
+                "id": f"inward_{entry['id']}",
+                "transaction_id": entry["id"],
+                "type": "IN",
+                "product": p_name,
+                "size": p_size,
+                "vendor": v_name or "—",
+                "client_name": "—",
+                "client_id": None,
+                "quantity": len(sns) if sns else int(entry.get("quantity") or 1),
+                "status": tx_status,
+                "date": d_str,
+                "reference_number": ref or (f"Bill {b_num}" if b_num else "—"),
+                "bill_number": b_num,
+                "serial_numbers": sns,
+                "detailed_serials": detailed_serials,
+                "created_at": entry.get("created_at") or d_str,
+            })
                 
-    # 2. Fetch Outward serial records
+    # 2. Fetch Outward transaction rows
     if not type or type.lower() in ("all", "outward", "out"):
         for entry in outwards_all:
-            sns = entry.get("serial_numbers") or []
+            sns = [str(sn).strip() for sn in (entry.get("serial_numbers") or outward_asset_map.get(entry.get("id"), [])) if str(sn).strip()]
+            if not sns and not entry.get("serial_number_required"):
+                continue
             p_name = entry.get("product") or ""
             p_size = entry.get("size") or ""
             c_name = entry.get("client_name") or ""
@@ -8879,79 +9022,32 @@ async def list_serial_tracking(
             d_str = (entry.get("date") or entry.get("created_at") or "")[:10]
             ref = entry.get("reference_number") or entry.get("outward_challan_no") or ""
             
-            for sn in sns:
-                sn_clean = str(sn).strip()
-                if not sn_clean:
-                    continue
-                rows.append({
-                    "id": f"outward_{entry['id']}_{sn_clean}",
-                    "transaction_id": entry["id"],
-                    "type": "OUT",
-                    "product": p_name,
-                    "size": p_size,
-                    "vendor": sn_to_vendor.get(sn_clean) or "—",
-                    "client_name": c_name or "—",
-                    "client_id": c_id,
-                    "serial_number": sn_clean,
-                    "quantity": 1,
-                    "status": "OUT / ISSUED",
-                    "date": d_str,
-                    "reference_number": ref or "—",
-                    "bill_number": "",
-                    "created_at": entry.get("created_at") or d_str,
-                })
+            v_names = list(dict.fromkeys([sn_to_vendor.get(s) for s in sns if sn_to_vendor.get(s)]))
+            v_display = ", ".join(v_names) if v_names else "—"
 
-    # Also check local assets in case any serials were registered via High Value Goods
-    assets = _load_local_assets()
-    known_keys = {(r["type"], r["transaction_id"], r["serial_number"]) for r in rows}
-    for a in assets:
-        if a.get("company_id") == cid and a.get("serial_number"):
-            sn_val = str(a["serial_number"]).strip()
-            if not sn_val:
-                continue
-            # If in inward
-            if a.get("inward_entry_id") and ("IN", a["inward_entry_id"], sn_val) not in known_keys:
-                if not type or type.lower() in ("all", "inward", "in"):
-                    is_out = sn_val.upper() in outwarded_sn_set
-                    rows.append({
-                        "id": f"inward_{a['inward_entry_id']}_{sn_val}",
-                        "transaction_id": a["inward_entry_id"],
-                        "type": "IN",
-                        "product": a.get("product_name") or "",
-                        "size": a.get("size_model") or "",
-                        "vendor": a.get("vendor") or "—",
-                        "client_name": "—",
-                        "client_id": None,
-                        "serial_number": sn_val,
-                        "quantity": 1,
-                        "status": "OUT / ISSUED" if is_out else "IN STOCK",
-                        "date": (a.get("purchase_date") or a.get("created_at") or "")[:10],
-                        "reference_number": a.get("challan_number") or "—",
-                        "bill_number": "",
-                        "created_at": a.get("created_at") or "",
-                    })
-                    known_keys.add(("IN", a["inward_entry_id"], sn_val))
-            # If in outward
-            if a.get("outward_entry_id") and ("OUT", a["outward_entry_id"], sn_val) not in known_keys:
-                if not type or type.lower() in ("all", "outward", "out"):
-                    rows.append({
-                        "id": f"outward_{a['outward_entry_id']}_{sn_val}",
-                        "transaction_id": a["outward_entry_id"],
-                        "type": "OUT",
-                        "product": a.get("product_name") or "",
-                        "size": a.get("size_model") or "",
-                        "vendor": "—",
-                        "client_name": a.get("client_name") or "—",
-                        "client_id": a.get("client_id"),
-                        "serial_number": sn_val,
-                        "quantity": 1,
-                        "status": "OUT / ISSUED",
-                        "date": (a.get("outward_date") or a.get("installation_date") or a.get("created_at") or "")[:10],
-                        "reference_number": a.get("challan_number") or "—",
-                        "bill_number": "",
-                        "created_at": a.get("created_at") or "",
-                    })
-                    known_keys.add(("OUT", a["outward_entry_id"], sn_val))
+            detailed_serials = [
+                {"serial_number": s, "status": "OUT / ISSUED"}
+                for s in sns
+            ]
+
+            rows.append({
+                "id": f"outward_{entry['id']}",
+                "transaction_id": entry["id"],
+                "type": "OUT",
+                "product": p_name,
+                "size": p_size,
+                "vendor": v_display,
+                "client_name": c_name or "—",
+                "client_id": c_id,
+                "quantity": len(sns) if sns else int(entry.get("quantity") or 1),
+                "status": "OUT / ISSUED",
+                "date": d_str,
+                "reference_number": ref or "—",
+                "bill_number": "",
+                "serial_numbers": sns,
+                "detailed_serials": detailed_serials,
+                "created_at": entry.get("created_at") or d_str,
+            })
 
     # Apply search and filters
     filtered = []
@@ -8968,7 +9064,8 @@ async def list_serial_tracking(
             continue
         if search and search.strip():
             s_low = search.lower().strip()
-            text = f"{r['serial_number']} {r['product']} {r['size']} {r['vendor']} {r['client_name']} {r['reference_number']}".lower()
+            sns_text = " ".join(r["serial_numbers"]).lower()
+            text = f"{r['product']} {r['size']} {r['vendor']} {r['client_name']} {r['reference_number']} {sns_text}".lower()
             if s_low not in text:
                 continue
         filtered.append(r)
@@ -9020,17 +9117,19 @@ async def export_serial_tracking_csv(
     import csv
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["Product", "Size / Spec", "Vendor", "Client / Purchased By", "Serial No.", "Type", "Date", "Reference"])
+    w.writerow(["Product", "Size / Spec", "Vendor", "Client / Purchased By", "Type", "Quantity", "Date", "Reference", "Status", "Serial Numbers"])
     for r in rows:
         w.writerow([
             r.get("product") or "",
             r.get("size") or "",
             r.get("vendor") or "",
             r.get("client_name") or "",
-            r.get("serial_number") or "",
             r.get("type") or "",
+            r.get("quantity") or 1,
             r.get("date") or "",
             r.get("reference_number") or "",
+            r.get("status") or "",
+            "; ".join(r.get("serial_numbers") or [])
         ])
     return Response(
         content=buf.getvalue(),

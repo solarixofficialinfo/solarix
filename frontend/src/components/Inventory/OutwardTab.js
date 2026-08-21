@@ -59,6 +59,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
   const [editing, setEditing] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
   const [busy, setBusy] = useState(false);
+  const submittingRef = useRef(false);
   const [uploading, setUploading] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [autoContinue, setAutoContinue] = useState(() => localStorage.getItem("outward_auto_continue") === "true");
@@ -198,13 +199,18 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
       }
       setHvDialogOpen(false);
     } catch (e) { toast.error(formatApiError(e)); }
-    finally { setBusy(false); }
+    finally {
+      submittingRef.current = false;
+      setBusy(false);
+    }
   };
 
   const submit = async () => {
+    if (submittingRef.current || busy) return;
     if (!form.product?.trim() || !form.quantity || Number(form.quantity) <= 0) {
       toast.error("Product and quantity are required"); return;
     }
+    submittingRef.current = true;
     if (form.high_value_goods && form.serial_number_required) {
       setHvDialogData({
         serial_number_required: true,
@@ -215,6 +221,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
         asset_remarks: form.asset_remarks || ""
       });
       setHvDialogOpen(true);
+      submittingRef.current = false;
     } else {
       await submitOutwardActual({});
     }
