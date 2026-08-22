@@ -88,7 +88,7 @@ export default function ClientData() {
   }, [filters]);
 
   const { data: clients = [], isLoading: clientsLoading } = useClientDataList(debouncedFilters);
-  const { data: stats = { total_meters: 0, online: 0, offline: 0, error: 0 }, isLoading: statsLoading } = useClientDataStats();
+  const { data: stats = { total_clients: 0, active_clients: 0, pending_action: 0, tickets_open: 0, tickets_closed: 0, total_capacity_kw: 0 }, isLoading: statsLoading } = useClientDataStats();
   const loading = clientsLoading || statsLoading;
 
   useEffect(() => {
@@ -139,8 +139,8 @@ export default function ClientData() {
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
         <StatCard title="Total Clients" value={stats?.total_clients ?? "—"} icon={Users2} accent="bg-blue-50 text-blue-600" />
-        <StatCard title="Active Inverters" value={stats?.active_inverters ?? "—"} icon={Activity} accent="bg-emerald-50 text-emerald-600" />
-        <StatCard title="Offline Inverters" value={stats?.offline_inverters ?? "—"} icon={WifiOff} accent="bg-red-50 text-red-600" />
+        <StatCard title="Active Clients" value={stats?.active_clients ?? "—"} icon={Activity} accent="bg-emerald-50 text-emerald-600" />
+        <StatCard title="Action Required" value={stats?.pending_action ?? stats?.action_required ?? "—"} icon={AlertCircle} accent="bg-amber-50 text-amber-600" />
         <StatCard title="Tickets Open" value={stats?.tickets_open ?? "—"} icon={TicketIcon} accent="bg-amber-50 text-amber-600" />
         <StatCard title="Tickets Closed" value={stats?.tickets_closed ?? "—"} icon={CheckCircle2} accent="bg-emerald-50 text-emerald-600" />
         <StatCard title="Solar Capacity" value={`${stats?.total_capacity_kw ?? 0} kW`} icon={Zap} accent="bg-indigo-50 text-indigo-600" />

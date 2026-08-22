@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Any, Literal
 """PDF generators for Solarix documents."""
 from io import BytesIO
 from datetime import datetime, timezone
@@ -119,7 +120,9 @@ def _kv_table(rows):
     return t
 
 
-def _format_currency(value: float) -> str:
+def _format_currency(value: float | None) -> str:
+    if value is None:
+        return "Rs. 0.00"
     try:
         return f"Rs. {value:,.2f}"
     except Exception:
@@ -704,7 +707,7 @@ def generate_po_pdf(data: dict, company: dict) -> bytes:
         hdr_left_flow.append(Paragraph(f"GST: {comp['gstin']}", comp_gst_style))
 
     po_title_style = ParagraphStyle('po_title', parent=styles['Normal'], fontSize=16, leading=18, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold', alignment=2)
-    hdr_right_flow = [Paragraph("PURCHASE ORDER", po_title_style), Spacer(1, 0.2 * cm)]
+    hdr_right_flow: list[Any] = [Paragraph("PURCHASE ORDER", po_title_style), Spacer(1, 0.2 * cm)]
 
     meta_table_data = [
         [Paragraph("<b>DATE</b>", BOLD_SMALL), Paragraph(po["po_date"], SMALL)],
@@ -1260,7 +1263,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         hdr_left_flow.append(Paragraph(seller["address"], comp_sub_style))
 
     inv_title_style = ParagraphStyle('inv_title', parent=styles['Normal'], fontSize=16, leading=18, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold', alignment=2)
-    hdr_right_flow = [Paragraph(title_text, inv_title_style), Spacer(1, 0.2 * cm)]
+    hdr_right_flow: list[Any] = [Paragraph(title_text, inv_title_style), Spacer(1, 0.2 * cm)]
 
     meta_table_data = [
         [Paragraph(f"<b>{title_text} NO.</b>", BOLD_SMALL), Paragraph(inv["number"], SMALL)],
@@ -2274,7 +2277,7 @@ def generate_wcr_pdf(client: dict, company: dict) -> bytes:
 
 def _build_sldr_drawing(sol_kw="5", sol_wp="540", num_panels="10", panel_make="GVP SOLAR", inverter_make="GROWATT", inverter_kw="5"):
     d = Drawing(490, 370)
-    d.add(Rect(0, 0, 490, 370, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#334155"), strokeWidth=1))
+    d.add(Rect(0, 0, 490, 370, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#334155"), strokeWidth=1))  # type: ignore
     
     d.add(String(245, 355, "Grid Tied Solar Inverter System Electrical Single Line Diagram", fontName="Helvetica-Bold", fontSize=9.5, textAnchor="middle", fillColor=colors.HexColor("#1e293b")))
 
@@ -2285,14 +2288,14 @@ def _build_sldr_drawing(sol_kw="5", sol_wp="540", num_panels="10", panel_make="G
         for row in range(4):
             ry = 285 - row * 43
             # Individual Solar Panel Rectangle
-            d.add(Rect(cx, ry, 30, 38, fillColor=colors.HexColor("#f8fafc"), strokeColor=colors.HexColor("#0284c7"), strokeWidth=1))
+            d.add(Rect(cx, ry, 30, 38, fillColor=colors.HexColor("#f8fafc"), strokeColor=colors.HexColor("#0284c7"), strokeWidth=1))  # type: ignore
             # Internal Solar Cell Grid Lines (3x2 grid)
             d.add(Line(cx+10, ry, cx+10, ry+38, strokeColor=colors.HexColor("#cbd5e1"), strokeWidth=0.5))
             d.add(Line(cx+20, ry, cx+20, ry+38, strokeColor=colors.HexColor("#cbd5e1"), strokeWidth=0.5))
             d.add(Line(cx, ry+19, cx+30, ry+19, strokeColor=colors.HexColor("#cbd5e1"), strokeWidth=0.5))
             
             # Embedded Junction Box with + / - Terminals
-            d.add(Rect(cx+7, ry+13, 16, 12, rx=1, ry=1, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#0369a1"), strokeWidth=0.6))
+            d.add(Rect(cx+7, ry+13, 16, 12, rx=1, ry=1, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#0369a1"), strokeWidth=0.6))  # type: ignore
             d.add(String(cx+15, ry+19, "Junction", fontName="Helvetica-Bold", fontSize=4.5, textAnchor="middle", fillColor=colors.HexColor("#0369a1")))
             d.add(String(cx+15, ry+14, "box", fontName="Helvetica-Bold", fontSize=4.5, textAnchor="middle", fillColor=colors.HexColor("#0369a1")))
             d.add(String(cx+3, ry+31, "+", fontName="Helvetica-Bold", fontSize=5.5, fillColor=colors.HexColor("#dc2626")))
@@ -2318,7 +2321,7 @@ def _build_sldr_drawing(sol_kw="5", sol_wp="540", num_panels="10", panel_make="G
     d.add(String(108, 65, "8.31A", fontName="Helvetica-Bold", fontSize=6.5, textAnchor="middle", fillColor=colors.HexColor("#b91c1c")))
 
     # 2. DC Isolator Box
-    d.add(Rect(140, 52, 55, 45, rx=3, ry=3, fillColor=colors.HexColor("#fef2f2"), strokeColor=colors.HexColor("#ef4444"), strokeWidth=1))
+    d.add(Rect(140, 52, 55, 45, rx=3, ry=3, fillColor=colors.HexColor("#fef2f2"), strokeColor=colors.HexColor("#ef4444"), strokeWidth=1))  # type: ignore
     d.add(Line(150, 75, 180, 75, strokeColor=colors.HexColor("#dc2626"), strokeWidth=1.2))
     d.add(Circle(155, 75, 2.5, fillColor=colors.HexColor("#dc2626"), strokeColor=colors.HexColor("#dc2626")))
     d.add(Circle(175, 75, 2.5, fillColor=colors.HexColor("#dc2626"), strokeColor=colors.HexColor("#dc2626")))
@@ -2330,20 +2333,20 @@ def _build_sldr_drawing(sol_kw="5", sol_wp="540", num_panels="10", panel_make="G
     d.add(Line(225, 75, 225, 140, strokeColor=colors.HexColor("#dc2626"), strokeWidth=1.5))
 
     # 3. Grid Tied Solar Inverter Box (Enlarged Height & Spacing)
-    d.add(Rect(200, 140, 130, 175, rx=8, ry=8, fillColor=colors.HexColor("#f8fafc"), strokeColor=colors.HexColor("#1e293b"), strokeWidth=1.5))
+    d.add(Rect(200, 140, 130, 175, rx=8, ry=8, fillColor=colors.HexColor("#f8fafc"), strokeColor=colors.HexColor("#1e293b"), strokeWidth=1.5))  # type: ignore
     d.add(String(265, 302, "Grid Tied Solar Inverter", fontName="Helvetica-Bold", fontSize=8.5, textAnchor="middle", fillColor=colors.HexColor("#0f172a")))
     
     # Wi-Fi Monitor Plug
-    d.add(Rect(286, 276, 36, 18, rx=3, ry=3, fillColor=colors.HexColor("#e0f2fe"), strokeColor=colors.HexColor("#0284c7"), strokeWidth=1))
+    d.add(Rect(286, 276, 36, 18, rx=3, ry=3, fillColor=colors.HexColor("#e0f2fe"), strokeColor=colors.HexColor("#0284c7"), strokeWidth=1))  # type: ignore
     d.add(String(304, 285, "Wi-Fi Plug", fontName="Helvetica-Bold", fontSize=5.5, textAnchor="middle", fillColor=colors.HexColor("#0369a1")))
     d.add(String(304, 279, "(Monitor)", fontName="Helvetica", fontSize=5, textAnchor="middle", fillColor=colors.HexColor("#0284c7")))
     d.add(String(304, 297, "((( Wi-Fi )))", fontName="Helvetica", fontSize=5.5, textAnchor="middle", fillColor=colors.HexColor("#0284c7")))
 
     # Converter Compartments (DC & AC)
-    d.add(Rect(218, 165, 44, 44, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#475569"), strokeWidth=1))
+    d.add(Rect(218, 165, 44, 44, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#475569"), strokeWidth=1))  # type: ignore
     d.add(String(240, 183, "DC", fontName="Helvetica-Bold", fontSize=9.5, textAnchor="middle", fillColor=colors.HexColor("#334155")))
     
-    d.add(Rect(218, 225, 44, 44, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#475569"), strokeWidth=1))
+    d.add(Rect(218, 225, 44, 44, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#475569"), strokeWidth=1))  # type: ignore
     d.add(String(240, 243, "AC", fontName="Helvetica-Bold", fontSize=9.5, textAnchor="middle", fillColor=colors.HexColor("#334155")))
 
     d.add(Line(240, 209, 240, 225, strokeColor=colors.HexColor("#2563eb"), strokeWidth=1.5))
@@ -2356,7 +2359,7 @@ def _build_sldr_drawing(sol_kw="5", sol_wp="540", num_panels="10", panel_make="G
     d.add(String(342, 164, "8.7A", fontName="Helvetica-Bold", fontSize=6.5, textAnchor="middle", fillColor=colors.HexColor("#1d4ed8")))
 
     # 4. AC Breaker Box
-    d.add(Rect(355, 153, 44, 44, rx=3, ry=3, fillColor=colors.HexColor("#eff6ff"), strokeColor=colors.HexColor("#3b82f6"), strokeWidth=1))
+    d.add(Rect(355, 153, 44, 44, rx=3, ry=3, fillColor=colors.HexColor("#eff6ff"), strokeColor=colors.HexColor("#3b82f6"), strokeWidth=1))  # type: ignore
     d.add(Line(365, 175, 389, 175, strokeColor=colors.HexColor("#1d4ed8"), strokeWidth=1.2))
     d.add(Circle(368, 175, 2, fillColor=colors.HexColor("#1d4ed8"), strokeColor=colors.HexColor("#1d4ed8")))
     d.add(Circle(386, 175, 2, fillColor=colors.HexColor("#1d4ed8"), strokeColor=colors.HexColor("#1d4ed8")))
@@ -2366,18 +2369,18 @@ def _build_sldr_drawing(sol_kw="5", sol_wp="540", num_panels="10", panel_make="G
     d.add(Line(399, 175, 420, 175, strokeColor=colors.HexColor("#2563eb"), strokeWidth=1.5))
 
     # 5. Main Distribution Panel & Utility Grid Meter (Taller Box)
-    d.add(Rect(420, 90, 62, 235, rx=5, ry=5, fillColor=colors.HexColor("#f8fafc"), strokeColor=colors.HexColor("#0f172a"), strokeWidth=1.5))
+    d.add(Rect(420, 90, 62, 235, rx=5, ry=5, fillColor=colors.HexColor("#f8fafc"), strokeColor=colors.HexColor("#0f172a"), strokeWidth=1.5))  # type: ignore
     d.add(String(451, 312, "Main Distribution", fontName="Helvetica-Bold", fontSize=6.5, textAnchor="middle", fillColor=colors.HexColor("#0f172a")))
     d.add(String(451, 303, "Panel", fontName="Helvetica-Bold", fontSize=6.5, textAnchor="middle", fillColor=colors.HexColor("#0f172a")))
 
     # Meter Box
-    d.add(Rect(427, 245, 48, 48, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#0284c7"), strokeWidth=1))
+    d.add(Rect(427, 245, 48, 48, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#0284c7"), strokeWidth=1))  # type: ignore
     d.add(Circle(451, 273, 12, fillColor=colors.HexColor("#f0f9ff"), strokeColor=colors.HexColor("#0284c7"), strokeWidth=0.8))
     d.add(String(451, 270, "Meter", fontName="Helvetica-Bold", fontSize=8, textAnchor="middle", fillColor=colors.HexColor("#0369a1")))
     d.add(String(451, 252, "[ P14 ]", fontName="Helvetica", fontSize=6.5, textAnchor="middle", fillColor=colors.HexColor("#0284c7")))
 
     # Main Switch / PSE Box
-    d.add(Rect(427, 155, 48, 38, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#475569"), strokeWidth=1))
+    d.add(Rect(427, 155, 48, 38, fillColor=colors.HexColor("#ffffff"), strokeColor=colors.HexColor("#475569"), strokeWidth=1))  # type: ignore
     d.add(String(451, 174, "Main Switch", fontName="Helvetica-Bold", fontSize=6.5, textAnchor="middle", fillColor=colors.HexColor("#334155")))
     d.add(String(451, 163, "[ PSE ]", fontName="Helvetica-Bold", fontSize=6, textAnchor="middle", fillColor=colors.HexColor("#475569")))
 
@@ -2611,6 +2614,9 @@ def make_net_meter_canvas(company: dict):
     company_name = (company.get("company_name") or company.get("name") or "").strip()
 
     class NetMeterCanvas(canvas.Canvas):
+        _startPage: Any
+        _pageNumber: Any
+
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self._saved_page_states = []
@@ -2952,6 +2958,9 @@ def make_vendor_canvas(company: dict):
     company_name = (company.get("company_name") or company.get("name") or "").strip()
 
     class VendorCanvas(canvas.Canvas):
+        _startPage: Any
+        _pageNumber: Any
+
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self._saved_page_states = []
@@ -3212,6 +3221,9 @@ def make_meter_testing_canvas(company: dict):
     phone = (company.get("mobile") or company.get("phone") or company.get("phone_number") or "").strip()
 
     class MeterTestingCanvas(canvas.Canvas):
+        _startPage: Any
+        _pageNumber: Any
+
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self._saved_page_states = []
@@ -3625,6 +3637,9 @@ def make_product_master_canvas(company: dict):
     company_name = (company.get("company_name") or company.get("name") or "Solar App").strip()
 
     class ProductMasterCanvas(canvas.Canvas):
+        _startPage: Any
+        _pageNumber: Any
+
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self._saved_page_states = []
@@ -3686,7 +3701,8 @@ def generate_product_master_pdf(products: list, company: dict) -> bytes:
     style_cell_right = ParagraphStyle('cell_r', parent=styles['Normal'], fontSize=7.5, fontName='Helvetica', leading=9.5, alignment=2, textColor=colors.HexColor('#1e293b'))
     style_cell_center = ParagraphStyle('cell_c', parent=styles['Normal'], fontSize=7.5, fontName='Helvetica', leading=9.5, alignment=1, textColor=colors.HexColor('#1e293b'))
 
-    hdr_cell = lambda txt, align=0: Paragraph(f"<b><font color='#ffffff' size='7.5'>{txt}</font></b>", ParagraphStyle('h', parent=styles['Normal'], alignment=align))
+    def hdr_cell(txt: str, align: Literal[0, 1, 2, 4] = 0) -> Paragraph:
+        return Paragraph(f"<b><font color='#ffffff' size='7.5'>{txt}</font></b>", ParagraphStyle('h', parent=styles['Normal'], alignment=align))
 
     table_data = [
         [
@@ -3805,6 +3821,11 @@ def _docx_company_header(doc, company: dict):
 # Faithful DOCX helpers (match PDF layout exactly)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _emu(val: float | int) -> Any:
+    from docx.shared import Emu
+    return Emu(int(val))
+
+
 def _build_docx_document(left_cm=1.2, right_cm=1.2, top_cm=1.0, bottom_cm=1.8):
     """Create a python-docx Document with A4 page size and given margins (in cm)."""
     from docx import Document as _Document
@@ -3812,12 +3833,12 @@ def _build_docx_document(left_cm=1.2, right_cm=1.2, top_cm=1.0, bottom_cm=1.8):
     from docx.oxml import OxmlElement
     doc = _Document()
     for section in doc.sections:
-        section.page_width  = int(21.0 * 360000)
-        section.page_height = int(29.7 * 360000)
-        section.left_margin   = int(left_cm   * 360000)
-        section.right_margin  = int(right_cm  * 360000)
-        section.top_margin    = int(top_cm    * 360000)
-        section.bottom_margin = int(bottom_cm * 360000)
+        section.page_width  = _emu(21.0 * 360000)
+        section.page_height = _emu(29.7 * 360000)
+        section.left_margin   = _emu(left_cm   * 360000)
+        section.right_margin  = _emu(right_cm  * 360000)
+        section.top_margin    = _emu(top_cm    * 360000)
+        section.bottom_margin = _emu(bottom_cm * 360000)
     for p in doc.paragraphs:
         p._element.getparent().remove(p._element)
     return doc
@@ -3873,11 +3894,11 @@ def _docx_header_block(doc, company: dict):
     hdr_tbl.style = 'Table Grid'
     _remove_tbl_borders(hdr_tbl)
     for idx, w_cm in enumerate([6.5, 7.5, 4.6]):
-        hdr_tbl.columns[idx].width = int(w_cm * 360000)
+        hdr_tbl.columns[idx].width = _emu(w_cm * 360000)
 
     row = hdr_tbl.rows[0]
     logo_cell = row.cells[0]
-    logo_cell.width = int(6.5 * 360000)
+    logo_cell.width = _emu(6.5 * 360000)
     if logo_bytes:
         try:
             from PIL import Image as _PILImage
@@ -3896,14 +3917,14 @@ def _docx_header_block(doc, company: dict):
                 res_buf.seek(0)
                 lp = logo_cell.paragraphs[0]
                 lrun = lp.add_run()
-                lrun.add_picture(res_buf, width=int(target_w * 360000))
+                lrun.add_picture(res_buf, width=_emu(target_w * 360000))
         except Exception:
             logo_cell.paragraphs[0].add_run('')
     else:
         logo_cell.paragraphs[0].add_run('')
 
     name_cell = row.cells[1]
-    name_cell.width = int(7.5 * 360000)
+    name_cell.width = _emu(7.5 * 360000)
     name_para = name_cell.paragraphs[0]
     name_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
     name_run = name_para.add_run(company_name.upper())
@@ -3912,7 +3933,7 @@ def _docx_header_block(doc, company: dict):
     name_run.font.color.rgb = RGBColor(0x1d, 0x4e, 0xd8)
 
     gst_cell = row.cells[2]
-    gst_cell.width = int(4.6 * 360000)
+    gst_cell.width = _emu(4.6 * 360000)
     gst_para = gst_cell.paragraphs[0]
     gst_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     if gst_no:
@@ -3926,7 +3947,7 @@ def _docx_header_block(doc, company: dict):
     div_tbl.style = 'Table Grid'
     _remove_tbl_borders(div_tbl)
     div_cell = div_tbl.rows[0].cells[0]
-    div_cell.width = int(18.6 * 360000)
+    div_cell.width = _emu(18.6 * 360000)
     tc = div_cell._tc
     tcPr = tc.get_or_add_tcPr()
     tcBorders = OxmlElement('w:tcBorders')
@@ -4001,8 +4022,8 @@ def _docx_signature_block(doc, client_name: str, company_name: str):
     sig_tbl = doc.add_table(rows=1, cols=2)
     sig_tbl.style = 'Table Grid'
     _remove_tbl_borders(sig_tbl)
-    sig_tbl.rows[0].cells[0].width = int(9.3 * 360000)
-    sig_tbl.rows[0].cells[1].width = int(9.3 * 360000)
+    sig_tbl.rows[0].cells[0].width = _emu(9.3 * 360000)
+    sig_tbl.rows[0].cells[1].width = _emu(9.3 * 360000)
     lp = sig_tbl.rows[0].cells[0].paragraphs[0]
     lr = lp.add_run(f"Authorized Signature [Vendor]\n\n\nFor {company_name.upper()}")
     lr.bold = True
@@ -4016,8 +4037,8 @@ def _docx_signature_block(doc, client_name: str, company_name: str):
     under_tbl = doc.add_table(rows=1, cols=2)
     under_tbl.style = 'Table Grid'
     _remove_tbl_borders(under_tbl)
-    under_tbl.rows[0].cells[0].width = int(9.3 * 360000)
-    under_tbl.rows[0].cells[1].width = int(9.3 * 360000)
+    under_tbl.rows[0].cells[0].width = _emu(9.3 * 360000)
+    under_tbl.rows[0].cells[1].width = _emu(9.3 * 360000)
     under_tbl.rows[0].cells[0].paragraphs[0].add_run("_________________________")
     rp2 = under_tbl.rows[0].cells[1].paragraphs[0]
     rp2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -4135,9 +4156,9 @@ def _generate_wcr_docx(client: dict, company: dict) -> bytes:
     SUB_HDR = {8, 15, 22}
     insp_tbl = doc.add_table(rows=len(insp_rows), cols=3)
     insp_tbl.style = 'Table Grid'
-    insp_tbl.columns[0].width = int(0.7 * 360000)
-    insp_tbl.columns[1].width = int(8.8 * 360000)
-    insp_tbl.columns[2].width = int(9.1 * 360000)
+    insp_tbl.columns[0].width = _emu(0.7 * 360000)
+    insp_tbl.columns[1].width = _emu(8.8 * 360000)
+    insp_tbl.columns[2].width = _emu(9.1 * 360000)
     for r_idx, (sr, comp, obs) in enumerate(insp_rows):
         row_cells = insp_tbl.rows[r_idx].cells
         if r_idx in SUB_HDR:
@@ -4221,7 +4242,7 @@ def _generate_wcr_docx(client: dict, company: dict) -> bytes:
         id_detail = ""
     id_box_tbl = doc.add_table(rows=2, cols=1)
     id_box_tbl.style = 'Table Grid'
-    id_box_tbl.columns[0].width = int(14.0 * 360000)
+    id_box_tbl.columns[0].width = _emu(14.0 * 360000)
     hdr_cell = id_box_tbl.rows[0].cells[0]
     _docx_set_cell_bg(hdr_cell, 'eff6ff')
     hp = hdr_cell.paragraphs[0]
@@ -4302,7 +4323,7 @@ def _generate_sldr_docx(client: dict, company: dict) -> bytes:
     diag_tbl = doc.add_table(rows=1, cols=1)
     diag_tbl.style = 'Table Grid'
     diag_cell = diag_tbl.rows[0].cells[0]
-    diag_cell.width = int(18.6 * 360000)
+    diag_cell.width = _emu(18.6 * 360000)
     trPr = diag_tbl.rows[0]._tr.get_or_add_trPr()
     trH = OxmlElement('w:trHeight')
     trH.set(qn('w:val'), '3969')
@@ -4341,7 +4362,7 @@ def _generate_sldr_docx(client: dict, company: dict) -> bytes:
     tech_tbl = doc.add_table(rows=len(tech_rows_data), cols=4)
     tech_tbl.style = 'Table Grid'
     for c_idx, w in enumerate([4.5, 5.5, 4.6, 4.0]):
-        tech_tbl.columns[c_idx].width = int(w * 360000)
+        tech_tbl.columns[c_idx].width = _emu(w * 360000)
     for r_idx, row_data in enumerate(tech_rows_data):
         for c_idx, text in enumerate(row_data):
             cell = tech_tbl.rows[r_idx].cells[c_idx]
@@ -4357,8 +4378,8 @@ def _generate_sldr_docx(client: dict, company: dict) -> bytes:
     ftr_tbl = doc.add_table(rows=1, cols=2)
     ftr_tbl.style = 'Table Grid'
     _remove_tbl_borders(ftr_tbl)
-    ftr_tbl.rows[0].cells[0].width = int(9.3 * 360000)
-    ftr_tbl.rows[0].cells[1].width = int(9.3 * 360000)
+    ftr_tbl.rows[0].cells[0].width = _emu(9.3 * 360000)
+    ftr_tbl.rows[0].cells[1].width = _emu(9.3 * 360000)
     lp = ftr_tbl.rows[0].cells[0].paragraphs[0]
     lr = lp.add_run(company_name)
     lr.bold = True; lr.font.size = Pt(8.5)
@@ -4405,6 +4426,8 @@ def _generate_net_meter_docx(client: dict, company: dict) -> bytes:
     else:
         sub_bu_str = sub_div or bu_no
     licensee_sub = f", {sub_bu_str}" if sub_bu_str else ""
+    discom_code  = client.get("discom_code") or client.get("discom") or "MSEDCL"
+    licensee_title = client.get("distribution_licensee") or f"Additional Executive Engineer{licensee_sub}, {discom_code}"
 
 
     def _hdr(text, size=14, center=True):
@@ -4509,8 +4532,8 @@ def _generate_net_meter_docx(client: dict, company: dict) -> bytes:
     ]
     for r_idx, (lt, rt) in enumerate(sig_data):
         row = sig_tbl.rows[r_idx]
-        row.cells[0].width = int(9.0 * 360000)
-        row.cells[1].width = int(9.0 * 360000)
+        row.cells[0].width = _emu(9.0 * 360000)
+        row.cells[1].width = _emu(9.0 * 360000)
         lp = row.cells[0].paragraphs[0]
         lp.add_run(lt).font.size = Pt(8.5)
         rp = row.cells[1].paragraphs[0]
@@ -4669,8 +4692,8 @@ def _generate_vendor_docx(client: dict, company: dict) -> bytes:
     ]
     for r_idx, (lt, rt) in enumerate(sig_data):
         row = sig_tbl.rows[r_idx]
-        row.cells[0].width = int(9.0 * 360000)
-        row.cells[1].width = int(9.0 * 360000)
+        row.cells[0].width = _emu(9.0 * 360000)
+        row.cells[1].width = _emu(9.0 * 360000)
         lp = row.cells[0].paragraphs[0]
         lp.add_run(lt).font.size = Pt(8.5)
         rp = row.cells[1].paragraphs[0]
@@ -4763,8 +4786,8 @@ def _generate_meter_testing_docx(client: dict, company: dict) -> bytes:
     ]
     for r_idx, (lt, rt) in enumerate(meter_data):
         row = meter_tbl.rows[r_idx]
-        row.cells[0].width = int(9.3 * 360000)
-        row.cells[1].width = int(9.3 * 360000)
+        row.cells[0].width = _emu(9.3 * 360000)
+        row.cells[1].width = _emu(9.3 * 360000)
         lp = row.cells[0].paragraphs[0]
         lp.add_run(lt).font.size = Pt(10)
         rp = row.cells[1].paragraphs[0]

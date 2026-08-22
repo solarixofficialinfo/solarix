@@ -10522,10 +10522,6 @@ async def client_data_stats(user=Depends(get_current_user)):
     """All count queries run in parallel — 6 sequential round-trips → 1 parallel wave."""
     cid = user["company_id"]
 
-    inv_pipeline = [
-        {"$match": {"company_id": cid}},
-        {"$group": {"_id": "$inverter_status", "count": {"$sum": 1}}}
-    ]
     kw_pipeline = [
         {"$match": {"company_id": cid, "status": "Handover Complete"}},
         {"$group": {"_id": None, "total_kw": {"$sum": "$system_kw"}}}
@@ -10533,27 +10529,27 @@ async def client_data_stats(user=Depends(get_current_user)):
 
     (
         total_installed, total_clients,
-        inv_rows, kw_agg,
+        active_clients, pending_action,
+        kw_agg,
         tickets_open, tickets_closed,
     ) = await asyncio.gather(
         db.clients.count_documents({"company_id": cid, "status": "Handover Complete"}),
         db.clients.count_documents({"company_id": cid}),
-        db.inverter_monitoring.aggregate(inv_pipeline).to_list(100),
+        db.clients.count_documents({"company_id": cid, "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}}),
+        db.clients.count_documents({"company_id": cid, "status": {"$nin": ["Handover Complete", "Archived", "Deleted", "archived", "deleted"]}}),
         db.clients.aggregate(kw_pipeline).to_list(1),
         db.service_tickets.count_documents({"company_id": cid, "status": {"$nin": ["Closed", "Resolved"]}}),
         db.service_tickets.count_documents({"company_id": cid, "status": "Closed"}),
     )
 
-    by_status = {row["_id"]: row["count"] for row in inv_rows}
-    active_inv  = by_status.get("Online", 0)
-    offline_inv = by_status.get("Offline", 0) + by_status.get("Error", 0)
     total_kw    = float(kw_agg[0]["total_kw"]) if kw_agg else 0
 
     return {
         "total_clients": total_clients,
+        "active_clients": active_clients,
+        "pending_action": pending_action,
+        "action_required": pending_action,
         "total_installed": total_installed,
-        "active_inverters": active_inv,
-        "offline_inverters": offline_inv,
         "tickets_open": tickets_open,
         "tickets_closed": tickets_closed,
         "total_capacity_kw": round(total_kw, 2),
