@@ -5543,6 +5543,7 @@ async def generate_public_document(payload: Dict[str, Any], user=Depends(require
             {"id": client_id, "company_id": user["company_id"]},
             {"$set": {"documents": docs, "stages": stages, "progress": calc_progress(stages), "updated_at": now_iso()}}
         )
+    from plan_config import check_plan_limit, increment_usage
     await increment_usage(user["company_id"], "document_generations", 1, db=db)
     await log_activity(user["company_id"], user["id"], user["name"], f"Generated {_document_label(doc_type).upper()}", client_doc.get("full_name", "Manual") if client_doc else "Manual")
     
@@ -13446,6 +13447,7 @@ async def get_receivables_dashboard(
                 or (is_def and loan.get("client_id") in c_identifiers and (not loan.get("project_id") or loan.get("project_id") == pid))
             ]
 
+            sys_kw = float(c.get("system_kw") or p.get("capacity_kw") or 0)
             p_val = float(c.get("contract_value") or p.get("project_value") or c.get("quotation_value") or p.get("quotation_value") or c.get("net_project_value") or (sys_kw * 45000 if sys_kw > 0 else 0))
 
             p_rec = sum(
@@ -15338,7 +15340,10 @@ async def update_platform_customer_subscription(
 
     if data.action == "extend_trial" and data.trial_days:
         curr_end = company.get("trial_ends_at")
-        curr_dt = parse_iso(curr_end) if curr_end else datetime.now(timezone.utc)
+        try:
+            curr_dt = datetime.fromisoformat(curr_end.replace("Z", "+00:00")) if curr_end else datetime.now(timezone.utc)
+        except Exception:
+            curr_dt = datetime.now(timezone.utc)
         new_dt = curr_dt + timedelta(days=data.trial_days)
         update_doc["trial_ends_at"] = new_dt.isoformat()
         update_doc["subscription_status"] = "trialing"
