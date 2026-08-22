@@ -213,6 +213,7 @@ export default function Receivables() {
     onSuccess: () => {
       toast.success("New project created successfully");
       queryClient.invalidateQueries(["finance", "receivables"]);
+      queryClient.invalidateQueries(["client"]);
       setNewProjectOpen(false);
     },
     onError: (err) => toast.error(formatApiError(err))
@@ -232,6 +233,7 @@ export default function Receivables() {
       toast.success(editingPayment ? "Payment record updated" : "Payment recorded successfully");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
+      queryClient.invalidateQueries(["client"]);
       setAddPaymentOpen(false);
       setEditingPayment(null);
     },
@@ -247,6 +249,7 @@ export default function Receivables() {
       toast.success("Payment transaction deleted");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
+      queryClient.invalidateQueries(["client"]);
     },
     onError: (err) => toast.error(formatApiError(err))
   });
@@ -260,6 +263,7 @@ export default function Receivables() {
       toast.success("Tax Invoice created successfully");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
+      queryClient.invalidateQueries(["client"]);
       setCreateInvoiceOpen(false);
       const fileId = data?.file_id || data?.invoice?.file_id;
       if (fileId) {
@@ -287,6 +291,7 @@ export default function Receivables() {
       toast.success(data.message || "Payment allocated successfully");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
+      queryClient.invalidateQueries(["client"]);
       setApplyPaymentOpen(false);
       setSelectedInvoice(null);
     },
@@ -302,6 +307,7 @@ export default function Receivables() {
       toast.success("Invoice cancelled successfully");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
+      queryClient.invalidateQueries(["client"]);
     },
     onError: (err) => toast.error(formatApiError(err))
   });
@@ -320,6 +326,7 @@ export default function Receivables() {
       toast.success(editingLoan ? "Loan record updated" : "Loan record logged successfully");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
+      queryClient.invalidateQueries(["client"]);
       setAddLoanOpen(false);
       setEditingLoan(null);
     },
@@ -335,6 +342,7 @@ export default function Receivables() {
       toast.success("Loan record deleted");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
+      queryClient.invalidateQueries(["client"]);
     },
     onError: (err) => toast.error(formatApiError(err))
   });
@@ -353,6 +361,7 @@ export default function Receivables() {
       toast.success(editingExpense ? "Expense updated" : "Expense logged successfully");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
+      queryClient.invalidateQueries(["client"]);
       setAddExpenseOpen(false);
       setEditingExpense(null);
     },
@@ -368,6 +377,7 @@ export default function Receivables() {
       toast.success("Expense deleted");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
+      queryClient.invalidateQueries(["client"]);
     },
     onError: (err) => toast.error(formatApiError(err))
   });

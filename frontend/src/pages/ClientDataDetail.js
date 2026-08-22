@@ -1805,6 +1805,8 @@ function RecordPaymentModal({ clientId, onClose, onSuccess }) {
       });
       toast.success("Payment recorded successfully");
       queryClient.invalidateQueries(["client", clientId, "financials"]);
+      queryClient.invalidateQueries(["finance", "receivables"]);
+      queryClient.invalidateQueries(["finance", "projects"]);
       onSuccess();
       onClose();
     } catch (err) {
@@ -1894,6 +1896,8 @@ function RecordExpenseModal({ clientId, onClose, onSuccess }) {
       });
       toast.success("Expense logged successfully");
       queryClient.invalidateQueries(["client", clientId, "financials"]);
+      queryClient.invalidateQueries(["finance", "receivables"]);
+      queryClient.invalidateQueries(["finance", "projects"]);
       onSuccess();
       onClose();
     } catch (err) {

@@ -721,6 +721,11 @@ def _prepare_client_supabase_payload(payload: dict) -> dict:
         if loc_key in payload and payload[loc_key] is not None:
             extra_onboarding[loc_key] = payload[loc_key]
 
+    # Extended Financial Fields
+    for f_key in ["contract_value", "quotation_value", "net_project_value", "payment_plan", "initial_payments", "loan_setup"]:
+        if f_key in payload and payload[f_key] is not None:
+            extra_onboarding[f_key] = payload[f_key]
+
     if "inverters" in payload and payload["inverters"] is not None:
         extra_onboarding["inverters"] = payload["inverters"]
         cleaned["inverters"] = payload["inverters"]
@@ -745,6 +750,11 @@ def _enrich_client_doc(c: dict) -> dict:
         return c
     stages = dict(c.get("stages") or {})
     ob = dict(stages.get("onboarding_data") or {})
+
+    for f_key in ["contract_value", "quotation_value", "net_project_value", "payment_plan", "initial_payments", "loan_setup"]:
+        if f_key not in c or c.get(f_key) is None:
+            if f_key in ob and ob.get(f_key) is not None:
+                c[f_key] = ob[f_key]
 
     p_brand = c.get("panel_brand") or c.get("panel_make") or ob.get("panel_brand") or ob.get("panel_make") or ""
     c["panel_brand"] = p_brand
@@ -1087,6 +1097,8 @@ class CollectionAdapter:
             document = _clean_inward_doc(document)
         elif self.table_name == "outward_entries":
             document = _clean_outward_doc(document)
+        elif self.table_name == "clients":
+            document = _prepare_client_supabase_payload(document)
         
         while True:
             try:
@@ -4488,10 +4500,10 @@ async def _sync_client_financials_on_update(client_id: str, company_id: str, pay
     # Sync initial_payments if provided
     initial_payments = payload.get("initial_payments")
     if initial_payments and isinstance(initial_payments, list):
-        for pay in initial_payments:
+        for idx, pay in enumerate(initial_payments):
             amt = float(pay.get("amount") or 0)
             if amt > 0 or pay.get("description"):
-                m_name = pay.get("description") or "Initial Payment"
+                m_name = pay.get("description") or f"Payment {idx+1}"
                 p_type = pay.get("description") or "Advance"
                 p_stat = pay.get("status") or "Received"
                 p_source = pay.get("payment_source") or pay.get("payment_mode") or "Bank Transfer"
@@ -4501,10 +4513,7 @@ async def _sync_client_financials_on_update(client_id: str, company_id: str, pay
                 existing_p = await db.payments.find_one({
                     "company_id": company_id,
                     "client_id": client_id,
-                    "$or": [
-                        {"milestone_name": m_name},
-                        {"payment_type": p_type}
-                    ]
+                    "milestone_name": m_name
                 })
                 if existing_p:
                     await db.payments.update_one(
@@ -4666,29 +4675,50 @@ async def get_client_financials(client_id: str, user=Depends(get_current_user)):
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    c_identifiers = list({x for x in [client.get("id"), client.get("sol_id"), target_id] if x})
+    c_identifiers = list({str(x) for x in [client.get("id"), client.get("sol_id"), target_id] if x})
     
     # Project info
-    project = await db.projects.find_one({"client_id": {"$in": c_identifiers}, "company_id": cid}, {"_id": 0})
+    project = await db.projects.find_one({
+        "company_id": cid,
+        "$or": [
+            {"client_id": {"$in": c_identifiers}},
+            {"id": f"proj_{client.get('id')}"},
+            {"id": f"proj_{client.get('sol_id')}"}
+        ]
+    }, {"_id": 0})
+    
     sys_kw = float(client.get("system_kw") or 0)
     net_val = float(
         client.get("contract_value") or
-        client.get("quotation_value") or
-        client.get("net_project_value") or
         (project.get("project_value") if project else 0) or
+        client.get("quotation_value") or
+        (project.get("quotation_value") if project else 0) or
+        client.get("net_project_value") or
         (sys_kw * 45000 if sys_kw > 0 else 0)
     )
-    quot_val = float(client.get("quotation_value") or net_val)
+    quot_val = float(client.get("quotation_value") or (project.get("project_value") if project else 0) or net_val)
 
     # Payments
-    payments = await db.payments.find({
+    payments_raw = await db.payments.find({
         "company_id": cid,
         "$or": [
             {"client_id": {"$in": c_identifiers}},
             {"project_id": f"proj_{client.get('id')}"},
+            {"project_id": f"proj_{client.get('sol_id')}"},
             {"project_id": project.get("id")} if project else {"client_id": client.get("id")}
         ]
     }, {"_id": 0}).sort("payment_date", -1).to_list(1000)
+    
+    seen_pay_ids = set()
+    payments = []
+    for p in payments_raw:
+        pid = p.get("id")
+        if pid and pid in seen_pay_ids:
+            continue
+        if pid:
+            seen_pay_ids.add(pid)
+        if (str(p.get("client_id") or "") in c_identifiers) or (str(p.get("project_id") or "") in [f"proj_{client.get('id')}", f"proj_{client.get('sol_id')}", (project.get("id") if project else "")]):
+            payments.append(p)
 
     # Expenses
     expenses = await db.expenses.find({
@@ -4696,12 +4726,13 @@ async def get_client_financials(client_id: str, user=Depends(get_current_user)):
         "$or": [
             {"client_id": {"$in": c_identifiers}},
             {"project_id": f"proj_{client.get('id')}"},
+            {"project_id": f"proj_{client.get('sol_id')}"},
             {"project_id": project.get("id")} if project else {"client_id": client.get("id")}
         ]
     }, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
     # Allocated material cost from inventory outward
-    outward_records = await db.inventory_outward.find({
+    outward_records = await db.outward_entries.find({
         "company_id": cid,
         "$or": [{"client_id": {"$in": c_identifiers}}, {"sol_id": {"$in": c_identifiers}}]
     }, {"_id": 0}).to_list(1000)
@@ -4737,7 +4768,7 @@ async def get_client_financials(client_id: str, user=Depends(get_current_user)):
             "id": f"ms_{idx+1}",
             "name": m.get("name") or m.get("milestone_name") or f"Milestone {idx+1}",
             "amount": m_amt,
-            "status": m.get("status") or m_status
+            "status": m_status
         })
 
     return {
@@ -13415,31 +13446,30 @@ async def get_receivables_dashboard(
                 or (is_def and loan.get("client_id") in c_identifiers and (not loan.get("project_id") or loan.get("project_id") == pid))
             ]
 
-            p_val = float(p.get("project_value") or p.get("quotation_value") or 0)
+            p_val = float(c.get("contract_value") or p.get("project_value") or c.get("quotation_value") or p.get("quotation_value") or c.get("net_project_value") or (sys_kw * 45000 if sys_kw > 0 else 0))
 
-            # Separate Cash, Online, and Loan Disbursement payments
+            p_rec = sum(
+                float(pay.get("amount") or 0)
+                for pay in p_payments
+                if (pay.get("status") or "Received").lower() == "received"
+            )
+
             p_cash_rec = sum(
                 float(pay.get("amount") or 0) for pay in p_payments 
                 if (pay.get("payment_source") or pay.get("payment_mode") or "").lower() == "cash" 
                 and (pay.get("status") or "Received").lower() == "received"
             )
-            p_online_rec = sum(
-                float(pay.get("amount") or 0) for pay in p_payments 
-                if (pay.get("payment_source") or pay.get("payment_mode") or "").lower() in ["online", "bank transfer", "cheque", "bank transfer / utr", "upi"] 
-                and (pay.get("status") or "Received").lower() == "received"
-            )
-            
-            p_loan_approved = sum(float(l.get("approved_amount") or 0) for l in p_loans if l.get("status") != "Rejected")
-            p_loan_disbursed_loans = sum(float(l.get("disbursed_amount") or 0) for l in p_loans)
             p_loan_disbursed_payments = sum(
                 float(pay.get("amount") or 0) for pay in p_payments 
                 if (pay.get("payment_source") or "").lower() in ["loan / finance", "loan", "finance"]
                 and (pay.get("status") or "Received").lower() == "received"
             )
+            p_loan_approved = sum(float(l.get("approved_amount") or 0) for l in p_loans if l.get("status") != "Rejected")
+            p_loan_disbursed_loans = sum(float(l.get("disbursed_amount") or 0) for l in p_loans)
             p_loan_disbursed = max(p_loan_disbursed_loans, p_loan_disbursed_payments)
             p_loan_pending = max(0.0, p_loan_approved - p_loan_disbursed)
+            p_online_rec = max(0.0, p_rec - p_cash_rec - p_loan_disbursed_payments)
 
-            p_rec = p_cash_rec + p_online_rec + p_loan_disbursed
             p_pen = max(0.0, p_val - p_rec)
             p_cost = sum(float(exp.get("amount") or 0) for exp in p_expenses)
             has_costs = len(p_expenses) > 0
@@ -13610,28 +13640,30 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
     expenses = [e for e in raw_expenses if (e.get("client_id") in c_identifiers) or (e.get("project_id") == project["id"])]
     loans = [l for l in raw_loans if (l.get("client_id") in c_identifiers) or (l.get("project_id") == project["id"])]
 
-    p_val = float(project.get("project_value") or project.get("quotation_value") or 0)
+    sys_kw = float(client.get("system_kw") or project.get("capacity_kw") or 0)
+    p_val = float(client.get("contract_value") or project.get("project_value") or client.get("quotation_value") or project.get("quotation_value") or client.get("net_project_value") or (sys_kw * 45000 if sys_kw > 0 else 0))
+
+    total_rec = sum(
+        float(pay.get("amount") or 0)
+        for pay in payments
+        if (pay.get("status") or "Received").lower() == "received"
+    )
 
     cash_rec = sum(
         float(pay.get("amount") or 0) for pay in payments 
         if (pay.get("payment_source") or pay.get("payment_mode") or "").lower() == "cash" 
         and (pay.get("status") or "Received").lower() == "received"
     )
-    online_rec = sum(
-        float(pay.get("amount") or 0) for pay in payments 
-        if (pay.get("payment_source") or pay.get("payment_mode") or "").lower() in ["online", "bank transfer", "cheque", "bank transfer / utr", "upi"] 
-        and (pay.get("status") or "Received").lower() == "received"
-    )
-
-    loan_approved = sum(float(l.get("approved_amount") or 0) for l in loans if l.get("status") != "Rejected")
-    loan_disbursed_loans = sum(float(l.get("disbursed_amount") or 0) for l in loans)
     loan_disbursed_payments = sum(
         float(pay.get("amount") or 0) for pay in payments 
         if (pay.get("payment_source") or "").lower() in ["loan / finance", "loan", "finance"]
         and (pay.get("status") or "Received").lower() == "received"
     )
+    loan_approved = sum(float(l.get("approved_amount") or 0) for l in loans if l.get("status") != "Rejected")
+    loan_disbursed_loans = sum(float(l.get("disbursed_amount") or 0) for l in loans)
     loan_disbursed = max(loan_disbursed_loans, loan_disbursed_payments)
     loan_pending = max(0.0, loan_approved - loan_disbursed)
+    online_rec = max(0.0, total_rec - cash_rec - loan_disbursed_payments)
 
     # Fetch project invoices
     inv_query = {
