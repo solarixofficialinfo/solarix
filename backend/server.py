@@ -4720,6 +4720,34 @@ async def get_client_financials(client_id: str, user=Depends(get_current_user)):
         if (str(p.get("client_id") or "") in c_identifiers) or (str(p.get("project_id") or "") in [f"proj_{client.get('id')}", f"proj_{client.get('sol_id')}", (project.get("id") if project else "")]):
             payments.append(p)
 
+    # Loans
+    raw_loans = await db.loans.find({
+        "company_id": cid,
+        "$or": [
+            {"client_id": {"$in": c_identifiers}},
+            {"project_id": f"proj_{client.get('id')}"},
+            {"project_id": f"proj_{client.get('sol_id')}"},
+            {"project_id": project.get("id")} if project else {"client_id": client.get("id")}
+        ]
+    }, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+    seen_loan_ids = set()
+    loans = []
+    for l in raw_loans:
+        lid = l.get("id")
+        if lid and lid in seen_loan_ids:
+            continue
+        if lid:
+            seen_loan_ids.add(lid)
+        is_recorded = any(
+            p.get("loan_id") == lid or l.get("payment_id") == p.get("id")
+            for p in payments
+            if (p.get("status") or "Received").lower() == "received"
+        )
+        l_copy = dict(l)
+        l_copy["payment_recorded"] = is_recorded
+        loans.append(l_copy)
+
     # Expenses
     expenses = await db.expenses.find({
         "company_id": cid,
@@ -4756,18 +4784,36 @@ async def get_client_financials(client_id: str, user=Depends(get_current_user)):
     estimated_profit = (net_val - total_cost) if total_cost > 0 else None
     profit_margin = ((estimated_profit / net_val) * 100) if (estimated_profit is not None and net_val > 0) else None
 
-    # Milestones from project or client payment plan
+    # Milestones from project or client payment plan strictly evaluated based on linked actual received payments
     milestone_plan = (project.get("payment_plan") if project else None) or client.get("payment_plan") or []
-    cum_req = 0.0
     milestones = []
     for idx, m in enumerate(milestone_plan):
+        m_id = str(m.get("id") or f"ms_{idx+1}")
+        m_name = (m.get("name") or m.get("milestone_name") or f"Milestone {idx+1}").strip()
         m_amt = float(m.get("amount") or 0)
-        cum_req += m_amt
-        m_status = "Paid" if total_rec >= cum_req and cum_req > 0 else "Pending"
+        m_name_lower = m_name.lower()
+
+        linked_payments = [
+            p for p in payments
+            if (p.get("status") or "Received").lower() == "received" and (
+                (p.get("milestone_id") and str(p.get("milestone_id")) == m_id) or
+                (p.get("milestone_name") and p.get("milestone_name").strip().lower() == m_name_lower) or
+                (p.get("payment_type") and p.get("payment_type").strip().lower() == m_name_lower)
+            )
+        ]
+        linked_rec_amt = sum(float(p.get("amount") or 0) for p in linked_payments)
+        if linked_rec_amt >= m_amt and m_amt > 0:
+            m_status = "Paid"
+        elif linked_rec_amt > 0:
+            m_status = "Partially Paid"
+        else:
+            m_status = "Pending"
+
         milestones.append({
-            "id": f"ms_{idx+1}",
-            "name": m.get("name") or m.get("milestone_name") or f"Milestone {idx+1}",
+            "id": m_id,
+            "name": m_name,
             "amount": m_amt,
+            "paid_amount": linked_rec_amt,
             "status": m_status
         })
 
@@ -4785,6 +4831,7 @@ async def get_client_financials(client_id: str, user=Depends(get_current_user)):
         },
         "milestones": milestones,
         "payments": payments,
+        "loans": loans,
         "expenses": expenses
     }
 
@@ -4806,14 +4853,26 @@ async def record_client_payment_direct(client_id: str, payload: Dict[str, Any], 
     if amt <= 0:
         raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
 
+    loan_id = payload.get("loan_id")
+    if loan_id:
+        existing_loan_pay = await db.payments.find_one({
+            "company_id": cid,
+            "loan_id": loan_id,
+            "status": {"$ne": "Cancelled"}
+        })
+        if existing_loan_pay:
+            raise HTTPException(status_code=400, detail="Payment already recorded for this loan")
+
     proj_id = f"proj_{client['id']}"
     pay_doc = {
         "id": f"pay_{uuid.uuid4().hex[:12]}",
         "company_id": cid,
         "client_id": client["id"],
         "project_id": proj_id,
+        "loan_id": loan_id or None,
+        "milestone_id": payload.get("milestone_id") or "",
         "milestone_name": payload.get("milestone_name") or "Direct Payment",
-        "payment_type": payload.get("milestone_name") or payload.get("payment_type") or "Advance",
+        "payment_type": payload.get("payment_type") or payload.get("milestone_name") or "Advance",
         "amount": amt,
         "payment_date": payload.get("payment_date") or now_iso()[:10],
         "payment_source": payload.get("payment_mode") or payload.get("payment_source") or "Bank Transfer",
@@ -4827,6 +4886,16 @@ async def record_client_payment_direct(client_id: str, payload: Dict[str, Any], 
         "updated_at": now_iso()
     }
     await db.payments.insert_one(pay_doc)
+    if loan_id:
+        await db.loans.update_one(
+            {"id": loan_id, "company_id": cid},
+            {"$set": {
+                "payment_id": pay_doc["id"],
+                "disbursed_amount": amt,
+                "status": "Disbursed",
+                "updated_at": now_iso()
+            }}
+        )
     await log_activity(cid, user["id"], user["name"], "Recorded Payment", f"Amount: ₹{amt} for Client: {client.get('full_name')}")
     pay_doc.pop("_id", None)
     return {"message": "Payment recorded successfully", "payment": pay_doc}
@@ -13125,6 +13194,7 @@ class PaymentRecordPayload(BaseModel):
     attachment_url: Optional[str] = ""
     invoice_id: Optional[str] = ""
     allocated_amount: Optional[float] = None
+    loan_id: Optional[str] = None
 
 class InvoiceItemPayload(BaseModel):
     product_name: str
@@ -13493,6 +13563,32 @@ async def get_receivables_dashboard(
             c_pen += p_pen
             c_cost += p_cost
 
+            # Milestones evaluated based on linked actual received payments
+            proj_plan = p.get("payment_plan") or c.get("payment_plan") or []
+            processed_proj_plan = []
+            for idx, m in enumerate(proj_plan):
+                m_id = str(m.get("id") or f"ms_{idx+1}")
+                m_name = (m.get("name") or m.get("milestone_name") or f"Milestone {idx+1}").strip()
+                m_amt = float(m.get("amount") or 0)
+                m_name_lower = m_name.lower()
+                linked_pays = [
+                    pay for pay in p_payments
+                    if (pay.get("status") or "Received").lower() == "received" and (
+                        (pay.get("milestone_id") and str(pay.get("milestone_id")) == m_id) or
+                        (pay.get("milestone_name") and pay.get("milestone_name").strip().lower() == m_name_lower) or
+                        (pay.get("payment_type") and pay.get("payment_type").strip().lower() == m_name_lower)
+                    )
+                ]
+                linked_amt = sum(float(pay.get("amount") or 0) for pay in linked_pays)
+                m_stat = "Paid" if (linked_amt >= m_amt and m_amt > 0) else ("Partially Paid" if linked_amt > 0 else "Pending")
+                processed_proj_plan.append({
+                    "id": m_id,
+                    "name": m_name,
+                    "amount": m_amt,
+                    "paid_amount": linked_amt,
+                    "status": m_stat
+                })
+
             c_project_items.append({
                 "id": pid,
                 "client_id": c_id,
@@ -13510,7 +13606,7 @@ async def get_receivables_dashboard(
                 "has_cost_data": has_costs,
                 "estimated_profit": p_profit,
                 "status": p_status,
-                "payment_plan": p.get("payment_plan") or [],
+                "payment_plan": processed_proj_plan,
                 "project_date": p.get("project_date") or str(p.get("created_at") or "")[:10]
             })
 
@@ -13782,6 +13878,44 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
 
     ledger.sort(key=lambda x: str(x["date"]), reverse=True)
 
+    processed_loans = []
+    for l in loans:
+        lid = l.get("id")
+        is_recorded = any(
+            p.get("loan_id") == lid or l.get("payment_id") == p.get("id")
+            for p in payments
+            if (p.get("status") or "Received").lower() == "received"
+        )
+        l_copy = dict(l)
+        l_copy["payment_recorded"] = is_recorded
+        processed_loans.append(l_copy)
+
+    # Process project payment plan milestones strictly by linked received payments
+    raw_plan = project.get("payment_plan") or client.get("payment_plan") or []
+    processed_plan = []
+    for idx, m in enumerate(raw_plan):
+        m_id = str(m.get("id") or f"ms_{idx+1}")
+        m_name = (m.get("name") or m.get("milestone_name") or f"Milestone {idx+1}").strip()
+        m_amt = float(m.get("amount") or 0)
+        m_name_lower = m_name.lower()
+        linked_pays = [
+            p for p in payments
+            if (p.get("status") or "Received").lower() == "received" and (
+                (p.get("milestone_id") and str(p.get("milestone_id")) == m_id) or
+                (p.get("milestone_name") and p.get("milestone_name").strip().lower() == m_name_lower) or
+                (p.get("payment_type") and p.get("payment_type").strip().lower() == m_name_lower)
+            )
+        ]
+        linked_amt = sum(float(p.get("amount") or 0) for p in linked_pays)
+        m_stat = "Paid" if (linked_amt >= m_amt and m_amt > 0) else ("Partially Paid" if linked_amt > 0 else "Pending")
+        processed_plan.append({
+            "id": m_id,
+            "name": m_name,
+            "amount": m_amt,
+            "paid_amount": linked_amt,
+            "status": m_stat
+        })
+
     return {
         "project": project,
         "client": client,
@@ -13802,11 +13936,11 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
             "has_cost_data": has_costs,
             "estimated_profit": estimated_profit
         },
-        "payment_plan": project.get("payment_plan") or [],
+        "payment_plan": processed_plan,
         "invoices": processed_invoices,
         "payments": payments,
         "unallocated_payments": unallocated_payments,
-        "loans": loans,
+        "loans": processed_loans,
         "expenses": expenses,
         "ledger": ledger
     }
@@ -13830,11 +13964,21 @@ async def record_project_payment(project_id: str, data: PaymentRecordPayload, us
     if not client_id:
         raise HTTPException(status_code=400, detail="Client ID required for payment")
 
+    if data.loan_id:
+        existing_loan_pay = await db.payments.find_one({
+            "company_id": cid,
+            "loan_id": data.loan_id,
+            "status": {"$ne": "Cancelled"}
+        })
+        if existing_loan_pay:
+            raise HTTPException(status_code=400, detail="Payment already recorded for this loan")
+
     payment_doc = {
         "id": f"pay_{uuid.uuid4().hex[:12]}",
         "company_id": cid,
         "client_id": client_id,
         "project_id": project_id,
+        "loan_id": data.loan_id or None,
         "milestone_id": data.milestone_id or "",
         "milestone_name": data.milestone_name or data.payment_type or "Payment",
         "payment_type": data.payment_type or "Advance",
@@ -13854,6 +13998,16 @@ async def record_project_payment(project_id: str, data: PaymentRecordPayload, us
     }
 
     await db.payments.insert_one(payment_doc)
+    if data.loan_id:
+        await db.loans.update_one(
+            {"id": data.loan_id, "company_id": cid},
+            {"$set": {
+                "payment_id": payment_doc["id"],
+                "disbursed_amount": data.amount,
+                "status": "Disbursed",
+                "updated_at": now_iso()
+            }}
+        )
     await log_activity(cid, user["id"], user["name"], "Recorded Payment", f"Amount: ₹{data.amount} for Project ID: {project_id}")
     payment_doc.pop("_id", None)
     return {"message": "Payment recorded successfully", "payment": payment_doc}
@@ -13879,6 +14033,11 @@ async def update_payment(payment_id: str, data: PaymentUpdatePayload, user=Depen
     if data.attachment_url is not None: update_fields["attachment_url"] = data.attachment_url
 
     await db.payments.update_one({"id": payment_id, "company_id": cid}, {"$set": update_fields})
+    if existing.get("loan_id") and data.amount is not None:
+        await db.loans.update_one(
+            {"id": existing["loan_id"], "company_id": cid},
+            {"$set": {"disbursed_amount": float(data.amount), "updated_at": now_iso()}}
+        )
     return {"message": "Payment updated successfully"}
 
 @api_router.delete("/finance/payments/{payment_id}")
@@ -13887,6 +14046,12 @@ async def delete_payment(payment_id: str, user=Depends(get_current_user)):
     existing = await db.payments.find_one({"id": payment_id, "company_id": cid})
     if not existing:
         raise HTTPException(status_code=404, detail="Payment not found")
+
+    if existing.get("loan_id"):
+        await db.loans.update_one(
+            {"id": existing["loan_id"], "company_id": cid},
+            {"$unset": {"payment_id": ""}}
+        )
 
     await db.payments.delete_one({"id": payment_id, "company_id": cid})
     await log_activity(cid, user["id"], user["name"], "Deleted Payment", f"Payment ID: {payment_id}")

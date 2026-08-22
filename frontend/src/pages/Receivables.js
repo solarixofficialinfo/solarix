@@ -411,25 +411,49 @@ export default function Receivables() {
       setEditingPayment(prefillPayment);
       setPaymentForm({
         payment_type: prefillPayment.payment_type || prefillPayment.milestone_name || "Advance",
+        milestone_name: prefillPayment.milestone_name || prefillPayment.payment_type || "Advance",
         amount: String(prefillPayment.amount || ""),
         payment_date: prefillPayment.payment_date || new Date().toISOString().split("T")[0],
         payment_source: prefillPayment.payment_source || prefillPayment.payment_mode || "Bank Transfer",
         ref_number: prefillPayment.ref_number || prefillPayment.bank_utr || "",
         remarks: prefillPayment.remarks || prefillPayment.notes || "",
-        status: "Received"
+        status: prefillPayment.status || "Received",
+        loan_id: prefillPayment.loan_id || ""
       });
     } else {
       setEditingPayment(null);
       setPaymentForm({
         payment_type: "Advance",
+        milestone_name: "Advance",
         amount: "",
         payment_date: new Date().toISOString().split("T")[0],
         payment_source: "Bank Transfer",
         ref_number: "",
         remarks: "",
-        status: "Received"
+        status: "Received",
+        loan_id: ""
       });
     }
+    setAddPaymentOpen(true);
+  };
+
+  const handleConvertLoanToPayment = (loan) => {
+    setActiveProjectId(loan.project_id || activeProjectId);
+    setEditingPayment(null);
+    const disbAmt = Number(loan.disbursed_amount || 0);
+    const appAmt = Number(loan.approved_amount || loan.loan_amount || 0);
+    const defaultAmt = disbAmt > 0 ? disbAmt : appAmt;
+    setPaymentForm({
+      payment_type: "Loan / Finance",
+      milestone_name: `Loan / Finance (${loan.provider || "Finance"})`,
+      amount: defaultAmt > 0 ? String(defaultAmt) : "",
+      payment_date: loan.expected_disbursement_date || loan.approved_date || new Date().toISOString().split("T")[0],
+      payment_source: loan.provider ? `Loan / Finance (${loan.provider})` : "Loan / Finance",
+      ref_number: loan.loan_ref || "",
+      remarks: `Disbursed Loan Receipt from ${loan.provider || "Finance"}`,
+      status: "Received",
+      loan_id: loan.id
+    });
     setAddPaymentOpen(true);
   };
 
@@ -437,12 +461,14 @@ export default function Receivables() {
     setEditingPayment(pay);
     setPaymentForm({
       payment_type: pay.payment_type || "Advance",
+      milestone_name: pay.milestone_name || pay.payment_type || "Advance",
       amount: String(pay.amount || ""),
       payment_date: pay.payment_date || (pay.created_at || "").slice(0, 10),
       payment_source: pay.payment_source || pay.payment_mode || "Bank Transfer",
       ref_number: pay.ref_number || pay.bank_utr || "",
       remarks: pay.remarks || pay.notes || "",
-      status: pay.status || "Received"
+      status: pay.status || "Received",
+      loan_id: pay.loan_id || ""
     });
     setAddPaymentOpen(true);
   };
@@ -1458,41 +1484,71 @@ export default function Receivables() {
                       </div>
                     ) : (
                       <div className="space-y-3">
-                        {projectWorkspace.loans.map((loan) => (
-                          <div key={loan.id} className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2 text-xs">
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <div className="font-bold text-sm text-slate-900">{loan.provider}</div>
-                                <div className="text-slate-500 text-[11px]">Loan Ref: {loan.loan_ref || "—"}</div>
+                        {projectWorkspace.loans.map((loan) => {
+                          const isRecorded = loan.payment_recorded || (projectWorkspace?.payments || []).some(p => p.loan_id === loan.id && (p.status || "Received").toLowerCase() === "received");
+                          return (
+                            <div key={loan.id} className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2 text-xs">
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <div className="font-bold text-sm text-slate-900">{loan.provider}</div>
+                                  <div className="text-slate-500 text-[11px]">Loan Ref: {loan.loan_ref || "—"}</div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[10px]">
+                                    {loan.status}
+                                  </Badge>
+                                  {isRecorded ? (
+                                    <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-semibold flex items-center gap-1">
+                                      <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Payment Recorded
+                                    </Badge>
+                                  ) : (
+                                    <Button
+                                      size="xs"
+                                      onClick={() => handleConvertLoanToPayment(loan)}
+                                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] h-6 px-2 gap-1"
+                                    >
+                                      <DollarSign className="w-3 h-3" /> Record as Received
+                                    </Button>
+                                  )}
+                                  <Button
+                                    size="xs"
+                                    variant="ghost"
+                                    onClick={() => handleOpenEditLoan(loan)}
+                                    className="h-6 w-6 p-0 text-slate-500 hover:text-blue-600"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </Button>
+                                  <Button
+                                    size="xs"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      if (window.confirm("Delete this loan record?")) {
+                                        deleteLoanMutation.mutate(loan.id);
+                                      }
+                                    }}
+                                    className="h-6 w-6 p-0 text-slate-500 hover:text-rose-600"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </Button>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[10px]">
-                                  {loan.status}
-                                </Badge>
-                                <Button
-                                  size="xs"
-                                  variant="ghost"
-                                  onClick={() => handleOpenEditLoan(loan)}
-                                  className="h-6 w-6 p-0 text-slate-500 hover:text-blue-600"
-                                >
-                                  <Edit3 className="w-3.5 h-3.5" />
-                                </Button>
-                                <Button
-                                  size="xs"
-                                  variant="ghost"
-                                  onClick={() => {
-                                    if (window.confirm("Delete this loan record?")) {
-                                      deleteLoanMutation.mutate(loan.id);
-                                    }
-                                  }}
-                                  className="h-6 w-6 p-0 text-slate-500 hover:text-rose-600"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </Button>
+                              <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100 text-[11px]">
+                                <div>
+                                  <span className="text-slate-400 block">Applied</span>
+                                  <strong className="text-slate-700">₹{(loan.loan_amount || 0).toLocaleString("en-IN")}</strong>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400 block">Approved</span>
+                                  <strong className="text-indigo-700">₹{(loan.approved_amount || 0).toLocaleString("en-IN")}</strong>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400 block">Disbursed / Received</span>
+                                  <strong className="text-emerald-700">₹{(loan.disbursed_amount || 0).toLocaleString("en-IN")}</strong>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </TabsContent>
@@ -2963,14 +3019,15 @@ export default function Receivables() {
                     payload: {
                       client_id: clientId,
                       payment_type: paymentForm.payment_type,
-                      milestone_name: paymentForm.payment_type,
+                      milestone_name: paymentForm.milestone_name || paymentForm.payment_type,
                       amount: Number(paymentForm.amount),
                       payment_date: paymentForm.payment_date,
                       payment_source: paymentForm.payment_source,
                       payment_mode: paymentForm.payment_source,
                       ref_number: paymentForm.ref_number,
                       remarks: paymentForm.remarks,
-                      status: paymentForm.status
+                      status: paymentForm.status,
+                      loan_id: paymentForm.loan_id || undefined
                     }
                   });
                 }}

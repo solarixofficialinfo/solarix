@@ -26,7 +26,7 @@ import {
   Plus, Save, Eye, ExternalLink, Calendar, Wrench, AlertTriangle, Paperclip,
   Clock, CheckCircle2, ChevronRight, Activity, Megaphone, ClipboardList,
   Truck, FileText, Gauge, Package, ScrollText, Check, Trash2, Edit3, Wifi, WifiOff,
-  Settings, AlertCircle, Zap, ShieldCheck, ChevronDown, ChevronUp, Sparkles, Filter, RefreshCw, Layers, DollarSign, TrendingUp, Calculator
+  Settings, AlertCircle, Zap, ShieldCheck, ChevronDown, ChevronUp, Sparkles, Filter, RefreshCw, Layers, DollarSign, TrendingUp, Calculator, Landmark
 } from "lucide-react";
 
 import RaiseComplaintDialog from "@/components/RaiseComplaintDialog";
@@ -148,6 +148,7 @@ export default function ClientDataDetail() {
   const [expandedStages, setExpandedStages] = useState({ Survey: true });
 
   const [paymentRecordOpen, setPaymentRecordOpen] = useState(false);
+  const [paymentPrefill, setPaymentPrefill] = useState(null);
   const [expenseRecordOpen, setExpenseRecordOpen] = useState(false);
   const [warrantyDialogOpen, setWarrantyDialogOpen] = useState(false);
   const [serviceVisitDialogOpen, setServiceVisitDialogOpen] = useState(false);
@@ -746,15 +747,25 @@ export default function ClientDataDetail() {
                     <div className="text-xs text-slate-500 italic">No payments recorded yet.</div>
                   ) : (
                     <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {financialsData.payments.map((p) => (
-                        <div key={p.id} className="text-xs bg-white p-2.5 rounded border border-slate-200 flex items-center justify-between">
-                          <div>
-                            <div className="font-semibold text-slate-800">{p.milestone_name || "Payment"}</div>
-                            <div className="text-[11px] text-slate-500">{p.payment_date} · {p.payment_mode} {p.ref_number ? `(Ref: ${p.ref_number})` : ""}</div>
+                      {financialsData.payments.map((p) => {
+                        const isRec = (p.status || "Received").toLowerCase() === "received";
+                        return (
+                          <div key={p.id} className="text-xs bg-white p-2.5 rounded border border-slate-200 flex items-center justify-between">
+                            <div>
+                              <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                                {p.milestone_name || p.payment_type || "Payment"}
+                                <Badge variant="outline" className={isRec ? "bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-semibold" : "bg-amber-50 text-amber-700 border-amber-200 text-[10px] font-semibold"}>
+                                  {p.status || "Received"}
+                                </Badge>
+                              </div>
+                              <div className="text-[11px] text-slate-500">{p.payment_date} · {p.payment_mode || p.payment_source} {p.ref_number ? `(Ref: ${p.ref_number})` : ""}</div>
+                            </div>
+                            <span className={`font-bold text-sm ${isRec ? "text-emerald-700" : "text-amber-700"}`}>
+                              ₹{Number(p.amount || 0).toLocaleString("en-IN")}
+                            </span>
                           </div>
-                          <span className="font-bold text-emerald-700 text-sm">₹{Number(p.amount).toLocaleString("en-IN")}</span>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -812,6 +823,80 @@ export default function ClientDataDetail() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Loan / Finance Section if Loans exist */}
+            {(financialsData?.loans || []).length > 0 && (
+              <Card className="border-slate-200 shadow-sm md:col-span-2">
+                <CardContent className="p-5 space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <h3 className="font-semibold text-sm text-slate-900 flex items-center gap-2">
+                      <Landmark className="w-4 h-4 text-indigo-600" /> Loan & Finance Lifecycle
+                    </h3>
+                  </div>
+                  <div className="grid md:grid-cols-2 gap-3">
+                    {financialsData.loans.map((loan) => {
+                      const isRecorded = loan.payment_recorded || (financialsData?.payments || []).some(p => p.loan_id === loan.id && (p.status || "Received").toLowerCase() === "received");
+                      const disbAmt = Number(loan.disbursed_amount || 0);
+                      const appAmt = Number(loan.approved_amount || loan.loan_amount || 0);
+                      const defaultAmt = disbAmt > 0 ? disbAmt : appAmt;
+                      return (
+                        <div key={loan.id} className="p-3.5 rounded-lg border border-slate-200 bg-slate-50 space-y-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="font-bold text-slate-900 text-xs">{loan.provider}</div>
+                              <div className="text-slate-500 text-[11px]">Ref: {loan.loan_ref || "—"}</div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[10px]">
+                                {loan.status}
+                              </Badge>
+                              {isRecorded ? (
+                                <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-semibold flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Payment Recorded
+                                </Badge>
+                              ) : (
+                                <Button
+                                  size="xs"
+                                  onClick={() => {
+                                    setPaymentPrefill({
+                                      milestone_name: `Loan / Finance (${loan.provider || "Finance"})`,
+                                      payment_type: "Loan / Finance",
+                                      amount: defaultAmt > 0 ? String(defaultAmt) : "",
+                                      payment_date: loan.expected_disbursement_date || loan.approved_date || new Date().toISOString().split("T")[0],
+                                      payment_mode: "Bank Transfer / UTR",
+                                      ref_number: loan.loan_ref || "",
+                                      loan_id: loan.id
+                                    });
+                                    setPaymentRecordOpen(true);
+                                  }}
+                                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] h-6 px-2 gap-1"
+                                >
+                                  <DollarSign className="w-3 h-3" /> Record as Received
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-200 text-[11px]">
+                            <div>
+                              <span className="text-slate-400 block">Applied</span>
+                              <strong className="text-slate-700">₹{(loan.loan_amount || 0).toLocaleString("en-IN")}</strong>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block">Approved</span>
+                              <strong className="text-indigo-700">₹{(loan.approved_amount || 0).toLocaleString("en-IN")}</strong>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block">Disbursed</span>
+                              <strong className="text-emerald-700">₹{(loan.disbursed_amount || 0).toLocaleString("en-IN")}</strong>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </TabsContent>
 
@@ -1212,8 +1297,9 @@ export default function ClientDataDetail() {
       {paymentRecordOpen && (
         <RecordPaymentModal
           clientId={id}
-          onClose={() => setPaymentRecordOpen(false)}
-          onSuccess={() => setPaymentRecordOpen(false)}
+          prefillData={paymentPrefill}
+          onClose={() => { setPaymentRecordOpen(false); setPaymentPrefill(null); }}
+          onSuccess={() => { setPaymentRecordOpen(false); setPaymentPrefill(null); }}
         />
       )}
 
@@ -1776,15 +1862,17 @@ function UploadPhotoDialog({ open, onClose, queryClient, clientId }) {
 }
 
 // ─── RECORD PAYMENT MODAL ────────────────────────────────────────────────────
-function RecordPaymentModal({ clientId, onClose, onSuccess }) {
+function RecordPaymentModal({ clientId, onClose, onSuccess, prefillData = null }) {
   const queryClient = useQueryClient();
   const [form, setForm] = useState({
-    amount: "",
-    milestone_name: "Advance Payment",
-    payment_date: dayjs().format("YYYY-MM-DD"),
-    payment_mode: "Bank Transfer / UTR",
-    ref_number: "",
-    notes: ""
+    milestone_name: prefillData?.milestone_name || "Advance Payment",
+    amount: prefillData?.amount ? String(prefillData.amount) : "",
+    payment_date: prefillData?.payment_date || new Date().toISOString().split("T")[0],
+    payment_mode: prefillData?.payment_mode || "Bank Transfer / UTR",
+    payment_type: prefillData?.payment_type || "Advance",
+    ref_number: prefillData?.ref_number || "",
+    notes: prefillData?.notes || "",
+    loan_id: prefillData?.loan_id || ""
   });
   const [saving, setSaving] = useState(false);
 
@@ -1796,12 +1884,16 @@ function RecordPaymentModal({ clientId, onClose, onSuccess }) {
     try {
       setSaving(true);
       await api.post(`/clients/${clientId}/payments`, {
-        amount: Number(form.amount),
         milestone_name: form.milestone_name,
+        payment_type: form.payment_type || form.milestone_name,
+        amount: Number(form.amount),
         payment_date: form.payment_date,
         payment_mode: form.payment_mode,
+        payment_source: form.payment_mode,
         ref_number: form.ref_number,
-        notes: form.notes
+        notes: form.notes,
+        status: "Received",
+        loan_id: form.loan_id || undefined
       });
       toast.success("Payment recorded successfully");
       queryClient.invalidateQueries(["client", clientId, "financials"]);
