@@ -3951,12 +3951,19 @@ async def download_file(file_id: str, request: Request, auth: Optional[str] = Qu
             logger.warning(f"Failed get_object for rec storage_path {rec.get('storage_path')}: {e}")
 
     if not data:
-        # Direct storage fallback paths
+        # Direct storage fallback paths including generated invoices and documents
         candidate_paths = [
             file_id,
+            f"{APP_NAME}/{company_id}/generated/{file_id}",
+            f"{APP_NAME}/{company_id}/generated/{clean_id}.pdf",
+            f"{APP_NAME}/{company_id}/generated/{clean_id}.docx",
+            f"{APP_NAME}/{company_id}/generated/{clean_id}",
             f"{APP_NAME}/{company_id}/client/{clean_id}",
             f"{APP_NAME}/{company_id}/general/{clean_id}",
             f"{APP_NAME}/{company_id}/templates/{clean_id}",
+            f"generated-pdfs/{clean_id}.pdf",
+            f"generated-pdfs/{clean_id}.docx",
+            f"generated-pdfs/{clean_id}",
             f"customer-documents/{clean_id}",
             f"project-images/{clean_id}",
             f"vendor-documents/{clean_id}"
@@ -3968,6 +3975,23 @@ async def download_file(file_id: str, request: Request, auth: Optional[str] = Qu
                     break
             except Exception:
                 continue
+
+    if not data:
+        # Check local disk cache fallback
+        import os
+        for ext in ["", ".pdf", ".docx", ".png", ".jpg"]:
+            local_p = os.path.join(os.path.dirname(__file__), "storage_cache", str(company_id), "generated", f"{clean_id}{ext}")
+            if os.path.exists(local_p):
+                try:
+                    with open(local_p, "rb") as lf:
+                        data = lf.read()
+                        if ext == ".docx":
+                            ct = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        elif ext == ".pdf":
+                            ct = "application/pdf"
+                        break
+                except Exception:
+                    pass
 
     if not data:
         raise HTTPException(status_code=404, detail="Document file is unavailable in storage.")
@@ -4284,21 +4308,26 @@ async def _get_client_high_value_assets(client_doc: dict, company_id: str) -> li
 
 @api_router.get("/clients/{client_id}")
 async def get_client(client_id: str, user=Depends(get_current_user)):
-    logger.info(f"[CLIENT-GET DIAG] GET /clients/{client_id} | company_id={user.get('company_id')} user_id={user.get('id')}")
-    c = await db.clients.find_one({"id": client_id, "company_id": user["company_id"]}, {"_id": 0})
-    if c:
-        logger.info(f"[CLIENT-GET DIAG] ✓ Found by id+company_id")
+    if not client_id or not client_id.strip():
+        raise HTTPException(status_code=400, detail="Invalid client ID")
+    cid = user["company_id"]
+    target_id = client_id.strip()
+    logger.info(f"[CLIENT-GET DIAG] GET /clients/{target_id} | company_id={cid} user_id={user.get('id')}")
+    
+    or_conds = [{"id": target_id}, {"sol_id": target_id}]
+    if len(target_id) == 24:
+        try:
+            from bson import ObjectId
+            or_conds.append({"_id": ObjectId(target_id)})
+        except Exception:
+            pass
+
+    c = await db.clients.find_one({"$or": or_conds, "company_id": cid}, {"_id": 0})
     if not c:
-        c = await db.clients.find_one({"sol_id": client_id, "company_id": user["company_id"]}, {"_id": 0})
-        if c:
-            logger.info(f"[CLIENT-GET DIAG] ✓ Found by sol_id+company_id")
-    if not c:
+        logger.error(f"[CLIENT-GET DIAG] ✗ Client {target_id} NOT FOUND — returning 404")
         raise HTTPException(status_code=404, detail="Client not found")
-    if not c:
-        logger.error(f"[CLIENT-GET DIAG] ✗ Client {client_id} NOT FOUND in Supabase or local — returning 404")
-        raise HTTPException(status_code=404, detail="Not found")
     c = _enrich_client_doc(c)
-    c["high_value_assets"] = await _get_client_high_value_assets(c, user["company_id"])
+    c["high_value_assets"] = await _get_client_high_value_assets(c, cid)
     return c
 
 def _normalize_client_payload(payload: dict) -> dict:
@@ -4404,6 +4433,9 @@ async def update_client(client_id: str, data: ClientIn, user=Depends(get_current
     await LocalFileCollection("clients").update_one({"$or": [{"id": client_id}, {"sol_id": client_id}]}, {"$set": update})
     await log_activity(user["company_id"], user["id"], user["name"], "Updated Client", data.full_name)
     
+    # Sync financial setup (contract_value, initial_payments, payment_plan, loan_setup)
+    await _sync_client_financials_on_update(client_id, user["company_id"], raw_payload, user["name"])
+
     # Direct database read-back verification
     client_doc = await db.clients.find_one({"$or": [{"id": client_id}, {"sol_id": client_id}], "company_id": user["company_id"]}, {"_id": 0})
     if not client_doc:
@@ -4412,6 +4444,140 @@ async def update_client(client_id: str, data: ClientIn, user=Depends(get_current
     if client_doc:
         _verify_client_db_write(raw_payload, client_doc)
     return _enrich_client_doc(client_doc) if client_doc else {}
+
+async def _sync_client_financials_on_update(client_id: str, company_id: str, payload: dict, user_name: str):
+    c_val = payload.get("contract_value") or payload.get("quotation_value") or payload.get("net_project_value")
+    payment_plan = payload.get("payment_plan")
+    sys_kw = payload.get("system_kw")
+    
+    proj_id = f"proj_{client_id}"
+    proj = await db.projects.find_one({
+        "$or": [{"id": proj_id}, {"client_id": client_id}],
+        "company_id": company_id
+    })
+    if proj:
+        proj_up: dict[str, Any] = {"updated_at": now_iso()}
+        if c_val is not None:
+            proj_up["project_value"] = float(c_val or 0)
+        if payment_plan is not None and isinstance(payment_plan, list):
+            proj_up["payment_plan"] = payment_plan
+        if sys_kw is not None:
+            proj_up["capacity_kw"] = float(sys_kw or 0)
+        await db.projects.update_one({"id": proj["id"], "company_id": company_id}, {"$set": proj_up})
+    elif c_val is not None:
+        proj_doc = {
+            "id": proj_id,
+            "company_id": company_id,
+            "client_id": client_id,
+            "project_name": f"{sys_kw or 0} kW Solar System" if sys_kw else "Solar Project",
+            "project_type": payload.get("consumer_type") or "Rooftop Solar",
+            "capacity_kw": float(sys_kw or 0),
+            "project_value": float(c_val or 0),
+            "project_date": now_iso()[:10],
+            "payment_plan": payment_plan or [],
+            "status": "Pending",
+            "created_by": user_name,
+            "created_at": now_iso(),
+            "updated_at": now_iso()
+        }
+        await db.projects.insert_one(proj_doc)
+
+    # Sync initial_payments if provided
+    initial_payments = payload.get("initial_payments")
+    if initial_payments and isinstance(initial_payments, list):
+        for pay in initial_payments:
+            amt = float(pay.get("amount") or 0)
+            if amt > 0 or pay.get("description"):
+                m_name = pay.get("description") or "Initial Payment"
+                p_type = pay.get("description") or "Advance"
+                p_stat = pay.get("status") or "Received"
+                p_source = pay.get("payment_source") or pay.get("payment_mode") or "Bank Transfer"
+                p_ref = pay.get("ref_number") or ""
+                p_date = pay.get("payment_date") or now_iso()[:10]
+                
+                existing_p = await db.payments.find_one({
+                    "company_id": company_id,
+                    "client_id": client_id,
+                    "$or": [
+                        {"milestone_name": m_name},
+                        {"payment_type": p_type}
+                    ]
+                })
+                if existing_p:
+                    await db.payments.update_one(
+                        {"id": existing_p["id"], "company_id": company_id},
+                        {"$set": {
+                            "amount": amt,
+                            "payment_date": p_date,
+                            "payment_source": p_source,
+                            "payment_mode": p_source,
+                            "ref_number": p_ref,
+                            "status": p_stat,
+                            "updated_at": now_iso()
+                        }}
+                    )
+                else:
+                    pay_doc = {
+                        "id": f"pay_{uuid.uuid4().hex[:12]}",
+                        "company_id": company_id,
+                        "client_id": client_id,
+                        "project_id": proj_id,
+                        "milestone_name": m_name,
+                        "payment_type": p_type,
+                        "amount": amt,
+                        "payment_date": p_date,
+                        "payment_source": p_source,
+                        "payment_mode": p_source,
+                        "ref_number": p_ref,
+                        "status": p_stat,
+                        "notes": pay.get("remarks") or pay.get("notes") or "",
+                        "recorded_by": user_name,
+                        "created_at": now_iso(),
+                        "updated_at": now_iso()
+                    }
+                    await db.payments.insert_one(pay_doc)
+
+    # Sync loan setup if provided
+    loan_info = payload.get("loan_setup")
+    if loan_info and isinstance(loan_info, dict) and loan_info.get("enabled"):
+        app_amt = float(loan_info.get("approved_amount") or loan_info.get("loan_amount") or 0)
+        existing_l = await db.loans.find_one({"company_id": company_id, "client_id": client_id})
+        if existing_l:
+            await db.loans.update_one(
+                {"id": existing_l["id"], "company_id": company_id},
+                {"$set": {
+                    "provider": loan_info.get("provider") or "Tata Capital",
+                    "loan_amount": float(loan_info.get("loan_amount") or 0),
+                    "approved_amount": app_amt,
+                    "approved_date": loan_info.get("approved_date") or now_iso()[:10],
+                    "expected_disbursement_date": loan_info.get("expected_disbursement_date") or "",
+                    "disbursed_amount": float(loan_info.get("disbursed_amount") or 0),
+                    "loan_ref": loan_info.get("loan_ref") or "",
+                    "status": loan_info.get("status") or "Approved",
+                    "remarks": loan_info.get("remarks") or "",
+                    "updated_at": now_iso()
+                }}
+            )
+        elif app_amt > 0 or loan_info.get("provider"):
+            loan_doc = {
+                "id": f"loan_{uuid.uuid4().hex[:12]}",
+                "company_id": company_id,
+                "client_id": client_id,
+                "project_id": proj_id,
+                "provider": loan_info.get("provider") or "Tata Capital",
+                "loan_amount": float(loan_info.get("loan_amount") or 0),
+                "approved_amount": app_amt,
+                "approved_date": loan_info.get("approved_date") or now_iso()[:10],
+                "expected_disbursement_date": loan_info.get("expected_disbursement_date") or "",
+                "disbursed_amount": float(loan_info.get("disbursed_amount") or 0),
+                "loan_ref": loan_info.get("loan_ref") or "",
+                "status": loan_info.get("status") or "Approved",
+                "remarks": loan_info.get("remarks") or "",
+                "created_by": user_name,
+                "created_at": now_iso(),
+                "updated_at": now_iso()
+            }
+            await db.loans.insert_one(loan_doc)
 
 @api_router.patch("/clients/{client_id}")
 async def patch_client(client_id: str, payload: Dict[str, Any], user=Depends(get_current_user)):
@@ -4455,6 +4621,9 @@ async def patch_client(client_id: str, payload: Dict[str, Any], user=Depends(get
                 raise HTTPException(status_code=404, detail="Client not found")
 
     await LocalFileCollection("clients").update_one({"$or": [{"id": client_id}, {"sol_id": client_id}]}, {"$set": payload})
+    
+    # Sync financial setup on patch
+    await _sync_client_financials_on_update(client_id, user["company_id"], raw_payload, user["name"])
 
     # ── DIAG STEP 4: Fresh SELECT read-back ──────────────────────────────────
     logger.info(f"[CLIENT-SAVE DIAG] STEP 4 ▶ Running fresh SELECT to verify persistence...")
@@ -4479,6 +4648,193 @@ async def patch_client(client_id: str, payload: Dict[str, Any], user=Depends(get
     logger.info(f"[CLIENT-SAVE DIAG] ✓ _verify_client_db_write passed — returning enriched doc")
     logger.info(f"[CLIENT-SAVE DIAG] ══════════════════════════════════════════")
     return _enrich_client_doc(client_doc) if client_doc else {}
+
+@api_router.get("/clients/{client_id}/financials")
+async def get_client_financials(client_id: str, user=Depends(get_current_user)):
+    if not client_id or not client_id.strip():
+        raise HTTPException(status_code=400, detail="Invalid client ID")
+    cid = user["company_id"]
+    target_id = client_id.strip()
+
+    client = await db.clients.find_one({
+        "$or": [{"id": target_id}, {"sol_id": target_id}],
+        "company_id": cid
+    }, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    c_identifiers = list({x for x in [client.get("id"), client.get("sol_id"), target_id] if x})
+    
+    # Project info
+    project = await db.projects.find_one({"client_id": {"$in": c_identifiers}, "company_id": cid}, {"_id": 0})
+    sys_kw = float(client.get("system_kw") or 0)
+    net_val = float(
+        client.get("contract_value") or
+        client.get("quotation_value") or
+        client.get("net_project_value") or
+        (project.get("project_value") if project else 0) or
+        (sys_kw * 45000 if sys_kw > 0 else 0)
+    )
+    quot_val = float(client.get("quotation_value") or net_val)
+
+    # Payments
+    payments = await db.payments.find({
+        "company_id": cid,
+        "$or": [
+            {"client_id": {"$in": c_identifiers}},
+            {"project_id": f"proj_{client.get('id')}"},
+            {"project_id": project.get("id")} if project else {"client_id": client.get("id")}
+        ]
+    }, {"_id": 0}).sort("payment_date", -1).to_list(1000)
+
+    # Expenses
+    expenses = await db.expenses.find({
+        "company_id": cid,
+        "$or": [
+            {"client_id": {"$in": c_identifiers}},
+            {"project_id": f"proj_{client.get('id')}"},
+            {"project_id": project.get("id")} if project else {"client_id": client.get("id")}
+        ]
+    }, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+    # Allocated material cost from inventory outward
+    outward_records = await db.inventory_outward.find({
+        "company_id": cid,
+        "$or": [{"client_id": {"$in": c_identifiers}}, {"sol_id": {"$in": c_identifiers}}]
+    }, {"_id": 0}).to_list(1000)
+    allocated_material_cost = sum(float(r.get("total_amount") or r.get("amount") or 0) for r in outward_records)
+    if allocated_material_cost == 0:
+        mat_reqs = await db.material_requests.find({
+            "company_id": cid,
+            "$or": [{"client_id": {"$in": c_identifiers}}, {"sol_id": {"$in": c_identifiers}}]
+        }, {"_id": 0}).to_list(1000)
+        allocated_material_cost = sum(float(m.get("estimated_cost") or m.get("total_cost") or 0) for m in mat_reqs)
+
+    logged_expenses_cost = sum(float(e.get("amount") or 0) for e in expenses)
+    total_cost = allocated_material_cost + logged_expenses_cost
+
+    total_rec = sum(
+        float(p.get("amount") or 0)
+        for p in payments
+        if (p.get("status") or "Received").lower() == "received"
+    )
+    total_pending = max(0.0, net_val - total_rec)
+    estimated_profit = (net_val - total_cost) if total_cost > 0 else None
+    profit_margin = ((estimated_profit / net_val) * 100) if (estimated_profit is not None and net_val > 0) else None
+
+    # Milestones from project or client payment plan
+    milestone_plan = (project.get("payment_plan") if project else None) or client.get("payment_plan") or []
+    cum_req = 0.0
+    milestones = []
+    for idx, m in enumerate(milestone_plan):
+        m_amt = float(m.get("amount") or 0)
+        cum_req += m_amt
+        m_status = "Paid" if total_rec >= cum_req and cum_req > 0 else "Pending"
+        milestones.append({
+            "id": f"ms_{idx+1}",
+            "name": m.get("name") or m.get("milestone_name") or f"Milestone {idx+1}",
+            "amount": m_amt,
+            "status": m.get("status") or m_status
+        })
+
+    return {
+        "commercial_summary": {
+            "net_project_value": net_val,
+            "quotation_value": quot_val,
+            "total_received": total_rec,
+            "total_pending": total_pending,
+            "allocated_material_cost": allocated_material_cost if allocated_material_cost > 0 else None,
+            "logged_expenses_cost": logged_expenses_cost if logged_expenses_cost > 0 else None,
+            "total_cost": total_cost if total_cost > 0 else None,
+            "estimated_profit": estimated_profit,
+            "profit_margin": round(profit_margin, 1) if profit_margin is not None else None
+        },
+        "milestones": milestones,
+        "payments": payments,
+        "expenses": expenses
+    }
+
+@api_router.post("/clients/{client_id}/payments")
+async def record_client_payment_direct(client_id: str, payload: Dict[str, Any], user=Depends(get_current_user)):
+    if not client_id or not client_id.strip():
+        raise HTTPException(status_code=400, detail="Invalid client ID")
+    cid = user["company_id"]
+    target_id = client_id.strip()
+
+    client = await db.clients.find_one({
+        "$or": [{"id": target_id}, {"sol_id": target_id}],
+        "company_id": cid
+    }, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    amt = float(payload.get("amount") or 0)
+    if amt <= 0:
+        raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
+
+    proj_id = f"proj_{client['id']}"
+    pay_doc = {
+        "id": f"pay_{uuid.uuid4().hex[:12]}",
+        "company_id": cid,
+        "client_id": client["id"],
+        "project_id": proj_id,
+        "milestone_name": payload.get("milestone_name") or "Direct Payment",
+        "payment_type": payload.get("milestone_name") or payload.get("payment_type") or "Advance",
+        "amount": amt,
+        "payment_date": payload.get("payment_date") or now_iso()[:10],
+        "payment_source": payload.get("payment_mode") or payload.get("payment_source") or "Bank Transfer",
+        "payment_mode": payload.get("payment_mode") or payload.get("payment_source") or "Bank Transfer",
+        "ref_number": payload.get("ref_number") or "",
+        "bank_utr": payload.get("ref_number") or "",
+        "status": payload.get("status") or "Received",
+        "notes": payload.get("notes") or "",
+        "recorded_by": user["name"],
+        "created_at": now_iso(),
+        "updated_at": now_iso()
+    }
+    await db.payments.insert_one(pay_doc)
+    await log_activity(cid, user["id"], user["name"], "Recorded Payment", f"Amount: ₹{amt} for Client: {client.get('full_name')}")
+    pay_doc.pop("_id", None)
+    return {"message": "Payment recorded successfully", "payment": pay_doc}
+
+@api_router.post("/clients/{client_id}/expenses")
+async def record_client_expense_direct(client_id: str, payload: Dict[str, Any], user=Depends(get_current_user)):
+    if not client_id or not client_id.strip():
+        raise HTTPException(status_code=400, detail="Invalid client ID")
+    cid = user["company_id"]
+    target_id = client_id.strip()
+
+    client = await db.clients.find_one({
+        "$or": [{"id": target_id}, {"sol_id": target_id}],
+        "company_id": cid
+    }, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    amt = float(payload.get("amount") or 0)
+    if amt <= 0:
+        raise HTTPException(status_code=400, detail="Expense amount must be greater than 0")
+
+    proj_id = f"proj_{client['id']}"
+    exp_doc = {
+        "id": f"exp_{uuid.uuid4().hex[:12]}",
+        "company_id": cid,
+        "client_id": client["id"],
+        "project_id": proj_id,
+        "category": payload.get("category") or "Direct Expense",
+        "amount": amt,
+        "description": payload.get("description") or "",
+        "vendor_name": payload.get("vendor_name") or "",
+        "payment_mode": payload.get("payment_mode") or "Cash/UPI",
+        "ref_number": payload.get("ref_number") or "",
+        "created_by": user["name"],
+        "created_at": now_iso(),
+        "updated_at": now_iso()
+    }
+    await db.expenses.insert_one(exp_doc)
+    await log_activity(cid, user["id"], user["name"], "Logged Expense", f"Amount: ₹{amt} ({payload.get('category')}) for Client: {client.get('full_name')}")
+    exp_doc.pop("_id", None)
+    return {"message": "Expense logged successfully", "expense": exp_doc}
 
 @api_router.patch("/clients/{client_id}/stages")
 async def update_stages(client_id: str, data: StageUpdate, user=Depends(get_current_user)):
@@ -10668,57 +11024,35 @@ async def get_client_data_detail(
     tab: Optional[str] = "all",
     user=Depends(get_current_user)
 ):
+    if not client_id or not client_id.strip():
+        raise HTTPException(status_code=400, detail="Invalid client ID")
     cid = user["company_id"]
+    target_id = client_id.strip()
     or_conds: List[Dict[str, Any]] = [
-        {"id": client_id},
-        {"sol_id": client_id},
-        {"consumer_number": client_id}
+        {"id": target_id},
+        {"sol_id": target_id}
     ]
-    if len(client_id) == 24:
+    if len(target_id) == 24:
         try:
             from bson import ObjectId
-            or_conds.append({"_id": ObjectId(client_id)})
+            or_conds.append({"_id": ObjectId(target_id)})
         except Exception:
             pass
 
-    c = None
-    
-    try:
-        c = await db.clients.find_one({"$or": or_conds, "company_id": cid})
-    except Exception as err:
-        logger.warning(f"OR query in get_client_data_detail: {err}")
-
-    if not c:
-        try:
-            c = await db.clients.find_one({"id": client_id, "company_id": cid})
-        except Exception:
-            pass
-
-    if not c:
-        try:
-            c = await db.clients.find_one({"$or": or_conds})
-        except Exception:
-            pass
-
-    if not c:
-        try:
-            c = await db.clients.find_one({"id": client_id})
-        except Exception:
-            pass
-
+    c = await db.clients.find_one({"$or": or_conds, "company_id": cid})
     if not c:
         raise HTTPException(status_code=404, detail="Client not found")
 
     raw_mongo_id = str(c.get("_id")) if c.get("_id") else None
     doc_id = c.get("id")
-    canonical_id = str(doc_id or raw_mongo_id or c.get("sol_id") or client_id)
+    canonical_id = str(doc_id or raw_mongo_id or c.get("sol_id") or target_id)
 
     c["id"] = canonical_id
     c.pop("_id", None)
     c["client_code"] = c.get("sol_id")
     c = _enrich_client_doc(c)
 
-    client_ids = list({x for x in [client_id, canonical_id, doc_id, raw_mongo_id, c.get("sol_id")] if x})
+    client_ids = list({x for x in [target_id, canonical_id, doc_id, raw_mongo_id, c.get("sol_id")] if x})
     q = {"company_id": cid, "client_id": {"$in": client_ids}}
 
     # Build list of coroutines based on which tab is requested, then gather them all.
@@ -13006,8 +13340,8 @@ async def get_receivables_dashboard(
 ):
     cid = user["company_id"]
     query = {"company_id": cid}
-    if client_id:
-        query["id"] = client_id
+    if client_id and client_id.strip():
+        query["$or"] = [{"id": client_id.strip()}, {"sol_id": client_id.strip()}]
 
     clients = await db.clients.find(query, {"_id": 0}).to_list(10000)
     all_projects = await db.projects.find({"company_id": cid}, {"_id": 0}).to_list(10000)
@@ -13023,15 +13357,21 @@ async def get_receivables_dashboard(
 
     client_items = []
     for c in clients:
-        c_projects = [p for p in all_projects if p.get("client_id") == c["id"]]
+        c_id = str(c.get("id") or c.get("_id") or "")
+        c_sol_id = str(c.get("sol_id") or "")
+        if not c_id and not c_sol_id:
+            continue
+        
+        c_identifiers = {x for x in [c_id, c_sol_id, c.get("id"), c.get("sol_id")] if x}
+        c_projects = [p for p in all_projects if p.get("client_id") and p.get("client_id") in c_identifiers]
         
         if not c_projects:
             sys_kw = float(c.get("system_kw") or 0)
-            quotation_val = float(c.get("quotation_value") or c.get("net_project_value") or (sys_kw * 45000 if sys_kw > 0 else 0))
+            quotation_val = float(c.get("contract_value") or c.get("quotation_value") or c.get("net_project_value") or (sys_kw * 45000 if sys_kw > 0 else 0))
             def_proj = {
-                "id": f"proj_{c['id']}",
+                "id": f"proj_{c_id}",
                 "company_id": cid,
-                "client_id": c["id"],
+                "client_id": c_id,
                 "project_name": f"{sys_kw} kW Solar System" if sys_kw > 0 else "Rooftop Solar Project",
                 "project_type": c.get("project_type") or "Rooftop Solar",
                 "capacity_kw": sys_kw,
@@ -13058,15 +13398,18 @@ async def get_receivables_dashboard(
             
             p_payments = [
                 pay for pay in payments 
-                if pay.get("project_id") == pid or (is_def and pay.get("client_id") == c["id"] and not pay.get("project_id"))
+                if (pay.get("project_id") == pid and pay.get("client_id") in c_identifiers)
+                or (is_def and pay.get("client_id") in c_identifiers and (not pay.get("project_id") or pay.get("project_id") == pid))
             ]
             p_expenses = [
                 exp for exp in expenses 
-                if exp.get("project_id") == pid or (is_def and exp.get("client_id") == c["id"] and not exp.get("project_id"))
+                if (exp.get("project_id") == pid and exp.get("client_id") in c_identifiers)
+                or (is_def and exp.get("client_id") in c_identifiers and (not exp.get("project_id") or exp.get("project_id") == pid))
             ]
             p_loans = [
                 loan for loan in loans
-                if loan.get("project_id") == pid or (is_def and loan.get("client_id") == c["id"] and not loan.get("project_id"))
+                if (loan.get("project_id") == pid and loan.get("client_id") in c_identifiers)
+                or (is_def and loan.get("client_id") in c_identifiers and (not loan.get("project_id") or loan.get("project_id") == pid))
             ]
 
             p_val = float(p.get("project_value") or p.get("quotation_value") or 0)
@@ -13117,7 +13460,7 @@ async def get_receivables_dashboard(
 
             c_project_items.append({
                 "id": pid,
-                "client_id": c["id"],
+                "client_id": c_id,
                 "project_name": p.get("project_name") or "Solar Project",
                 "project_type": p.get("project_type") or "Rooftop Solar",
                 "capacity_kw": float(p.get("capacity_kw") or p.get("system_kw") or 0),
@@ -13143,7 +13486,7 @@ async def get_receivables_dashboard(
         total_loan_pending += c_loan_pend
 
         client_items.append({
-            "client_id": c["id"],
+            "client_id": c_id,
             "full_name": c.get("full_name") or "Unnamed Client",
             "mobile": c.get("mobile") or "",
             "sol_id": c.get("sol_id") or "",
@@ -13208,17 +13551,23 @@ async def create_project(data: ProjectCreatePayload, user=Depends(get_current_us
 
 @api_router.get("/finance/projects/{project_id}")
 async def get_project_financial_details(project_id: str, user=Depends(get_current_user)):
+    if not project_id or not project_id.strip():
+        raise HTTPException(status_code=400, detail="Invalid project ID")
     cid = user["company_id"]
-    project = await db.projects.find_one({"id": project_id, "company_id": cid}, {"_id": 0})
+    target_pid = project_id.strip()
+    project = await db.projects.find_one({"id": target_pid, "company_id": cid}, {"_id": 0})
     
-    if not project and project_id.startswith("proj_"):
-        client_id_candidate = project_id.replace("proj_", "")
-        client = await db.clients.find_one({"id": client_id_candidate, "company_id": cid}, {"_id": 0})
+    if not project and target_pid.startswith("proj_"):
+        client_id_candidate = target_pid.replace("proj_", "")
+        client = await db.clients.find_one({
+            "$or": [{"id": client_id_candidate}, {"sol_id": client_id_candidate}],
+            "company_id": cid
+        }, {"_id": 0})
         if client:
             sys_kw = float(client.get("system_kw") or 0)
-            quot_val = float(client.get("quotation_value") or client.get("net_project_value") or (sys_kw * 45000 if sys_kw > 0 else 0))
+            quot_val = float(client.get("contract_value") or client.get("quotation_value") or client.get("net_project_value") or (sys_kw * 45000 if sys_kw > 0 else 0))
             project = {
-                "id": project_id,
+                "id": target_pid,
                 "company_id": cid,
                 "client_id": client["id"],
                 "project_name": f"{sys_kw} kW Solar System" if sys_kw > 0 else "Rooftop Solar Project",
@@ -13233,28 +13582,30 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    client = await db.clients.find_one({"id": project["client_id"], "company_id": cid}, {"_id": 0})
+    client = await db.clients.find_one({
+        "$or": [{"id": project["client_id"]}, {"sol_id": project.get("client_id")}],
+        "company_id": cid
+    }, {"_id": 0})
     if not client:
         raise HTTPException(status_code=404, detail="Client not found for this project")
 
+    c_identifiers = list({x for x in [client.get("id"), client.get("sol_id"), project.get("client_id")] if x})
     is_def = project.get("is_default", False)
-    if is_def:
-        payments = await db.payments.find(
-            {"company_id": cid, "$or": [{"project_id": project_id}, {"client_id": client["id"], "project_id": {"$in": ["", None]}}]},
-            {"_id": 0}
-        ).sort("payment_date", -1).to_list(1000)
-        expenses = await db.expenses.find(
-            {"company_id": cid, "$or": [{"project_id": project_id}, {"client_id": client["id"], "project_id": {"$in": ["", None]}}]},
-            {"_id": 0}
-        ).sort("created_at", -1).to_list(1000)
-        loans = await db.loans.find(
-            {"company_id": cid, "$or": [{"project_id": project_id}, {"client_id": client["id"], "project_id": {"$in": ["", None]}}]},
-            {"_id": 0}
-        ).sort("created_at", -1).to_list(1000)
-    else:
-        payments = await db.payments.find({"project_id": project_id, "company_id": cid}, {"_id": 0}).sort("payment_date", -1).to_list(1000)
-        expenses = await db.expenses.find({"project_id": project_id, "company_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-        loans = await db.loans.find({"project_id": project_id, "company_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    
+    pay_query = {
+        "company_id": cid,
+        "$or": [
+            {"project_id": project["id"]},
+            {"client_id": {"$in": c_identifiers}}
+        ]
+    }
+    raw_payments = await db.payments.find(pay_query, {"_id": 0}).sort("payment_date", -1).to_list(1000)
+    raw_expenses = await db.expenses.find(pay_query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    raw_loans = await db.loans.find(pay_query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+    payments = [p for p in raw_payments if (p.get("client_id") in c_identifiers) or (p.get("project_id") == project["id"])]
+    expenses = [e for e in raw_expenses if (e.get("client_id") in c_identifiers) or (e.get("project_id") == project["id"])]
+    loans = [l for l in raw_loans if (l.get("client_id") in c_identifiers) or (l.get("project_id") == project["id"])]
 
     p_val = float(project.get("project_value") or project.get("quotation_value") or 0)
 
@@ -13280,10 +13631,15 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
     loan_pending = max(0.0, loan_approved - loan_disbursed)
 
     # Fetch project invoices
-    invoices = await db.invoices.find(
-        {"company_id": cid, "$or": [{"project_id": project_id}, {"client_id": client["id"]}]},
-        {"_id": 0}
-    ).sort("created_at", -1).to_list(1000)
+    inv_query = {
+        "company_id": cid,
+        "$or": [
+            {"project_id": project["id"]},
+            {"client_id": {"$in": c_identifiers}}
+        ]
+    }
+    raw_invoices = await db.invoices.find(inv_query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    invoices = [inv for inv in raw_invoices if (inv.get("client_id") in c_identifiers) or (inv.get("project_id") == project["id"])]
 
     total_invoiced = sum(float(inv.get("grand_total") or 0) for inv in invoices if inv.get("status") != "Cancelled")
     
@@ -13825,7 +14181,11 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
 async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=Depends(get_current_user)):
     cid = user["company_id"]
     fmt = (payload.get("format") or "pdf").lower().strip()
-    invoice = await db.invoices.find_one({"id": invoice_id, "company_id": cid}, {"_id": 0})
+    target_inv_id = invoice_id.strip()
+    invoice = await db.invoices.find_one({
+        "$or": [{"id": target_inv_id}, {"invoice_number": target_inv_id}],
+        "company_id": cid
+    }, {"_id": 0})
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
@@ -13833,7 +14193,12 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
     company_doc = await _enrich_company_doc(company_doc)
     client_doc = None
     if invoice.get("client_id"):
-        client_doc = await db.clients.find_one({"id": invoice["client_id"], "company_id": cid}, {"_id": 0})
+        client_doc = await db.clients.find_one({
+            "$or": [{"id": invoice["client_id"]}, {"sol_id": invoice["client_id"]}],
+            "company_id": cid
+        }, {"_id": 0})
+        if client_doc:
+            client_doc = _enrich_client_doc(client_doc)
 
     doc_data = {
         **invoice,
@@ -13842,23 +14207,35 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
 
     doc_type = invoice.get("doc_type") or "tax_invoice"
     if fmt == "docx":
-        pdf_bytes = pdf_generator.generate_docx(doc_type, doc_data, company_doc)
+        doc_bytes = pdf_generator.generate_docx(doc_type, doc_data, company_doc)
         content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ext = ".docx"
     else:
-        pdf_bytes = pdf_generator.generate_document(doc_type, doc_data, company_doc)
+        doc_bytes = pdf_generator.generate_document(doc_type, doc_data, company_doc)
         content_type = "application/pdf"
         ext = ".pdf"
 
     file_id = str(uuid.uuid4())
     filename = f"{invoice.get('client_name', 'Client')}_Invoice_{invoice.get('invoice_number', invoice_id)}{ext}".replace(" ", "_")
     storage_path = f"{APP_NAME}/{cid}/generated/{file_id}{ext}"
-    result = put_object(storage_path, pdf_bytes, content_type)
+    result = put_object(storage_path, doc_bytes, content_type)
+
+    # Local fallback cache write
+    try:
+        import os
+        cache_dir = os.path.join(os.path.dirname(__file__), "storage_cache", str(cid), "generated")
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(os.path.join(cache_dir, f"{file_id}{ext}"), "wb") as f:
+            f.write(doc_bytes)
+        with open(os.path.join(cache_dir, f"{invoice.get('id', file_id)}{ext}"), "wb") as f:
+            f.write(doc_bytes)
+    except Exception as _ce:
+        logger.debug(f"Local storage cache write: {_ce}")
 
     file_rec = {
         "id": file_id, "company_id": cid, "uploader_id": user["id"],
         "storage_path": result["path"], "original_filename": filename,
-        "content_type": content_type, "size": len(pdf_bytes),
+        "content_type": content_type, "size": len(doc_bytes),
         "category": "generated", "is_deleted": False, "created_at": now_iso(),
         "doc_type": doc_type,
         "document_number": invoice.get("invoice_number"),
@@ -13867,7 +14244,10 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
         "status": "Active"
     }
     await db.files.insert_one(file_rec)
-    await db.invoices.update_one({"id": invoice_id, "company_id": cid}, {"$set": {"file_id": file_id, "updated_at": now_iso()}})
+    await db.invoices.update_one(
+        {"$or": [{"id": invoice.get("id")}, {"invoice_number": invoice.get("invoice_number")}], "company_id": cid},
+        {"$set": {"file_id": file_id, "updated_at": now_iso()}}
+    )
 
     return {"id": file_id, "filename": filename, "file_id": file_id}
 

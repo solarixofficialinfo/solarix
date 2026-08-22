@@ -373,18 +373,53 @@ export default function Receivables() {
   });
 
   // Modal Handlers
-  const handleOpenAddPayment = (projId) => {
-    setActiveProjectId(projId);
-    setEditingPayment(null);
-    setPaymentForm({
-      payment_type: "Advance",
-      amount: "",
-      payment_date: new Date().toISOString().split("T")[0],
-      payment_source: "Bank Transfer",
-      ref_number: "",
-      remarks: "",
-      status: "Received"
-    });
+  const handleDownloadInvoiceDoc = async (inv, format = "pdf") => {
+    try {
+      toast.info(`Generating ${format.toUpperCase()}...`);
+      const res = await api.post(`/finance/invoices/${inv.id}/generate-doc`, { format });
+      const targetFileId = res.data?.file_id || res.data?.id || inv.file_id;
+      if (targetFileId) {
+        window.open(fileUrl(targetFileId), "_blank");
+        toast.success(`${format.toUpperCase()} ready`);
+      } else {
+        toast.error("Could not generate document");
+      }
+    } catch (err) {
+      console.error("Error generating invoice doc:", err);
+      if (inv.file_id) {
+        window.open(fileUrl(inv.file_id), "_blank");
+      } else {
+        toast.error("Failed to generate document: " + formatApiError(err));
+      }
+    }
+  };
+
+  const handleOpenAddPayment = (projId = null, prefillPayment = null) => {
+    const targetProjId = projId || activeProjectId;
+    setActiveProjectId(targetProjId);
+    if (prefillPayment) {
+      setEditingPayment(prefillPayment);
+      setPaymentForm({
+        payment_type: prefillPayment.payment_type || prefillPayment.milestone_name || "Advance",
+        amount: String(prefillPayment.amount || ""),
+        payment_date: prefillPayment.payment_date || new Date().toISOString().split("T")[0],
+        payment_source: prefillPayment.payment_source || prefillPayment.payment_mode || "Bank Transfer",
+        ref_number: prefillPayment.ref_number || prefillPayment.bank_utr || "",
+        remarks: prefillPayment.remarks || prefillPayment.notes || "",
+        status: "Received"
+      });
+    } else {
+      setEditingPayment(null);
+      setPaymentForm({
+        payment_type: "Advance",
+        amount: "",
+        payment_date: new Date().toISOString().split("T")[0],
+        payment_source: "Bank Transfer",
+        ref_number: "",
+        remarks: "",
+        status: "Received"
+      });
+    }
     setAddPaymentOpen(true);
   };
 
@@ -400,6 +435,72 @@ export default function Receivables() {
       status: pay.status || "Received"
     });
     setAddPaymentOpen(true);
+  };
+
+  const handleOpenAddLoan = (projId) => {
+    setActiveProjectId(projId);
+    setEditingLoan(null);
+    setLoanForm({
+      provider: "Tata Capital",
+      loan_amount: "",
+      approved_amount: "",
+      approved_date: new Date().toISOString().split("T")[0],
+      expected_disbursement_date: "",
+      disbursed_amount: "",
+      loan_ref: "",
+      status: "Applied",
+      remarks: ""
+    });
+    setAddLoanOpen(true);
+  };
+
+  const handleOpenEditLoan = (loan) => {
+    setEditingLoan(loan);
+    setLoanForm({
+      provider: loan.provider || "Tata Capital",
+      loan_amount: String(loan.loan_amount || ""),
+      approved_amount: String(loan.approved_amount || ""),
+      approved_date: loan.approved_date || "",
+      expected_disbursement_date: loan.expected_disbursement_date || "",
+      disbursed_amount: String(loan.disbursed_amount || ""),
+      loan_ref: loan.loan_ref || "",
+      status: loan.status || "Applied",
+      remarks: loan.remarks || ""
+    });
+    setAddLoanOpen(true);
+  };
+
+  const handleOpenAddExpense = (projId) => {
+    setActiveProjectId(projId);
+    setEditingExpense(null);
+    setExpenseForm({
+      category: "BOS Material",
+      amount: "",
+      expense_date: new Date().toISOString().split("T")[0],
+      vendor_name: "",
+      description: "",
+      payment_mode: "Bank Transfer",
+      ref_number: "",
+      payment_status: "Paid",
+      notes: ""
+    });
+    setAddExpenseOpen(true);
+  };
+
+  const handleOpenEditExpense = (exp) => {
+    setEditingExpense(exp);
+    setExpenseForm({
+      category: exp.category || "BOS Material",
+      amount: String(exp.amount || ""),
+      expense_date: exp.expense_date || (exp.created_at || "").slice(0, 10),
+      vendor_name: exp.vendor_name || "",
+      description: exp.description || "",
+      payment_mode: exp.payment_mode || "Bank Transfer",
+      ref_number: exp.ref_number || "",
+      payment_status: exp.payment_status || "Paid",
+      notes: exp.notes || ""
+    });
+    setAddExpenseOpen(true);
   };
 
   const calculateInvoiceTotals = (
@@ -446,9 +547,44 @@ export default function Receivables() {
 
   const handleOpenCreateInvoice = (projId = null, docType = "tax_invoice", clientObj = null, projObj = null) => {
     const targetProjId = projId || activeProjectId;
-    const proj = projObj || (projectWorkspace?.project?.id === targetProjId ? projectWorkspace.project : null);
-    const cid = proj?.client_id || (typeof targetProjId === "string" && !targetProjId.startsWith("proj") ? targetProjId : "");
-    const client = clientObj || (cid ? clientsList.find((c) => c.id === cid) : null) || (projectWorkspace?.client?.id === cid ? projectWorkspace.client : null);
+    
+    let matchedClient = clientObj || null;
+    let matchedProj = projObj || null;
+
+    if (!matchedProj && targetProjId) {
+      if (projectWorkspace?.project?.id === targetProjId) {
+        matchedProj = projectWorkspace.project;
+      } else if (receivablesData?.items) {
+        for (const item of receivablesData.items) {
+          const foundProj = item.projects?.find((p) => p.id === targetProjId);
+          if (foundProj) {
+            matchedProj = foundProj;
+            if (!matchedClient) {
+              matchedClient = clientsList.find((c) => c.id === item.client_id) || {
+                id: item.client_id,
+                full_name: item.full_name,
+                mobile: item.mobile,
+                sol_id: item.sol_id
+              };
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    if (!matchedClient) {
+      if (projectWorkspace?.client?.id) {
+        matchedClient = projectWorkspace.client;
+      } else if (targetProjId) {
+        const rawCid = targetProjId.startsWith("proj_") ? targetProjId.replace("proj_", "") : targetProjId;
+        matchedClient = clientsList.find((c) => c.id === rawCid || c.sol_id === rawCid) || null;
+      }
+    }
+
+    const client = matchedClient;
+    const proj = matchedProj;
+    const cid = client?.id || proj?.client_id || "";
 
     const isLockedClient = !!(client || proj);
     const sysKw = proj?.capacity_kw || client?.system_kw || 0;
@@ -1075,7 +1211,16 @@ export default function Receivables() {
                           <tbody className="divide-y divide-slate-100">
                             {projectWorkspace.invoices.map((inv) => (
                               <tr key={inv.id} className="hover:bg-slate-50">
-                                <td className="p-2.5 font-bold font-mono text-blue-700">{inv.invoice_number}</td>
+                                <td
+                                  className="p-2.5 font-bold font-mono text-blue-700 hover:underline cursor-pointer"
+                                  onClick={() => {
+                                    setSelectedInvoiceDetail(inv);
+                                    setInvoiceDetailOpen(true);
+                                  }}
+                                  title="Click to view invoice details"
+                                >
+                                  {inv.invoice_number}
+                                </td>
                                 <td className="p-2.5 font-medium whitespace-nowrap">{inv.invoice_date}</td>
                                 <td className="p-2.5 text-slate-500 whitespace-nowrap">{inv.due_date || "—"}</td>
                                 <td className="p-2.5 text-right font-bold text-slate-900 font-mono">
@@ -1110,17 +1255,20 @@ export default function Receivables() {
                                     <Button
                                       size="xs"
                                       variant="outline"
-                                      onClick={() => {
-                                        if (inv.file_id) {
-                                          window.open(fileUrl(inv.file_id), "_blank");
-                                        } else {
-                                          toast.info("Generated PDF file not found");
-                                        }
-                                      }}
-                                      className="h-6 px-2 text-[11px] gap-1 text-slate-700"
-                                      title="Download PDF"
+                                      onClick={() => handleDownloadInvoiceDoc(inv, "pdf")}
+                                      className="h-6 px-2 text-[11px] gap-1 text-slate-700 border-slate-300 hover:bg-slate-100"
+                                      title="Download PDF Invoice"
                                     >
                                       <Download className="w-3 h-3 text-blue-600" /> PDF
+                                    </Button>
+                                    <Button
+                                      size="xs"
+                                      variant="outline"
+                                      onClick={() => handleDownloadInvoiceDoc(inv, "docx")}
+                                      className="h-6 px-2 text-[11px] gap-1 text-slate-700 border-slate-300 hover:bg-slate-100"
+                                      title="Download Word Invoice (.docx)"
+                                    >
+                                      <Download className="w-3 h-3 text-indigo-600" /> Word
                                     </Button>
                                     <Button
                                       size="xs"
@@ -1230,11 +1378,23 @@ export default function Receivables() {
                                 </td>
                                 <td className="p-2.5 text-center whitespace-nowrap">
                                   <div className="flex items-center justify-center gap-1">
+                                    {pay.status === "Pending" && (
+                                      <Button
+                                        size="xs"
+                                        variant="outline"
+                                        onClick={() => handleOpenAddPayment(activeProjectId, pay)}
+                                        className="h-6 text-[10px] px-2 bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100 font-semibold"
+                                        title="Record / Receive Payment"
+                                      >
+                                        Receive
+                                      </Button>
+                                    )}
                                     <Button
                                       size="xs"
                                       variant="ghost"
                                       onClick={() => handleOpenEditPayment(pay)}
                                       className="h-6 w-6 p-0 text-slate-500 hover:text-blue-600"
+                                      title="Edit Payment"
                                     >
                                       <Edit3 className="w-3.5 h-3.5" />
                                     </Button>
@@ -1247,6 +1407,7 @@ export default function Receivables() {
                                         }
                                       }}
                                       className="h-6 w-6 p-0 text-slate-500 hover:text-rose-600"
+                                      title="Delete Payment"
                                     >
                                       <Trash2 className="w-3.5 h-3.5" />
                                     </Button>
@@ -2786,7 +2947,7 @@ export default function Receivables() {
                     toast.error("Please enter a valid amount");
                     return;
                   }
-                  const clientId = projectWorkspace?.client?.id || projectWorkspace?.project?.client_id || "";
+                  const clientId = projectWorkspace?.client?.id || projectWorkspace?.project?.client_id || (activeProjectId?.startsWith("proj_") ? activeProjectId.replace("proj_", "") : activeProjectId) || "";
                   recordPaymentMutation.mutate({
                     projectId: activeProjectId,
                     payload: {
@@ -2837,58 +2998,41 @@ export default function Receivables() {
                   />
                 </div>
                 <div>
-                  <Label className="text-xs font-semibold">Loan Status</Label>
-                  <Select
-                    value={loanForm.status}
-                    onValueChange={(v) => setLoanForm({ ...loanForm, status: v })}
-                  >
-                    <SelectTrigger className="mt-1 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Applied">Applied</SelectItem>
-                      <SelectItem value="Approved">Approved</SelectItem>
-                      <SelectItem value="Partially Disbursed">Partially Disbursed</SelectItem>
-                      <SelectItem value="Disbursed">Disbursed</SelectItem>
-                      <SelectItem value="Closed">Closed</SelectItem>
-                      <SelectItem value="Rejected">Rejected</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <Label className="text-xs font-semibold">Loan Amount Requested (₹)</Label>
+                  <Label className="text-xs font-semibold">Applied Amount (₹)</Label>
                   <Input
                     type="number"
                     value={loanForm.loan_amount}
                     onChange={(e) => setLoanForm({ ...loanForm, loan_amount: e.target.value })}
-                    placeholder="100000"
-                    className="mt-1 font-mono text-xs"
+                    placeholder="250000"
+                    className="mt-1 text-xs"
                   />
                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <Label className="text-xs font-semibold">Approved Amount (₹)</Label>
                   <Input
                     type="number"
                     value={loanForm.approved_amount}
                     onChange={(e) => setLoanForm({ ...loanForm, approved_amount: e.target.value })}
-                    placeholder="100000"
-                    className="mt-1 font-mono text-xs"
+                    placeholder="250000"
+                    className="mt-1 text-xs font-bold text-indigo-700"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold">Disbursed Amount (₹)</Label>
+                  <Input
+                    type="number"
+                    value={loanForm.disbursed_amount}
+                    onChange={(e) => setLoanForm({ ...loanForm, disbursed_amount: e.target.value })}
+                    placeholder="250000"
+                    className="mt-1 font-bold font-mono text-xs text-emerald-700"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <Label className="text-xs font-semibold">Actual Disbursed (₹)</Label>
-                  <Input
-                    type="number"
-                    value={loanForm.disbursed_amount}
-                    onChange={(e) => setLoanForm({ ...loanForm, disbursed_amount: e.target.value })}
-                    placeholder="60000"
-                    className="mt-1 font-bold font-mono text-xs text-emerald-700"
-                  />
-                </div>
                 <div>
                   <Label className="text-xs font-semibold">Approved Date</Label>
                   <Input
@@ -2897,6 +3041,22 @@ export default function Receivables() {
                     onChange={(e) => setLoanForm({ ...loanForm, approved_date: e.target.value })}
                     className="mt-1 text-xs"
                   />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold">Status</Label>
+                  <Select
+                    value={loanForm.status}
+                    onValueChange={(v) => setLoanForm({ ...loanForm, status: v })}
+                  >
+                    <SelectTrigger className="mt-1 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Applied">Applied</SelectItem>
+                      <SelectItem value="In Process">In Process</SelectItem>
+                      <SelectItem value="Approved">Approved</SelectItem>
+                      <SelectItem value="Disbursed">Disbursed</SelectItem>
+                      <SelectItem value="Rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -2930,11 +3090,12 @@ export default function Receivables() {
                     toast.error("Please enter finance provider");
                     return;
                   }
+                  const clientId = projectWorkspace?.client?.id || projectWorkspace?.project?.client_id || (activeProjectId?.startsWith("proj_") ? activeProjectId.replace("proj_", "") : activeProjectId) || "";
                   recordLoanMutation.mutate({
                     projectId: activeProjectId,
                     payload: {
                       project_id: activeProjectId,
-                      client_id: projectWorkspace?.client?.id || "",
+                      client_id: clientId,
                       provider: loanForm.provider,
                       loan_amount: Number(loanForm.loan_amount || 0),
                       approved_amount: Number(loanForm.approved_amount || 0),
@@ -3076,11 +3237,12 @@ export default function Receivables() {
                     toast.error("Please enter a valid expense amount");
                     return;
                   }
+                  const clientId = projectWorkspace?.client?.id || projectWorkspace?.project?.client_id || (activeProjectId?.startsWith("proj_") ? activeProjectId.replace("proj_", "") : activeProjectId) || "";
                   recordExpenseMutation.mutate({
                     projectId: activeProjectId,
                     payload: {
                       project_id: activeProjectId,
-                      client_id: projectWorkspace?.client?.id || "",
+                      client_id: clientId,
                       category: expenseForm.category,
                       amount: Number(expenseForm.amount),
                       expense_date: expenseForm.expense_date,
