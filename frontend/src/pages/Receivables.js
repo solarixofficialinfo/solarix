@@ -257,16 +257,20 @@ export default function Receivables() {
   const createInvoiceMutation = useMutation({
     mutationFn: async (payload) => {
       const res = await api.post("/finance/invoices", payload);
-      return res.data;
+      return { ...res.data, isDraft: payload.status === "Draft" };
     },
     onSuccess: async (data) => {
-      toast.success("Tax Invoice created successfully");
+      if (data?.isDraft) {
+        toast.success("Draft invoice saved successfully");
+      } else {
+        toast.success("Tax Invoice created successfully");
+      }
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
       queryClient.invalidateQueries(["client"]);
       setCreateInvoiceOpen(false);
       const fileId = data?.file_id || data?.invoice?.file_id;
-      if (fileId) {
+      if (fileId && !data?.isDraft) {
         const downloadFilename = `Invoice_${data?.invoice?.invoice_number || fileId}.pdf`;
         await downloadFile(fileId, downloadFilename);
       }
@@ -586,7 +590,7 @@ export default function Receivables() {
     };
   };
 
-  const handleOpenCreateInvoice = (projId = null, docType = "tax_invoice", clientObj = null, projObj = null) => {
+  const handleOpenCreateInvoice = (projId = null, docType = "tax_invoice", clientObj = null, projObj = null, existingInvoice = null) => {
     const targetProjId = projId || activeProjectId;
     
     let matchedClient = clientObj || null;
@@ -626,6 +630,63 @@ export default function Receivables() {
     const client = matchedClient;
     const proj = matchedProj;
     const cid = client?.id || proj?.client_id || "";
+
+    if (existingInvoice) {
+      setInvoiceForm({
+        id: existingInvoice.id,
+        doc_type: existingInvoice.doc_type || docType,
+        project_id: existingInvoice.project_id || targetProjId || "",
+        client_id: existingInvoice.client_id || client?.id || cid || "",
+        client_name: existingInvoice.client_name || client?.full_name || proj?.client_name || "",
+        project_name: existingInvoice.project_name || proj?.project_name || "Solar Project",
+        invoice_number: existingInvoice.invoice_number,
+        invoice_date: existingInvoice.invoice_date || new Date().toISOString().split("T")[0],
+        payment_terms: existingInvoice.payment_terms || "15 Days",
+        due_date: existingInvoice.due_date || "",
+        place_of_supply: existingInvoice.place_of_supply || client?.state || "Maharashtra",
+        reverse_charge: existingInvoice.reverse_charge || "No",
+        seller_gstin: existingInvoice.seller_gstin || companyProfile?.gst_number || companyProfile?.gstin || companyProfile?.gst_no || "",
+        buyer_gstin: existingInvoice.buyer_gstin || client?.gst_number || client?.gstin || "",
+        is_intra_state: existingInvoice.igst_rate === 0 || existingInvoice.igst_rate === undefined,
+        gst_applicable: (Number(existingInvoice.cgst_rate) > 0 || Number(existingInvoice.sgst_rate) > 0 || Number(existingInvoice.igst_rate) > 0),
+        is_locked_client: true,
+        original_invoice_number: existingInvoice.original_invoice_number || "",
+        reason: existingInvoice.reason || "",
+        payment_mode: existingInvoice.payment_mode || "Bank Transfer",
+        ref_number: existingInvoice.ref_number || "",
+        amount_received: existingInvoice.amount_received || existingInvoice.paid_amount || 0,
+        items: (existingInvoice.items && existingInvoice.items.length > 0) ? existingInvoice.items.map(it => ({
+          product_name: it.product_name || it.product || "Item",
+          hsn_sac: it.hsn_sac || "",
+          size: it.size || "",
+          quantity: it.quantity || 1,
+          unit: it.unit || "Nos",
+          rate: it.rate !== undefined ? it.rate : (it.unit_price !== undefined ? it.unit_price : 0),
+          discount: it.discount || 0,
+          gst_rate: it.gst_rate !== undefined ? it.gst_rate : (it.gst !== undefined ? it.gst : 18),
+          amount: it.amount || 0
+        })) : [],
+        subtotal: existingInvoice.subtotal || 0,
+        discount: existingInvoice.discount || 0,
+        taxable_amount: existingInvoice.taxable_amount || existingInvoice.subtotal || 0,
+        cgst_rate: existingInvoice.cgst_rate !== undefined ? existingInvoice.cgst_rate : 9,
+        cgst_amount: existingInvoice.cgst_amount || 0,
+        sgst_rate: existingInvoice.sgst_rate !== undefined ? existingInvoice.sgst_rate : 9,
+        sgst_amount: existingInvoice.sgst_amount || 0,
+        igst_rate: existingInvoice.igst_rate !== undefined ? existingInvoice.igst_rate : 0,
+        igst_amount: existingInvoice.igst_amount || 0,
+        total_tax: (existingInvoice.cgst_amount || 0) + (existingInvoice.sgst_amount || 0) + (existingInvoice.igst_amount || 0),
+        freight: existingInvoice.freight || 0,
+        round_off: existingInvoice.round_off || 0,
+        grand_total: existingInvoice.grand_total || 0,
+        notes: existingInvoice.notes || "Payment due within 15 days of invoice date.",
+        terms: existingInvoice.terms || "Goods once sold will not be taken back.",
+        status: existingInvoice.status || "Draft",
+        allocated_payment_ids: existingInvoice.allocated_payment_ids || []
+      });
+      setCreateInvoiceOpen(true);
+      return;
+    }
 
     const isLockedClient = !!(client || proj);
     const sysKw = proj?.capacity_kw || client?.system_kw || 0;
@@ -1277,7 +1338,9 @@ export default function Receivables() {
                                   <Badge
                                     variant="outline"
                                     className={
-                                      inv.status === "Paid"
+                                      inv.status === "Draft"
+                                        ? "bg-slate-100 text-slate-700 border-slate-300 text-[10px] font-semibold"
+                                        : inv.status === "Paid"
                                         ? "bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]"
                                         : inv.status === "Partially Paid"
                                         ? "bg-blue-50 text-blue-700 border-blue-200 text-[10px]"
@@ -1293,6 +1356,17 @@ export default function Receivables() {
                                 </td>
                                 <td className="p-2.5 text-center whitespace-nowrap">
                                   <div className="flex items-center justify-center gap-1">
+                                    {inv.status === "Draft" && (
+                                      <Button
+                                        size="xs"
+                                        variant="outline"
+                                        onClick={() => handleOpenCreateInvoice(activeProjectId, inv.doc_type || "tax_invoice", projectWorkspace?.client, projectWorkspace?.project, inv)}
+                                        className="h-6 px-2 text-[11px] gap-1 text-blue-700 border-blue-300 hover:bg-blue-50 font-semibold"
+                                        title="Edit / Finalize Draft"
+                                      >
+                                        <Edit3 className="w-3 h-3 text-blue-600" /> Edit Draft
+                                      </Button>
+                                    )}
                                     <Button
                                       size="xs"
                                       variant="outline"
@@ -1311,33 +1385,36 @@ export default function Receivables() {
                                     >
                                       <Download className="w-3 h-3 text-indigo-600" /> Word
                                     </Button>
-                                    <Button
-                                      size="xs"
-                                      variant="outline"
-                                      onClick={() => {
-                                        setSelectedInvoice(inv);
-                                        setSelectedPaymentToApply("");
-                                        setAllocatedAmountInput(String(inv.outstanding_amount || 0));
-                                        setApplyPaymentOpen(true);
-                                      }}
-                                      className="h-6 px-2 text-[11px] gap-1 text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-                                      title="Apply Payment / Details"
-                                    >
-                                      <CreditCard className="w-3 h-3 text-emerald-600" /> Apply Payment
-                                    </Button>
+                                    {inv.status !== "Draft" && inv.status !== "Cancelled" && (
+                                      <Button
+                                        size="xs"
+                                        variant="outline"
+                                        onClick={() => {
+                                          setSelectedInvoice(inv);
+                                          setSelectedPaymentToApply("");
+                                          setAllocatedAmountInput(String(inv.outstanding_amount || 0));
+                                          setApplyPaymentOpen(true);
+                                        }}
+                                        className="h-6 px-2 text-[11px] gap-1 text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                                        title="Apply Payment / Details"
+                                      >
+                                        <CreditCard className="w-3 h-3 text-emerald-600" /> Apply Payment
+                                      </Button>
+                                    )}
                                     {inv.status !== "Cancelled" && (
                                       <Button
                                         size="xs"
                                         variant="ghost"
                                         onClick={() => {
-                                          if (window.confirm(`Cancel Tax Invoice ${inv.invoice_number}?`)) {
+                                          const actionLabel = inv.status === "Draft" ? "Delete Draft" : "Cancel Tax";
+                                          if (window.confirm(`${actionLabel} Invoice ${inv.invoice_number}?`)) {
                                             cancelInvoiceMutation.mutate(inv.id);
                                           }
                                         }}
                                         className="h-6 w-6 p-0 text-slate-400 hover:text-rose-600"
-                                        title="Cancel Invoice"
+                                        title={inv.status === "Draft" ? "Delete Draft" : "Cancel Invoice"}
                                       >
-                                        <XCircle className="w-3.5 h-3.5" />
+                                        {inv.status === "Draft" ? <Trash2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
                                       </Button>
                                     )}
                                   </div>
@@ -1539,18 +1616,25 @@ export default function Receivables() {
                               </div>
                               <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100 text-[11px]">
                                 <div>
-                                  <span className="text-slate-400 block">Applied</span>
+                                  <span className="text-slate-400 block">Loan Requested</span>
                                   <strong className="text-slate-700">₹{(loan.loan_amount || 0).toLocaleString("en-IN")}</strong>
                                 </div>
                                 <div>
-                                  <span className="text-slate-400 block">Approved</span>
+                                  <span className="text-slate-400 block">Approved Amount</span>
                                   <strong className="text-indigo-700">₹{(loan.approved_amount || 0).toLocaleString("en-IN")}</strong>
                                 </div>
                                 <div>
-                                  <span className="text-slate-400 block">Disbursed / Received</span>
+                                  <span className="text-slate-400 block">Actual Disbursed</span>
                                   <strong className="text-emerald-700">₹{(loan.disbursed_amount || 0).toLocaleString("en-IN")}</strong>
                                 </div>
                               </div>
+                              {(loan.approved_date || loan.expected_disbursement_date || loan.remarks) && (
+                                <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-slate-500 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                  {loan.approved_date && <span><strong>Approved Date:</strong> {loan.approved_date}</span>}
+                                  {loan.expected_disbursement_date && <span><strong>Expected Disb.:</strong> {loan.expected_disbursement_date}</span>}
+                                  {loan.remarks && <span className="italic">"{loan.remarks}"</span>}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -1697,17 +1781,25 @@ export default function Receivables() {
             <DialogHeader className="border-b border-slate-100 pb-3">
               <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-lg">
                 <FileText className="w-5 h-5 text-blue-600" />
-                {invoiceForm.doc_type === "tax_invoice" && "Create Invoice"}
-                {invoiceForm.doc_type === "proforma" && "Create Proforma Invoice"}
-                {invoiceForm.doc_type === "payment_receipt" && "Create Payment Receipt"}
-                {invoiceForm.doc_type === "credit_note" && "Create Credit Note"}
-                {invoiceForm.doc_type === "debit_note" && "Create Debit Note"}
+                {invoiceForm.id ? "Edit " : "Create "}
+                {invoiceForm.doc_type === "tax_invoice" && "Invoice"}
+                {invoiceForm.doc_type === "proforma" && "Proforma Invoice"}
+                {invoiceForm.doc_type === "payment_receipt" && "Payment Receipt"}
+                {invoiceForm.doc_type === "credit_note" && "Credit Note"}
+                {invoiceForm.doc_type === "debit_note" && "Debit Note"}
+                {invoiceForm.status === "Draft" && (
+                  <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-xs font-semibold uppercase ml-1">
+                    Draft
+                  </Badge>
+                )}
                 <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs font-semibold uppercase ml-1">
                   {invoiceForm.doc_type === "tax_invoice" ? "Tax Invoice" : invoiceForm.doc_type.replace("_", " ")}
                 </Badge>
               </DialogTitle>
               <DialogDescription className="text-xs text-slate-500">
-                {invoiceForm.doc_type === "tax_invoice"
+                {invoiceForm.id
+                  ? "Update saved invoice details or finalize and generate the tax invoice document."
+                  : invoiceForm.doc_type === "tax_invoice"
                   ? "Generate GST-compliant Tax Invoice for customer project billing."
                   : "Create billing & financial documents with full tax compliance."}
               </DialogDescription>
@@ -2683,7 +2775,9 @@ export default function Receivables() {
                   <Badge
                     variant="outline"
                     className={`ml-2 text-xs capitalize ${
-                      selectedInvoiceDetail.status === "Paid"
+                      selectedInvoiceDetail.status === "Draft"
+                        ? "bg-slate-100 text-slate-700 border-slate-300"
+                        : selectedInvoiceDetail.status === "Paid"
                         ? "bg-emerald-50 text-emerald-700 border-emerald-300"
                         : selectedInvoiceDetail.status === "Overdue"
                         ? "bg-rose-50 text-rose-700 border-rose-300"
@@ -2700,6 +2794,25 @@ export default function Receivables() {
 
               {/* ACTION BUTTONS */}
               <div className="flex items-center gap-2">
+                {selectedInvoiceDetail.status === "Draft" && (
+                  <Button
+                    size="xs"
+                    onClick={() => {
+                      setInvoiceDetailOpen(false);
+                      handleOpenCreateInvoice(
+                        activeProjectId,
+                        selectedInvoiceDetail.doc_type || "tax_invoice",
+                        projectWorkspace?.client,
+                        projectWorkspace?.project,
+                        selectedInvoiceDetail
+                      );
+                    }}
+                    className="h-8 text-xs bg-blue-600 hover:bg-blue-700 text-white font-semibold gap-1.5 shadow-2xs"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" /> Edit Draft
+                  </Button>
+                )}
+
                 <Button
                   size="xs"
                   variant="outline"
@@ -2718,18 +2831,20 @@ export default function Receivables() {
                   <Download className="w-3.5 h-3.5 text-indigo-600" /> Word (.docx)
                 </Button>
 
-                <Button
-                  size="xs"
-                  onClick={() => {
-                    setSelectedInvoice(selectedInvoiceDetail);
-                    setAllocatedAmountInput(String(selectedInvoiceDetail.outstanding_amount || selectedInvoiceDetail.grand_total));
-                    setInvoiceDetailOpen(false);
-                    setApplyPaymentOpen(true);
-                  }}
-                  className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1.5 shadow-2xs"
-                >
-                  <CreditCard className="w-3.5 h-3.5" /> Record Payment
-                </Button>
+                {selectedInvoiceDetail.status !== "Draft" && selectedInvoiceDetail.status !== "Cancelled" && (
+                  <Button
+                    size="xs"
+                    onClick={() => {
+                      setSelectedInvoice(selectedInvoiceDetail);
+                      setAllocatedAmountInput(String(selectedInvoiceDetail.outstanding_amount || selectedInvoiceDetail.grand_total));
+                      setInvoiceDetailOpen(false);
+                      setApplyPaymentOpen(true);
+                    }}
+                    className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1.5 shadow-2xs"
+                  >
+                    <CreditCard className="w-3.5 h-3.5" /> Record Payment
+                  </Button>
+                )}
               </div>
             </DialogHeader>
 

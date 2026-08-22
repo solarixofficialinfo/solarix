@@ -13224,6 +13224,7 @@ class InvoiceItemPayload(BaseModel):
         return float(v)
 
 class InvoiceCreatePayload(BaseModel):
+    id: Optional[str] = None
     doc_type: Optional[str] = "tax_invoice"
     project_id: Optional[str] = ""
     client_id: Optional[str] = ""
@@ -13245,9 +13246,14 @@ class InvoiceCreatePayload(BaseModel):
     items: List[InvoiceItemPayload]
     subtotal: float
     discount: Optional[float] = 0.0
+    taxable_amount: Optional[float] = 0.0
     cgst_rate: Optional[float] = 9.0
+    cgst_amount: Optional[float] = 0.0
     sgst_rate: Optional[float] = 9.0
+    sgst_amount: Optional[float] = 0.0
     igst_rate: Optional[float] = 0.0
+    igst_amount: Optional[float] = 0.0
+    total_tax: Optional[float] = 0.0
     freight: Optional[float] = 0.0
     round_off: Optional[float] = 0.0
     grand_total: float
@@ -13256,7 +13262,7 @@ class InvoiceCreatePayload(BaseModel):
     status: Optional[str] = "Sent"
     allocated_payment_ids: Optional[List[str]] = []
 
-    @field_validator("amount_received", "subtotal", "discount", "cgst_rate", "sgst_rate", "igst_rate", "freight", "round_off", "grand_total", mode="before")
+    @field_validator("amount_received", "subtotal", "discount", "taxable_amount", "cgst_rate", "cgst_amount", "sgst_rate", "sgst_amount", "igst_rate", "igst_amount", "total_tax", "freight", "round_off", "grand_total", mode="before")
     @classmethod
     def parse_invoice_numeric_fields(cls, v):
         if v is None or v == "":
@@ -13289,7 +13295,7 @@ class PaymentUpdatePayload(BaseModel):
     attachment_url: Optional[str] = None
 
 class LoanRecordPayload(BaseModel):
-    project_id: str
+    project_id: Optional[str] = ""
     client_id: Optional[str] = ""
     provider: str
     loan_amount: float
@@ -13722,11 +13728,12 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
 
     c_identifiers = list({x for x in [client.get("id"), client.get("sol_id"), project.get("client_id")] if x})
     is_def = project.get("is_default", False)
+    p_ids = [pid for pid in [project.get("id"), target_pid, f"proj_{client.get('id')}", f"proj_{client.get('sol_id')}" if client.get('sol_id') else None] if pid]
     
     pay_query = {
         "company_id": cid,
         "$or": [
-            {"project_id": project["id"]},
+            {"project_id": {"$in": p_ids}},
             {"client_id": {"$in": c_identifiers}}
         ]
     }
@@ -13734,9 +13741,42 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
     raw_expenses = await db.expenses.find(pay_query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     raw_loans = await db.loans.find(pay_query, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
-    payments = [p for p in raw_payments if (p.get("client_id") in c_identifiers) or (p.get("project_id") == project["id"])]
-    expenses = [e for e in raw_expenses if (e.get("client_id") in c_identifiers) or (e.get("project_id") == project["id"])]
-    loans = [l for l in raw_loans if (l.get("client_id") in c_identifiers) or (l.get("project_id") == project["id"])]
+    payments = [p for p in raw_payments if (p.get("client_id") in c_identifiers) or (p.get("project_id") in p_ids)]
+    expenses = [e for e in raw_expenses if (e.get("client_id") in c_identifiers) or (e.get("project_id") in p_ids)]
+    loans = [l for l in raw_loans if (l.get("client_id") in c_identifiers) or (l.get("project_id") in p_ids)]
+
+    # If no separate loan records exist in db.loans, bridge/fallback from client onboarding loan_setup
+    if not loans:
+        ob_stages = dict(client.get("stages") or {})
+        ob_data = dict(ob_stages.get("onboarding_data") or {})
+        c_loan_setup = client.get("loan_setup") or ob_data.get("loan_setup") or ob_stages.get("loan_setup") or {}
+        if isinstance(c_loan_setup, dict):
+            provider = (c_loan_setup.get("provider") or "").strip()
+            loan_amt = float(c_loan_setup.get("loan_amount") or 0)
+            app_amt = float(c_loan_setup.get("approved_amount") or c_loan_setup.get("loan_amount") or 0)
+            disb_amt = float(c_loan_setup.get("disbursed_amount") or 0)
+            is_enabled = c_loan_setup.get("enabled", True)
+            if (app_amt > 0 or loan_amt > 0 or disb_amt > 0 or provider or c_loan_setup.get("loan_ref")) and is_enabled is not False:
+                synth_loan = {
+                    "id": f"loan_{uuid.uuid4().hex[:12]}",
+                    "company_id": cid,
+                    "client_id": client.get("id"),
+                    "project_id": project.get("id") or target_pid,
+                    "provider": provider or "Tata Capital",
+                    "loan_amount": loan_amt,
+                    "approved_amount": app_amt,
+                    "approved_date": c_loan_setup.get("approved_date") or (client.get("created_at") or now_iso())[:10],
+                    "expected_disbursement_date": c_loan_setup.get("expected_disbursement_date") or "",
+                    "disbursed_amount": disb_amt,
+                    "loan_ref": c_loan_setup.get("loan_ref") or "",
+                    "status": c_loan_setup.get("status") or "Approved",
+                    "remarks": c_loan_setup.get("remarks") or "",
+                    "created_by": client.get("created_by") or "Onboarding",
+                    "created_at": client.get("created_at") or now_iso(),
+                    "updated_at": now_iso()
+                }
+                await db.loans.insert_one(dict(synth_loan))
+                loans.append(synth_loan)
 
     sys_kw = float(client.get("system_kw") or project.get("capacity_kw") or 0)
     p_val = float(client.get("contract_value") or project.get("project_value") or client.get("quotation_value") or project.get("quotation_value") or client.get("net_project_value") or (sys_kw * 45000 if sys_kw > 0 else 0))
@@ -13767,14 +13807,14 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
     inv_query = {
         "company_id": cid,
         "$or": [
-            {"project_id": project["id"]},
+            {"project_id": {"$in": p_ids}},
             {"client_id": {"$in": c_identifiers}}
         ]
     }
     raw_invoices = await db.invoices.find(inv_query, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    invoices = [inv for inv in raw_invoices if (inv.get("client_id") in c_identifiers) or (inv.get("project_id") == project["id"])]
+    invoices = [inv for inv in raw_invoices if (inv.get("client_id") in c_identifiers) or (inv.get("project_id") in p_ids)]
 
-    total_invoiced = sum(float(inv.get("grand_total") or 0) for inv in invoices if inv.get("status") != "Cancelled")
+    total_invoiced = sum(float(inv.get("grand_total") or 0) for inv in invoices if inv.get("status") not in ("Cancelled", "Draft"))
     
     # Calculate invoice paid & outstanding for each invoice
     processed_invoices = []
@@ -13799,7 +13839,7 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
             else:
                 inv_status = "Sent"
 
-        if inv_status != "Cancelled":
+        if inv_status not in ("Cancelled", "Draft"):
             total_invoice_outstanding += inv_out
 
         inv_copy = dict(inv)
@@ -14057,19 +14097,54 @@ async def delete_payment(payment_id: str, user=Depends(get_current_user)):
     await log_activity(cid, user["id"], user["name"], "Deleted Payment", f"Payment ID: {payment_id}")
     return {"message": "Payment deleted successfully"}
 
+@api_router.get("/finance/loans")
+async def list_loans(
+    project_id: Optional[str] = None,
+    client_id: Optional[str] = None,
+    user=Depends(get_current_user)
+):
+    cid = user["company_id"]
+    query = {"company_id": cid}
+    if project_id:
+        if project_id.startswith("proj_"):
+            c_cand = project_id.replace("proj_", "")
+            query["$or"] = [{"project_id": project_id}, {"client_id": c_cand}]
+        else:
+            query["project_id"] = project_id
+    if client_id:
+        client = await db.clients.find_one({"$or": [{"id": client_id}, {"sol_id": client_id}], "company_id": cid})
+        if client:
+            c_ids = list({x for x in [client.get("id"), client.get("sol_id"), client_id] if x})
+            query["client_id"] = {"$in": c_ids}
+        else:
+            query["client_id"] = client_id
+
+    loans = await db.loans.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return {"loans": loans}
+
 @api_router.post("/finance/projects/{project_id}/loans")
 async def record_project_loan(project_id: str, data: LoanRecordPayload, user=Depends(get_current_user)):
     cid = user["company_id"]
-    project = await db.projects.find_one({"id": project_id, "company_id": cid})
+    target_pid = project_id.strip()
+    project = await db.projects.find_one({"id": target_pid, "company_id": cid})
     client_id = data.client_id or (project.get("client_id") if project else None)
-    if not client_id and project_id.startswith("proj_"):
-        client_id = project_id.replace("proj_", "")
+    if not client_id and target_pid.startswith("proj_"):
+        client_id = target_pid.replace("proj_", "")
+
+    client = None
+    if client_id:
+        client = await db.clients.find_one({
+            "$or": [{"id": client_id}, {"sol_id": client_id}],
+            "company_id": cid
+        })
+        if client:
+            client_id = client.get("id") or client_id
 
     loan_doc = {
         "id": f"loan_{uuid.uuid4().hex[:12]}",
         "company_id": cid,
-        "client_id": client_id,
-        "project_id": project_id,
+        "client_id": client_id or "",
+        "project_id": target_pid,
         "provider": data.provider.strip(),
         "loan_amount": float(data.loan_amount or 0),
         "approved_amount": float(data.approved_amount or 0),
@@ -14085,6 +14160,30 @@ async def record_project_loan(project_id: str, data: LoanRecordPayload, user=Dep
     }
 
     await db.loans.insert_one(loan_doc)
+
+    # Sync back to client onboarding loan_setup for consistency
+    if client:
+        stages_dict = dict(client.get("stages") or {})
+        ob_dict = dict(stages_dict.get("onboarding_data") or {})
+        loan_setup_payload = {
+            "enabled": True,
+            "provider": loan_doc["provider"],
+            "loan_amount": loan_doc["loan_amount"],
+            "approved_amount": loan_doc["approved_amount"],
+            "approved_date": loan_doc["approved_date"],
+            "expected_disbursement_date": loan_doc["expected_disbursement_date"],
+            "disbursed_amount": loan_doc["disbursed_amount"],
+            "loan_ref": loan_doc["loan_ref"],
+            "status": loan_doc["status"],
+            "remarks": loan_doc["remarks"]
+        }
+        ob_dict["loan_setup"] = loan_setup_payload
+        stages_dict["onboarding_data"] = ob_dict
+        await db.clients.update_one(
+            {"id": client["id"], "company_id": cid},
+            {"$set": {"loan_setup": loan_setup_payload, "stages": stages_dict, "updated_at": now_iso()}}
+        )
+
     await log_activity(cid, user["id"], user["name"], "Recorded Loan", f"Provider: {data.provider}, Approved: ₹{data.approved_amount}")
     loan_doc.pop("_id", None)
     return {"message": "Loan record created successfully", "loan": loan_doc}
@@ -14108,6 +14207,33 @@ async def update_project_loan(loan_id: str, data: LoanUpdatePayload, user=Depend
     if data.remarks is not None: update_fields["remarks"] = data.remarks
 
     await db.loans.update_one({"id": loan_id, "company_id": cid}, {"$set": update_fields})
+
+    # Sync back to client if client_id is present
+    client_id = existing.get("client_id")
+    if client_id:
+        client = await db.clients.find_one({"$or": [{"id": client_id}, {"sol_id": client_id}], "company_id": cid})
+        if client:
+            stages_dict = dict(client.get("stages") or {})
+            ob_dict = dict(stages_dict.get("onboarding_data") or {})
+            loan_setup_payload = {
+                "enabled": True,
+                "provider": update_fields.get("provider", existing.get("provider")),
+                "loan_amount": update_fields.get("loan_amount", existing.get("loan_amount")),
+                "approved_amount": update_fields.get("approved_amount", existing.get("approved_amount")),
+                "approved_date": update_fields.get("approved_date", existing.get("approved_date")),
+                "expected_disbursement_date": update_fields.get("expected_disbursement_date", existing.get("expected_disbursement_date")),
+                "disbursed_amount": update_fields.get("disbursed_amount", existing.get("disbursed_amount")),
+                "loan_ref": update_fields.get("loan_ref", existing.get("loan_ref")),
+                "status": update_fields.get("status", existing.get("status")),
+                "remarks": update_fields.get("remarks", existing.get("remarks"))
+            }
+            ob_dict["loan_setup"] = loan_setup_payload
+            stages_dict["onboarding_data"] = ob_dict
+            await db.clients.update_one(
+                {"id": client["id"], "company_id": cid},
+                {"$set": {"loan_setup": loan_setup_payload, "stages": stages_dict, "updated_at": now_iso()}}
+            )
+
     return {"message": "Loan record updated successfully"}
 
 @api_router.delete("/finance/loans/{loan_id}")
@@ -14116,6 +14242,22 @@ async def delete_project_loan(loan_id: str, user=Depends(get_current_user)):
     existing = await db.loans.find_one({"id": loan_id, "company_id": cid})
     if not existing:
         raise HTTPException(status_code=404, detail="Loan record not found")
+
+    client_id = existing.get("client_id")
+    if client_id:
+        client = await db.clients.find_one({"$or": [{"id": client_id}, {"sol_id": client_id}], "company_id": cid})
+        if client:
+            stages_dict = dict(client.get("stages") or {})
+            ob_dict = dict(stages_dict.get("onboarding_data") or {})
+            if "loan_setup" in ob_dict and isinstance(ob_dict["loan_setup"], dict):
+                ob_dict["loan_setup"]["enabled"] = False
+                stages_dict["onboarding_data"] = ob_dict
+            loan_setup_c = dict(client.get("loan_setup") or {})
+            loan_setup_c["enabled"] = False
+            await db.clients.update_one(
+                {"id": client["id"], "company_id": cid},
+                {"$set": {"loan_setup": loan_setup_c, "stages": stages_dict, "updated_at": now_iso()}}
+            )
 
     await db.loans.delete_one({"id": loan_id, "company_id": cid})
     await log_activity(cid, user["id"], user["name"], "Deleted Loan", f"Loan ID: {loan_id}")
@@ -14240,27 +14382,59 @@ async def list_invoices(
 @api_router.post("/finance/invoices")
 async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_user)):
     cid = user["company_id"]
-    client_id = data.client_id
-    project_id = data.project_id
+    client_id = (data.client_id or "").strip()
+    project_id = (data.project_id or "").strip()
     doc_type = (data.doc_type or "tax_invoice").lower().strip()
 
     if not client_id and project_id:
-        proj = await db.projects.find_one({"id": project_id, "company_id": cid})
+        if project_id.startswith("proj_"):
+            client_id = project_id.replace("proj_", "")
+        else:
+            proj = await db.projects.find_one({"id": project_id, "company_id": cid})
+            if proj:
+                client_id = proj.get("client_id") or ""
+
+    client = None
+    if client_id:
+        client = await db.clients.find_one({
+            "$or": [{"id": client_id}, {"sol_id": client_id}],
+            "company_id": cid
+        })
+        if client:
+            client_id = client.get("id") or client_id
+
+    if not project_id and client_id:
+        proj = await db.projects.find_one({"client_id": client_id, "company_id": cid})
         if proj:
-            client_id = proj.get("client_id")
+            project_id = proj.get("id") or ""
+        else:
+            project_id = f"proj_{client_id}"
 
-    client = await db.clients.find_one({"id": client_id, "company_id": cid}) if client_id else None
+    # Check if we are updating an existing draft or existing invoice
+    existing_invoice = None
+    if data.id and data.id.strip():
+        existing_invoice = await db.invoices.find_one({
+            "$or": [
+                {"id": data.id.strip()},
+                {"invoice_number": data.id.strip()}
+            ],
+            "company_id": cid
+        })
 
-    invoice_id = f"inv_{uuid.uuid4().hex[:12]}"
-    prefix_map = {
-        "tax_invoice": "INV",
-        "proforma": "PI",
-        "payment_receipt": "REC",
-        "credit_note": "CN",
-        "debit_note": "DN"
-    }
-    prefix = prefix_map.get(doc_type, "INV")
-    inv_num = data.invoice_number or f"{prefix}-{now_iso()[:10].replace('-', '')}-{uuid.uuid4().hex[:4].upper()}"
+    if existing_invoice:
+        invoice_id = existing_invoice["id"]
+        inv_num = data.invoice_number or existing_invoice.get("invoice_number")
+    else:
+        invoice_id = (data.id or "").strip() if (data.id and data.id.strip().startswith("inv_")) else f"inv_{uuid.uuid4().hex[:12]}"
+        prefix_map = {
+            "tax_invoice": "INV",
+            "proforma": "PI",
+            "payment_receipt": "REC",
+            "credit_note": "CN",
+            "debit_note": "DN"
+        }
+        prefix = prefix_map.get(doc_type, "INV")
+        inv_num = data.invoice_number or f"{prefix}-{now_iso()[:10].replace('-', '')}-{uuid.uuid4().hex[:4].upper()}"
 
     formatted_items = []
     for item in data.items:
@@ -14311,17 +14485,22 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
         "items": formatted_items,
         "subtotal": data.subtotal,
         "discount": data.discount or 0.0,
+        "taxable_amount": data.taxable_amount or data.subtotal,
         "cgst_rate": data.cgst_rate or 9.0,
+        "cgst_amount": data.cgst_amount or 0.0,
         "sgst_rate": data.sgst_rate or 9.0,
+        "sgst_amount": data.sgst_amount or 0.0,
         "igst_rate": data.igst_rate or 0.0,
+        "igst_amount": data.igst_amount or 0.0,
+        "total_tax": data.total_tax or 0.0,
         "freight": data.freight or 0.0,
         "round_off": data.round_off or 0.0,
         "grand_total": data.grand_total,
         "notes": data.notes or "",
         "terms": data.terms or "",
         "status": data.status or "Sent",
-        "created_by": user["name"],
-        "created_at": now_iso(),
+        "created_by": (existing_invoice.get("created_by") if existing_invoice else user["name"]),
+        "created_at": (existing_invoice.get("created_at") if existing_invoice else now_iso()),
         "updated_at": now_iso()
     }
 
@@ -14366,7 +14545,10 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
         except Exception as e:
             logger.error(f"Error generating Invoice PDF: {e}")
 
-    await db.invoices.insert_one(invoice_doc)
+    if existing_invoice:
+        await db.invoices.update_one({"id": invoice_id, "company_id": cid}, {"$set": invoice_doc})
+    else:
+        await db.invoices.insert_one(invoice_doc)
 
     if data.allocated_payment_ids:
         for p_id in data.allocated_payment_ids:
@@ -14375,9 +14557,15 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
                 {"$set": {"invoice_id": invoice_id, "invoice_no": inv_num, "updated_at": now_iso()}}
             )
 
-    await log_activity(cid, user["id"], user["name"], f"Created {doc_type.replace('_', ' ').title()}", f"Invoice #{inv_num} for ₹{data.grand_total}")
+    action_label = "Updated" if existing_invoice else "Created"
+    await log_activity(cid, user["id"], user["name"], f"{action_label} {doc_type.replace('_', ' ').title()}", f"Invoice #{inv_num} ({data.status}) for ₹{data.grand_total}")
     invoice_doc.pop("_id", None)
-    return {"message": "Invoice created successfully", "invoice": invoice_doc}
+    return {"message": f"Invoice {action_label.lower()} successfully", "invoice": invoice_doc}
+
+@api_router.put("/finance/invoices/{invoice_id}")
+async def update_invoice(invoice_id: str, data: InvoiceCreatePayload, user=Depends(get_current_user)):
+    data.id = invoice_id.strip()
+    return await create_invoice(data, user)
 
 @api_router.post("/finance/invoices/{invoice_id}/generate-doc")
 async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=Depends(get_current_user)):

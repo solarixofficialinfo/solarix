@@ -26,7 +26,7 @@ import {
   Plus, Save, Eye, ExternalLink, Calendar, Wrench, AlertTriangle, Paperclip,
   Clock, CheckCircle2, ChevronRight, Activity, Megaphone, ClipboardList,
   Truck, FileText, Gauge, Package, ScrollText, Check, Trash2, Edit3, Wifi, WifiOff,
-  Settings, AlertCircle, Zap, ShieldCheck, ChevronDown, ChevronUp, Sparkles, Filter, RefreshCw, Layers, DollarSign, TrendingUp, Calculator, Landmark
+  Settings, AlertCircle, Zap, ShieldCheck, ChevronDown, ChevronUp, Filter, RefreshCw, Layers, DollarSign, TrendingUp, Calculator, Landmark
 } from "lucide-react";
 
 import RaiseComplaintDialog from "@/components/RaiseComplaintDialog";
@@ -515,9 +515,6 @@ export default function ClientDataDetail() {
               )}
               <Button size="sm" variant="outline" className="h-8 text-xs bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100" onClick={() => setComplaintOpen(true)} data-testid="raise-complaint-btn">
                 <Megaphone className="w-3.5 h-3.5 mr-1" /> Raise Complaint
-              </Button>
-              <Button size="sm" variant="outline" className="h-8 text-xs bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100" onClick={() => setTplOpen(true)}>
-                <Sparkles className="w-3.5 h-3.5 mr-1" /> Generate Document
               </Button>
             </div>
 
@@ -1078,9 +1075,6 @@ export default function ClientDataDetail() {
               <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
                 <FileText className="w-4 h-4 text-violet-600" /> Official EPC Document Generator
               </h3>
-              <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold" onClick={() => setTplOpen(true)}>
-                + Generate Document Template
-              </Button>
             </div>
 
             <ClientDocumentManager
