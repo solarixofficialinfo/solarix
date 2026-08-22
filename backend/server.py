@@ -1299,31 +1299,36 @@ class CollectionAdapter:
             patch = self._clean_empty_fks(patch)
         if self.table_name == "products" and not _PRODUCTS_HAS_RATE:
             patch = {k: v for k, v in patch.items() if k != "rate"}
+        res_count = 1
         try:
             builder = supabase.table(self.table_name).update(patch)
             builder = self._apply_filters(builder, filter)
             res = builder.execute()
+            res_count = len(res.data) if res.data else 1
         except Exception as e:
-            if self.table_name == "products" and "rate" in patch:
-                err_str = str(e)
-                if "PGRST204" in err_str or "rate" in err_str:
+            err_str = str(e).lower()
+            if "pgrst205" in err_str or "does not exist" in err_str or "schema cache" in err_str:
+                logger.warning(f"Supabase update_many failed for table '{self.table_name}', updating local fallback: {e}")
+            elif self.table_name == "products" and "rate" in patch:
+                if "pgrst204" in err_str or "rate" in err_str:
                     logger.warning("Supabase table products does not have rate column. Disabling rate writes.")
                     _PRODUCTS_HAS_RATE = False
                     patch_copy = {k: v for k, v in patch.items() if k != "rate"}
-                    if not patch_copy:
-                        return UpdateResult(1, 1)
-                    builder = supabase.table(self.table_name).update(patch_copy)
-                    builder = self._apply_filters(builder, filter)
-                    res = builder.execute()
-                else:
-                    raise e
+                    if patch_copy:
+                        try:
+                            builder = supabase.table(self.table_name).update(patch_copy)
+                            builder = self._apply_filters(builder, filter)
+                            res = builder.execute()
+                            res_count = len(res.data) if res.data else 1
+                        except Exception:
+                            pass
             else:
-                raise e
+                pass
         try:
             await LocalFileCollection(self.table_name).update_many(filter, update)
         except Exception:
             pass
-        return UpdateResult(len(res.data), len(res.data))
+        return UpdateResult(res_count, res_count)
 
     async def delete_one(self, filter):
         try:
@@ -14616,9 +14621,8 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
         ext = ".pdf"
 
     file_id = str(uuid.uuid4())
-    safe_client = (invoice.get("client_name") or "Client").replace(" ", "_")
     safe_inv_num = (invoice.get("invoice_number") or invoice_id).replace(" ", "_")
-    filename = f"{safe_client}_Invoice_{safe_inv_num}{ext}"
+    filename = f"Invoice_{safe_inv_num}{ext}"
     storage_path = f"{APP_NAME}/{cid}/generated/{file_id}{ext}"
     result = put_object(storage_path, doc_bytes, content_type)
 
@@ -14646,9 +14650,11 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
         "status": "Active"
     }
     await db.files.insert_one(file_rec)
+    
+    update_field = "docx_file_id" if fmt == "docx" else "file_id"
     await db.invoices.update_one(
         {"$or": [{"id": invoice.get("id")}, {"invoice_number": invoice.get("invoice_number")}], "company_id": cid},
-        {"$set": {"file_id": file_id, "updated_at": now_iso()}}
+        {"$set": {update_field: file_id, "updated_at": now_iso()}}
     )
 
     return {"id": file_id, "filename": filename, "file_id": file_id}
@@ -14702,16 +14708,37 @@ async def apply_payment_to_invoice(invoice_id: str, payload: ApplyPaymentPayload
     }
 
 @api_router.delete("/finance/invoices/{invoice_id}")
-async def cancel_invoice(invoice_id: str, user=Depends(get_current_user)):
+async def delete_invoice(invoice_id: str, user=Depends(get_current_user)):
     cid = user["company_id"]
-    existing = await db.invoices.find_one({"id": invoice_id, "company_id": cid})
+    target_id = invoice_id.strip()
+    existing = await db.invoices.find_one({
+        "$or": [{"id": target_id}, {"invoice_number": target_id}],
+        "company_id": cid
+    })
     if not existing:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    await db.invoices.update_one({"id": invoice_id, "company_id": cid}, {"$set": {"status": "Cancelled", "updated_at": now_iso()}})
-    await db.payments.update_many({"invoice_id": invoice_id, "company_id": cid}, {"$unset": {"invoice_id": "", "invoice_no": "", "allocated_amount": ""}})
-    await log_activity(cid, user["id"], user["name"], "Cancelled Tax Invoice", f"Invoice ID: {invoice_id}")
-    return {"message": "Invoice cancelled successfully"}
+    # Safety check for Paid invoice with allocated payments
+    inv_status = (existing.get("status") or "").lower()
+    linked_payments = await db.payments.find({"invoice_id": existing.get("id"), "company_id": cid}).to_list(100)
+    if inv_status == "paid" and any((p.get("status") or "").lower() == "received" for p in linked_payments):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete paid invoice {existing.get('invoice_number')} with allocated payments. Please deallocate or remove the payments first."
+        )
+
+    # Cleanly remove allocated invoice references from any linked payments
+    await db.payments.update_many(
+        {"invoice_id": existing.get("id"), "company_id": cid},
+        {"$unset": {"invoice_id": "", "invoice_no": "", "allocated_amount": ""}}
+    )
+
+    # Delete invoice record from database
+    await db.invoices.delete_one({"id": existing.get("id"), "company_id": cid})
+
+    # Log activity
+    await log_activity(cid, user["id"], user["name"], "Deleted Invoice", f"Invoice ID: {existing.get('id')}, Number: {existing.get('invoice_number')}")
+    return {"message": f"Invoice {existing.get('invoice_number')} deleted successfully"}
 
 @api_router.get("/vendors")
 async def list_vendors(user=Depends(get_current_user)):

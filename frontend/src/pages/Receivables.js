@@ -102,6 +102,7 @@ export default function Receivables() {
   const [applyPaymentOpen, setApplyPaymentOpen] = useState(false);
   const [selectedPaymentToApply, setSelectedPaymentToApply] = useState("");
   const [allocatedAmountInput, setAllocatedAmountInput] = useState("");
+  const [invoiceToDelete, setInvoiceToDelete] = useState(null);
 
   // Add/Edit Loan Modal State
   const [addLoanOpen, setAddLoanOpen] = useState(false);
@@ -297,16 +298,20 @@ export default function Receivables() {
     onError: (err) => toast.error(formatApiError(err))
   });
 
-  const cancelInvoiceMutation = useMutation({
+  const deleteInvoiceMutation = useMutation({
     mutationFn: async (invoiceId) => {
       const res = await api.delete(`/finance/invoices/${invoiceId}`);
       return res.data;
     },
-    onSuccess: () => {
-      toast.success("Invoice cancelled successfully");
+    onSuccess: (data) => {
+      toast.success(data?.message || "Invoice deleted successfully");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
       queryClient.invalidateQueries(["client"]);
+      queryClient.invalidateQueries(["invoices"]);
+      setInvoiceDetailOpen(false);
+      setSelectedInvoiceDetail(null);
+      setInvoiceToDelete(null);
     },
     onError: (err) => toast.error(formatApiError(err))
   });
@@ -389,11 +394,11 @@ export default function Receivables() {
     }
     const fmt = (format || "pdf").toLowerCase().trim();
     const ext = fmt === "docx" ? ".docx" : ".pdf";
-    const defaultFilename = `${(inv.client_name || "Invoice").replace(/\s+/g, "_")}_${inv.invoice_number || inv.id}${ext}`;
+    const defaultFilename = `Invoice_${(inv.invoice_number || inv.id).replace(/\s+/g, "_")}${ext}`;
     try {
       toast.info(`Generating ${fmt.toUpperCase()}...`);
       const res = await api.post(`/finance/invoices/${inv.id}/generate-doc`, { format: fmt });
-      const targetFileId = res.data?.file_id || res.data?.id || inv.file_id;
+      const targetFileId = res.data?.file_id || res.data?.id;
       const downloadFilename = res.data?.filename || defaultFilename;
       if (targetFileId) {
         const ok = await downloadFile(targetFileId, downloadFilename);
@@ -405,11 +410,7 @@ export default function Receivables() {
       }
     } catch (err) {
       console.error("Error generating invoice doc:", err);
-      if (inv.file_id) {
-        await downloadFile(inv.file_id, defaultFilename);
-      } else {
-        toast.error("Failed to generate document: " + formatApiError(err));
-      }
+      toast.error("Failed to generate document: " + formatApiError(err));
     }
   };
 
@@ -1401,22 +1402,15 @@ export default function Receivables() {
                                         <CreditCard className="w-3 h-3 text-emerald-600" /> Apply Payment
                                       </Button>
                                     )}
-                                    {inv.status !== "Cancelled" && (
-                                      <Button
-                                        size="xs"
-                                        variant="ghost"
-                                        onClick={() => {
-                                          const actionLabel = inv.status === "Draft" ? "Delete Draft" : "Cancel Tax";
-                                          if (window.confirm(`${actionLabel} Invoice ${inv.invoice_number}?`)) {
-                                            cancelInvoiceMutation.mutate(inv.id);
-                                          }
-                                        }}
-                                        className="h-6 w-6 p-0 text-slate-400 hover:text-rose-600"
-                                        title={inv.status === "Draft" ? "Delete Draft" : "Cancel Invoice"}
-                                      >
-                                        {inv.status === "Draft" ? <Trash2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
-                                      </Button>
-                                    )}
+                                    <Button
+                                      size="xs"
+                                      variant="outline"
+                                      onClick={() => setInvoiceToDelete(inv)}
+                                      className="h-6 px-2 text-[11px] gap-1 text-rose-700 border-rose-300 hover:bg-rose-50 font-semibold"
+                                      title="Delete Invoice"
+                                    >
+                                      <Trash2 className="w-3 h-3 text-rose-600" /> Delete
+                                    </Button>
                                   </div>
                                 </td>
                               </tr>
@@ -2845,6 +2839,18 @@ export default function Receivables() {
                     <CreditCard className="w-3.5 h-3.5" /> Record Payment
                   </Button>
                 )}
+
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => {
+                    setInvoiceToDelete(selectedInvoiceDetail);
+                  }}
+                  className="h-8 text-xs text-rose-700 border-rose-300 hover:bg-rose-50 gap-1.5 font-semibold"
+                  title="Delete Invoice"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600" /> Delete
+                </Button>
               </div>
             </DialogHeader>
 
@@ -3430,6 +3436,43 @@ export default function Receivables() {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* ─── MODAL: DELETE INVOICE CONFIRMATION ──────────────────────────── */}
+      <Dialog open={!!invoiceToDelete} onOpenChange={(open) => !open && setInvoiceToDelete(null)}>
+        <DialogContent className="max-w-md rounded-xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <Trash2 className="w-5 h-5 text-rose-600" /> Delete Invoice?
+            </DialogTitle>
+            <DialogDescription className="text-sm text-slate-600 pt-2 leading-relaxed">
+              Are you sure you want to delete invoice <strong className="text-slate-900 font-mono">{invoiceToDelete?.invoice_number || invoiceToDelete?.id}</strong>?
+              <br />
+              This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="pt-4 gap-2 flex justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setInvoiceToDelete(null)}
+              className="border-slate-200"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (invoiceToDelete) {
+                  deleteInvoiceMutation.mutate(invoiceToDelete.id);
+                }
+              }}
+              disabled={deleteInvoiceMutation.isPending}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-semibold gap-1.5"
+            >
+              <Trash2 className="w-4 h-4" /> {deleteInvoiceMutation.isPending ? "Deleting..." : "Delete Invoice"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
