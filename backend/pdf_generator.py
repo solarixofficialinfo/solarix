@@ -1227,7 +1227,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
             img = PILImage.open(BytesIO(logo_bytes))
             orig_w, orig_h = img.size
             if orig_w > 0 and orig_h > 0:
-                max_w, max_h = 11.0 * cm, 3.0 * cm
+                max_w, max_h = 11.0 * cm, 3.65 * cm
                 aspect = orig_w / float(orig_h or 1)
                 if orig_w > orig_h:
                     target_w = max_w
