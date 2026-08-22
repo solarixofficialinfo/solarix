@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import api, { formatApiError, fileUrl } from "../lib/api";
+import api, { formatApiError, fileUrl, downloadFile } from "../lib/api";
 import {
   DollarSign, ArrowDownLeft, Clock, Filter, Search, Plus, RefreshCw, Eye, Edit3, Trash2,
   TrendingUp, FolderPlus, Layers, User, Truck, Landmark, FileText, CheckCircle2, AlertCircle,
@@ -259,7 +259,7 @@ export default function Receivables() {
       const res = await api.post("/finance/invoices", payload);
       return res.data;
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       toast.success("Tax Invoice created successfully");
       queryClient.invalidateQueries(["finance", "receivables"]);
       queryClient.invalidateQueries(["finance", "projects", activeProjectId]);
@@ -267,13 +267,8 @@ export default function Receivables() {
       setCreateInvoiceOpen(false);
       const fileId = data?.file_id || data?.invoice?.file_id;
       if (fileId) {
-        const downloadUrl = fileUrl(fileId) + "?download=1";
-        const link = document.createElement("a");
-        link.href = downloadUrl;
-        link.setAttribute("download", `Invoice_${data?.invoice?.invoice_number || fileId}.pdf`);
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+        const downloadFilename = `Invoice_${data?.invoice?.invoice_number || fileId}.pdf`;
+        await downloadFile(fileId, downloadFilename);
       }
     },
     onError: (err) => toast.error(formatApiError(err))
@@ -384,20 +379,30 @@ export default function Receivables() {
 
   // Modal Handlers
   const handleDownloadInvoiceDoc = async (inv, format = "pdf") => {
+    if (!inv || !inv.id) {
+      toast.error("Invoice record is missing or invalid");
+      return;
+    }
+    const fmt = (format || "pdf").toLowerCase().trim();
+    const ext = fmt === "docx" ? ".docx" : ".pdf";
+    const defaultFilename = `${(inv.client_name || "Invoice").replace(/\s+/g, "_")}_${inv.invoice_number || inv.id}${ext}`;
     try {
-      toast.info(`Generating ${format.toUpperCase()}...`);
-      const res = await api.post(`/finance/invoices/${inv.id}/generate-doc`, { format });
+      toast.info(`Generating ${fmt.toUpperCase()}...`);
+      const res = await api.post(`/finance/invoices/${inv.id}/generate-doc`, { format: fmt });
       const targetFileId = res.data?.file_id || res.data?.id || inv.file_id;
+      const downloadFilename = res.data?.filename || defaultFilename;
       if (targetFileId) {
-        window.open(fileUrl(targetFileId), "_blank");
-        toast.success(`${format.toUpperCase()} ready`);
+        const ok = await downloadFile(targetFileId, downloadFilename);
+        if (ok) {
+          toast.success(`${fmt.toUpperCase()} downloaded successfully`);
+        }
       } else {
         toast.error("Could not generate document");
       }
     } catch (err) {
       console.error("Error generating invoice doc:", err);
       if (inv.file_id) {
-        window.open(fileUrl(inv.file_id), "_blank");
+        await downloadFile(inv.file_id, defaultFilename);
       } else {
         toast.error("Failed to generate document: " + formatApiError(err));
       }
@@ -2698,17 +2703,7 @@ export default function Receivables() {
                 <Button
                   size="xs"
                   variant="outline"
-                  onClick={async () => {
-                    try {
-                      const res = await api.post(`/finance/invoices/${selectedInvoiceDetail.id}/generate-doc`, { format: "pdf" });
-                      if (res.data?.file_id) {
-                        window.open(fileUrl(res.data.file_id), "_blank");
-                        toast.success("PDF generated successfully");
-                      }
-                    } catch (err) {
-                      toast.error("Failed to generate PDF: " + formatApiError(err));
-                    }
-                  }}
+                  onClick={() => handleDownloadInvoiceDoc(selectedInvoiceDetail, "pdf")}
                   className="h-8 text-xs text-slate-700 border-slate-300 gap-1.5"
                 >
                   <Download className="w-3.5 h-3.5 text-blue-600" /> PDF
@@ -2717,17 +2712,7 @@ export default function Receivables() {
                 <Button
                   size="xs"
                   variant="outline"
-                  onClick={async () => {
-                    try {
-                      const res = await api.post(`/finance/invoices/${selectedInvoiceDetail.id}/generate-doc`, { format: "docx" });
-                      if (res.data?.file_id) {
-                        window.open(fileUrl(res.data.file_id), "_blank");
-                        toast.success("Word document generated successfully");
-                      }
-                    } catch (err) {
-                      toast.error("Failed to generate Word document: " + formatApiError(err));
-                    }
-                  }}
+                  onClick={() => handleDownloadInvoiceDoc(selectedInvoiceDetail, "docx")}
                   className="h-8 text-xs text-slate-700 border-slate-300 gap-1.5"
                 >
                   <Download className="w-3.5 h-3.5 text-indigo-600" /> Word (.docx)

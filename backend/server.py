@@ -14385,7 +14385,11 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
     fmt = (payload.get("format") or "pdf").lower().strip()
     target_inv_id = invoice_id.strip()
     invoice = await db.invoices.find_one({
-        "$or": [{"id": target_inv_id}, {"invoice_number": target_inv_id}],
+        "$or": [
+            {"id": target_inv_id},
+            {"invoice_number": target_inv_id},
+            {"invoice_no": target_inv_id}
+        ],
         "company_id": cid
     }, {"_id": 0})
     if not invoice:
@@ -14404,21 +14408,29 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
 
     doc_data = {
         **invoice,
-        "client": client_doc or {}
+        "client": client_doc or {
+            "full_name": invoice.get("client_name", "Customer"),
+            "mobile": "",
+            "address": invoice.get("place_of_supply", ""),
+            "site_address": invoice.get("place_of_supply", ""),
+            "gstin": invoice.get("buyer_gstin", "")
+        }
     }
 
     doc_type = invoice.get("doc_type") or "tax_invoice"
     if fmt == "docx":
-        doc_bytes = pdf_generator.generate_docx(doc_type, doc_data, company_doc)
+        doc_bytes = await asyncio.to_thread(pdf_generator.generate_docx, doc_type, doc_data, company_doc)
         content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ext = ".docx"
     else:
-        doc_bytes = pdf_generator.generate_document(doc_type, doc_data, company_doc)
+        doc_bytes = await asyncio.to_thread(pdf_generator.generate_document, doc_type, doc_data, company_doc)
         content_type = "application/pdf"
         ext = ".pdf"
 
     file_id = str(uuid.uuid4())
-    filename = f"{invoice.get('client_name', 'Client')}_Invoice_{invoice.get('invoice_number', invoice_id)}{ext}".replace(" ", "_")
+    safe_client = (invoice.get("client_name") or "Client").replace(" ", "_")
+    safe_inv_num = (invoice.get("invoice_number") or invoice_id).replace(" ", "_")
+    filename = f"{safe_client}_Invoice_{safe_inv_num}{ext}"
     storage_path = f"{APP_NAME}/{cid}/generated/{file_id}{ext}"
     result = put_object(storage_path, doc_bytes, content_type)
 
