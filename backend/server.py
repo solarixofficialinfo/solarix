@@ -477,14 +477,7 @@ class CursorAdapter:
         return self
 
     async def to_list(self, length=None):
-        select_cols = "*"
-        if self.projection and isinstance(self.projection, dict):
-            inclusions = [k for k, v in self.projection.items() if (v == 1 or v is True) and "->" not in k and "." not in k]
-            if self.collection.table_name == "products" and not _PRODUCTS_HAS_OPENING_STOCK and "opening_stock" in inclusions:
-                inclusions.remove("opening_stock")
-            if inclusions:
-                select_cols = ",".join(inclusions)
-        builder = supabase.table(self.collection.table_name).select(select_cols)
+        builder = supabase.table(self.collection.table_name).select("*")
         
         # Intercept and extract unsupported filters for files table
         filter_to_apply = self.filter
@@ -525,9 +518,6 @@ class CursorAdapter:
                 raise e
         
         # ── Local-file merge (fallback/offline data) ─────────────────────────────
-        # Skip this expensive disk read for the products table when Supabase already
-        # returned data — products.json can be 26KB+, reading it on every request
-        # was the primary cause of the 30-second product-search delay.
         skip_local_merge = len(data) > 0
         if not skip_local_merge:
             local_records = await LocalFileCollection(self.collection.table_name).find(self.filter, self.projection).sort(self.sort_fields).to_list(length)
@@ -545,10 +535,18 @@ class CursorAdapter:
                     continue
             deserialized_data.append(doc)
 
-        if self.projection:
-            for doc in deserialized_data:
-                for pk, pv in self.projection.items():
-                    if pv == 0:
+        if self.projection and isinstance(self.projection, dict):
+            inclusions = [pk for pk, pv in self.projection.items() if (pv == 1 or pv is True) and pk != "_id"]
+            exclusions = [pk for pk, pv in self.projection.items() if (pv == 0 or pv is False)]
+            if inclusions:
+                for i, doc in enumerate(deserialized_data):
+                    filtered_doc = {k: doc[k] for k in inclusions if k in doc}
+                    if "_id" not in exclusions and "id" in doc and "id" not in filtered_doc:
+                        filtered_doc["id"] = doc["id"]
+                    deserialized_data[i] = filtered_doc
+            elif exclusions:
+                for doc in deserialized_data:
+                    for pk in exclusions:
                         doc.pop(pk, None)
                         
         if self.collection.table_name == "files" and extracted_filters:
@@ -567,25 +565,16 @@ _PRODUCTS_HAS_OPENING_STOCK = True
 _PRODUCTS_HAS_HV = True
 _PRODUCTS_HAS_SN_REQ = True
 
-def _clean_products_doc(doc: dict) -> dict:
-    cleaned = dict(doc)
-    if not _PRODUCTS_HAS_RATE:
-        cleaned.pop("rate", None)
-    if not _PRODUCTS_HAS_OPENING_STOCK:
-        cleaned.pop("opening_stock", None)
-    if not _PRODUCTS_HAS_HV:
-        cleaned.pop("high_value_goods", None)
-    if not _PRODUCTS_HAS_SN_REQ:
-        cleaned.pop("serial_number_required", None)
-    return cleaned
+_PRODUCTS_VALID_COLS = {
+    "id", "company_id", "name", "size", "category", "unit", "min_stock", "status", "created_at", "updated_at"
+}
 
 _INWARD_VALID_COLS = {
     "id", "company_id", "product", "size", "quantity", "unit",
     "reference_number", "reference_type", "bill_number", "source_type",
     "source_name", "date", "remarks", "attachment_file_id",
     "attachment_filename", "source", "created_by", "created_by_name",
-    "created_at", "import_batch", "updated_at", "serial_numbers",
-    "serial_number_required", "serial_number", "product_id"
+    "created_at", "import_batch", "updated_at"
 }
 
 _OUTWARD_VALID_COLS = {
@@ -593,26 +582,33 @@ _OUTWARD_VALID_COLS = {
     "product", "size", "quantity", "unit", "outward_challan_no", "reference_number",
     "reference_type", "date", "status", "remarks", "source", "material_request_id",
     "delivery_photo_file_id", "challan_photo_file_id", "attachment_file_id", "attachment_filename",
-    "created_by", "created_by_name", "created_at", "import_batch", "updated_at",
-    "serial_numbers", "serial_number_required", "serial_number", "product_id"
+    "created_by", "created_by_name", "created_at", "import_batch", "updated_at"
 }
+
+def _clean_products_doc(doc: dict) -> dict:
+    cleaned = {k: v for k, v in doc.items() if k in _PRODUCTS_VALID_COLS}
+    return cleaned
 
 def _clean_inward_doc(doc: dict) -> dict:
     cleaned = {k: v for k, v in doc.items() if k in _INWARD_VALID_COLS}
     sns = doc.get("serial_numbers") or []
     if sns and isinstance(sns, list):
-        rem = str(cleaned.get("remarks") or "")
-        if "__SERIALS__:" not in rem:
-            cleaned["remarks"] = f"__SERIALS__:{json.dumps(sns)}:{rem}"
+        rem = str(doc.get("remarks") or cleaned.get("remarks") or "")
+        if "__SERIALS__:" in rem:
+            parts = rem.split(":", 2)
+            rem = parts[2] if len(parts) > 2 else ""
+        cleaned["remarks"] = f"__SERIALS__:{json.dumps(sns)}:{rem}"
     return cleaned
 
 def _clean_outward_doc(doc: dict) -> dict:
     cleaned = {k: v for k, v in doc.items() if k in _OUTWARD_VALID_COLS}
     sns = doc.get("serial_numbers") or []
     if sns and isinstance(sns, list):
-        rem = str(cleaned.get("remarks") or "")
-        if "__SERIALS__:" not in rem:
-            cleaned["remarks"] = f"__SERIALS__:{json.dumps(sns)}:{rem}"
+        rem = str(doc.get("remarks") or cleaned.get("remarks") or "")
+        if "__SERIALS__:" in rem:
+            parts = rem.split(":", 2)
+            rem = parts[2] if len(parts) > 2 else ""
+        cleaned["remarks"] = f"__SERIALS__:{json.dumps(sns)}:{rem}"
     return cleaned
 
 def _enrich_inward_doc(doc: dict) -> dict:
@@ -1016,12 +1012,8 @@ class CollectionAdapter:
                         return doc
                 return None
 
-        select_cols = "*"
-        if projection and isinstance(projection, dict):
-            inclusions = [k for k, v in projection.items() if (v == 1 or v is True) and "->" not in k and "." not in k]
-            if inclusions:
-                select_cols = ",".join(inclusions)
-        builder = supabase.table(self.table_name).select(select_cols)
+        # Always select * from Supabase so missing columns in custom projection dictionaries never cause 400 Bad Request
+        builder = supabase.table(self.table_name).select("*")
         builder = self._apply_filters(builder, filter)
         if sort:
             for k, dir in sort:
@@ -1038,11 +1030,18 @@ class CollectionAdapter:
                         local_doc = await LocalFileCollection("companies").find_one({"id": cid})
                         if local_doc:
                             doc = {**doc, **local_doc}
-                if projection:
-                    for pk, pv in projection.items():
-                        if pv == 0:
-                            doc.pop(pk, None)
                 doc = self._deserialize_document(doc)
+                if projection and isinstance(projection, dict):
+                    inclusions = [pk for pk, pv in projection.items() if (pv == 1 or pv is True) and pk != "_id"]
+                    exclusions = [pk for pk, pv in projection.items() if (pv == 0 or pv is False)]
+                    if inclusions:
+                        filtered_doc = {k: doc[k] for k in inclusions if k in doc}
+                        if "_id" not in exclusions and "id" in doc and "id" not in filtered_doc:
+                            filtered_doc["id"] = doc["id"]
+                        doc = filtered_doc
+                    elif exclusions:
+                        for pk in exclusions:
+                            doc.pop(pk, None)
                 return doc
         except Exception as e:
             err_str = str(e).lower()
@@ -1161,8 +1160,12 @@ class CollectionAdapter:
         if not patch:
             return UpdateResult(1, 1)
 
-        if self.table_name == "products" and not _PRODUCTS_HAS_RATE:
-            patch = {k: v for k, v in patch.items() if k != "rate"}
+        if self.table_name == "products":
+            patch = _clean_products_doc(patch)
+        elif self.table_name == "inward_entries":
+            patch = _clean_inward_doc(patch)
+        elif self.table_name == "outward_entries":
+            patch = _clean_outward_doc(patch)
 
         if self.table_name == "clients":
             logger.info(f"[CLIENT-SAVE DIAG] ▶ update_one called. filter={filter}")
