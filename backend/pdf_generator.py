@@ -11,13 +11,44 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.pdfgen import canvas
 from reportlab.graphics.shapes import Drawing, Rect, String, Line, Group, Circle, PolyLine
 
+import os
+import logging
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+logger = logging.getLogger(__name__)
+
+# Register PDF-safe Unicode font supporting the Indian Rupee symbol (₹)
+FONTS_DIR = os.path.join(os.path.dirname(__file__), "fonts")
+REGULAR_FONT_PATH = os.path.join(FONTS_DIR, "NotoSans-Regular.ttf")
+BOLD_FONT_PATH = os.path.join(FONTS_DIR, "NotoSans-Bold.ttf")
+
+PDF_FONT = "Helvetica"
+PDF_FONT_BOLD = "Helvetica-Bold"
+
+try:
+    if os.path.exists(REGULAR_FONT_PATH) and os.path.exists(BOLD_FONT_PATH):
+        pdfmetrics.registerFont(TTFont("NotoSans", REGULAR_FONT_PATH))
+        pdfmetrics.registerFont(TTFont("NotoSans-Bold", BOLD_FONT_PATH))
+        pdfmetrics.registerFontFamily("NotoSans", normal="NotoSans", bold="NotoSans-Bold")
+        PDF_FONT = "NotoSans"
+        PDF_FONT_BOLD = "NotoSans-Bold"
+    elif os.path.exists("/Library/Fonts/Arial Unicode.ttf"):
+        pdfmetrics.registerFont(TTFont("NotoSans", "/Library/Fonts/Arial Unicode.ttf"))
+        pdfmetrics.registerFont(TTFont("NotoSans-Bold", "/Library/Fonts/Arial Unicode.ttf"))
+        pdfmetrics.registerFontFamily("NotoSans", normal="NotoSans", bold="NotoSans-Bold")
+        PDF_FONT = "NotoSans"
+        PDF_FONT_BOLD = "NotoSans-Bold"
+except Exception as e:
+    logger.warning(f"Failed to register custom PDF fonts: {e}")
+
 styles = getSampleStyleSheet()
-H1 = ParagraphStyle('h1', parent=styles['Heading1'], fontSize=16, textColor=colors.HexColor('#1d4ed8'), spaceAfter=8, alignment=1)
-H2 = ParagraphStyle('h2', parent=styles['Heading2'], fontSize=11, textColor=colors.HexColor('#0f172a'), spaceAfter=6)
-BODY = ParagraphStyle('body', parent=styles['BodyText'], fontSize=9, leading=13, textColor=colors.HexColor('#1f2937'))
-SMALL = ParagraphStyle('small', parent=styles['BodyText'], fontSize=8, leading=11, textColor=colors.HexColor('#475569'))
-BOLD_SMALL = ParagraphStyle('bold_small', parent=styles['BodyText'], fontSize=8, leading=11, fontName='Helvetica-Bold', textColor=colors.HexColor('#1f2937'))
-HEADER_TEXT_STYLE = ParagraphStyle('header_text_style', parent=styles['BodyText'], fontSize=8, leading=11, fontName='Helvetica-Bold', textColor=colors.white)
+H1 = ParagraphStyle('h1', parent=styles['Heading1'], fontSize=16, fontName=PDF_FONT_BOLD, textColor=colors.HexColor('#1d4ed8'), spaceAfter=8, alignment=1)
+H2 = ParagraphStyle('h2', parent=styles['Heading2'], fontSize=11, fontName=PDF_FONT_BOLD, textColor=colors.HexColor('#0f172a'), spaceAfter=6)
+BODY = ParagraphStyle('body', parent=styles['BodyText'], fontSize=9, fontName=PDF_FONT, leading=13, textColor=colors.HexColor('#1f2937'))
+SMALL = ParagraphStyle('small', parent=styles['BodyText'], fontSize=8, fontName=PDF_FONT, leading=11, textColor=colors.HexColor('#475569'))
+BOLD_SMALL = ParagraphStyle('bold_small', parent=styles['BodyText'], fontSize=8, fontName=PDF_FONT_BOLD, leading=11, textColor=colors.HexColor('#1f2937'))
+HEADER_TEXT_STYLE = ParagraphStyle('header_text_style', parent=styles['BodyText'], fontSize=8, fontName=PDF_FONT_BOLD, leading=11, textColor=colors.white)
 
 
 def _header(company: dict, prepared_by: str | None = None, show_owner: bool = True):
@@ -997,6 +1028,9 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
     if not isinstance(company, dict):
         company = {}
 
+    if "lineItems" in data and "financials" in data and "seller" in data:
+        return data
+
     comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "GVP SOLAR ENERGY").strip()
     comp_gst = (company.get("gst_number") or company.get("gstin") or company.get("gst") or "").strip()
     comp_addr = (company.get("address") or company.get("address_line_1") or company.get("office_address") or "").strip()
@@ -1025,14 +1059,23 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
     c_consumer = (client_raw.get("consumer_number") or "").strip()
 
     doc_type = (data.get("doc_type") or data.get("invoice_type") or "tax_invoice").lower().strip()
+    custom_title = (data.get("doc_title") or data.get("document_title") or data.get("title") or "").strip()
     title_map = {
         "tax_invoice": "TAX INVOICE",
+        "customer_invoice": "CUSTOMER INVOICE",
         "proforma": "PROFORMA INVOICE",
         "payment_receipt": "PAYMENT RECEIPT",
         "credit_note": "CREDIT NOTE",
         "debit_note": "DEBIT NOTE"
     }
-    title_text = title_map.get(doc_type, "TAX INVOICE")
+    if custom_title:
+        title_text = custom_title.upper()
+    elif doc_type in title_map:
+        title_text = title_map[doc_type]
+    elif "customer" in doc_type:
+        title_text = "CUSTOMER INVOICE"
+    else:
+        title_text = "TAX INVOICE"
 
     inv_num = (data.get("invoice_number") or data.get("receipt_number") or data.get("document_number") or data.get("id") or "").strip()
     inv_date = (data.get("invoice_date") or data.get("receipt_date") or data.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
@@ -1109,6 +1152,9 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
     saved_grand_total = float(data.get("grand_total") or 0.0)
     grand_total = saved_grand_total if saved_grand_total > 0 else grand_total_calc
 
+    paid_amount = float(data.get("paid_amount") if data.get("paid_amount") is not None else (data.get("amount_received") or data.get("received_amount") or 0.0))
+    outstanding_amount = float(data.get("outstanding_amount") if data.get("outstanding_amount") is not None else max(0.0, grand_total - paid_amount))
+
     receipt_meta = {}
     if doc_type == "payment_receipt":
         receipt_meta = {
@@ -1175,7 +1221,10 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
             "igst_amount": igst_amount,
             "freight": freight,
             "round_off": round_off,
-            "grand_total": grand_total
+            "grand_total": grand_total,
+            "paid_amount": paid_amount,
+            "received_amount": paid_amount,
+            "outstanding_amount": outstanding_amount
         },
         "receipt_meta": receipt_meta,
         "notes": notes,
@@ -1231,22 +1280,22 @@ def make_sales_doc_canvas(company: dict, doc_type: str = "tax_invoice"):
             self.saveState()
             self.setStrokeColor(colors.HexColor('#1e3a8a'))
             self.setLineWidth(0.8)
-            self.line(1.2 * cm, 1.35 * cm, 21.0 * cm - 1.2 * cm, 1.35 * cm)
+            self.line(1.2 * cm, 1.45 * cm, 21.0 * cm - 1.2 * cm, 1.45 * cm)
 
-            self.setFont("Helvetica-Bold", 7.5)
+            self.setFont(PDF_FONT_BOLD, 7.5)
             self.setFillColor(colors.HexColor('#1e3a8a'))
             if line1:
-                self.drawString(1.2 * cm, 0.95 * cm, line1[:115])
+                self.drawString(1.2 * cm, 1.05 * cm, line1[:120])
 
-            self.setFont("Helvetica", 7.0)
+            self.setFont(PDF_FONT, 7.0)
             self.setFillColor(colors.HexColor('#475569'))
             if line2:
-                self.drawString(1.2 * cm, 0.60 * cm, line2[:115])
+                self.drawString(1.2 * cm, 0.70 * cm, line2[:120])
 
-            self.setFont("Helvetica-Bold", 7.5)
+            self.setFont(PDF_FONT_BOLD, 7.5)
             self.setFillColor(colors.HexColor('#334155'))
             page_num = getattr(self, '_pageNumber', 1)
-            self.drawRightString(21.0 * cm - 1.2 * cm, 0.60 * cm, f"Page {page_num} of {page_count}")
+            self.drawRightString(21.0 * cm - 1.2 * cm, 0.70 * cm, f"Page {page_num} of {page_count}")
             self.restoreState()
 
     return SalesDocCanvas
@@ -1273,7 +1322,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         leftMargin=1.2 * cm,
         rightMargin=1.2 * cm,
         topMargin=1.2 * cm,
-        bottomMargin=1.8 * cm
+        bottomMargin=2.0 * cm
     )
     story = []
 
@@ -1304,9 +1353,9 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         hdr_left_flow.append(logo_d)
         hdr_left_flow.append(Spacer(1, 0.1 * cm))
 
-    comp_title_style = ParagraphStyle('inv_comp_title', parent=styles['Normal'], fontSize=13, leading=15, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold')
-    comp_gst_style = ParagraphStyle('inv_comp_gst', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'), fontName='Helvetica-Bold')
-    comp_sub_style = ParagraphStyle('inv_comp_sub', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#475569'))
+    comp_title_style = ParagraphStyle('inv_comp_title', parent=styles['Normal'], fontSize=13, leading=15, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD)
+    comp_gst_style = ParagraphStyle('inv_comp_gst', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT_BOLD)
+    comp_sub_style = ParagraphStyle('inv_comp_sub', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#475569'), fontName=PDF_FONT)
 
     hdr_left_flow.append(Paragraph(seller["name"], comp_title_style))
     if seller["gstin"]:
@@ -1319,7 +1368,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     if contact_parts:
         hdr_left_flow.append(Paragraph(" | ".join(contact_parts), comp_sub_style))
 
-    inv_title_style = ParagraphStyle('inv_title', parent=styles['Normal'], fontSize=16, leading=18, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold', alignment=2)
+    inv_title_style = ParagraphStyle('inv_title', parent=styles['Normal'], fontSize=16, leading=18, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD, alignment=2)
     hdr_right_flow: list[Any] = [Paragraph(title_text, inv_title_style), Spacer(1, 0.2 * cm)]
 
     meta_table_data = [
@@ -1370,8 +1419,8 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     if buyer['gstin'] and buyer['gstin'] != "—": b_body += f"GSTIN: {buyer['gstin']}<br/>"
     if buyer['sol_id'] and buyer['sol_id'] != "—": b_body += f"SOL ID: {buyer['sol_id']}"
 
-    party_header_style = ParagraphStyle('inv_p_hdr', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#ffffff'), fontName='Helvetica-Bold')
-    party_body_style = ParagraphStyle('inv_p_bdy', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'))
+    party_header_style = ParagraphStyle('inv_p_hdr', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#ffffff'), fontName=PDF_FONT_BOLD)
+    party_body_style = ParagraphStyle('inv_p_bdy', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT)
 
     party_table_data = [
         [Paragraph("SUPPLIER / SELLER DETAILS", party_header_style), Paragraph("BUYER / BILL TO", party_header_style)],
@@ -1392,7 +1441,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     story.append(Spacer(1, 0.3 * cm))
 
     # 3. LINE ITEMS TABLE (10 COLUMNS)
-    th_style = ParagraphStyle('inv_th', parent=styles['Normal'], fontSize=7.5, leading=9.5, textColor=colors.HexColor('#ffffff'), fontName='Helvetica-Bold')
+    th_style = ParagraphStyle('inv_th', parent=styles['Normal'], fontSize=7.5, leading=9.5, textColor=colors.HexColor('#ffffff'), fontName=PDF_FONT_BOLD)
     th_c = ParagraphStyle('inv_th_c', parent=th_style, alignment=1)
     th_r = ParagraphStyle('inv_th_r', parent=th_style, alignment=2)
 
@@ -1410,7 +1459,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     ]
     item_rows = [item_headers]
 
-    tb_style = ParagraphStyle('inv_tb', parent=styles['Normal'], fontSize=7.5, leading=9.5, textColor=colors.HexColor('#0f172a'))
+    tb_style = ParagraphStyle('inv_tb', parent=styles['Normal'], fontSize=7.5, leading=9.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT)
     tb_c = ParagraphStyle('inv_tb_c', parent=tb_style, alignment=1)
     tb_r = ParagraphStyle('inv_tb_r', parent=tb_style, alignment=2)
 
@@ -1454,12 +1503,12 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     if terms:
         left_notes_text += f"<b>TERMS & CONDITIONS</b><br/>{terms.replace(chr(10), '<br/>')}"
 
-    notes_p = Paragraph(left_notes_text or "Thank you for your business!", ParagraphStyle('inv_notes_p', parent=styles['Normal'], fontSize=8, leading=10.5, textColor=colors.HexColor('#1e293b')))
+    notes_p = Paragraph(left_notes_text or "Thank you for your business!", ParagraphStyle('inv_notes_p', parent=styles['Normal'], fontSize=8, leading=10.5, textColor=colors.HexColor('#1e293b'), fontName=PDF_FONT))
 
-    tot_lbl = ParagraphStyle('inv_tot_lbl', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#334155'), fontName='Helvetica-Bold')
-    tot_val = ParagraphStyle('inv_tot_v', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#0f172a'), alignment=2)
-    tot_grand_lbl = ParagraphStyle('inv_tot_g_lbl', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold')
-    tot_grand_val = ParagraphStyle('inv_tot_g_v', parent=styles['Normal'], fontSize=9.5, leading=11, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold', alignment=2)
+    tot_lbl = ParagraphStyle('inv_tot_lbl', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#334155'), fontName=PDF_FONT_BOLD)
+    tot_val = ParagraphStyle('inv_tot_v', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT, alignment=2)
+    tot_grand_lbl = ParagraphStyle('inv_tot_g_lbl', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD)
+    tot_grand_val = ParagraphStyle('inv_tot_g_v', parent=styles['Normal'], fontSize=9.5, leading=11, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD, alignment=2)
 
     totals_rows = [
         [Paragraph("SUBTOTAL", tot_lbl), Paragraph(_format_currency(fin["subtotal"]), tot_val)]
@@ -1480,6 +1529,18 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         totals_rows.append([Paragraph("ROUND OFF", tot_lbl), Paragraph(_format_currency(fin["round_off"]), tot_val)])
 
     totals_rows.append([Paragraph("GRAND TOTAL", tot_grand_lbl), Paragraph(_format_currency(fin["grand_total"]), tot_grand_val)])
+
+    # If payments are received or invoice has payment records, show Received & Outstanding
+    if fin.get("paid_amount", 0) > 0 or fin.get("received_amount", 0) > 0:
+        actual_paid = float(fin.get("paid_amount") or fin.get("received_amount") or 0.0)
+        actual_out = float(fin.get("outstanding_amount") if fin.get("outstanding_amount") is not None else max(0.0, fin["grand_total"] - actual_paid))
+        tot_rec_lbl = ParagraphStyle('inv_tot_rec_lbl', parent=styles['Normal'], fontSize=8.5, leading=10, textColor=colors.HexColor('#059669'), fontName=PDF_FONT_BOLD)
+        tot_rec_val = ParagraphStyle('inv_tot_rec_v', parent=styles['Normal'], fontSize=8.5, leading=10, textColor=colors.HexColor('#059669'), fontName=PDF_FONT_BOLD, alignment=2)
+        tot_out_lbl = ParagraphStyle('inv_tot_out_lbl', parent=styles['Normal'], fontSize=8.5, leading=10, textColor=colors.HexColor('#dc2626'), fontName=PDF_FONT_BOLD)
+        tot_out_val = ParagraphStyle('inv_tot_out_v', parent=styles['Normal'], fontSize=8.5, leading=10, textColor=colors.HexColor('#dc2626'), fontName=PDF_FONT_BOLD, alignment=2)
+
+        totals_rows.append([Paragraph("RECEIVED AMOUNT", tot_rec_lbl), Paragraph(_format_currency(actual_paid), tot_rec_val)])
+        totals_rows.append([Paragraph("OUTSTANDING BALANCE", tot_out_lbl), Paragraph(_format_currency(actual_out), tot_out_val)])
 
     totals_table = Table(totals_rows, colWidths=[4.4 * cm, 3.9 * cm])
     totals_table.setStyle(TableStyle([
@@ -1503,12 +1564,12 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     story.append(Spacer(1, 0.3 * cm))
 
     # 5. AMOUNT IN WORDS & SIGNATURE BLOCK
-    words_p = Paragraph(f"<b>Amount in Words:</b> {_amount_to_words(fin['grand_total'])}", ParagraphStyle('inv_words', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a')))
+    words_p = Paragraph(f"<b>Amount in Words:</b> {_amount_to_words(fin['grand_total'])}", ParagraphStyle('inv_words', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT))
     story.append(words_p)
     story.append(Spacer(1, 0.35 * cm))
 
-    sig_l = Paragraph("<b>Customer Signature</b><br/><br/><br/>_______________________", ParagraphStyle('sig_l', parent=styles['Normal'], fontSize=8.5, alignment=0))
-    sig_r = Paragraph(f"<b>For {seller['name']}</b><br/><br/><br/>Authorized Signatory", ParagraphStyle('sig_r', parent=styles['Normal'], fontSize=8.5, alignment=2))
+    sig_l = Paragraph("<b>Customer Signature</b><br/><br/><br/>_______________________", ParagraphStyle('sig_l', parent=styles['Normal'], fontSize=8.5, alignment=0, fontName=PDF_FONT))
+    sig_r = Paragraph(f"<b>For {seller['name']}</b><br/><br/><br/>Authorized Signatory", ParagraphStyle('sig_r', parent=styles['Normal'], fontSize=8.5, alignment=2, fontName=PDF_FONT))
     sig_table = Table([[sig_l, sig_r]], colWidths=[9.3 * cm, 9.3 * cm])
     sig_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
@@ -1519,7 +1580,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
 
     if doc_type == "proforma":
         story.append(Spacer(1, 0.2 * cm))
-        story.append(Paragraph("<font size='9' color='#d97706'><b>THIS IS A PROFORMA INVOICE — NOT A TAX INVOICE</b></font>", ParagraphStyle('pf_not_tax', parent=styles['Normal'], alignment=1)))
+        story.append(Paragraph("<font size='9' color='#d97706'><b>THIS IS A PROFORMA INVOICE — NOT A TAX INVOICE</b></font>", ParagraphStyle('pf_not_tax', parent=styles['Normal'], alignment=1, fontName=PDF_FONT_BOLD)))
 
     pdf.build(story, canvasmaker=make_sales_doc_canvas(company, doc_type))
     return buf.getvalue()
@@ -1548,13 +1609,23 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     footer = doc.sections[0].footer
     ftr_para = footer.paragraphs[0]
     ftr_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r_f1 = ftr_para.add_run(f"{seller['name']} | {title_text}\n")
+    
+    comp_line1_parts = [seller['name']]
+    if seller['phone']: comp_line1_parts.append(f"Ph: {seller['phone']}")
+    if seller['email']: comp_line1_parts.append(f"Email: {seller['email']}")
+    if seller['website']: comp_line1_parts.append(f"Web: {seller['website']}")
+    if seller['gstin']: comp_line1_parts.append(f"GSTIN: {seller['gstin']}")
+    
+    r_f1 = ftr_para.add_run(" | ".join(comp_line1_parts) + "\n")
     r_f1.bold = True
     r_f1.font.size = Pt(8)
     r_f1.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
-    r_f2 = ftr_para.add_run(f"Email: {seller['email']} | Phone: {seller['phone']} | GSTIN: {seller['gstin']}")
-    r_f2.font.size = Pt(7.5)
-    r_f2.font.color.rgb = RGBColor(0x64, 0x74, 0x8b)
+    
+    comp_addr_line = f"Office: {seller['address']}" if seller['address'] else ""
+    if comp_addr_line:
+        r_f2 = ftr_para.add_run(comp_addr_line)
+        r_f2.font.size = Pt(7.5)
+        r_f2.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
 
     # 1. HEADER (Logo/Company Left, Title/Meta Right)
     hdr_table = doc.add_table(rows=1, cols=2)
@@ -1792,6 +1863,12 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
 
     totals_list.append(("GRAND TOTAL", _format_currency(fin["grand_total"])))
 
+    if fin.get("paid_amount", 0) > 0 or fin.get("received_amount", 0) > 0:
+        actual_paid = float(fin.get("paid_amount") or fin.get("received_amount") or 0.0)
+        actual_out = float(fin.get("outstanding_amount") if fin.get("outstanding_amount") is not None else max(0.0, fin["grand_total"] - actual_paid))
+        totals_list.append(("RECEIVED AMOUNT", _format_currency(actual_paid)))
+        totals_list.append(("OUTSTANDING BALANCE", _format_currency(actual_out)))
+
     tot_sub_tbl = c_t.add_table(rows=len(totals_list), cols=2)
     tot_sub_tbl.style = 'Table Grid'
     for r_idx, (t_lbl, t_val) in enumerate(totals_list):
@@ -1801,22 +1878,34 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
         t_c1.width = _emu(3.9 * 360000)
 
         is_grand = (t_lbl == "GRAND TOTAL")
+        is_rec = (t_lbl == "RECEIVED AMOUNT")
+        is_out = (t_lbl == "OUTSTANDING BALANCE")
         if is_grand:
             _docx_set_cell_bg(t_c0, "eff6ff")
             _docx_set_cell_bg(t_c1, "eff6ff")
+        elif is_rec:
+            _docx_set_cell_bg(t_c0, "f0fdf4")
+            _docx_set_cell_bg(t_c1, "f0fdf4")
+        elif is_out:
+            _docx_set_cell_bg(t_c0, "fef2f2")
+            _docx_set_cell_bg(t_c1, "fef2f2")
 
         tp0 = t_c0.paragraphs[0]
         tr0 = tp0.add_run(t_lbl)
         tr0.bold = True
-        tr0.font.size = Pt(8.5 if is_grand else 7.5)
+        tr0.font.size = Pt(8.5 if (is_grand or is_rec or is_out) else 7.5)
         if is_grand: tr0.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
+        elif is_rec: tr0.font.color.rgb = RGBColor(0x05, 0x96, 0x69)
+        elif is_out: tr0.font.color.rgb = RGBColor(0xdc, 0x26, 0x26)
 
         tp1 = t_c1.paragraphs[0]
         tp1.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         tr1 = tp1.add_run(t_val)
-        tr1.bold = is_grand
-        tr1.font.size = Pt(9 if is_grand else 7.5)
+        tr1.bold = (is_grand or is_rec or is_out)
+        tr1.font.size = Pt(9 if is_grand else (8.5 if (is_rec or is_out) else 7.5))
         if is_grand: tr1.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
+        elif is_rec: tr1.font.color.rgb = RGBColor(0x05, 0x96, 0x69)
+        elif is_out: tr1.font.color.rgb = RGBColor(0xdc, 0x26, 0x26)
 
     doc.add_paragraph()
 
@@ -1864,9 +1953,10 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
 
 
 def generate_document(doc_type: str, data: dict, company: dict) -> bytes:
-    if doc_type in ("tax_invoice", "proforma", "payment_receipt", "credit_note", "debit_note"):
+    doc_type_clean = (doc_type or "").lower().strip()
+    if doc_type_clean in ("tax_invoice", "customer_invoice", "proforma", "payment_receipt", "credit_note", "debit_note", "invoice"):
         return generate_invoice_pdf(data, company)
-    if doc_type == "purchase_order":
+    if doc_type_clean == "purchase_order":
         return generate_po_pdf(data, company)
     buf = BytesIO()
     pdf = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.2 * cm, rightMargin=1.2 * cm, topMargin=1.2 * cm, bottomMargin=1.8 * cm)
@@ -5014,7 +5104,7 @@ def generate_docx(doc_type: str, client: dict, company: dict) -> bytes:
         return _generate_vendor_docx(client, company)
     if doc_type_clean in ("meter_testing_request", "meter_testing"):
         return _generate_meter_testing_docx(client, company)
-    if doc_type_clean in ("tax_invoice", "proforma", "payment_receipt", "credit_note", "debit_note", "invoice"):
+    if doc_type_clean in ("tax_invoice", "customer_invoice", "proforma", "payment_receipt", "credit_note", "debit_note", "invoice"):
         return generate_invoice_docx(client, company)
     if doc_type_clean in ("purchase_order", "po"):
         return generate_po_docx(client, company)

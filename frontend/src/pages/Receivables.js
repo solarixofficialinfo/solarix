@@ -1093,7 +1093,7 @@ export default function Receivables() {
               <div className="py-2 space-y-4">
                 {/* Workspace Tabs (8 Tabs) */}
                 <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                  <TabsList className="grid grid-cols-4 sm:grid-cols-8 bg-slate-100 p-1 rounded-xl text-xs">
+                  <TabsList className="grid grid-cols-3 sm:grid-cols-6 bg-slate-100 p-1 rounded-xl text-xs">
                     <TabsTrigger value="overview" className="text-xs py-1.5">Overview</TabsTrigger>
                     <TabsTrigger value="payment_plan" className="text-xs py-1.5">Payment Plan</TabsTrigger>
                     <TabsTrigger value="invoices" className="text-xs py-1.5 flex items-center gap-1 font-semibold text-blue-700">
@@ -1102,8 +1102,6 @@ export default function Receivables() {
                     <TabsTrigger value="payments" className="text-xs py-1.5">Payments</TabsTrigger>
                     <TabsTrigger value="loan_finance" className="text-xs py-1.5">Loan / Finance</TabsTrigger>
                     <TabsTrigger value="expenses" className="text-xs py-1.5">Expenses</TabsTrigger>
-                    <TabsTrigger value="profitability" className="text-xs py-1.5">Profitability</TabsTrigger>
-                    <TabsTrigger value="documents" className="text-xs py-1.5">Documents</TabsTrigger>
                   </TabsList>
 
                   {/* ─── TAB 1: OVERVIEW ────────────────────────────────────────── */}
@@ -1709,53 +1707,6 @@ export default function Receivables() {
                     )}
                   </TabsContent>
 
-                  {/* ─── TAB 7: PROFITABILITY ───────────────────────────────────── */}
-                  <TabsContent value="profitability" className="space-y-4 pt-3">
-                    {!projectWorkspace?.summary?.has_cost_data ? (
-                      <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                        <PieChart className="w-8 h-8 text-slate-400 mx-auto" />
-                        <h4 className="font-bold text-slate-700 text-sm">Profitability not calculated</h4>
-                        <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                          No direct project expenses have been logged for this project yet. Log expenses under the Expenses tab to calculate actual gross profit.
-                        </p>
-                      </div>
-                    ) : (
-                      <Card className="border-slate-200 shadow-2xs">
-                        <CardContent className="p-4 space-y-3">
-                          <h4 className="font-bold text-xs text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
-                            Project Gross Profitability
-                          </h4>
-                          <div className="space-y-2 text-xs font-mono">
-                            <div className="flex justify-between py-1">
-                              <span className="font-sans text-slate-600">Contract Value</span>
-                              <span className="font-bold text-slate-900">
-                                ₹{(projectWorkspace?.summary?.project_value || 0).toLocaleString("en-IN")}
-                              </span>
-                            </div>
-                            <div className="flex justify-between py-1 border-b border-slate-100">
-                              <span className="font-sans text-slate-600">Actual Project Expenses</span>
-                              <span className="font-bold text-amber-700">
-                                -₹{(projectWorkspace?.summary?.total_expense || 0).toLocaleString("en-IN")}
-                              </span>
-                            </div>
-                            <div className="flex justify-between py-2 bg-indigo-50/70 px-3 rounded-lg font-bold text-sm text-indigo-900">
-                              <span className="font-sans">Gross Profit</span>
-                              <span>
-                                ₹{(projectWorkspace?.summary?.estimated_profit || 0).toLocaleString("en-IN")}
-                              </span>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    )}
-                  </TabsContent>
-
-                  {/* ─── TAB 8: DOCUMENTS ───────────────────────────────────────── */}
-                  <TabsContent value="documents" className="space-y-3 pt-3">
-                    <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-50 rounded-xl border">
-                      No project documents attached yet.
-                    </div>
-                  </TabsContent>
                 </Tabs>
               </div>
             )}
@@ -1777,7 +1728,8 @@ export default function Receivables() {
               <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-lg">
                 <FileText className="w-5 h-5 text-blue-600" />
                 {invoiceForm.id ? "Edit " : "Create "}
-                {invoiceForm.doc_type === "tax_invoice" && "Invoice"}
+                {invoiceForm.doc_type === "customer_invoice" && "Customer Invoice"}
+                {invoiceForm.doc_type === "tax_invoice" && "Tax Invoice"}
                 {invoiceForm.doc_type === "proforma" && "Proforma Invoice"}
                 {invoiceForm.doc_type === "payment_receipt" && "Payment Receipt"}
                 {invoiceForm.doc_type === "credit_note" && "Credit Note"}
@@ -1788,12 +1740,14 @@ export default function Receivables() {
                   </Badge>
                 )}
                 <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs font-semibold uppercase ml-1">
-                  {invoiceForm.doc_type === "tax_invoice" ? "Tax Invoice" : invoiceForm.doc_type.replace("_", " ")}
+                  {invoiceForm.doc_type === "tax_invoice" ? "Tax Invoice" : invoiceForm.doc_type === "customer_invoice" ? "Customer Invoice" : invoiceForm.doc_type.replace("_", " ")}
                 </Badge>
               </DialogTitle>
               <DialogDescription className="text-xs text-slate-500">
                 {invoiceForm.id
-                  ? "Update saved invoice details or finalize and generate the tax invoice document."
+                  ? "Update saved invoice details or finalize and generate the invoice document."
+                  : invoiceForm.doc_type === "customer_invoice"
+                  ? "Generate Customer Invoice for client billing."
                   : invoiceForm.doc_type === "tax_invoice"
                   ? "Generate GST-compliant Tax Invoice for customer project billing."
                   : "Create billing & financial documents with full tax compliance."}
@@ -1802,7 +1756,8 @@ export default function Receivables() {
               {/* DOCUMENT TYPE SELECTOR TABS */}
               <div className="flex items-center gap-1.5 pt-3 overflow-x-auto">
                 {[
-                  { id: "tax_invoice", label: "Tax Invoice", prefix: "INV" },
+                  { id: "tax_invoice", label: "TAX INVOICE", prefix: "INV" },
+                  { id: "customer_invoice", label: "CUSTOMER INVOICE", prefix: "INV" },
                   { id: "proforma", label: "Proforma Invoice", prefix: "PI" },
                   { id: "payment_receipt", label: "Payment Receipt", prefix: "REC" },
                   { id: "credit_note", label: "Credit Note", prefix: "CN" },

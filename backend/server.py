@@ -14160,11 +14160,21 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
     total_invoice_outstanding = 0.0
     for inv in invoices:
         inv_total = float(inv.get("grand_total") or 0)
-        inv_paid = sum(
-            float(pay.get("allocated_amount") or pay.get("amount") or 0)
-            for pay in payments
-            if pay.get("invoice_id") == inv["id"] and (pay.get("status") or "Received").lower() == "received"
-        )
+        matching_pays = [
+            pay for pay in payments
+            if (pay.get("invoice_id") in (inv["id"], inv.get("invoice_number"), inv.get("invoice_no")) or 
+                pay.get("invoice_no") in (inv["id"], inv.get("invoice_number"), inv.get("invoice_no")))
+            and (pay.get("status") or "Received").lower() == "received"
+        ]
+        inv_paid = sum(float(pay.get("allocated_amount") or pay.get("amount") or 0) for pay in matching_pays)
+        if inv_paid == 0 and len(invoices) == 1:
+            inv_paid = sum(
+                float(pay.get("amount") or 0)
+                for pay in payments
+                if (pay.get("status") or "Received").lower() == "received"
+            )
+            inv_paid = min(inv_paid, inv_total)
+
         inv_out = max(0.0, inv_total - inv_paid)
         
         inv_status = inv.get("status") or "Sent"
@@ -14357,6 +14367,8 @@ async def record_project_payment(project_id: str, data: PaymentRecordPayload, us
         "company_id": cid,
         "client_id": client_id,
         "project_id": project_id,
+        "invoice_id": data.invoice_id or None,
+        "allocated_amount": data.allocated_amount or (data.amount if data.invoice_id else None),
         "loan_id": data.loan_id or None,
         "milestone_id": data.milestone_id or "",
         "milestone_name": data.milestone_name or data.payment_type or "Payment",
@@ -14856,8 +14868,37 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
     if data.status != "Draft":
         company_doc = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
         company_doc = await _enrich_company_doc_with_logo(company_doc)
+
+        payments = await db.payments.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+        inv_total = float(invoice_doc.get("grand_total") or 0)
+        inv_payments = [
+            p for p in payments 
+            if (p.get("status") or "Received").lower() == "received" and (
+                p.get("invoice_id") == invoice_id or 
+                p.get("invoice_no") == inv_num or 
+                (inv_num and p.get("invoice_number") == inv_num)
+            )
+        ]
+        inv_paid = sum(float(p.get("allocated_amount") or p.get("amount") or 0) for p in inv_payments)
+        if inv_paid == 0:
+            c_ids = {x for x in [invoice_doc.get("client_id"), client.get("id") if client else None, client.get("sol_id") if client else None] if x}
+            p_ids = {x for x in [invoice_doc.get("project_id"), f"proj_{invoice_doc.get('client_id')}"] if x}
+            general_payments = [
+                p for p in payments
+                if (p.get("status") or "Received").lower() == "received" and (
+                    p.get("client_id") in c_ids or p.get("project_id") in p_ids
+                )
+            ]
+            inv_paid = sum(float(p.get("amount") or 0) for p in general_payments)
+
+        inv_paid = min(inv_paid, inv_total) if inv_total > 0 else inv_paid
+        inv_outstanding = max(0.0, inv_total - inv_paid)
+
         doc_data_pdf = {
             **invoice_doc,
+            "paid_amount": inv_paid,
+            "received_amount": inv_paid,
+            "outstanding_amount": inv_outstanding,
             "client": client or {
                 "full_name": invoice_doc["client_name"],
                 "mobile": client.get("mobile", "") if client else "",
@@ -14942,8 +14983,40 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
         if client_doc:
             client_doc = _enrich_client_doc(client_doc)
 
+    payments = await db.payments.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+    inv_id = invoice.get("id")
+    inv_num = invoice.get("invoice_number")
+    inv_total = float(invoice.get("grand_total") or 0)
+
+    inv_payments = [
+        p for p in payments 
+        if (p.get("status") or "Received").lower() == "received" and (
+            p.get("invoice_id") == inv_id or 
+            p.get("invoice_no") == inv_num or 
+            (inv_num and p.get("invoice_number") == inv_num)
+        )
+    ]
+    inv_paid = sum(float(p.get("allocated_amount") or p.get("amount") or 0) for p in inv_payments)
+
+    if inv_paid == 0:
+        c_ids = {x for x in [invoice.get("client_id"), client_doc.get("id") if client_doc else None, client_doc.get("sol_id") if client_doc else None] if x}
+        p_ids = {x for x in [invoice.get("project_id"), f"proj_{invoice.get('client_id')}"] if x}
+        general_payments = [
+            p for p in payments
+            if (p.get("status") or "Received").lower() == "received" and (
+                p.get("client_id") in c_ids or p.get("project_id") in p_ids
+            )
+        ]
+        inv_paid = sum(float(p.get("amount") or 0) for p in general_payments)
+
+    inv_paid = min(inv_paid, inv_total) if inv_total > 0 else inv_paid
+    inv_outstanding = max(0.0, inv_total - inv_paid)
+
     doc_data = {
         **invoice,
+        "paid_amount": inv_paid,
+        "received_amount": inv_paid,
+        "outstanding_amount": inv_outstanding,
         "client": client_doc or {
             "full_name": invoice.get("client_name", "Customer"),
             "mobile": "",
