@@ -204,24 +204,73 @@ _PH_RE = _re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
 
 def _replace_in_paragraph(paragraph, replacements: Dict[str, str]):
-    """Replace {{ key }} → value in a paragraph while preserving run formatting."""
+    """Replace {{ key }} → value in a paragraph while strictly preserving run-level formatting."""
     runs = paragraph.runs
     if not runs:
         return
-    full = "".join(r.text for r in runs)
-    if "{{" not in full:
+    full_text = "".join(r.text for r in runs)
+    if "{" not in full_text:
         return
-    new_text = full
+
+    patterns = []
     for key, val in replacements.items():
         tokens = key.split()
+        if not tokens:
+            continue
         body = r"\s+".join(_re.escape(t) for t in tokens)
         pattern = _re.compile(r"\{\{\s*" + body + r"\s*\}\}")
-        new_text = pattern.sub(lambda m: val, new_text)
-    if new_text == full:
+        patterns.append((pattern, str(val) if val is not None else ""))
+
+    # First pass: replace within single runs (100% preserves existing run formatting)
+    for r in runs:
+        if "{{" in r.text:
+            orig = r.text
+            for pat, val in patterns:
+                orig = pat.sub(lambda m: val, orig)
+            r.text = orig
+
+    full_text = "".join(r.text for r in runs)
+    if "{{" not in full_text:
         return
-    runs[0].text = new_text
-    for r in runs[1:]:
-        r.text = ""
+
+    # Second pass: replace placeholders split across multiple adjacent runs
+    for pat, val in patterns:
+        while True:
+            full = "".join(r.text for r in runs)
+            m = pat.search(full)
+            if not m:
+                break
+            m_start, m_end = m.start(), m.end()
+
+            cur = 0
+            start_r, end_r = None, None
+            start_off, end_off = 0, 0
+            for r_idx, r in enumerate(runs):
+                r_len = len(r.text)
+                r_end_pos = cur + r_len
+                if start_r is None and cur <= m_start < r_end_pos:
+                    start_r = r_idx
+                    start_off = m_start - cur
+                if cur < m_end <= r_end_pos:
+                    end_r = r_idx
+                    end_off = m_end - cur
+                    break
+                cur += r_len
+
+            if start_r is None or end_r is None:
+                break
+
+            if start_r == end_r:
+                r = runs[start_r]
+                r.text = r.text[:start_off] + val + r.text[end_off:]
+            else:
+                r_s = runs[start_r]
+                prefix = r_s.text[:start_off]
+                r_s.text = prefix + val
+                for idx in range(start_r + 1, end_r):
+                    runs[idx].text = ""
+                r_e = runs[end_r]
+                r_e.text = r_e.text[end_off:]
 
 
 def _walk_and_replace(container, replacements: Dict[str, str]):
