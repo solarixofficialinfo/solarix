@@ -152,6 +152,8 @@ export default function ClientDataDetail() {
   const [expenseRecordOpen, setExpenseRecordOpen] = useState(false);
   const [warrantyDialogOpen, setWarrantyDialogOpen] = useState(false);
   const [serviceVisitDialogOpen, setServiceVisitDialogOpen] = useState(false);
+  const [confirmPhotoDel, setConfirmPhotoDel] = useState(null);
+  const [deletingPhoto, setDeletingPhoto] = useState(false);
 
   // Load full client details & related records in parallel
   const { data: clientData, isLoading: loading } = useClientDataDetail(id, "all");
@@ -227,6 +229,25 @@ export default function ClientDataDetail() {
       toast.success(`${stageName} marked as ${nextState ? "Completed" : "Reset"}`);
     } catch (err) {
       toast.error(formatApiError(err));
+    }
+  };
+
+  const handleDeletePhoto = async () => {
+    if (!confirmPhotoDel) return;
+    setDeletingPhoto(true);
+    try {
+      const fid = confirmPhotoDel.file_id || confirmPhotoDel.id;
+      await api.delete(`/clients/${c.id || id}/photos/${fid}`);
+      invalidateAllClientQueries(queryClient, id);
+      toast.success("Photo deleted successfully.");
+      setConfirmPhotoDel(null);
+      if (zoom && (zoom.file_id === fid || zoom.id === fid)) {
+        setZoom(null);
+      }
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setDeletingPhoto(false);
     }
   };
 
@@ -1109,8 +1130,9 @@ export default function ClientDataDetail() {
                 {assets.map((ast, idx) => (
                   <div
                     key={idx}
-                    className="bg-white rounded-xl border border-slate-200 overflow-hidden group cursor-pointer shadow-2xs hover:shadow-xs transition"
+                    className="bg-white rounded-xl border border-slate-200 overflow-hidden group cursor-pointer shadow-2xs hover:shadow-xs transition relative"
                     onClick={() => setZoom(ast)}
+                    data-testid={`photo-card-${idx}`}
                   >
                     <div className="aspect-square bg-slate-100 relative overflow-hidden flex items-center justify-center">
                       <img
@@ -1136,14 +1158,39 @@ export default function ClientDataDetail() {
                           {ast.stage || ast.source}
                         </Badge>
                       )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="absolute top-2 right-2 h-7 w-7 rounded-full bg-slate-900/80 hover:bg-red-600 text-white opacity-0 group-hover:opacity-100 transition shadow-sm z-10"
+                        title="Delete Photo"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setConfirmPhotoDel(ast);
+                        }}
+                        data-testid={`delete-photo-btn-${idx}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
                     </div>
                     <div className="p-2 space-y-0.5 bg-white">
                       <div className="font-semibold text-xs text-slate-800 truncate" title={ast.location || ast.label}>
                         {ast.location || ast.label}
                       </div>
-                      <div className="text-[10px] text-slate-500 flex items-center gap-1">
-                        <Calendar className="w-3 h-3 text-slate-400" />
-                        {ast.created_at ? dayjs(ast.created_at).format("D MMM YYYY") : "—"}
+                      <div className="text-[10px] text-slate-500 flex items-center justify-between">
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-3 h-3 text-slate-400" />
+                          {ast.created_at ? dayjs(ast.created_at).format("D MMM YYYY") : "—"}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-slate-400 hover:text-red-600 text-[10px] font-medium transition"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmPhotoDel(ast);
+                          }}
+                        >
+                          Delete
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1371,6 +1418,50 @@ export default function ClientDataDetail() {
                 {zoom.created_at && <div><strong className="text-white">Upload Date:</strong> {dayjs(zoom.created_at).format("D MMMM YYYY, h:mm A")}</div>}
               </div>
             </div>
+            <DialogFooter className="p-3 border-t border-slate-800 flex items-center justify-between">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-red-400 hover:text-red-300 hover:bg-red-950/50 text-xs"
+                onClick={() => setConfirmPhotoDel(zoom)}
+                data-testid="zoom-delete-photo-btn"
+              >
+                <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Delete Photo
+              </Button>
+              <Button variant="outline" size="sm" className="border-slate-700 text-white hover:bg-slate-800" onClick={() => setZoom(null)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Delete Photo Confirmation Modal */}
+      {confirmPhotoDel && (
+        <Dialog open onOpenChange={(v) => !v && setConfirmPhotoDel(null)}>
+          <DialogContent className="max-w-md" data-testid="delete-photo-dialog">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-red-600">
+                <Trash2 className="w-5 h-5" /> Delete Project Photo
+              </DialogTitle>
+              <DialogDescription>
+                Are you sure you want to delete this photo{confirmPhotoDel.location ? ` (${confirmPhotoDel.location})` : ""}? This action will remove the photo from the client record.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="mt-4 flex gap-2 justify-end">
+              <Button variant="outline" onClick={() => setConfirmPhotoDel(null)} disabled={deletingPhoto}>
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                className="bg-red-600 hover:bg-red-700 text-white"
+                onClick={handleDeletePhoto}
+                disabled={deletingPhoto}
+                data-testid="confirm-delete-photo-btn"
+              >
+                {deletingPhoto ? "Deleting…" : "Delete Photo"}
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       )}

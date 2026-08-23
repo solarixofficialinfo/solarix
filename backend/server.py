@@ -574,7 +574,8 @@ _INWARD_VALID_COLS = {
     "reference_number", "reference_type", "bill_number", "source_type",
     "source_name", "date", "remarks", "attachment_file_id",
     "attachment_filename", "source", "created_by", "created_by_name",
-    "created_at", "import_batch", "updated_at"
+    "created_at", "import_batch", "updated_at",
+    "serial_numbers", "serial_number_required", "product_id"
 }
 
 _OUTWARD_VALID_COLS = {
@@ -582,7 +583,8 @@ _OUTWARD_VALID_COLS = {
     "product", "size", "quantity", "unit", "outward_challan_no", "reference_number",
     "reference_type", "date", "status", "remarks", "source", "material_request_id",
     "delivery_photo_file_id", "challan_photo_file_id", "attachment_file_id", "attachment_filename",
-    "created_by", "created_by_name", "created_at", "import_batch", "updated_at"
+    "created_by", "created_by_name", "created_at", "import_batch", "updated_at",
+    "serial_numbers", "serial_number_required", "product_id"
 }
 
 def _clean_products_doc(doc: dict) -> dict:
@@ -728,11 +730,15 @@ def _prepare_client_supabase_payload(payload: dict) -> dict:
 
     if "inverters" in payload and payload["inverters"] is not None:
         extra_onboarding["inverters"] = payload["inverters"]
-        cleaned["inverters"] = payload["inverters"]
 
     if "documents" in payload and payload["documents"] is not None:
         extra_onboarding["documents"] = payload["documents"]
-        cleaned["documents"] = payload["documents"]
+
+    if "photos" in payload and payload["photos"] is not None:
+        extra_onboarding["photos"] = payload["photos"]
+
+    if "cleared_assets" in payload and payload["cleared_assets"] is not None:
+        extra_onboarding["cleared_assets"] = payload["cleared_assets"]
 
     for k, v in payload.items():
         if k in VALID_CLIENT_COLUMNS:
@@ -786,8 +792,27 @@ def _enrich_client_doc(c: dict) -> dict:
     c["division"] = ob.get("division") or c.get("division") or ""
     c["sub_division"] = ob.get("sub_division") or c.get("sub_division") or ""
 
-    # Ensure documents list is always retrieved from root or onboarding stages
-    c["documents"] = c.get("documents") if (isinstance(c.get("documents"), list) and len(c.get("documents")) > 0) else (ob.get("documents") if isinstance(ob.get("documents"), list) else [])
+    # Ensure documents and photos lists are always retrieved from root or onboarding stages
+    if isinstance(c.get("documents"), list):
+        c["documents"] = c["documents"]
+    elif isinstance(ob.get("documents"), list):
+        c["documents"] = ob["documents"]
+    else:
+        c["documents"] = []
+
+    if isinstance(c.get("photos"), list):
+        c["photos"] = c["photos"]
+    elif isinstance(ob.get("photos"), list):
+        c["photos"] = ob["photos"]
+    else:
+        c["photos"] = []
+
+    if isinstance(c.get("cleared_assets"), list):
+        c["cleared_assets"] = c["cleared_assets"]
+    elif isinstance(ob.get("cleared_assets"), list):
+        c["cleared_assets"] = ob["cleared_assets"]
+    else:
+        c["cleared_assets"] = []
 
     # DISCOM Resolution
     discom_val = c.get("discom") or ob.get("discom") or c.get("discom_name") or ob.get("discom_name") or c.get("discom_code") or ob.get("discom_code") or ""
@@ -1160,14 +1185,49 @@ class CollectionAdapter:
             patch.update(update["$set"])
             patch = self._clean_empty_fks(patch)
         
+        # Need existing document for $inc, $pull, $addToSet, $push
+        existing = {}
+        ex_ob = {}
+        if any(op in update for op in ["$inc", "$pull", "$addToSet", "$push"]):
+            try:
+                builder = supabase.table(self.table_name).select("*").limit(1)
+                builder = self._apply_filters(builder, filter)
+                res = builder.execute()
+                if res.data:
+                    existing = dict(res.data[0])
+                    ex_ob = dict((existing.get("stages") or {}).get("onboarding_data") or {})
+            except Exception:
+                pass
+
         if "$inc" in update:
-            builder = supabase.table(self.table_name).select("*")
-            builder = self._apply_filters(builder, filter)
-            res = builder.execute()
-            if res.data:
-                existing = res.data[0]
-                for inc_k, inc_v in update["$inc"].items():
-                    patch[inc_k] = (existing.get(inc_k) or 0) + inc_v
+            for inc_k, inc_v in update["$inc"].items():
+                patch[inc_k] = (existing.get(inc_k) or 0) + inc_v
+
+        if "$addToSet" in update:
+            for set_k, set_v in update["$addToSet"].items():
+                arr = list(existing.get(set_k) or ex_ob.get(set_k) or [])
+                if set_v not in arr:
+                    arr.append(set_v)
+                patch[set_k] = arr
+
+        if "$pull" in update:
+            for pull_k, pull_cond in update["$pull"].items():
+                arr = list(existing.get(pull_k) or ex_ob.get(pull_k) or [])
+                def _match_pull(item, cond):
+                    if isinstance(cond, dict) and "$or" in cond:
+                        return any(_match_pull(item, sub) for sub in cond["$or"])
+                    if isinstance(cond, dict):
+                        return all(item.get(ck) == cv for ck, cv in cond.items() if isinstance(item, dict))
+                    return item == cond or (isinstance(item, dict) and (item.get("file_id") == cond or item.get("id") == cond))
+                
+                arr = [item for item in arr if not _match_pull(item, pull_cond)]
+                patch[pull_k] = arr
+
+        if "$push" in update:
+            for push_k, push_v in update["$push"].items():
+                arr = list(existing.get(push_k) or ex_ob.get(push_k) or [])
+                arr.append(push_v)
+                patch[push_k] = arr
         
         if not patch:
             return UpdateResult(1, 1)
@@ -7562,7 +7622,7 @@ def invalidate_products_cache(company_id: Optional[str] = None):
 
 
 async def _compute_inventory_balances(cid: str):
-    items = await db.products.find({"company_id": cid}, {"_id": 0}).sort("name", 1).to_list(10000)
+    items = await db.products.find({"company_id": cid, "status": {"$ne": "Archived"}}, {"_id": 0}).sort("name", 1).to_list(10000)
     inward_entries = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(100000)
     outward_entries = await db.outward_entries.find({"company_id": cid}, {"_id": 0}).to_list(100000)
 
@@ -10971,6 +11031,14 @@ async def clear_client_image(client_id: str, data: ClearImageIn, user=Depends(ge
     )
     await log_activity(user["company_id"], user["id"], user["name"], "Cleared Client Image", client.get("full_name", ""))
     return {"status": "success", "message": "Image cleared from client record", "file_id": fid}
+
+
+@api_router.delete("/clients/{client_id}/photos/{file_id}")
+async def delete_client_photo(client_id: str, file_id: str, user=Depends(get_current_user)):
+    fid = (file_id or "").strip()
+    if not fid:
+        raise HTTPException(status_code=400, detail="file_id is required")
+    return await clear_client_image(client_id, ClearImageIn(file_id=fid), user=user)
 
 
 def _summarize_inverter_status(monitoring: Optional[dict]) -> str:

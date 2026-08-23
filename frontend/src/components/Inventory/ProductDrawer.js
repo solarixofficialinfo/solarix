@@ -60,16 +60,37 @@ export default function ProductDrawer({ product, open, onClose, onChanged }) {
     }
   }, [tab, loadTxns]);
 
+  const [confirmDelProd, setConfirmDelProd] = useState(null);
+
   const saveProduct = async () => {
     setBusy(true);
     try {
       const payload = { ...form, min_stock: Number(form.min_stock) || 0, rate: Number(form.rate) || 0 };
       await api.patch(`/inventory/products/${product.id}`, payload);
       toast.success("Product updated successfully.");
-      onChanged?.();
+      onChanged?.(product.id);
       loadStats();
+      onClose?.();
     } catch (e) { toast.error(formatApiError(e)); }
     finally { setBusy(false); }
+  };
+
+  const doDeleteProduct = async () => {
+    if (!confirmDelProd) return;
+    try {
+      const res = await api.delete(`/inventory/products/${confirmDelProd.id}`);
+      if (res.data?.action === "archived") {
+        toast.info(res.data.message || "Product archived because historical records exist.");
+      } else {
+        toast.success(res.data?.message || "Product deleted successfully.");
+      }
+      setConfirmDelProd(null);
+      onClose?.();
+      onChanged?.();
+    } catch (e) {
+      toast.error(formatApiError(e));
+      setConfirmDelProd(null);
+    }
   };
 
   const deleteTxn = async () => {
@@ -257,7 +278,16 @@ export default function ProductDrawer({ product, open, onClose, onChanged }) {
           )}
         </div>
 
-        <DialogFooter className="px-6 py-3 border-t border-slate-200 bg-slate-50/50">
+        <DialogFooter className="px-6 py-3 border-t border-slate-200 bg-slate-50/50 flex items-center justify-between">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-red-500 hover:text-red-700 hover:bg-red-50 text-xs h-8"
+            onClick={() => setConfirmDelProd(product)}
+            data-testid="pd-delete-product-btn"
+          >
+            <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete Product
+          </Button>
           <Button variant="outline" onClick={onClose}>Close</Button>
         </DialogFooter>
       </DialogContent>
@@ -273,6 +303,13 @@ export default function ProductDrawer({ product, open, onClose, onChanged }) {
         title="Delete transaction?"
         description={confirmDel ? `${confirmDel.type} · ${confirmDel.product} × ${confirmDel.quantity}. Stock will recalculate.` : ""}
         onConfirm={deleteTxn}
+      />
+      <ConfirmDialog
+        open={!!confirmDelProd}
+        onOpenChange={(v) => !v && setConfirmDelProd(null)}
+        title="Delete product?"
+        description={confirmDelProd ? `Remove "${confirmDelProd.name}" from the master. If historical records exist, it will be safely archived without affecting inventory balances.` : ""}
+        onConfirm={doDeleteProduct}
       />
     </Dialog>
   );

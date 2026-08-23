@@ -30,9 +30,24 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importModalType, setImportModalType] = useState("pdf");
   const [manageModalOpen, setManageModalOpen] = useState(false);
+  const [activeEditingId, setActiveEditingId] = useState(null);
+  const [recentlyUpdatedId, setRecentlyUpdatedId] = useState(null);
 
   const startAdd = () => { setEditing(null); setForm(EMPTY()); setOpen(true); };
-  const startEdit = (p) => { setDrawerProduct(p); };
+  const startEdit = (p) => {
+    setActiveEditingId(p.id);
+    setDrawerProduct(p);
+  };
+
+  const handleProductChanged = (updatedId) => {
+    if (updatedId) {
+      setRecentlyUpdatedId(updatedId);
+      setTimeout(() => {
+        setRecentlyUpdatedId((curr) => (curr === updatedId ? null : curr));
+      }, 6000);
+    }
+    onChanged?.();
+  };
 
   const save = async () => {
     if (!form.name?.trim()) { toast.error("Product name required"); return; }
@@ -42,12 +57,13 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
       if (editing) {
         await api.patch(`/inventory/products/${editing.id}`, payload);
         toast.success("Product updated successfully.");
+        handleProductChanged(editing.id);
       } else {
-        await api.post("/inventory/products", payload);
+        const res = await api.post("/inventory/products", payload);
         toast.success("Product updated successfully.");
+        handleProductChanged(res.data?.id);
       }
       setOpen(false);
-      onChanged?.();
     } catch (e) { toast.error(formatApiError(e)); }
     finally { setBusy(false); }
   };
@@ -62,7 +78,7 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
         toast.success(res.data?.message || "Product deleted successfully.");
       }
       setConfirmDel(null);
-      onChanged?.();
+      handleProductChanged(confirmDel.id);
     } catch (e) { toast.error(formatApiError(e)); setConfirmDel(null); }
   };
 
@@ -208,34 +224,60 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
                     <div className="text-sm font-semibold text-slate-700">No products yet</div>
                     <div className="text-xs text-slate-500 mt-1">Add your first product or create an inward entry — products auto-register.</div>
                   </td></tr>
-                ) : paginated.map((p) => (
-                  <tr key={p.id} className="border-t border-slate-100 hover:bg-slate-50/60" data-testid={`product-row-${p.id}`}>
-                    <td className="px-4 py-2.5 text-xs">
-                      <div className="font-semibold text-slate-900 flex items-center gap-1.5">
-                        {p.name}
-                        {p.high_value_goods && (
-                          <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[9px] uppercase px-1 py-0 scale-90">HV</Badge>
-                        )}
-                      </div>
-                      {p.size && <div className="text-[10px] text-slate-400 mt-0.5">{p.size}</div>}
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-slate-700">{p.size || "—"}</td>
-                    <td className="px-4 py-2.5 text-xs">
-                      <Badge variant="outline" className="bg-slate-50 text-slate-700 border-slate-200 text-[10px]">{p.category || "Solar"}</Badge>
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-center text-slate-600">{p.unit || "Nos"}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-xs text-slate-600">{p.min_stock || 0}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-xs text-slate-600">₹ {p.rate || 0}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{p.balance}</td>
-                    <td className="px-4 py-2.5 text-center">
-                      <Badge variant="outline" className={`${STATUS_STYLES[p.stock_status] || ""} text-[10px]`}>{p.stock_status}</Badge>
-                    </td>
-                    <td className="px-2 py-2 text-center">
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEdit(p)} data-testid={`edit-product-${p.id}`}><Pencil className="w-3.5 h-3.5" /></Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-red-600" onClick={() => setConfirmDel(p)} data-testid={`del-product-${p.id}`}><Trash2 className="w-3.5 h-3.5" /></Button>
-                    </td>
-                  </tr>
-                ))}
+                ) : paginated.map((p) => {
+                  const isEditing = p.id === activeEditingId || p.id === drawerProduct?.id;
+                  const isRecentlyUpdated = p.id === recentlyUpdatedId;
+                  return (
+                    <tr
+                      key={p.id}
+                      className={`border-t border-slate-100 transition-colors ${
+                        isEditing
+                          ? "bg-blue-50/80 border-l-4 border-l-blue-600"
+                          : isRecentlyUpdated
+                          ? "bg-emerald-50/70 border-l-4 border-l-emerald-600"
+                          : "hover:bg-slate-50/60"
+                      }`}
+                      data-testid={`product-row-${p.id}`}
+                    >
+                      <td className="px-4 py-2.5 text-xs">
+                        <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                          <span>{p.name}</span>
+                          {p.high_value_goods && (
+                            <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[9px] uppercase px-1 py-0 scale-90">HV</Badge>
+                          )}
+                          {isEditing && (
+                            <Badge className="bg-blue-600 text-white text-[9px] px-1.5 py-0 uppercase tracking-wider font-semibold">
+                              Editing
+                            </Badge>
+                          )}
+                          {isRecentlyUpdated && (
+                            <Badge className="bg-emerald-600 text-white text-[9px] px-1.5 py-0 uppercase tracking-wider font-semibold">
+                              Updated
+                            </Badge>
+                          )}
+                        </div>
+                        {p.size && <div className="text-[10px] text-slate-400 mt-0.5">{p.size}</div>}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-slate-700">{p.size || "—"}</td>
+                      <td className="px-4 py-2.5 text-xs">
+                        <Badge variant="outline" className="bg-slate-50 text-slate-700 border-slate-200 text-[10px]">{p.category || "Solar"}</Badge>
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-center text-slate-600">{p.unit || "Nos"}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-xs text-slate-600">{p.min_stock || 0}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-xs text-slate-600">₹ {p.rate || 0}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{p.balance}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <Badge variant="outline" className={`${STATUS_STYLES[p.stock_status] || ""} text-[10px]`}>{p.stock_status}</Badge>
+                      </td>
+                      <td className="px-2 py-2 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-blue-600 hover:text-blue-700" onClick={() => startEdit(p)} data-testid={`edit-product-${p.id}`}><Pencil className="w-3.5 h-3.5" /></Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-red-600" onClick={() => setConfirmDel(p)} data-testid={`del-product-${p.id}`}><Trash2 className="w-3.5 h-3.5" /></Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -309,15 +351,20 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
         open={!!confirmDel}
         onOpenChange={(v) => !v && setConfirmDel(null)}
         title="Delete product?"
-        description={confirmDel ? `Remove "${confirmDel.name}" from the master. If any inward/outward entries reference it, the delete will be blocked.` : ""}
+        description={confirmDel ? `Remove "${confirmDel.name}" from the master. If historical records exist, it will be safely archived without affecting inventory balances.` : ""}
         onConfirm={doDelete}
       />
 
       <ProductDrawer
         product={drawerProduct}
         open={!!drawerProduct}
-        onClose={() => setDrawerProduct(null)}
-        onChanged={() => { onChanged?.(); }}
+        onClose={() => {
+          setDrawerProduct(null);
+          setActiveEditingId(null);
+        }}
+        onChanged={(updatedId) => {
+          handleProductChanged(updatedId || drawerProduct?.id);
+        }}
       />
 
       <ProductImportModal
@@ -369,47 +416,77 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map((p) => (
-                  <tr key={p.id} className="hover:bg-slate-50">
-                    <td className="px-3 py-2 font-semibold text-slate-900">{p.name}</td>
-                    <td className="px-3 py-2 text-slate-600">{p.size || "—"}</td>
-                    <td className="px-3 py-2">
-                      <Badge variant="outline" className="text-[10px] bg-slate-50">{p.category || "Solar"}</Badge>
-                    </td>
-                    <td className="px-3 py-2 text-center">{p.unit || "Nos"}</td>
-                    <td className="px-3 py-2 text-right">{p.min_stock || 0}</td>
-                    <td className="px-3 py-2 text-right font-medium">₹ {p.rate || 0}</td>
-                    <td className="px-3 py-2 text-center">
-                      {p.high_value_goods ? <Badge className="bg-indigo-50 text-indigo-700 text-[9px]">YES</Badge> : <span className="text-slate-400">No</span>}
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <Badge variant="outline" className={`${STATUS_STYLES[p.stock_status] || ""} text-[10px]`}>{p.status || "Active"}</Badge>
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <div className="flex items-center justify-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 text-xs px-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                          onClick={() => {
-                            setManageModalOpen(false);
-                            startEdit(p);
-                          }}
-                        >
-                          <Pencil className="w-3 h-3 mr-1" /> Edit
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 text-xs px-2 text-red-500 hover:text-red-700 hover:bg-red-50"
-                          onClick={() => setConfirmDel(p)}
-                        >
-                          <Trash2 className="w-3 h-3 mr-1" /> Delete
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {filtered.map((p) => {
+                  const isEditing = p.id === activeEditingId || p.id === drawerProduct?.id;
+                  const isRecentlyUpdated = p.id === recentlyUpdatedId;
+                  return (
+                    <tr
+                      key={p.id}
+                      className={`transition-colors ${
+                        isEditing
+                          ? "bg-blue-50/80 border-l-4 border-l-blue-600"
+                          : isRecentlyUpdated
+                          ? "bg-emerald-50/70 border-l-4 border-l-emerald-600"
+                          : "hover:bg-slate-50"
+                      }`}
+                      data-testid={`manage-product-row-${p.id}`}
+                    >
+                      <td className="px-3 py-2 font-semibold text-slate-900">
+                        <div className="flex items-center gap-1.5">
+                          <span>{p.name}</span>
+                          {isEditing && (
+                            <Badge className="bg-blue-600 text-white text-[9px] px-1.5 py-0 uppercase tracking-wider font-semibold">
+                              Editing
+                            </Badge>
+                          )}
+                          {isRecentlyUpdated && (
+                            <Badge className="bg-emerald-600 text-white text-[9px] px-1.5 py-0 uppercase tracking-wider font-semibold">
+                              Updated
+                            </Badge>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">{p.size || "—"}</td>
+                      <td className="px-3 py-2">
+                        <Badge variant="outline" className="text-[10px] bg-slate-50">{p.category || "Solar"}</Badge>
+                      </td>
+                      <td className="px-3 py-2 text-center">{p.unit || "Nos"}</td>
+                      <td className="px-3 py-2 text-right">{p.min_stock || 0}</td>
+                      <td className="px-3 py-2 text-right font-medium">₹ {p.rate || 0}</td>
+                      <td className="px-3 py-2 text-center">
+                        {p.high_value_goods ? <Badge className="bg-indigo-50 text-indigo-700 text-[9px]">YES</Badge> : <span className="text-slate-400">No</span>}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <Badge variant="outline" className={`${STATUS_STYLES[p.stock_status] || ""} text-[10px]`}>{p.status || "Active"}</Badge>
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs px-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                            onClick={() => {
+                              // Keep Manage Products modal OPEN
+                              startEdit(p);
+                            }}
+                            data-testid={`manage-edit-product-${p.id}`}
+                          >
+                            <Pencil className="w-3 h-3 mr-1" /> Edit
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs px-2 text-red-500 hover:text-red-700 hover:bg-red-50"
+                            onClick={() => setConfirmDel(p)}
+                            data-testid={`manage-del-product-${p.id}`}
+                          >
+                            <Trash2 className="w-3 h-3 mr-1" /> Delete
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

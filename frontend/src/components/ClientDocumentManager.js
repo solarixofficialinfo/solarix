@@ -197,6 +197,9 @@ export default function ClientDocumentManager({
 
       if (clientId) {
         await api.patch(`/clients/${clientId}`, { documents: updatedList });
+        try {
+          await api.post(`/clients/${clientId}/clear-image`, { file_id: targetId });
+        } catch (_) {}
       }
 
       onChange?.(updatedList);
