@@ -855,6 +855,71 @@ def _enrich_client_doc(c: dict) -> dict:
     c["inverters"] = c.get("inverters") if (isinstance(c.get("inverters"), list) and len(c.get("inverters")) > 0) else (ob.get("inverters") if (isinstance(ob.get("inverters"), list) and len(ob.get("inverters")) > 0) else ([{"brand": inv_brand, "capacity": str(c.get("inverter_capacity") or ""), "quantity": 1, "serials": [c["inverter_serial"]] if c.get("inverter_serial") else [], "serial": c.get("inverter_serial") or ""}] if (c.get("inverter_capacity") or inv_brand) else []))
     return c
 
+VALID_COMPANY_COLUMNS = {
+    "id", "company_name", "owner_name", "mobile", "alt_mobile", "email", "gst_number",
+    "address", "city", "state", "pincode", "business_type", "website", "support_number",
+    "logo_file_id", "documents", "trial_start", "trial_end", "plan", "created_at", "status"
+}
+
+def _prepare_company_supabase_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        return payload
+    cleaned = {}
+    
+    # Map plan_id / plan to Supabase 'plan' column
+    plan_val = payload.get("plan") or payload.get("plan_id")
+    if plan_val is not None:
+        cleaned["plan"] = str(plan_val).lower()
+
+    # Map trial dates
+    t_start = payload.get("trial_start") or payload.get("trial_started_at")
+    if t_start is not None:
+        cleaned["trial_start"] = t_start
+    t_end = payload.get("trial_end") or payload.get("trial_ends_at")
+    if t_end is not None:
+        cleaned["trial_end"] = t_end
+
+    for k, v in payload.items():
+        if k in VALID_COMPANY_COLUMNS and k not in cleaned:
+            cleaned[k] = v
+            
+    return cleaned
+
+def _enrich_company_doc(doc: dict) -> dict:
+    if not isinstance(doc, dict):
+        return doc
+    enriched = dict(doc)
+    
+    # Normalize plan_id and plan
+    raw_plan = str(enriched.get("plan_id") or enriched.get("plan") or "starter").lower()
+    if raw_plan in ("active", "completed"):
+        raw_plan = "pro"
+    enriched["plan_id"] = raw_plan
+    enriched["plan"] = raw_plan
+    
+    # Normalize subscription_status
+    if not enriched.get("subscription_status"):
+        if raw_plan in ("pro", "growth"):
+            enriched["subscription_status"] = "active"
+        else:
+            enriched["subscription_status"] = "trialing"
+            
+    # Normalize trial dates
+    t_start = enriched.get("trial_started_at") or enriched.get("trial_start")
+    if t_start:
+        enriched["trial_started_at"] = t_start
+        enriched["trial_start"] = t_start
+    t_end = enriched.get("trial_ends_at") or enriched.get("trial_end")
+    if t_end:
+        enriched["trial_ends_at"] = t_end
+        enriched["trial_end"] = t_end
+
+    # Guarantee non-empty company_name
+    if not enriched.get("company_name"):
+        enriched["company_name"] = enriched.get("name") or "Solar EPC Company"
+
+    return enriched
+
 class CollectionAdapter:
     def __init__(self, table_name: str):
         self.table_name = table_name
@@ -1065,6 +1130,7 @@ class CollectionAdapter:
                         local_doc = await LocalFileCollection("companies").find_one({"id": cid})
                         if local_doc:
                             doc = {**doc, **local_doc}
+                    doc = _enrich_company_doc(doc)
                 doc = self._deserialize_document(doc)
                 if projection and isinstance(projection, dict):
                     inclusions = [pk for pk, pv in projection.items() if (pv == 1 or pv is True) and pk != "_id"]
@@ -1081,12 +1147,17 @@ class CollectionAdapter:
         except Exception as e:
             err_str = str(e).lower()
             if "42501" in err_str or "row-level security" in err_str or "unauthorized" in err_str or "pgrst205" in err_str or "schema cache" in err_str or "could not find the table" in err_str:
-                return await LocalFileCollection(self.table_name).find_one(filter, projection)
+                local_doc = await LocalFileCollection(self.table_name).find_one(filter, projection)
+                if local_doc and self.table_name == "companies":
+                    return _enrich_company_doc(local_doc)
+                return local_doc
             raise e
 
         if self.table_name != "products":
             local_doc = await LocalFileCollection(self.table_name).find_one(filter, projection)
             if local_doc:
+                if self.table_name == "companies":
+                    return _enrich_company_doc(local_doc)
                 return local_doc
         return None
 
@@ -1238,6 +1309,8 @@ class CollectionAdapter:
             patch = _clean_inward_doc(patch)
         elif self.table_name == "outward_entries":
             patch = _clean_outward_doc(patch)
+        elif self.table_name == "companies":
+            patch = _prepare_company_supabase_payload(patch)
 
         if self.table_name == "clients":
             logger.info(f"[CLIENT-SAVE DIAG] ▶ update_one called. filter={filter}")
@@ -3003,8 +3076,14 @@ def _supabase_sign_in_sync(email: str, password: str):
     })
 
 def _fetch_company_sync(company_id: str):
-    company_rpc = get_rpc_client().rpc("get_company_by_id", {"p_company_id": company_id}).execute()
-    return company_rpc.data[0] if isinstance(company_rpc.data, list) and company_rpc.data else None
+    try:
+        company_rpc = get_rpc_client().rpc("get_company_by_id", {"p_company_id": company_id}).execute()
+        raw = company_rpc.data[0] if isinstance(company_rpc.data, list) and company_rpc.data else None
+        if raw:
+            return _enrich_company_doc(raw)
+    except Exception:
+        pass
+    return None
 
 def _lookup_user_profile_with_token_sync(user_id: str, token: str):
     """Fetch user profile using the user's own JWT - bypasses RLS since users can read their own row."""
@@ -3020,9 +3099,12 @@ def _fetch_company_with_token_sync(company_id: str, token: str):
     user_client = get_supabase_client(token=token)
     try:
         rpc_res = user_client.rpc("get_company_by_id", {"p_company_id": company_id}).execute()
-        return rpc_res.data[0] if isinstance(rpc_res.data, list) and rpc_res.data else None
+        raw = rpc_res.data[0] if isinstance(rpc_res.data, list) and rpc_res.data else None
+        if raw:
+            return _enrich_company_doc(raw)
     except Exception:
-        return None
+        pass
+    return None
 
 @api_router.post("/auth/login")
 async def login(data: LoginIn, response: Response):
@@ -3177,8 +3259,6 @@ async def login(data: LoginIn, response: Response):
                 company = await asyncio.to_thread(_fetch_company_sync, cid)
             if not company:
                 company = await db.companies.find_one({"id": cid}, {"_id": 0})
-            if company and isinstance(company, dict):
-                _cache_put_company(cid, company)
         except Exception as e:
             logger.error(f"[LOGIN] step=company_failed elapsed={_elapsed()}ms err={e}")
             company = None
@@ -3190,10 +3270,16 @@ async def login(data: LoginIn, response: Response):
                 company = await db.companies.find_one({"email": user_email}, {"_id": 0})
                 if company and isinstance(company, dict):
                     user["company_id"] = company["id"]
-                    _cache_put_company(company["id"], company)
                     await db.users.update_one({"id": user["id"]}, {"$set": {"company_id": company["id"]}})
             except Exception as e:
                 logger.error(f"[LOGIN] step=company_by_email_failed err={e}")
+
+    if company and isinstance(company, dict):
+        local_c = await LocalFileCollection("companies").find_one({"id": company.get("id") or cid})
+        if local_c:
+            company = {**company, **local_c}
+        company = _enrich_company_doc(company)
+        _cache_put_company(company.get("id") or cid, company)
 
     if (user.get("email") or "").strip().lower() in SUPER_ADMIN_EMAILS:
         user["is_super_admin"] = True
@@ -3238,15 +3324,19 @@ async def me(user=Depends(get_current_user)):
     company = _cache_get_company(cid) if cid else None
     if not company and cid:
         company = await db.companies.find_one({"id": cid}, {"_id": 0})
-        if company and isinstance(company, dict):
-            _cache_put_company(cid, company)
     if not company and user.get("email"):
         company = await db.companies.find_one({"email": user["email"].lower().strip()}, {"_id": 0})
         if company and isinstance(company, dict):
             if user.get("id"):
                 await db.users.update_one({"id": user["id"]}, {"$set": {"company_id": company["id"]}})
                 user["company_id"] = company["id"]
-            _cache_put_company(company["id"], company)
+    if company and isinstance(company, dict):
+        local_c = await LocalFileCollection("companies").find_one({"id": company.get("id") or cid})
+        if local_c:
+            company = {**company, **local_c}
+        company = _enrich_company_doc(company)
+        if cid or company.get("id"):
+            _cache_put_company(company.get("id") or cid, company)
     return {"user": user, "company": company}
 
 @api_router.patch("/auth/me")
@@ -5409,10 +5499,10 @@ async def generate_document(client_id: str, payload: Dict[str, Any], user=Depend
     client_doc = await db.clients.find_one({"id": client_id, "company_id": user["company_id"]}, {"_id": 0})
     if not client_doc:
         raise HTTPException(status_code=404, detail="Client not found")
-async def _enrich_company_doc(company_doc: dict) -> dict:
+async def _enrich_company_doc_with_logo(company_doc: dict) -> dict:
     if not company_doc:
         return {}
-    c = dict(company_doc)
+    c = _enrich_company_doc(dict(company_doc))
     company_name = (c.get("company_name") or c.get("name") or c.get("legal_business_name") or c.get("vendor_name") or "").strip()
     owner_name = (c.get("owner_name") or c.get("proprietor_name") or c.get("authorized_signatory") or c.get("manager_name") or "").strip()
     gst = (c.get("gst_number") or c.get("gstin") or c.get("gst") or "").strip()
@@ -5503,7 +5593,7 @@ async def generate_document_preview(payload: Dict[str, Any], user=Depends(get_cu
             raise HTTPException(status_code=404, detail="Client not found")
 
     company_doc = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}
-    company_doc = await _enrich_company_doc(company_doc)
+    company_doc = await _enrich_company_doc_with_logo(company_doc)
 
     if client_doc:
         client_doc = _enrich_client_doc(client_doc)
@@ -5596,7 +5686,7 @@ async def generate_public_document(payload: Dict[str, Any], user=Depends(require
         raise HTTPException(status_code=403, detail=chk_gen["message"])
 
     company_doc = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}
-    company_doc = await _enrich_company_doc(company_doc)
+    company_doc = await _enrich_company_doc_with_logo(company_doc)
 
     client_id = payload.get("client_id")
     client_doc = None
@@ -5693,7 +5783,7 @@ async def download_direct_document(payload: Dict[str, Any], user=Depends(get_cur
         raise HTTPException(status_code=400, detail="client_id is required")
 
     company_doc = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}
-    company_doc = await _enrich_company_doc(company_doc)
+    company_doc = await _enrich_company_doc_with_logo(company_doc)
     cid = user["company_id"]
     or_conds: List[Dict[str, Any]] = [{"id": client_id}, {"sol_id": client_id}]
     client_doc = None
@@ -12841,7 +12931,7 @@ async def export_product_master_pdf_endpoint(request: Request, user=Depends(requ
 
     try:
         company_doc = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}
-        company = await _enrich_company_doc(company_doc)
+        company = await _enrich_company_doc_with_logo(company_doc)
     except Exception as e:
         logger.warning(f"export-pdf: could not fetch company doc: {e}")
         company = {}
@@ -14580,7 +14670,7 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
     # PDF Generation (if not Draft)
     if data.status != "Draft":
         company_doc = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
-        company_doc = await _enrich_company_doc(company_doc)
+        company_doc = await _enrich_company_doc_with_logo(company_doc)
         doc_data_pdf = {
             **invoice_doc,
             "client": client or {
@@ -14657,7 +14747,7 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
         raise HTTPException(status_code=404, detail="Invoice not found")
 
     company_doc = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
-    company_doc = await _enrich_company_doc(company_doc)
+    company_doc = await _enrich_company_doc_with_logo(company_doc)
     client_doc = None
     if invoice.get("client_id"):
         client_doc = await db.clients.find_one({

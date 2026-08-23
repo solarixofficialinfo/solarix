@@ -299,6 +299,7 @@ async def verify_razorpay_subscription(data: VerifySubscriptionIn, user=Depends(
         {"$set": {
             "subscription_status": "active",
             "plan_id": data.plan_id,
+            "plan": data.plan_id,
             "billing_cycle": data.billing_cycle,
             "subscription_started_at": now,
             "subscription_expires_at": sub_expires,
@@ -416,6 +417,11 @@ async def razorpay_webhook(request: Request, x_razorpay_signature: Optional[str]
                 {"id": company_id},
                 {"$set": {"subscription_status": "expired", "updated_at": now_iso()}}
             )
+        try:
+            from server import _cache_invalidate_company
+            _cache_invalidate_company(company_id)
+        except Exception:
+            pass
 
     return {"status": "success", "event": event_type}
 
