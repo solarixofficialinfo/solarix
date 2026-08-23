@@ -33,6 +33,8 @@ const TASK_TYPES = [
   "Handover",
 ];
 
+const SUBSIDY_TASK_TYPES = new Set(["PM Surya Ghar Upload", "MSEDCL Upload"]);
+
 export default function ProjectExecution() {
   const queryClient = useQueryClient();
 
@@ -43,6 +45,11 @@ export default function ProjectExecution() {
   const [selected, setSelected] = useState(null);
   const [taskForm, setTaskForm] = useState({ task_type: "Survey", assigned_to: "", deadline: "", priority: "Medium", remarks: "" });
   const [assigning, setAssigning] = useState(false);
+
+  const availableTaskTypes = useMemo(() => {
+    if (!selected || selected.subsidy_eligible) return TASK_TYPES;
+    return TASK_TYPES.filter((t) => !SUBSIDY_TASK_TYPES.has(t));
+  }, [selected]);
 
   useEffect(() => {
     if (tab) {
@@ -421,21 +428,35 @@ export default function ProjectExecution() {
                       {paginated.length === 0 && <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-500">No onboarded projects yet. Mark Onboarding complete on a client to add them here.</td></tr>}
                       {paginated.map((p) => {
                         const stages = p.stages || {};
-                        const order = [
-                          "Handover",
-                          "Verification",
-                          "MSEDCL Upload",
-                          "PM Surya Ghar Upload",
-                          "Meter Testing Completed",
-                          "Meter Testing Request",
-                          "Document Signed",
-                          "Document Making",
-                          "Installation",
-                          "Material Delivery",
-                          "Quotation",
-                          "Survey",
-                          "Onboarding",
-                        ];
+                        const order = p.subsidy_eligible
+                          ? [
+                              "Handover",
+                              "Verification",
+                              "MSEDCL Upload",
+                              "PM Surya Ghar Upload",
+                              "Meter Testing Completed",
+                              "Meter Testing Request",
+                              "Document Signed",
+                              "Document Making",
+                              "Installation",
+                              "Material Delivery",
+                              "Quotation",
+                              "Survey",
+                              "Onboarding",
+                            ]
+                          : [
+                              "Handover",
+                              "Verification",
+                              "Meter Testing Completed",
+                              "Meter Testing Request",
+                              "Document Signed",
+                              "Document Making",
+                              "Installation",
+                              "Material Delivery",
+                              "Quotation",
+                              "Survey",
+                              "Onboarding",
+                            ];
                         const current = order.find((s) => stages[s]) || "Onboarding";
                         return (
                           <tr key={p.id} className="border-t border-slate-100 hover:bg-slate-50">
@@ -625,7 +646,7 @@ export default function ProjectExecution() {
             <FF label="Task Type">
               <Select value={taskForm.task_type} onValueChange={(v) => setTaskForm({ ...taskForm, task_type: v })}>
                 <SelectTrigger data-testid="task-type"><SelectValue /></SelectTrigger>
-                <SelectContent>{TASK_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                <SelectContent>{availableTaskTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
               </Select>
             </FF>
             <FF label="Team Member">

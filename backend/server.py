@@ -592,7 +592,7 @@ def _clean_products_doc(doc: dict) -> dict:
     return cleaned
 
 def _clean_inward_doc(doc: dict) -> dict:
-    cleaned = {k: v for k, v in doc.items() if k in _INWARD_VALID_COLS}
+    cleaned = {k: v for k, v in doc.items() if k in _INWARD_VALID_COLS and k not in ("serial_numbers", "serial_number_required", "product_id")}
     sns = doc.get("serial_numbers") or []
     if sns and isinstance(sns, list):
         rem = str(doc.get("remarks") or cleaned.get("remarks") or "")
@@ -603,7 +603,7 @@ def _clean_inward_doc(doc: dict) -> dict:
     return cleaned
 
 def _clean_outward_doc(doc: dict) -> dict:
-    cleaned = {k: v for k, v in doc.items() if k in _OUTWARD_VALID_COLS}
+    cleaned = {k: v for k, v in doc.items() if k in _OUTWARD_VALID_COLS and k not in ("serial_numbers", "serial_number_required", "product_id")}
     sns = doc.get("serial_numbers") or []
     if sns and isinstance(sns, list):
         rem = str(doc.get("remarks") or cleaned.get("remarks") or "")
@@ -992,6 +992,8 @@ class CollectionAdapter:
             return builder
         for k, v in query.items():
             if self.table_name == "products" and k == "brand":
+                continue
+            if self.table_name in ("inward_entries", "outward_entries") and k == "product_id":
                 continue
             if k == "$or":
                 parts = []
@@ -1430,8 +1432,19 @@ class CollectionAdapter:
         if "$set" in update:
             patch.update(update["$set"])
             patch = self._clean_empty_fks(patch)
-        if self.table_name == "products" and not _PRODUCTS_HAS_RATE:
-            patch = {k: v for k, v in patch.items() if k != "rate"}
+        if self.table_name == "products":
+            patch = _clean_products_doc(patch)
+            if not _PRODUCTS_HAS_RATE:
+                patch = {k: v for k, v in patch.items() if k != "rate"}
+        elif self.table_name == "inward_entries":
+            patch = _clean_inward_doc(patch)
+        elif self.table_name == "outward_entries":
+            patch = _clean_outward_doc(patch)
+        elif self.table_name == "companies":
+            patch = _prepare_company_supabase_payload(patch)
+        elif self.table_name == "clients":
+            patch = _prepare_client_supabase_payload(patch)
+
         res_count = 1
         try:
             builder = supabase.table(self.table_name).update(patch)
@@ -2498,6 +2511,12 @@ DEFAULT_STAGES = [
     "Handover",
 ]
 
+SUBSIDY_STAGES = ["PM Surya Ghar Upload", "MSEDCL Upload"]
+NON_SUBSIDY_STAGES = [s for s in DEFAULT_STAGES if s not in SUBSIDY_STAGES]
+
+def get_client_stages_list(subsidy_eligible: bool = True) -> List[str]:
+    return DEFAULT_STAGES if subsidy_eligible else NON_SUBSIDY_STAGES
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -2517,24 +2536,12 @@ def _stages_indicate_onboarding(client: dict) -> bool:
 
 def _client_current_stage(client: dict) -> str:
     stages = (client.get("stages") or {})
-    for stage in [
-        "Onboarding",
-        "Survey",
-        "Quotation",
-        "Material Delivery",
-        "Installation",
-        "Document Making",
-        "Document Signed",
-        "Meter Testing Request",
-        "Meter Testing Completed",
-        "PM Surya Ghar Upload",
-        "MSEDCL Upload",
-        "Verification",
-        "Handover",
-    ]:
+    subsidy_eligible = client.get("subsidy_eligible") is True
+    active_stages = get_client_stages_list(subsidy_eligible)
+    for stage in active_stages:
         if not stages.get(stage):
             return stage
-    return "Handover"
+    return active_stages[-1] if active_stages else "Handover"
 
 
 async def next_client_id(company_id: str) -> str:
@@ -2586,11 +2593,12 @@ async def push_notification(company_id: str, audience: str, title: str, body: st
     except Exception:
         pass  # Notification failures must never crash the parent operation
 
-def calc_progress(stages: Dict[str, bool]) -> int:
+def calc_progress(stages: Dict[str, bool], subsidy_eligible: bool = True) -> int:
     if not stages:
         return 0
-    done = sum(1 for s in DEFAULT_STAGES if stages.get(s))
-    return round((done / len(DEFAULT_STAGES)) * 100)
+    active_stages = get_client_stages_list(subsidy_eligible)
+    done = sum(1 for s in active_stages if stages.get(s))
+    return round((done / len(active_stages)) * 100) if active_stages else 0
 
 STAGE_CHECKLISTS = {
     "Survey": [
@@ -4263,7 +4271,9 @@ async def create_client(data: ClientIn, user=Depends(require_active_subscription
         )
     client_id = str(uuid.uuid4())
     sol_id = await next_client_id(user["company_id"])
-    stages = data.stages or {s: False for s in DEFAULT_STAGES}
+    subsidy_eligible = data.subsidy_eligible is True
+    active_stages = get_client_stages_list(subsidy_eligible)
+    stages = data.stages or {s: False for s in active_stages}
     if data.status in ["Approved", "Installation Pending", "Installation Complete", "Handover Complete"]:
         stages["Onboarding"] = True
     payload = data.model_dump()
@@ -4271,7 +4281,7 @@ async def create_client(data: ClientIn, user=Depends(require_active_subscription
     full_doc = {
         "id": client_id, "sol_id": sol_id, "company_id": user["company_id"],
         "created_by": user["id"], **payload,
-        "progress": calc_progress(stages),
+        "progress": calc_progress(stages, subsidy_eligible),
         "notes": [], "documents": data.documents or [],
         "created_at": now_iso(), "updated_at": now_iso(),
     }
@@ -4580,10 +4590,11 @@ async def update_client(client_id: str, data: ClientIn, user=Depends(get_current
         raise HTTPException(status_code=403, detail="Missing permission: clients.edit")
     raw_payload = data.model_dump()
     update = _normalize_client_payload(dict(raw_payload))
-    existing = await db.clients.find_one({"id": client_id, "company_id": user["company_id"]}, {"_id": 0})
+    subsidy_eligible = data.subsidy_eligible is True if data.subsidy_eligible is not None else ((existing.get("subsidy_eligible") is True) if existing else False)
+    active_stages = get_client_stages_list(subsidy_eligible)
     if existing:
         if not update.get("stages"):
-            update["stages"] = existing.get("stages") or {s: False for s in DEFAULT_STAGES}
+            update["stages"] = existing.get("stages") or {s: False for s in active_stages}
     else:
         if not update.get("stages"):
             update.pop("stages", None)
@@ -4591,7 +4602,7 @@ async def update_client(client_id: str, data: ClientIn, user=Depends(get_current
         if data.status in ["Approved", "Installation Pending", "Installation Complete", "Handover Complete"]:
             update["stages"]["Onboarding"] = True
         update["stages"] = sync_checklist_completed(update["stages"])
-        update["progress"] = calc_progress(update["stages"])
+        update["progress"] = calc_progress(update["stages"], subsidy_eligible)
     update["updated_at"] = now_iso()
     res = await db.clients.update_one({"id": client_id, "company_id": user["company_id"]}, {"$set": update})
     if res.matched_count == 0:
@@ -5101,11 +5112,13 @@ async def update_stages(client_id: str, data: StageUpdate, user=Depends(get_curr
     existing = await db.clients.find_one({"id": client_id, "company_id": user["company_id"]}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Client not found")
-    merged_stages = {**(existing.get("stages") or {s: False for s in DEFAULT_STAGES}), **data.stages}
+    subsidy_eligible = existing.get("subsidy_eligible") is True
+    active_stages = get_client_stages_list(subsidy_eligible)
+    merged_stages = {**(existing.get("stages") or {s: False for s in active_stages}), **data.stages}
     if "Onboarding" not in data.stages and not merged_stages.get("Onboarding"):
         merged_stages["Onboarding"] = True
     stages = sync_checklist_completed(merged_stages)
-    progress = calc_progress(stages)
+    progress = calc_progress(stages, subsidy_eligible)
     await db.clients.update_one(
         {"id": client_id},
         {"$set": {"stages": stages, "progress": progress, "updated_at": now_iso()}}
@@ -5124,12 +5137,14 @@ async def update_status(client_id: str, data: StatusUpdate, user=Depends(get_cur
     if not c:
         raise HTTPException(status_code=404, detail="Client not found")
     
+    subsidy_eligible = c.get("subsidy_eligible") is True
+    active_stages = get_client_stages_list(subsidy_eligible)
     update_set: dict[str, Any] = {"status": data.status, "updated_at": now_iso()}
     if data.status in ["Approved", "Installation Pending", "Installation Complete", "Handover Complete"]:
-        stages = c.get("stages") or {s: False for s in DEFAULT_STAGES}
+        stages = c.get("stages") or {s: False for s in active_stages}
         stages["Onboarding"] = True
         update_set["stages"] = stages
-        update_set["progress"] = calc_progress(stages)
+        update_set["progress"] = calc_progress(stages, subsidy_eligible)
         
     await db.clients.update_one(
         {"id": client_id, "company_id": user["company_id"]},
@@ -6148,6 +6163,8 @@ async def create_task(data: TaskIn, user=Depends(require_active_subscription()))
     client = await db.clients.find_one({"id": data.client_id, "company_id": user["company_id"]}, {"_id": 0})
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+    if not client.get("subsidy_eligible") and data.task_type in SUBSIDY_STAGES:
+        raise HTTPException(status_code=400, detail=f"'{data.task_type}' is a subsidy task and cannot be assigned to a non-subsidy client.")
     doc = {
         "id": str(uuid.uuid4()), "company_id": user["company_id"], "client_id": data.client_id,
         "client_name": client.get("full_name"), "sol_id": client.get("sol_id"),
@@ -8214,8 +8231,11 @@ async def update_product(product_id: str, data: ProductIn, user=Depends(get_curr
         # cascade rename in inward/outward entries and link product_id
         old_pname = existing["name"]
         old_psize = existing.get("size", "")
-        await db.inward_entries.update_many({"company_id": cid, "$or": [{"product_id": product_id}, {"product": old_pname, "size": old_psize}]}, {"$set": {"product": new_name, "size": new_size, "unit": new_unit, "product_id": product_id}})
-        await db.outward_entries.update_many({"company_id": cid, "$or": [{"product_id": product_id}, {"product": old_pname, "size": old_psize}]}, {"$set": {"product": new_name, "size": new_size, "unit": new_unit, "product_id": product_id}})
+        await db.inward_entries.update_many({"company_id": cid, "product_id": product_id}, {"$set": {"product": new_name, "size": new_size, "unit": new_unit}})
+        await db.outward_entries.update_many({"company_id": cid, "product_id": product_id}, {"$set": {"product": new_name, "size": new_size, "unit": new_unit}})
+        if old_pname:
+            await db.inward_entries.update_many({"company_id": cid, "product": old_pname, "size": old_psize}, {"$set": {"product": new_name, "size": new_size, "unit": new_unit, "product_id": product_id}})
+            await db.outward_entries.update_many({"company_id": cid, "product": old_pname, "size": old_psize}, {"$set": {"product": new_name, "size": new_size, "unit": new_unit, "product_id": product_id}})
     rate_val = data.rate or 0.0
     _save_local_rate(new_name, rate_val)
     if data.high_value_goods is not None:
@@ -12529,6 +12549,43 @@ async def calculate_client_ledger(company_id: str, client_id: str):
         }, {"_id": 0}).to_list(5000),
     )
     
+    # Fetch all products to resolve product_id to canonical master record
+    all_products = await db.products.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
+    prod_id_map: Dict[str, Dict] = {}
+    prod_key_map: Dict[Tuple[str, str], Dict] = {}
+    prod_name_map: Dict[str, List[Dict]] = {}
+
+    for p in all_products:
+        p_name = norm_product_name(p.get("name"))
+        p_size = norm_str(p.get("size"))
+        if p.get("id"):
+            prod_id_map[p["id"]] = p
+        if p_name:
+            key = (p_name, p_size)
+            prod_key_map[key] = p
+            prod_name_map.setdefault(p_name, []).append(p)
+
+    def _resolve_ledger_entry(entry: dict):
+        pid = entry.get("product_id")
+        if pid and pid in prod_id_map:
+            target = prod_id_map[pid]
+            return (target.get("name") or "").strip(), (target.get("size") or "").strip(), (target.get("unit") or entry.get("unit") or "Nos").strip()
+        
+        raw_p = (entry.get("product") or "").strip()
+        raw_s = (entry.get("size") or "").strip()
+        p_norm = norm_product_name(raw_p)
+        s_norm = norm_str(raw_s)
+
+        if (p_norm, s_norm) in prod_key_map:
+            target = prod_key_map[(p_norm, s_norm)]
+            return (target.get("name") or raw_p), (target.get("size") or raw_s), (target.get("unit") or entry.get("unit") or "Nos").strip()
+            
+        if p_norm in prod_name_map and len(prod_name_map[p_norm]) == 1:
+            target = prod_name_map[p_norm][0]
+            return (target.get("name") or raw_p), (target.get("size") or raw_s), (target.get("unit") or entry.get("unit") or "Nos").strip()
+
+        return raw_p, raw_s, (entry.get("unit") or "Nos").strip()
+
     # Parse client_id out of remarks and filter to this client
     inwards = []
     for inv in inwards_raw:
@@ -12539,13 +12596,11 @@ async def calculate_client_ledger(company_id: str, client_id: str):
     ledger = {}
     
     for out in outwards:
-        raw_prod = (out.get("product") or "").strip()
+        raw_prod, raw_size, unit = _resolve_ledger_entry(out)
         norm_name = raw_prod.upper()
         if not norm_name:
             continue
-        raw_size = (out.get("size") or "").strip()
         norm_size = raw_size.upper()
-        unit = (out.get("unit") or "Nos").strip()
         
         # Report identity key: normalized Product Name + normalized Size/Spec
         # Unit MUST NOT be part of the identity key.
@@ -12577,13 +12632,11 @@ async def calculate_client_ledger(company_id: str, client_id: str):
                 ledger[key]["last_movement_date"] = date_str
 
     for inv in inwards:
-        raw_prod = (inv.get("product") or "").strip()
+        raw_prod, raw_size, unit = _resolve_ledger_entry(inv)
         norm_name = raw_prod.upper()
         if not norm_name:
             continue
-        raw_size = (inv.get("size") or "").strip()
         norm_size = raw_size.upper()
-        unit = (inv.get("unit") or "Nos").strip()
         
         # Report identity key: normalized Product Name + normalized Size/Spec
         key = (norm_name, norm_size)

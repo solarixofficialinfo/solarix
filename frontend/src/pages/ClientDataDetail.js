@@ -33,9 +33,7 @@ import RaiseComplaintDialog from "@/components/RaiseComplaintDialog";
 import TemplateGenerateDialog from "@/components/TemplateGenerateDialog";
 import ClientDocumentManager from "@/components/ClientDocumentManager";
 
-dayjs.extend(relativeTime);
-
-const STAGES = [
+const ALL_STAGES = [
   "Onboarding",
   "Survey",
   "Quotation",
@@ -50,6 +48,8 @@ const STAGES = [
   "Verification",
   "Handover",
 ];
+
+const SUBSIDY_STAGES = new Set(["PM Surya Ghar Upload", "MSEDCL Upload"]);
 
 const ONBOARDING_DOC_KEYS = new Set([
   "wcr", "sldr", "annexure", "vendor_agreement", "vendor agreement",
@@ -209,11 +209,16 @@ export default function ClientDataDetail() {
   const outward = clientData?.outward || [];
   const activityLogs = clientData?.activity_logs || [];
 
-  // Stage calculations
-  const stagesObj = c.stages || {};
+  // Stage calculations based on subsidy eligibility
+  const STAGES = useMemo(() => {
+    if (c?.subsidy_eligible) return ALL_STAGES;
+    return ALL_STAGES.filter((s) => !SUBSIDY_STAGES.has(s));
+  }, [c?.subsidy_eligible]);
+
+  const stagesObj = c?.stages || {};
   const completedStagesCount = STAGES.filter((s) => stagesObj[s] === true).length;
   const totalStagesCount = STAGES.length;
-  const progressPercent = Math.round((completedStagesCount / totalStagesCount) * 100);
+  const progressPercent = totalStagesCount > 0 ? Math.round((completedStagesCount / totalStagesCount) * 100) : 0;
   const currentStage = STAGES.find((s) => !stagesObj[s]) || STAGES[STAGES.length - 1];
 
   const toggleStageExpand = (stageName) => {
@@ -923,7 +928,7 @@ export default function ClientDataDetail() {
           <div className="flex items-center justify-between gap-4 flex-wrap bg-slate-50 p-4 rounded-xl border border-slate-200">
             <div>
               <h3 className="font-bold text-slate-900 text-sm">Project Execution Workflow</h3>
-              <p className="text-xs text-slate-500">Track actual progress across all 13 execution stages.</p>
+              <p className="text-xs text-slate-500">Track actual progress across all {totalStagesCount} execution stages.</p>
             </div>
             <div className="flex items-center gap-3 text-xs">
               <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500" /> Completed</span>

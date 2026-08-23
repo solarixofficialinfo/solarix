@@ -642,12 +642,19 @@ export default function TaskPortal() {
                     <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 mt-0.5">
                       {(() => {
                         const stages = mrSelectedProject.stages || {};
-                        const order = [
-                          "Handover", "Verification", "MSEDCL Upload", "PM Surya Ghar Upload",
-                          "Meter Testing Completed", "Meter Testing Request", "Document Signed",
-                          "Document Making", "Installation", "Material Delivery", "Quotation",
-                          "Survey", "Onboarding"
-                        ];
+                        const order = mrSelectedProject.subsidy_eligible
+                          ? [
+                              "Handover", "Verification", "MSEDCL Upload", "PM Surya Ghar Upload",
+                              "Meter Testing Completed", "Meter Testing Request", "Document Signed",
+                              "Document Making", "Installation", "Material Delivery", "Quotation",
+                              "Survey", "Onboarding"
+                            ]
+                          : [
+                              "Handover", "Verification",
+                              "Meter Testing Completed", "Meter Testing Request", "Document Signed",
+                              "Document Making", "Installation", "Material Delivery", "Quotation",
+                              "Survey", "Onboarding"
+                            ];
                         return order.find((s) => stages[s]) || "Onboarding";
                       })()}
                     </Badge>
