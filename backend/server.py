@@ -14781,19 +14781,21 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
             "company_id": cid
         })
 
+    prefix_map = {
+        "tax_invoice": "INV",
+        "customer_invoice": "INV",
+        "proforma": "PI",
+        "payment_receipt": "REC",
+        "credit_note": "CN",
+        "debit_note": "DN"
+    }
+    prefix = prefix_map.get(doc_type, "INV")
+
     if existing_invoice:
         invoice_id = existing_invoice["id"]
         inv_num = data.invoice_number or existing_invoice.get("invoice_number")
     else:
         invoice_id = (data.id or "").strip() if (data.id and data.id.strip().startswith("inv_")) else f"inv_{uuid.uuid4().hex[:12]}"
-        prefix_map = {
-            "tax_invoice": "INV",
-            "proforma": "PI",
-            "payment_receipt": "REC",
-            "credit_note": "CN",
-            "debit_note": "DN"
-        }
-        prefix = prefix_map.get(doc_type, "INV")
         inv_num = data.invoice_number or f"{prefix}-{now_iso()[:10].replace('-', '')}-{uuid.uuid4().hex[:4].upper()}"
 
     formatted_items = []

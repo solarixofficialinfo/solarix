@@ -231,7 +231,7 @@ def _amount_to_words(amount: float | int | None) -> str:
         return " ".join(parts)
 
     integer_part = int(abs(val))
-    paise_part = int(round((abs(val) - integer_part) * 100))
+    paise_part = round((abs(val) - integer_part) * 100)
 
     rupees_str = convert_indian(integer_part) + " rupees"
     if paise_part > 0:
