@@ -13832,21 +13832,22 @@ async def get_receivables_dashboard(
         for p in c_projects:
             pid = p["id"]
             is_def = p.get("is_default", False)
+            p_ids_for_c = {pid, f"proj_{c_id}", f"proj_{c_sol_id}" if c_sol_id else None, c_id, c_sol_id} - {None}
             
             p_payments = [
                 pay for pay in payments 
-                if (pay.get("project_id") == pid and pay.get("client_id") in c_identifiers)
-                or (is_def and pay.get("client_id") in c_identifiers and (not pay.get("project_id") or pay.get("project_id") == pid))
+                if (pay.get("client_id") in c_identifiers and (pay.get("project_id") in p_ids_for_c or is_def or not pay.get("project_id")))
+                or (pay.get("project_id") == pid)
             ]
             p_expenses = [
                 exp for exp in expenses 
-                if (exp.get("project_id") == pid and exp.get("client_id") in c_identifiers)
-                or (is_def and exp.get("client_id") in c_identifiers and (not exp.get("project_id") or exp.get("project_id") == pid))
+                if (exp.get("client_id") in c_identifiers and (exp.get("project_id") in p_ids_for_c or is_def or not exp.get("project_id")))
+                or (exp.get("project_id") == pid)
             ]
             p_loans = [
                 loan for loan in loans
-                if (loan.get("project_id") == pid and loan.get("client_id") in c_identifiers)
-                or (is_def and loan.get("client_id") in c_identifiers and (not loan.get("project_id") or loan.get("project_id") == pid))
+                if (loan.get("client_id") in c_identifiers and (loan.get("project_id") in p_ids_for_c or is_def or not loan.get("project_id")))
+                or (loan.get("project_id") == pid)
             ]
 
             sys_kw = float(c.get("system_kw") or p.get("capacity_kw") or 0)
@@ -14020,17 +14021,22 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
     target_pid = project_id.strip()
     project = await db.projects.find_one({"id": target_pid, "company_id": cid}, {"_id": 0})
     
-    if not project and target_pid.startswith("proj_"):
-        client_id_candidate = target_pid.replace("proj_", "")
+    if not project:
+        client_id_candidate = target_pid.replace("proj_", "") if target_pid.startswith("proj_") else target_pid
         client = await db.clients.find_one({
-            "$or": [{"id": client_id_candidate}, {"sol_id": client_id_candidate}],
+            "$or": [
+                {"id": client_id_candidate},
+                {"sol_id": client_id_candidate},
+                {"id": target_pid},
+                {"sol_id": target_pid}
+            ],
             "company_id": cid
         }, {"_id": 0})
         if client:
             sys_kw = float(client.get("system_kw") or 0)
             quot_val = float(client.get("contract_value") or client.get("quotation_value") or client.get("net_project_value") or (sys_kw * 45000 if sys_kw > 0 else 0))
             project = {
-                "id": target_pid,
+                "id": target_pid if target_pid.startswith("proj_") else f"proj_{client.get('id') or client_id_candidate}",
                 "company_id": cid,
                 "client_id": client["id"],
                 "project_name": f"{sys_kw} kW Solar System" if sys_kw > 0 else "Rooftop Solar Project",
@@ -14054,7 +14060,14 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
 
     c_identifiers = list({x for x in [client.get("id"), client.get("sol_id"), project.get("client_id")] if x})
     is_def = project.get("is_default", False)
-    p_ids = [pid for pid in [project.get("id"), target_pid, f"proj_{client.get('id')}", f"proj_{client.get('sol_id')}" if client.get('sol_id') else None] if pid]
+    p_ids = list({x for x in [
+        project.get("id"),
+        target_pid,
+        f"proj_{client.get('id')}",
+        f"proj_{client.get('sol_id')}" if client.get('sol_id') else None,
+        client.get("id"),
+        client.get("sol_id")
+    ] if x})
     
     pay_query = {
         "company_id": cid,
@@ -14673,9 +14686,18 @@ async def list_invoices(
     cid = user["company_id"]
     query = {"company_id": cid}
     if project_id:
-        query["project_id"] = project_id
+        if project_id.startswith("proj_"):
+            c_cand = project_id.replace("proj_", "")
+            query["$or"] = [{"project_id": project_id}, {"client_id": c_cand}]
+        else:
+            query["project_id"] = project_id
     if client_id:
-        query["client_id"] = client_id
+        client = await db.clients.find_one({"$or": [{"id": client_id}, {"sol_id": client_id}], "company_id": cid})
+        if client:
+            c_ids = list({x for x in [client.get("id"), client.get("sol_id"), client_id] if x})
+            query["client_id"] = {"$in": c_ids}
+        else:
+            query["client_id"] = client_id
 
     invoices = await db.invoices.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     payments = await db.payments.find({"company_id": cid}, {"_id": 0}).to_list(10000)
