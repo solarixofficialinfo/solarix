@@ -660,12 +660,12 @@ export default function Receivables() {
           product_name: it.product_name || it.product || "Item",
           hsn_sac: it.hsn_sac || "",
           size: it.size || "",
-          quantity: it.quantity || 1,
+          quantity: it.quantity !== undefined && it.quantity !== null ? it.quantity : 1,
           unit: it.unit || "Nos",
-          rate: it.rate !== undefined ? it.rate : (it.unit_price !== undefined ? it.unit_price : 0),
-          discount: it.discount || 0,
-          gst_rate: it.gst_rate !== undefined ? it.gst_rate : (it.gst !== undefined ? it.gst : 18),
-          amount: it.amount || 0
+          rate: it.rate !== undefined && it.rate !== null ? it.rate : (it.unit_price !== undefined && it.unit_price !== null ? it.unit_price : 0),
+          discount: it.discount !== undefined && it.discount !== null ? it.discount : 0,
+          gst_rate: it.gst_rate !== undefined && it.gst_rate !== null ? it.gst_rate : (it.gst !== undefined && it.gst !== null ? it.gst : 18),
+          amount: it.amount !== undefined && it.amount !== null ? it.amount : 0
         })) : [],
         subtotal: existingInvoice.subtotal || 0,
         discount: existingInvoice.discount || 0,

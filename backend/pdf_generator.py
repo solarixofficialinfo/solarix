@@ -120,36 +120,94 @@ def _kv_table(rows):
     return t
 
 
-def _format_currency(value: float | None) -> str:
+def _format_currency(value: float | int | None, symbol: str = "₹") -> str:
     if value is None:
-        return "Rs. 0.00"
+        return f"{symbol}0.00"
     try:
-        return f"Rs. {value:,.2f}"
+        val = float(value)
     except Exception:
-        return "Rs. 0.00"
+        return f"{symbol}0.00"
+    is_neg = val < 0
+    val = abs(val)
+    int_part = int(val)
+    paise_part = f"{val - int_part:.2f}"[2:]
+    
+    s = str(int_part)
+    if len(s) <= 3:
+        formatted_int = s
+    else:
+        last3 = s[-3:]
+        remaining = s[:-3]
+        groups = []
+        while len(remaining) > 2:
+            groups.insert(0, remaining[-2:])
+            remaining = remaining[:-2]
+        if remaining:
+            groups.insert(0, remaining)
+        formatted_int = ",".join(groups) + "," + last3
+    
+    sign = "-" if is_neg else ""
+    return f"{sign}{symbol}{formatted_int}.{paise_part}"
 
 
-def _amount_to_words(amount: float) -> str:
-    words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
+def _amount_to_words(amount: float | int | None) -> str:
+    if amount is None or amount == 0:
+        return "Zero rupees only"
+    try:
+        val = float(amount)
+    except Exception:
+        return "Zero rupees only"
+
+    words = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+        "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"
+    ]
     tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
 
-    def convert(num: int) -> str:
-        if num < 20:
-            return words[num]
-        if num < 100:
-            return tens[num // 10] + (" " + words[num % 10] if num % 10 else "")
-        if num < 1000:
-            return words[num // 100] + " hundred" + (" " + convert(num % 100) if num % 100 else "")
-        if num < 100000:
-            return convert(num // 1000) + " thousand" + (" " + convert(num % 1000) if num % 1000 else "")
-        return convert(num // 100000) + " lakh" + (" " + convert(num % 100000) if num % 100000 else "")
+    def convert_upto_999(n: int) -> str:
+        if n == 0:
+            return ""
+        if n < 20:
+            return words[n]
+        if n < 100:
+            return tens[n // 10] + (" " + words[n % 10] if n % 10 else "")
+        return words[n // 100] + " hundred" + (" " + convert_upto_999(n % 100) if n % 100 else "")
 
-    integer_part = int(amount)
-    paise_part = round((amount - integer_part) * 100)
-    words_out = convert(integer_part) + " rupees"
-    if paise_part:
-        words_out += " and " + convert(paise_part) + " paise"
-    return words_out.replace("  ", " ").strip().capitalize() + " only"
+    def convert_indian(num: int) -> str:
+        if num == 0:
+            return "zero"
+        
+        parts = []
+        crores = num // 10000000
+        num %= 10000000
+        if crores > 0:
+            parts.append(convert_indian(crores) + " crore")
+        
+        lakhs = num // 100000
+        num %= 100000
+        if lakhs > 0:
+            parts.append(convert_upto_999(lakhs) + " lakh")
+        
+        thousands = num // 1000
+        num %= 1000
+        if thousands > 0:
+            parts.append(convert_upto_999(thousands) + " thousand")
+        
+        hundreds_and_units = convert_upto_999(num)
+        if hundreds_and_units:
+            parts.append(hundreds_and_units)
+        
+        return " ".join(parts)
+
+    integer_part = int(abs(val))
+    paise_part = int(round((abs(val) - integer_part) * 100))
+
+    rupees_str = convert_indian(integer_part) + " rupees"
+    if paise_part > 0:
+        rupees_str += " and " + convert_upto_999(paise_part) + " paise"
+    
+    clean_str = " ".join(rupees_str.split()).strip()
+    return clean_str.capitalize() + " only"
 
 
 def _safe_client_name(client: dict) -> str:
@@ -985,6 +1043,8 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
     reason = (data.get("reason") or "").strip()
     payment_terms = (data.get("payment_terms") or "Due on Receipt").strip()
 
+    is_intra_state = (place_of_supply.lower().strip() == comp_state.lower().strip())
+
     items_raw = data.get("items") or []
     line_items = []
     subtotal_calc = 0.0
@@ -997,24 +1057,27 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
             continue
         hsn = (item.get("hsn_sac") or item.get("hsn") or "").strip()
         spec = (item.get("size") or item.get("spec") or "").strip()
-        qty = float(item.get("quantity") or item.get("qty") or 0.0)
+        qty_val = item.get("quantity") if item.get("quantity") is not None else item.get("qty")
+        qty = float(qty_val if (qty_val is not None and str(qty_val).strip() != "") else 0.0)
         unit = (item.get("unit") or "Nos").strip()
-        rate = float(item.get("rate") if item.get("rate") is not None else item.get("unit_price") or 0.0)
-        disc = float(item.get("discount") or 0.0)
+        rate_val = item.get("rate") if item.get("rate") is not None else item.get("unit_price")
+        rate = float(rate_val if (rate_val is not None and str(rate_val).strip() != "") else 0.0)
+        disc_val = item.get("discount")
+        disc = float(disc_val if (disc_val is not None and str(disc_val).strip() != "") else 0.0)
         taxable = max(0.0, (qty * rate) - disc)
         subtotal_calc += taxable
 
-        gst_r = float(item.get("gst_rate") if item.get("gst_rate") is not None else item.get("gst") or 18.0)
-        line_cgst = float(item.get("cgst") or (taxable * (gst_r / 2.0 / 100.0) if place_of_supply.lower() == comp_state.lower() else 0.0))
-        line_sgst = float(item.get("sgst") or (taxable * (gst_r / 2.0 / 100.0) if place_of_supply.lower() == comp_state.lower() else 0.0))
-        line_igst = float(item.get("igst") or (taxable * (gst_r / 100.0) if place_of_supply.lower() != comp_state.lower() else 0.0))
-        amt = float(item.get("amount") or (taxable + line_cgst + line_sgst + line_igst))
+        gst_r = float(item.get("gst_rate") if item.get("gst_rate") is not None and str(item.get("gst_rate")).strip() != "" else (item.get("gst") if item.get("gst") is not None and str(item.get("gst")).strip() != "" else 18.0))
+        line_cgst = float(item.get("cgst") if item.get("cgst") is not None else (taxable * (gst_r / 2.0 / 100.0) if is_intra_state else 0.0))
+        line_sgst = float(item.get("sgst") if item.get("sgst") is not None else (taxable * (gst_r / 2.0 / 100.0) if is_intra_state else 0.0))
+        line_igst = float(item.get("igst") if item.get("igst") is not None else (taxable * (gst_r / 100.0) if not is_intra_state else 0.0))
+        amt = float(item.get("amount") if item.get("amount") is not None else (taxable + line_cgst + line_sgst + line_igst))
 
         line_items.append({
             "code": str(idx),
             "product_name": p_name,
-            "hsn_sac": hsn,
-            "size": spec,
+            "hsn_sac": hsn or "—",
+            "size": spec or "—",
             "quantity": qty,
             "unit": unit,
             "rate": rate,
@@ -1027,11 +1090,9 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
             "amount": amt
         })
 
-    subtotal = float(data.get("subtotal") or subtotal_calc)
-    discount = float(data.get("discount") or 0.0)
+    subtotal = float(data.get("subtotal") if data.get("subtotal") is not None else subtotal_calc)
+    discount = float(data.get("discount") if data.get("discount") is not None else 0.0)
     taxable_amount = max(0.0, subtotal - discount)
-
-    is_intra_state = (place_of_supply.lower() == comp_state.lower())
 
     cgst_rate = float(data.get("cgst_rate") if data.get("cgst_rate") is not None else (9.0 if is_intra_state else 0.0))
     sgst_rate = float(data.get("sgst_rate") if data.get("sgst_rate") is not None else (9.0 if is_intra_state else 0.0))
@@ -1080,13 +1141,13 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
         },
         "buyer": {
             "name": c_name,
-            "address": c_addr,
-            "phone": c_phone,
-            "email": c_email,
-            "gstin": c_gstin,
+            "address": c_addr or "—",
+            "phone": c_phone or "—",
+            "email": c_email or "—",
+            "gstin": c_gstin or "—",
             "state": c_state,
-            "sol_id": c_sol_id,
-            "consumer": c_consumer
+            "sol_id": c_sol_id or "—",
+            "consumer": c_consumer or "—"
         },
         "invoiceDetails": {
             "number": inv_num,
@@ -1123,7 +1184,7 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
 
 
 def make_sales_doc_canvas(company: dict, doc_type: str = "tax_invoice"):
-    comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "").strip()
+    comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "GVP SOLAR ENERGY").strip()
     mobile = (company.get("mobile") or company.get("mobile_number") or company.get("phone") or company.get("phone_number") or "").strip()
     email = (company.get("email") or "").strip()
     website = (company.get("website") or "").strip()
@@ -1168,7 +1229,6 @@ def make_sales_doc_canvas(company: dict, doc_type: str = "tax_invoice"):
 
         def draw_page_decorations(self, page_count):
             self.saveState()
-            # Divider line
             self.setStrokeColor(colors.HexColor('#1e3a8a'))
             self.setLineWidth(0.8)
             self.line(1.2 * cm, 1.35 * cm, 21.0 * cm - 1.2 * cm, 1.35 * cm)
@@ -1203,7 +1263,6 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     shipping = norm["shipping"]
     items = norm["lineItems"]
     fin = norm["financials"]
-    receipt_meta = norm["receipt_meta"]
     notes = norm["notes"]
     terms = norm["terms"]
 
@@ -1227,20 +1286,13 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
             img = PILImage.open(BytesIO(logo_bytes))
             orig_w, orig_h = img.size
             if orig_w > 0 and orig_h > 0:
-                max_w, max_h = 11.0 * cm, 3.65 * cm
+                max_w, max_h = 6.0 * cm, 2.2 * cm
                 aspect = orig_w / float(orig_h or 1)
-                if orig_w > orig_h:
-                    target_w = max_w
-                    target_h = max_w / aspect
-                    if target_h > max_h:
-                        target_h = max_h
-                        target_w = max_h * aspect
-                else:
+                target_w = max_w
+                target_h = max_w / aspect
+                if target_h > max_h:
                     target_h = max_h
                     target_w = max_h * aspect
-                    if target_w > max_w:
-                        target_w = max_w
-                        target_h = max_w / aspect
                 res_buf = BytesIO()
                 img.save(res_buf, format="PNG")
                 logo_d = RLImage(BytesIO(res_buf.getvalue()), width=target_w, height=target_h)
@@ -1261,13 +1313,18 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         hdr_left_flow.append(Paragraph(f"GSTIN: {seller['gstin']}", comp_gst_style))
     if seller["address"]:
         hdr_left_flow.append(Paragraph(seller["address"], comp_sub_style))
+    contact_parts = []
+    if seller["phone"]: contact_parts.append(f"Phone: {seller['phone']}")
+    if seller["email"]: contact_parts.append(f"Email: {seller['email']}")
+    if contact_parts:
+        hdr_left_flow.append(Paragraph(" | ".join(contact_parts), comp_sub_style))
 
     inv_title_style = ParagraphStyle('inv_title', parent=styles['Normal'], fontSize=16, leading=18, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold', alignment=2)
     hdr_right_flow: list[Any] = [Paragraph(title_text, inv_title_style), Spacer(1, 0.2 * cm)]
 
     meta_table_data = [
-        [Paragraph(f"<b>{title_text} NO.</b>", BOLD_SMALL), Paragraph(inv["number"], SMALL)],
-        [Paragraph("<b>DATE</b>", BOLD_SMALL), Paragraph(inv["date"], SMALL)],
+        [Paragraph(f"<b>{title_text} NO.</b>", BOLD_SMALL), Paragraph(inv["number"] or "—", SMALL)],
+        [Paragraph("<b>DATE</b>", BOLD_SMALL), Paragraph(inv["date"] or "—", SMALL)],
     ]
     if inv["due_date"]:
         meta_table_data.append([Paragraph("<b>DUE DATE</b>", BOLD_SMALL), Paragraph(inv["due_date"], SMALL)])
@@ -1276,7 +1333,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     if inv["original_invoice_number"]:
         meta_table_data.append([Paragraph("<b>ORIGINAL INVOICE</b>", BOLD_SMALL), Paragraph(inv["original_invoice_number"], SMALL)])
 
-    meta_table = Table(meta_table_data, colWidths=[3.2 * cm, 4.2 * cm])
+    meta_table = Table(meta_table_data, colWidths=[3.4 * cm, 4.2 * cm])
     meta_table.setStyle(TableStyle([
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
         ('BACKGROUND', (0,0), (0,-1), colors.HexColor('#f8fafc')),
@@ -1297,9 +1354,9 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         ('BOTTOMPADDING', (0,0), (-1,-1), 0),
     ]))
     story.append(header_table)
-    story.append(Spacer(1, 0.4 * cm))
+    story.append(Spacer(1, 0.35 * cm))
 
-    # 2. SELLER & BUYER DETAILS (2 COLUMNS)
+    # 2. SELLER & BUYER DETAILS (2 BALANCED COLUMNS)
     s_body = f"<b>{seller['name']}</b><br/>"
     if seller['address']: s_body += f"{seller['address']}<br/>"
     if seller['phone']: s_body += f"Phone: {seller['phone']}<br/>"
@@ -1307,11 +1364,11 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     if seller['gstin']: s_body += f"GSTIN: {seller['gstin']} (State Code: {seller['state_code']})"
 
     b_body = f"<b>{buyer['name']}</b><br/>"
-    if buyer['address']: b_body += f"{buyer['address']}<br/>"
-    if buyer['phone']: b_body += f"Phone: {buyer['phone']}<br/>"
-    if buyer['email']: b_body += f"Email: {buyer['email']}<br/>"
-    if buyer['gstin']: b_body += f"GSTIN: {buyer['gstin']}<br/>"
-    if buyer['sol_id']: b_body += f"SOL ID: {buyer['sol_id']}"
+    if buyer['address'] and buyer['address'] != "—": b_body += f"{buyer['address']}<br/>"
+    if buyer['phone'] and buyer['phone'] != "—": b_body += f"Phone: {buyer['phone']}<br/>"
+    if buyer['email'] and buyer['email'] != "—": b_body += f"Email: {buyer['email']}<br/>"
+    if buyer['gstin'] and buyer['gstin'] != "—": b_body += f"GSTIN: {buyer['gstin']}<br/>"
+    if buyer['sol_id'] and buyer['sol_id'] != "—": b_body += f"SOL ID: {buyer['sol_id']}"
 
     party_header_style = ParagraphStyle('inv_p_hdr', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#ffffff'), fontName='Helvetica-Bold')
     party_body_style = ParagraphStyle('inv_p_bdy', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'))
@@ -1320,13 +1377,13 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         [Paragraph("SUPPLIER / SELLER DETAILS", party_header_style), Paragraph("BUYER / BILL TO", party_header_style)],
         [Paragraph(s_body, party_body_style), Paragraph(b_body, party_body_style)]
     ]
-    party_table = Table(party_table_data, colWidths=[9.1 * cm, 9.1 * cm])
+    party_table = Table(party_table_data, colWidths=[9.3 * cm, 9.3 * cm])
     party_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e3a8a')),
         ('BACKGROUND', (0,1), (-1,1), colors.HexColor('#ffffff')),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
-        ('TOPPADDING', (0,0), (-1,-1), 5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+        ('TOPPADDING', (0,0), (-1,-1), 4),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
         ('LEFTPADDING', (0,0), (-1,-1), 6),
         ('RIGHTPADDING', (0,0), (-1,-1), 6),
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
@@ -1334,8 +1391,8 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     story.append(party_table)
     story.append(Spacer(1, 0.3 * cm))
 
-    # 3. LINE ITEMS TABLE
-    th_style = ParagraphStyle('inv_th', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#ffffff'), fontName='Helvetica-Bold')
+    # 3. LINE ITEMS TABLE (10 COLUMNS)
+    th_style = ParagraphStyle('inv_th', parent=styles['Normal'], fontSize=7.5, leading=9.5, textColor=colors.HexColor('#ffffff'), fontName='Helvetica-Bold')
     th_c = ParagraphStyle('inv_th_c', parent=th_style, alignment=1)
     th_r = ParagraphStyle('inv_th_r', parent=th_style, alignment=2)
 
@@ -1343,6 +1400,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         Paragraph("S.NO", th_c),
         Paragraph("DESCRIPTION OF GOODS / SERVICES", th_style),
         Paragraph("HSN/SAC", th_c),
+        Paragraph("SPEC / SIZE", th_c),
         Paragraph("QTY", th_c),
         Paragraph("UNIT", th_c),
         Paragraph("RATE", th_r),
@@ -1352,19 +1410,16 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     ]
     item_rows = [item_headers]
 
-    tb_style = ParagraphStyle('inv_tb', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#0f172a'))
+    tb_style = ParagraphStyle('inv_tb', parent=styles['Normal'], fontSize=7.5, leading=9.5, textColor=colors.HexColor('#0f172a'))
     tb_c = ParagraphStyle('inv_tb_c', parent=tb_style, alignment=1)
     tb_r = ParagraphStyle('inv_tb_r', parent=tb_style, alignment=2)
 
     for it in items:
-        p_name = it["product_name"]
-        if it["size"] and it["size"] not in p_name:
-            p_name += f" ({it['size']})"
-
         item_rows.append([
             Paragraph(it["code"], tb_c),
-            Paragraph(p_name, tb_style),
-            Paragraph(it["hsn_sac"] or "—", tb_c),
+            Paragraph(it["product_name"], tb_style),
+            Paragraph(it["hsn_sac"], tb_c),
+            Paragraph(it["size"], tb_c),
             Paragraph(f"{it['quantity']:g}", tb_c),
             Paragraph(it["unit"], tb_c),
             Paragraph(_format_currency(it["rate"]), tb_r),
@@ -1373,12 +1428,16 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
             Paragraph(_format_currency(it["amount"]), tb_r),
         ])
 
-    items_table = Table(item_rows, colWidths=[0.9 * cm, 5.5 * cm, 1.6 * cm, 1.1 * cm, 1.1 * cm, 2.0 * cm, 2.2 * cm, 1.4 * cm, 2.8 * cm], repeatRows=1)
+    items_table = Table(
+        item_rows,
+        colWidths=[0.9 * cm, 5.3 * cm, 1.5 * cm, 1.4 * cm, 1.1 * cm, 1.1 * cm, 1.8 * cm, 1.9 * cm, 1.2 * cm, 2.4 * cm],
+        repeatRows=1
+    )
     items_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e3a8a')),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('TOPPADDING', (0,0), (-1,-1), 3.5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3.5),
         ('LEFTPADDING', (0,0), (-1,-1), 3),
         ('RIGHTPADDING', (0,0), (-1,-1), 3),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
@@ -1395,12 +1454,12 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     if terms:
         left_notes_text += f"<b>TERMS & CONDITIONS</b><br/>{terms.replace(chr(10), '<br/>')}"
 
-    notes_p = Paragraph(left_notes_text or "Thank you for your business!", ParagraphStyle('inv_notes_p', parent=styles['Normal'], fontSize=8, leading=11, textColor=colors.HexColor('#1e293b')))
+    notes_p = Paragraph(left_notes_text or "Thank you for your business!", ParagraphStyle('inv_notes_p', parent=styles['Normal'], fontSize=8, leading=10.5, textColor=colors.HexColor('#1e293b')))
 
-    tot_lbl = ParagraphStyle('inv_tot_lbl', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#334155'), fontName='Helvetica-Bold')
-    tot_val = ParagraphStyle('inv_tot_v', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'), alignment=2)
-    tot_grand_lbl = ParagraphStyle('inv_tot_g_lbl', parent=styles['Normal'], fontSize=9.5, leading=12, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold')
-    tot_grand_val = ParagraphStyle('inv_tot_g_v', parent=styles['Normal'], fontSize=10, leading=12, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold', alignment=2)
+    tot_lbl = ParagraphStyle('inv_tot_lbl', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#334155'), fontName='Helvetica-Bold')
+    tot_val = ParagraphStyle('inv_tot_v', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#0f172a'), alignment=2)
+    tot_grand_lbl = ParagraphStyle('inv_tot_g_lbl', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold')
+    tot_grand_val = ParagraphStyle('inv_tot_g_v', parent=styles['Normal'], fontSize=9.5, leading=11, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold', alignment=2)
 
     totals_rows = [
         [Paragraph("SUBTOTAL", tot_lbl), Paragraph(_format_currency(fin["subtotal"]), tot_val)]
@@ -1410,10 +1469,10 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     totals_rows.append([Paragraph("TAXABLE AMOUNT", tot_lbl), Paragraph(_format_currency(fin["taxable_amount"]), tot_val)])
 
     if shipping["is_intra_state"]:
-        totals_rows.append([Paragraph(f"CGST ({fin['cgst_rate']}%)", tot_lbl), Paragraph(_format_currency(fin["cgst_amount"]), tot_val)])
-        totals_rows.append([Paragraph(f"SGST ({fin['sgst_rate']}%)", tot_lbl), Paragraph(_format_currency(fin["sgst_amount"]), tot_val)])
+        totals_rows.append([Paragraph(f"CGST ({fin['cgst_rate']:g}%)", tot_lbl), Paragraph(_format_currency(fin["cgst_amount"]), tot_val)])
+        totals_rows.append([Paragraph(f"SGST ({fin['sgst_rate']:g}%)", tot_lbl), Paragraph(_format_currency(fin["sgst_amount"]), tot_val)])
     else:
-        totals_rows.append([Paragraph(f"IGST ({fin['igst_rate']}%)", tot_lbl), Paragraph(_format_currency(fin["igst_amount"]), tot_val)])
+        totals_rows.append([Paragraph(f"IGST ({fin['igst_rate']:g}%)", tot_lbl), Paragraph(_format_currency(fin["igst_amount"]), tot_val)])
 
     if fin["freight"] > 0:
         totals_rows.append([Paragraph("FREIGHT / S&H", tot_lbl), Paragraph(_format_currency(fin["freight"]), tot_val)])
@@ -1422,14 +1481,14 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
 
     totals_rows.append([Paragraph("GRAND TOTAL", tot_grand_lbl), Paragraph(_format_currency(fin["grand_total"]), tot_grand_val)])
 
-    totals_table = Table(totals_rows, colWidths=[4.4 * cm, 3.7 * cm])
+    totals_table = Table(totals_rows, colWidths=[4.4 * cm, 3.9 * cm])
     totals_table.setStyle(TableStyle([
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
         ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#eff6ff')),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-        ('LEFTPADDING', (0,0), (-1,-1), 5),
-        ('RIGHTPADDING', (0,0), (-1,-1), 5),
+        ('TOPPADDING', (0,0), (-1,-1), 3),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+        ('LEFTPADDING', (0,0), (-1,-1), 4),
+        ('RIGHTPADDING', (0,0), (-1,-1), 4),
     ]))
 
     bottom_table = Table([[notes_p, totals_table]], colWidths=[10.3 * cm, 8.3 * cm])
@@ -1441,16 +1500,16 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         ('BOTTOMPADDING', (0,0), (-1,-1), 0),
     ]))
     story.append(bottom_table)
-    story.append(Spacer(1, 0.4 * cm))
+    story.append(Spacer(1, 0.3 * cm))
 
     # 5. AMOUNT IN WORDS & SIGNATURE BLOCK
     words_p = Paragraph(f"<b>Amount in Words:</b> {_amount_to_words(fin['grand_total'])}", ParagraphStyle('inv_words', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a')))
     story.append(words_p)
-    story.append(Spacer(1, 0.4 * cm))
+    story.append(Spacer(1, 0.35 * cm))
 
     sig_l = Paragraph("<b>Customer Signature</b><br/><br/><br/>_______________________", ParagraphStyle('sig_l', parent=styles['Normal'], fontSize=8.5, alignment=0))
     sig_r = Paragraph(f"<b>For {seller['name']}</b><br/><br/><br/>Authorized Signatory", ParagraphStyle('sig_r', parent=styles['Normal'], fontSize=8.5, alignment=2))
-    sig_table = Table([[sig_l, sig_r]], colWidths=[9.1 * cm, 9.1 * cm])
+    sig_table = Table([[sig_l, sig_r]], colWidths=[9.3 * cm, 9.3 * cm])
     sig_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
         ('LEFTPADDING', (0,0), (-1,-1), 0),
@@ -1483,7 +1542,19 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     notes = norm["notes"]
     terms = norm["terms"]
 
-    doc = _build_docx_document(left_cm=1.2, right_cm=1.2, top_cm=1.0, bottom_cm=1.5)
+    doc = _build_docx_document(left_cm=1.2, right_cm=1.2, top_cm=1.2, bottom_cm=1.5)
+
+    # 0. DOCUMENT FOOTER (On every page)
+    footer = doc.sections[0].footer
+    ftr_para = footer.paragraphs[0]
+    ftr_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r_f1 = ftr_para.add_run(f"{seller['name']} | {title_text}\n")
+    r_f1.bold = True
+    r_f1.font.size = Pt(8)
+    r_f1.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
+    r_f2 = ftr_para.add_run(f"Email: {seller['email']} | Phone: {seller['phone']} | GSTIN: {seller['gstin']}")
+    r_f2.font.size = Pt(7.5)
+    r_f2.font.color.rgb = RGBColor(0x64, 0x74, 0x8b)
 
     # 1. HEADER (Logo/Company Left, Title/Meta Right)
     hdr_table = doc.add_table(rows=1, cols=2)
@@ -1492,12 +1563,27 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
 
     cell_l = hdr_table.rows[0].cells[0]
     cell_r = hdr_table.rows[0].cells[1]
+    cell_l.width = _emu(11.0 * 360000)
+    cell_r.width = _emu(7.6 * 360000)
 
     logo_bytes = seller.get("logo_bytes")
     if logo_bytes:
         try:
-            p_logo = cell_l.paragraphs[0]
-            p_logo.add_run().add_picture(BytesIO(logo_bytes), width=Inches(1.8))
+            from PIL import Image as _PILImage
+            img = _PILImage.open(BytesIO(logo_bytes))
+            orig_w, orig_h = img.size
+            if orig_w > 0 and orig_h > 0:
+                aspect = orig_h / float(orig_w)
+                target_w_in = 2.2
+                target_h_in = target_w_in * aspect
+                if target_h_in > 0.86:
+                    target_h_in = 0.86
+                    target_w_in = target_h_in / aspect
+                res_buf = BytesIO()
+                img.save(res_buf, format="PNG")
+                res_buf.seek(0)
+                p_logo = cell_l.paragraphs[0]
+                p_logo.add_run().add_picture(res_buf, width=Inches(target_w_in), height=Inches(target_h_in))
         except Exception:
             pass
 
@@ -1511,13 +1597,23 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
         p_gst = cell_l.add_paragraph()
         r_gst = p_gst.add_run(f"GSTIN: {seller['gstin']}")
         r_gst.bold = True
-        r_gst.font.size = Pt(9)
+        r_gst.font.size = Pt(8.5)
+        r_gst.font.color.rgb = RGBColor(0x0f, 0x17, 0x2a)
 
     if seller["address"]:
         p_addr = cell_l.add_paragraph()
         r_addr = p_addr.add_run(seller["address"])
-        r_addr.font.size = Pt(8.5)
+        r_addr.font.size = Pt(8)
         r_addr.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
+
+    contact_parts = []
+    if seller["phone"]: contact_parts.append(f"Phone: {seller['phone']}")
+    if seller["email"]: contact_parts.append(f"Email: {seller['email']}")
+    if contact_parts:
+        p_cnt = cell_l.add_paragraph()
+        r_cnt = p_cnt.add_run(" | ".join(contact_parts))
+        r_cnt.font.size = Pt(8)
+        r_cnt.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
 
     p_title = cell_r.paragraphs[0]
     p_title.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -1526,12 +1622,33 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     r_title.font.size = Pt(15)
     r_title.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
 
-    meta_str = f"NO: {inv['number']}\nDATE: {inv['date']}"
-    if inv["due_date"]: meta_str += f"\nDUE DATE: {inv['due_date']}"
-    if inv["place_of_supply"]: meta_str += f"\nPLACE OF SUPPLY: {inv['place_of_supply']}"
-    r_meta = p_title.add_run(meta_str)
-    r_meta.font.size = Pt(9)
-    r_meta.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
+    meta_items = [
+        (f"{title_text} NO.", inv["number"] or "—"),
+        ("DATE", inv["date"] or "—")
+    ]
+    if inv["due_date"]: meta_items.append(("DUE DATE", inv["due_date"]))
+    if inv["place_of_supply"]: meta_items.append(("PLACE OF SUPPLY", inv["place_of_supply"]))
+    if inv["original_invoice_number"]: meta_items.append(("ORIGINAL INVOICE", inv["original_invoice_number"]))
+
+    meta_tbl = cell_r.add_table(rows=len(meta_items), cols=2)
+    meta_tbl.style = 'Table Grid'
+    for r_idx, (m_lbl, m_val) in enumerate(meta_items):
+        c0 = meta_tbl.rows[r_idx].cells[0]
+        c1 = meta_tbl.rows[r_idx].cells[1]
+        c0.width = _emu(3.4 * 360000)
+        c1.width = _emu(4.2 * 360000)
+        _docx_set_cell_bg(c0, "f8fafc")
+        
+        p0 = c0.paragraphs[0]
+        r0 = p0.add_run(m_lbl)
+        r0.bold = True
+        r0.font.size = Pt(7.5)
+        r0.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
+
+        p1 = c1.paragraphs[0]
+        r1 = p1.add_run(m_val)
+        r1.font.size = Pt(7.5)
+        r1.font.color.rgb = RGBColor(0x0f, 0x17, 0x2a)
 
     doc.add_paragraph()
 
@@ -1541,7 +1658,9 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
 
     c_sh = party_tbl.rows[0].cells[0]
     c_bh = party_tbl.rows[0].cells[1]
-    c_sh.text = "SUPPLIER / SELLER"
+    c_sh.width = _emu(9.3 * 360000)
+    c_bh.width = _emu(9.3 * 360000)
+    c_sh.text = "SUPPLIER / SELLER DETAILS"
     c_bh.text = "BUYER / BILL TO"
     _docx_set_cell_bg(c_sh, "1e3a8a")
     _docx_set_cell_bg(c_bh, "1e3a8a")
@@ -1549,90 +1668,98 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
         for p in c.paragraphs:
             for r in p.runs:
                 r.bold = True
-                r.font.size = Pt(9.5)
+                r.font.size = Pt(9)
                 r.font.color.rgb = RGBColor(0xff, 0xff, 0xff)
 
     c_sb = party_tbl.rows[1].cells[0]
     c_bb = party_tbl.rows[1].cells[1]
+    c_sb.width = _emu(9.3 * 360000)
+    c_bb.width = _emu(9.3 * 360000)
 
     p_s = c_sb.paragraphs[0]
     rs_name = p_s.add_run(f"{seller['name']}\n")
     rs_name.bold = True
-    rs_name.font.size = Pt(9.5)
+    rs_name.font.size = Pt(9)
     s_details = []
     if seller['address']: s_details.append(seller['address'])
     if seller['phone']: s_details.append(f"Phone: {seller['phone']}")
     if seller['email']: s_details.append(f"Email: {seller['email']}")
     if seller['gstin']: s_details.append(f"GSTIN: {seller['gstin']} (State Code: {seller['state_code']})")
     rs_body = p_s.add_run("\n".join(s_details))
-    rs_body.font.size = Pt(8.5)
+    rs_body.font.size = Pt(8)
 
     p_b = c_bb.paragraphs[0]
     rb_name = p_b.add_run(f"{buyer['name']}\n")
     rb_name.bold = True
-    rb_name.font.size = Pt(9.5)
+    rb_name.font.size = Pt(9)
     b_details = []
-    if buyer['address']: b_details.append(buyer['address'])
-    if buyer['phone']: b_details.append(f"Phone: {buyer['phone']}")
-    if buyer['email']: b_details.append(f"Email: {buyer['email']}")
-    if buyer['gstin']: b_details.append(f"GSTIN: {buyer['gstin']}")
-    if buyer['sol_id']: b_details.append(f"SOL ID: {buyer['sol_id']}")
+    if buyer['address'] and buyer['address'] != "—": b_details.append(buyer['address'])
+    if buyer['phone'] and buyer['phone'] != "—": b_details.append(f"Phone: {buyer['phone']}")
+    if buyer['email'] and buyer['email'] != "—": b_details.append(f"Email: {buyer['email']}")
+    if buyer['gstin'] and buyer['gstin'] != "—": b_details.append(f"GSTIN: {buyer['gstin']}")
+    if buyer['sol_id'] and buyer['sol_id'] != "—": b_details.append(f"SOL ID: {buyer['sol_id']}")
     rb_body = p_b.add_run("\n".join(b_details))
-    rb_body.font.size = Pt(8.5)
+    rb_body.font.size = Pt(8)
 
     doc.add_paragraph()
 
-    # 3. LINE ITEMS TABLE
-    items_tbl = doc.add_table(rows=len(items) + 1, cols=9)
+    # 3. LINE ITEMS TABLE (10 COLUMNS)
+    col_widths = [0.9, 5.3, 1.5, 1.4, 1.1, 1.1, 1.8, 1.9, 1.2, 2.4]
+    items_tbl = doc.add_table(rows=len(items) + 1, cols=10)
     items_tbl.style = 'Table Grid'
 
-    i_headers = ["S.NO", "DESCRIPTION OF GOODS / SERVICES", "HSN/SAC", "QTY", "UNIT", "RATE (Rs.)", "TAXABLE (Rs.)", "GST %", "AMOUNT (Rs.)"]
+    i_headers = ["S.NO", "DESCRIPTION OF GOODS / SERVICES", "HSN/SAC", "SPEC / SIZE", "QTY", "UNIT", "RATE", "TAXABLE", "GST %", "AMOUNT"]
     for i, h in enumerate(i_headers):
         cell = items_tbl.rows[0].cells[i]
+        cell.width = _emu(col_widths[i] * 360000)
         cell.text = h
         _docx_set_cell_bg(cell, "1e3a8a")
         for p in cell.paragraphs:
-            if i in (0, 2, 3, 4, 7):
+            if i in (0, 2, 3, 4, 5, 8):
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            elif i in (5, 6, 8):
+            elif i in (6, 7, 9):
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             for r in p.runs:
                 r.bold = True
-                r.font.size = Pt(8)
+                r.font.size = Pt(7.5)
                 r.font.color.rgb = RGBColor(0xff, 0xff, 0xff)
 
     for idx, item in enumerate(items, 1):
         row_cells = items_tbl.rows[idx].cells
-        p_name = item["product_name"]
-        if item["size"] and item["size"] not in p_name:
-            p_name += f" ({item['size']})"
+        for i, w in enumerate(col_widths):
+            row_cells[i].width = _emu(w * 360000)
 
         row_cells[0].text = item["code"]
-        row_cells[1].text = p_name
-        row_cells[2].text = item["hsn_sac"] or "—"
-        row_cells[3].text = f"{item['quantity']:g}"
-        row_cells[4].text = item["unit"]
-        row_cells[5].text = f"{item['rate']:,.2f}"
-        row_cells[6].text = f"{item['taxable']:,.2f}"
-        row_cells[7].text = f"{item['gst_rate']:g}%"
-        row_cells[8].text = f"{item['amount']:,.2f}"
+        row_cells[1].text = item["product_name"]
+        row_cells[2].text = item["hsn_sac"]
+        row_cells[3].text = item["size"]
+        row_cells[4].text = f"{item['quantity']:g}"
+        row_cells[5].text = item["unit"]
+        row_cells[6].text = _format_currency(item["rate"])
+        row_cells[7].text = _format_currency(item["taxable"])
+        row_cells[8].text = f"{item['gst_rate']:g}%"
+        row_cells[9].text = _format_currency(item["amount"])
 
         for i, c in enumerate(row_cells):
             for p in c.paragraphs:
-                if i in (0, 2, 3, 4, 7):
+                if i in (0, 2, 3, 4, 5, 8):
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                elif i in (5, 6, 8):
+                elif i in (6, 7, 9):
                     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
                 for r in p.runs:
-                    r.font.size = Pt(8)
+                    r.font.size = Pt(7.5)
 
     doc.add_paragraph()
 
     # 4. BOTTOM SECTION (NOTES & TOTALS)
     bot_tbl = doc.add_table(rows=1, cols=2)
     bot_tbl.style = 'Table Grid'
+    _remove_tbl_borders(bot_tbl)
+
     c_n = bot_tbl.rows[0].cells[0]
     c_t = bot_tbl.rows[0].cells[1]
+    c_n.width = _emu(10.3 * 360000)
+    c_t.width = _emu(8.3 * 360000)
 
     p_n = c_n.paragraphs[0]
     n_text = ""
@@ -1643,52 +1770,87 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     if terms:
         n_text += f"TERMS & CONDITIONS\n{terms}"
     rn_bdy = p_n.add_run(n_text or "Thank you for your business!")
-    rn_bdy.font.size = Pt(8)
+    rn_bdy.font.size = Pt(7.5)
 
     totals_list = [
-        ("SUBTOTAL", f"Rs. {fin['subtotal']:,.2f}"),
+        ("SUBTOTAL", _format_currency(fin["subtotal"])),
     ]
     if fin["discount"] > 0:
-        totals_list.append(("DISCOUNT", f"Rs. {fin['discount']:,.2f}"))
-    totals_list.append(("TAXABLE AMOUNT", f"Rs. {fin['taxable_amount']:,.2f}"))
+        totals_list.append(("DISCOUNT", _format_currency(fin["discount"])))
+    totals_list.append(("TAXABLE AMOUNT", _format_currency(fin["taxable_amount"])))
 
     if shipping["is_intra_state"]:
-        totals_list.append((f"CGST ({fin['cgst_rate']}%)", f"Rs. {fin['cgst_amount']:,.2f}"))
-        totals_list.append((f"SGST ({fin['sgst_rate']}%)", f"Rs. {fin['sgst_amount']:,.2f}"))
+        totals_list.append((f"CGST ({fin['cgst_rate']:g}%)", _format_currency(fin["cgst_amount"])))
+        totals_list.append((f"SGST ({fin['sgst_rate']:g}%)", _format_currency(fin["sgst_amount"])))
     else:
-        totals_list.append((f"IGST ({fin['igst_rate']}%)", f"Rs. {fin['igst_amount']:,.2f}"))
+        totals_list.append((f"IGST ({fin['igst_rate']:g}%)", _format_currency(fin["igst_amount"])))
 
     if fin["freight"] > 0:
-        totals_list.append(("FREIGHT / S&H", f"Rs. {fin['freight']:,.2f}"))
+        totals_list.append(("FREIGHT / S&H", _format_currency(fin["freight"])))
     if fin["round_off"] != 0:
-        totals_list.append(("ROUND OFF", f"Rs. {fin['round_off']:,.2f}"))
+        totals_list.append(("ROUND OFF", _format_currency(fin["round_off"])))
 
-    totals_list.append(("GRAND TOTAL", f"Rs. {fin['grand_total']:,.2f}"))
+    totals_list.append(("GRAND TOTAL", _format_currency(fin["grand_total"])))
 
-    for lbl, val in totals_list:
-        p_row = c_t.add_paragraph()
-        r_lbl = p_row.add_run(f"{lbl}: ")
-        r_lbl.bold = True
-        r_lbl.font.size = Pt(8.5)
-        r_val = p_row.add_run(val)
-        r_val.font.size = Pt(8.5)
-        if lbl == "GRAND TOTAL":
-            r_lbl.font.size = Pt(9.5)
-            r_lbl.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
-            r_val.bold = True
-            r_val.font.size = Pt(10)
-            r_val.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
+    tot_sub_tbl = c_t.add_table(rows=len(totals_list), cols=2)
+    tot_sub_tbl.style = 'Table Grid'
+    for r_idx, (t_lbl, t_val) in enumerate(totals_list):
+        t_c0 = tot_sub_tbl.rows[r_idx].cells[0]
+        t_c1 = tot_sub_tbl.rows[r_idx].cells[1]
+        t_c0.width = _emu(4.4 * 360000)
+        t_c1.width = _emu(3.9 * 360000)
+
+        is_grand = (t_lbl == "GRAND TOTAL")
+        if is_grand:
+            _docx_set_cell_bg(t_c0, "eff6ff")
+            _docx_set_cell_bg(t_c1, "eff6ff")
+
+        tp0 = t_c0.paragraphs[0]
+        tr0 = tp0.add_run(t_lbl)
+        tr0.bold = True
+        tr0.font.size = Pt(8.5 if is_grand else 7.5)
+        if is_grand: tr0.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
+
+        tp1 = t_c1.paragraphs[0]
+        tp1.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        tr1 = tp1.add_run(t_val)
+        tr1.bold = is_grand
+        tr1.font.size = Pt(9 if is_grand else 7.5)
+        if is_grand: tr1.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
 
     doc.add_paragraph()
 
-    # 5. FOOTER & NOT TAX INVOICE
-    p_ftr = doc.add_paragraph()
-    p_ftr.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r_ftr = p_ftr.add_run(f"Enquiries: {seller['email']} | Contact: {seller['phone']} | Registered Office: {seller['address']}")
-    r_ftr.font.size = Pt(8)
-    r_ftr.font.color.rgb = RGBColor(0x64, 0x74, 0x8b)
+    # 5. AMOUNT IN WORDS & SIGNATURE BLOCK
+    p_words = doc.add_paragraph()
+    rw_lbl = p_words.add_run("Amount in Words: ")
+    rw_lbl.bold = True
+    rw_lbl.font.size = Pt(8.5)
+    rw_val = p_words.add_run(_amount_to_words(fin["grand_total"]))
+    rw_val.font.size = Pt(8.5)
+
+    doc.add_paragraph()
+
+    sig_tbl = doc.add_table(rows=1, cols=2)
+    sig_tbl.style = 'Table Grid'
+    _remove_tbl_borders(sig_tbl)
+    sc0 = sig_tbl.rows[0].cells[0]
+    sc1 = sig_tbl.rows[0].cells[1]
+    sc0.width = _emu(9.3 * 360000)
+    sc1.width = _emu(9.3 * 360000)
+
+    sp0 = sc0.paragraphs[0]
+    sr0 = sp0.add_run("Customer Signature\n\n\n_______________________")
+    sr0.bold = True
+    sr0.font.size = Pt(8.5)
+
+    sp1 = sc1.paragraphs[0]
+    sp1.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    sr1 = sp1.add_run(f"For {seller['name']}\n\n\nAuthorized Signatory")
+    sr1.bold = True
+    sr1.font.size = Pt(8.5)
 
     if doc_type == "proforma":
+        doc.add_paragraph()
         p_pf = doc.add_paragraph()
         p_pf.alignment = WD_ALIGN_PARAGRAPH.CENTER
         r_pf = p_pf.add_run("THIS IS A PROFORMA INVOICE — NOT A TAX INVOICE")
