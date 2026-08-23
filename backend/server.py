@@ -9683,14 +9683,28 @@ async def inv_history(
     page: int = 1,
     page_size: int = 100,
 ):
-    if type and type.lower() in ("all", "none", "null"):
-        type = None
-    if status and status.lower() in ("all", "none", "null"):
-        status = None
+    txn_type = (type or "").strip().lower()
+    if txn_type in ("all", "none", "null", ""):
+        txn_type = None
+    
+    st_filter = (status or "").strip()
+    if st_filter.lower() in ("all", "none", "null", ""):
+        st_filter = None
 
     cid = user["company_id"]
     page = max(1, page)
     page_size = max(1, min(page_size, 500))
+
+    prod_filter = (product or "").strip().lower()
+    size_filter = norm_str(size) if (size is not None and size != "") else None
+    vendor_filter = (vendor or "").strip().lower()
+    client_filter = (client or "").strip().lower()
+    challan_filter = (challan or "").strip().lower()
+    bill_filter = (bill_number or "").strip().lower()
+    user_filter = (user_id or "").strip()
+    from_d = (from_date or "").strip()
+    to_d = (to_date or "").strip()
+
     inward_projection = {
         "_id": 0,
         "id": 1,
@@ -9702,9 +9716,15 @@ async def inv_history(
         "unit": 1,
         "reference_number": 1,
         "bill_number": 1,
+        "source": 1,
         "source_name": 1,
         "source_type": 1,
+        "vendor": 1,
+        "vendor_name": 1,
+        "client_name": 1,
+        "client_id": 1,
         "remarks": 1,
+        "status": 1,
         "serial_numbers": 1,
         "serial_number_required": 1,
         "high_value_asset": 1,
@@ -9742,19 +9762,13 @@ async def inv_history(
         "attachment_filename": 1,
     }
 
-    def _text_filter(value: Optional[str]) -> dict[str, Any]:
-        return {"$regex": re.escape(value or ""), "$options": "i"} if value else {}
-
-    def _search_or_conditions(field_names: List[str], value: str) -> List[Dict[str, Any]]:
-        return [{field: _text_filter(value)} for field in field_names if field]
-
     def _date_match(rec: Dict[str, Any]) -> bool:
         d = (rec.get("date") or rec.get("created_at") or "")[:10]
-        if from_date and d < from_date: return False
-        if to_date and d > to_date: return False
+        if from_d and d < from_d:
+            return False
+        if to_d and d > to_d:
+            return False
         return True
-
-    rows: List[Dict[str, Any]] = []
 
     def _search_match(rec: Dict[str, Any]) -> bool:
         if not search or not search.strip():
@@ -9767,7 +9781,7 @@ async def inv_history(
         prod = norm_product_name(rec.get("product"))
         raw_size = rec.get("size") or ""
         sz = norm_str(raw_size)
-        src = (rec.get("source_name") or rec.get("client_name") or "").lower()
+        src = (rec.get("source_name") or rec.get("source") or rec.get("client_name") or "").lower()
         proj = (rec.get("project_name") or "").lower()
         ref = (rec.get("reference_number") or rec.get("outward_challan_no") or "").lower()
         bill = (rec.get("bill_number") or "").lower()
@@ -9777,39 +9791,126 @@ async def inv_history(
         full_text = f"{prod} {sz} {raw_size} {src} {proj} {ref} {bill} {rem} {by}".lower()
         return all(t in full_text for t in tokens)
 
-    if (not type or type == "inward") and not status:
-        q: Dict[str, Any] = {"company_id": cid}
-        if product: q["product"] = _text_filter(product)
-        if size is not None and size != "": q["size"] = norm_str(size)
-        if vendor: q["source_name"] = _text_filter(vendor)
-        if challan: q["reference_number"] = _text_filter(challan)
-        if bill_number: q["bill_number"] = _text_filter(bill_number)
-        if user_id: q["created_by"] = user_id
-        inward_rows = await db.inward_entries.find(q, inward_projection).sort([("date", -1), ("created_at", -1)]).to_list(10000)
-        for r in inward_rows:
-            if not _date_match(r):
-                continue
-            enriched = _enrich_inward_with_assets(parse_inward_client_info(r))
-            if enriched:
-                if _search_match(enriched):
-                    rows.append({**enriched, "type": "Inward"})
+    rows: List[Dict[str, Any]] = []
 
-    if (not type or type == "outward") and not bill_number:
-        q = {"company_id": cid}
-        if product: q["product"] = _text_filter(product)
-        if size is not None and size != "": q["size"] = norm_str(size)
-        if client: q["client_name"] = _text_filter(client)
-        if challan: q["$or"] = [{"outward_challan_no": _text_filter(challan)}, {"reference_number": _text_filter(challan)}]
-        if user_id: q["created_by"] = user_id
-        if status: q["status"] = status
-        outward_rows = await db.outward_entries.find(q, outward_projection).sort([("date", -1), ("created_at", -1)]).to_list(10000)
-        for r in outward_rows:
-            if not _date_match(r):
+    # Inward entries
+    if not txn_type or txn_type == "inward":
+        inward_rows = await db.inward_entries.find({"company_id": cid}, inward_projection).sort([("date", -1), ("created_at", -1)]).to_list(100000)
+        for raw_r in inward_rows:
+            r = parse_inward_client_info(raw_r)
+            enriched = _enrich_inward_with_assets(r)
+            if not enriched:
                 continue
-            enriched = _enrich_outward_with_assets(r)
-            if enriched:
-                if _search_match(enriched):
-                    rows.append({**enriched, "type": "Outward"})
+
+            # Product filter
+            if prod_filter and prod_filter not in (enriched.get("product") or "").lower():
+                continue
+
+            # Size filter
+            if size_filter and norm_str(enriched.get("size")) != size_filter:
+                continue
+
+            is_client_return = (enriched.get("source_type") == "Return From Client") or bool(enriched.get("client_id"))
+
+            # Vendor filter: applies to supplier/vendor inward entries (not client returns)
+            if vendor_filter:
+                if is_client_return:
+                    continue
+                v_str = f"{enriched.get('source_name') or ''} {enriched.get('source') or ''} {enriched.get('vendor') or ''} {enriched.get('vendor_name') or ''}".lower()
+                if vendor_filter not in v_str:
+                    continue
+
+            # Client filter: Inwards only match if they are client returns associated with this client
+            if client_filter:
+                c_str = f"{enriched.get('client_name') or ''} {enriched.get('source_name') or ''}".lower() if is_client_return else ""
+                if not is_client_return or client_filter not in c_str:
+                    continue
+
+            # Date filter
+            if not _date_match(enriched):
+                continue
+
+            # Challan / Ref filter
+            if challan_filter:
+                ch_str = f"{enriched.get('reference_number') or ''} {enriched.get('bill_number') or ''}".lower()
+                if challan_filter not in ch_str:
+                    continue
+
+            # Bill number filter
+            if bill_filter and bill_filter not in (enriched.get("bill_number") or "").lower():
+                continue
+
+            # User filter
+            if user_filter and enriched.get("created_by") != user_filter:
+                continue
+
+            # Status filter
+            if st_filter and (enriched.get("status") or "").lower() != st_filter.lower():
+                continue
+
+            # Search match
+            if not _search_match(enriched):
+                continue
+
+            rows.append({**enriched, "type": "Inward"})
+
+    # Outward entries
+    if not txn_type or txn_type == "outward":
+        outward_rows = await db.outward_entries.find({"company_id": cid}, outward_projection).sort([("date", -1), ("created_at", -1)]).to_list(100000)
+        for raw_r in outward_rows:
+            enriched = _enrich_outward_with_assets(raw_r)
+            if not enriched:
+                continue
+
+            # Product filter
+            if prod_filter and prod_filter not in (enriched.get("product") or "").lower():
+                continue
+
+            # Size filter
+            if size_filter and norm_str(enriched.get("size")) != size_filter:
+                continue
+
+            # Vendor filter: Outwards are client dispatches (do not have a vendor)
+            if vendor_filter:
+                v_str = f"{enriched.get('vendor') or ''} {enriched.get('vendor_name') or ''}".lower()
+                if not v_str.strip() or vendor_filter not in v_str:
+                    continue
+
+            # Client filter: match client_name, client_id, project_name
+            if client_filter:
+                c_str = f"{enriched.get('client_name') or ''} {enriched.get('project_name') or ''} {enriched.get('client_id') or ''}".lower()
+                if client_filter not in c_str:
+                    continue
+
+            # Date filter
+            if not _date_match(enriched):
+                continue
+
+            # Challan / Ref filter
+            if challan_filter:
+                ch_str = f"{enriched.get('outward_challan_no') or ''} {enriched.get('reference_number') or ''}".lower()
+                if challan_filter not in ch_str:
+                    continue
+
+            # Bill number filter (outward challan no or ref)
+            if bill_filter:
+                b_str = f"{enriched.get('outward_challan_no') or ''} {enriched.get('reference_number') or ''}".lower()
+                if bill_filter not in b_str:
+                    continue
+
+            # User filter
+            if user_filter and enriched.get("created_by") != user_filter:
+                continue
+
+            # Status filter
+            if st_filter and (enriched.get("status") or "").lower() != st_filter.lower():
+                continue
+
+            # Search match
+            if not _search_match(enriched):
+                continue
+
+            rows.append({**enriched, "type": "Outward"})
 
     rows.sort(key=lambda x: (x.get("date") or x.get("created_at") or ""), reverse=True)
     total = len(rows)
@@ -9827,11 +9928,20 @@ async def inv_history_csv(
     size: Optional[str] = None,
     vendor: Optional[str] = None,
     client: Optional[str] = None,
+    challan: Optional[str] = None,
+    bill_number: Optional[str] = None,
+    user_id: Optional[str] = None,
+    status: Optional[str] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     search: Optional[str] = None,
 ):
-    result = await inv_history(request=request, user=user, type=type, product=product, size=size, vendor=vendor, client=client, from_date=from_date, to_date=to_date, search=search, page=1, page_size=100000)  # type: ignore
+    result = await inv_history(
+        request=request, user=user, type=type, product=product, size=size,
+        vendor=vendor, client=client, challan=challan, bill_number=bill_number,
+        user_id=user_id, status=status, from_date=from_date, to_date=to_date,
+        search=search, page=1, page_size=100000
+    )  # type: ignore
     rows: Any = result["rows"] if isinstance(result, dict) else result
     if not isinstance(rows, list):
         rows = []
@@ -9842,7 +9952,7 @@ async def inv_history_csv(
     for r in rows:
         ref = r.get("reference_number") or ""
         billish = r.get("bill_number") or r.get("outward_challan_no") or ""
-        party = r.get("source_name") if r.get("type") == "Inward" else r.get("client_name")
+        party = (r.get("source_name") or r.get("source") or "") if r.get("type") == "Inward" else (r.get("client_name") or "")
         w.writerow([
             (r.get("date") or r.get("created_at") or "")[:10],
             r.get("type", ""), r.get("product", ""), r.get("size", ""),

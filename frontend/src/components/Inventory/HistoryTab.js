@@ -101,7 +101,7 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
     sel.forEach((r) => {
       const ref = r.reference_number || r.outward_challan_no || "";
       const bill = r.bill_number || "";
-      const party = r.type === "Inward" ? r.source_name : r.client_name;
+      const party = r.type === "Inward" ? (r.source_name || r.source || "") : (r.client_name || "");
       const row = [
         (r.date || r.created_at || "").slice(0, 10), r.type, r.product, r.size || "",
         r.quantity || 0, r.unit || "Nos", ref, bill, party || "",
@@ -338,7 +338,7 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
                         {r.size && <div className="text-[10px] text-slate-400 mt-0.5">{r.size}</div>}
                       </td>
                       <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{r.quantity} <span className="text-[10px] text-slate-500 font-normal">{r.unit || "Nos"}</span></td>
-                      <td className="px-4 py-2.5 text-xs">{r.type === "Inward" ? r.source_name : r.client_name || "—"}</td>
+                      <td className="px-4 py-2.5 text-xs">{r.type === "Inward" ? (r.source_name || r.source || "—") : (r.client_name || "—")}</td>
                       <td className="px-4 py-2.5 text-xs">
                         <div className="font-mono text-slate-700">{r.reference_number || r.outward_challan_no || "—"}</div>
                         {r.bill_number && <div className="font-mono text-[10px] text-slate-400">Bill {r.bill_number}</div>}
