@@ -35,6 +35,34 @@ const TASK_TYPES = [
 
 const SUBSIDY_TASK_TYPES = new Set(["PM Surya Ghar Upload", "MSEDCL Upload"]);
 
+function getStageBadgeStyle(stageName) {
+  switch (stageName) {
+    case "Handover":
+      return "bg-emerald-50 text-emerald-700 border-emerald-200/80 hover:bg-emerald-100";
+    case "Verification":
+      return "bg-purple-50 text-purple-700 border-purple-200/80 hover:bg-purple-100";
+    case "MSEDCL Upload":
+    case "PM Surya Ghar Upload":
+      return "bg-blue-50 text-blue-700 border-blue-200/80 hover:bg-blue-100";
+    case "Meter Testing Completed":
+    case "Meter Testing Request":
+      return "bg-cyan-50 text-cyan-700 border-cyan-200/80 hover:bg-cyan-100";
+    case "Installation":
+      return "bg-amber-50 text-amber-700 border-amber-200/80 hover:bg-amber-100";
+    case "Material Delivery":
+      return "bg-orange-50 text-orange-700 border-orange-200/80 hover:bg-orange-100";
+    case "Document Signed":
+    case "Document Making":
+      return "bg-indigo-50 text-indigo-700 border-indigo-200/80 hover:bg-indigo-100";
+    case "Quotation":
+    case "Survey":
+      return "bg-sky-50 text-sky-700 border-sky-200/80 hover:bg-sky-100";
+    case "Onboarding":
+    default:
+      return "bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200/70";
+  }
+}
+
 export default function ProjectExecution() {
   const queryClient = useQueryClient();
 
@@ -313,38 +341,63 @@ export default function ProjectExecution() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         title="Project Execution"
         subtitle="Control the complete installation workflow for onboarded clients."
         badge={`${filteredProjects.length} Projects`}
       />
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5">
         {cards.map((c) => {
           const Icon = c.icon;
+          const iconStyles = {
+            blue: "bg-blue-50 text-blue-600 border-blue-100",
+            amber: "bg-amber-50 text-amber-600 border-amber-100",
+            indigo: "bg-indigo-50 text-indigo-600 border-indigo-100",
+            emerald: "bg-emerald-50 text-emerald-600 border-emerald-100",
+            teal: "bg-teal-50 text-teal-600 border-teal-100",
+          }[c.color] || "bg-slate-50 text-slate-600 border-slate-100";
+
           return (
-            <Card key={c.label} className="p-4 card-lift border-slate-200" data-testid={`proj-stat-${c.label.replace(/\s/g, "-").toLowerCase()}`}>
-              <div className={`w-9 h-9 rounded-lg bg-${c.color}-50 text-${c.color}-600 flex items-center justify-center mb-2`}><Icon className="w-4 h-4" /></div>
-              <div className="text-xl font-semibold tabular-nums text-slate-900">{c.v}</div>
-              <div className="text-[11px] uppercase tracking-wider text-slate-500 font-medium mt-0.5">{c.label}</div>
+            <Card
+              key={c.label}
+              className="p-4 bg-white border border-slate-200/80 rounded-xl shadow-2xs transition-all duration-200 hover:shadow-xs hover:border-slate-300"
+              data-testid={`proj-stat-${c.label.replace(/\s/g, "-").toLowerCase()}`}
+            >
+              <div className="flex items-center justify-between">
+                <div className={`w-9 h-9 rounded-lg ${iconStyles} border flex items-center justify-center`}>
+                  <Icon className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="mt-3">
+                <div className="text-2xl font-bold tabular-nums text-slate-900 tracking-tight" style={{ fontFamily: "Outfit, sans-serif" }}>
+                  {c.v}
+                </div>
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mt-1">
+                  {c.label}
+                </div>
+              </div>
             </Card>
           );
         })}
       </div>
 
       {/* Inline Filter Bar */}
-      <Card className="p-3 border-slate-200 bg-slate-50/50">
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2 items-center">
+      <Card className="p-3 border-slate-200/90 bg-slate-50/70 rounded-xl shadow-2xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 items-center">
           <Input
             placeholder="Search Client / Sol ID / Consumer..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-9 text-xs bg-white"
+            className="h-9 text-xs bg-white border-slate-200 focus:border-blue-500 rounded-lg shadow-2xs"
             data-testid="filter-search"
           />
           <Select value={selectedStage} onValueChange={setSelectedStage}>
-            <SelectTrigger className="h-9 text-xs bg-white"><SelectValue placeholder="Stage: All" /></SelectTrigger>
+            <SelectTrigger className="h-9 text-xs bg-white border-slate-200 rounded-lg shadow-2xs">
+              <SelectValue placeholder="Stage: All" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="All">All Stages</SelectItem>
               {TASK_TYPES.map((st) => (
@@ -353,7 +406,9 @@ export default function ProjectExecution() {
             </SelectContent>
           </Select>
           <Select value={selectedStatus} onValueChange={setSelectedStatus}>
-            <SelectTrigger className="h-9 text-xs bg-white"><SelectValue placeholder="Status: All" /></SelectTrigger>
+            <SelectTrigger className="h-9 text-xs bg-white border-slate-200 rounded-lg shadow-2xs">
+              <SelectValue placeholder="Status: All" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="All">All Statuses</SelectItem>
               <SelectItem value="pending">Pending</SelectItem>
@@ -365,7 +420,9 @@ export default function ProjectExecution() {
             </SelectContent>
           </Select>
           <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
-            <SelectTrigger className="h-9 text-xs bg-white"><SelectValue placeholder="Assigned User: All" /></SelectTrigger>
+            <SelectTrigger className="h-9 text-xs bg-white border-slate-200 rounded-lg shadow-2xs">
+              <SelectValue placeholder="Assigned User: All" />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="All">All Assigned Users</SelectItem>
               {employees.map((emp) => (
@@ -375,7 +432,9 @@ export default function ProjectExecution() {
           </Select>
           <div className="flex items-center gap-2">
             <Select value={selectedDateRange} onValueChange={setSelectedDateRange}>
-              <SelectTrigger className="h-9 text-xs bg-white flex-1"><SelectValue placeholder="Date Range" /></SelectTrigger>
+              <SelectTrigger className="h-9 text-xs bg-white border-slate-200 rounded-lg shadow-2xs flex-1">
+                <SelectValue placeholder="Date Range" />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Time</SelectItem>
                 <SelectItem value="today">Today</SelectItem>
@@ -384,7 +443,7 @@ export default function ProjectExecution() {
               </SelectContent>
             </Select>
             {isFiltered && (
-              <Button size="sm" variant="ghost" onClick={resetFilters} className="h-9 px-2 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50" data-testid="clear-filters-btn">
+              <Button size="sm" variant="ghost" onClick={resetFilters} className="h-9 px-2.5 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg font-medium" data-testid="clear-filters-btn">
                 Clear
               </Button>
             )}
@@ -393,16 +452,26 @@ export default function ProjectExecution() {
       </Card>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="bg-white border border-slate-200">
+        <TabsList className="bg-slate-100 p-1 border border-slate-200/80 rounded-xl h-auto flex flex-wrap gap-1">
           {visibleTabs.map((t) => (
-            <TabsTrigger key={t.id} value={t.id} data-testid={t.testId}>
-              {t.label} {t.badge ? `(${t.badge})` : ""}
+            <TabsTrigger
+              key={t.id}
+              value={t.id}
+              data-testid={t.testId}
+              className="text-xs px-3.5 py-1.5 rounded-lg data-[state=active]:bg-white data-[state=active]:text-blue-700 data-[state=active]:shadow-2xs font-medium transition-all"
+            >
+              <span>{t.label}</span>
+              {t.badge ? (
+                <span className="ml-1.5 px-1.5 py-0.2 text-[10px] font-bold rounded-full bg-blue-100 text-blue-800">
+                  {t.badge}
+                </span>
+              ) : null}
             </TabsTrigger>
           ))}
         </TabsList>
 
         {visibleTabs.length === 0 && (
-          <div className="p-8 text-center text-slate-500 bg-white rounded-lg border border-slate-200 mt-4">
+          <div className="p-8 text-center text-slate-500 bg-white rounded-xl border border-slate-200 mt-4 text-xs">
             No project execution tabs permitted. Contact your administrator.
           </div>
         )}
@@ -410,22 +479,31 @@ export default function ProjectExecution() {
         {canProjectAssignment && (
           <div style={{ display: tab === "projects" ? "block" : "none" }}>
             {loadedTabs.has("projects") && (
-              <Card className="border-slate-200">
+              <Card className="border border-slate-200/90 rounded-xl shadow-2xs overflow-hidden bg-white mt-3">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm" data-testid="projects-table">
-                    <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+                    <thead className="bg-slate-50/90 border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-500">
                       <tr>
                         <th className="text-left px-4 py-3 font-semibold">Client</th>
                         <th className="text-left px-4 py-3 font-semibold">Mobile</th>
-                        <th className="text-left px-4 py-3 font-semibold">KW</th>
+                        <th className="text-left px-4 py-3 font-semibold">System (kW)</th>
                         <th className="text-left px-4 py-3 font-semibold">Current Stage</th>
                         <th className="text-left px-4 py-3 font-semibold">Assigned Team</th>
                         <th className="text-left px-4 py-3 font-semibold">Updated</th>
                         <th className="text-right px-4 py-3 font-semibold">Actions</th>
                       </tr>
                     </thead>
-                    <tbody>
-                      {paginated.length === 0 && <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-500">No onboarded projects yet. Mark Onboarding complete on a client to add them here.</td></tr>}
+                    <tbody className="divide-y divide-slate-100">
+                      {paginated.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-12 text-center text-slate-500">
+                            <div className="max-w-xs mx-auto text-center space-y-1">
+                              <div className="text-sm font-semibold text-slate-700">No onboarded projects yet</div>
+                              <div className="text-xs text-slate-400">Mark Onboarding complete on a client to add them here.</div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
                       {paginated.map((p) => {
                         const stages = p.stages || {};
                         const order = p.subsidy_eligible
@@ -458,17 +536,48 @@ export default function ProjectExecution() {
                               "Onboarding",
                             ];
                         const current = order.find((s) => stages[s]) || "Onboarding";
+                        const stageBadgeCls = getStageBadgeStyle(current);
+
                         return (
-                          <tr key={p.id} className="border-t border-slate-100 hover:bg-slate-50">
-                            <td className="px-4 py-3 whitespace-nowrap"><Link to={`/client-data/${p.id}`} className="font-medium text-slate-900 hover:text-blue-600 hover:underline block">{p.full_name}</Link><div className="text-xs text-slate-500 block whitespace-nowrap">{p.sol_id}</div></td>
-                            <td className="px-4 py-3 text-slate-700">{p.mobile}</td>
-                            <td className="px-4 py-3 text-slate-700">{p.system_kw || 0}</td>
-                            <td className="px-4 py-3"><Link to={`/client-data/${p.id}`}><Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 cursor-pointer">{current}</Badge></Link></td>
-                            <td className="px-4 py-3 text-slate-700 text-xs">{p.assigned_team?.length ? p.assigned_team.join(", ") : "—"}</td>
-                            <td className="px-4 py-3 text-xs text-slate-500">{p.updated_at ? dayjs(p.updated_at).format("MMM D") : "—"}</td>
-                            <td className="px-4 py-3 text-right">
+                          <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
+                            <td className="px-4 py-3.5 whitespace-nowrap">
+                              <Link to={`/client-data/${p.id}`} className="font-semibold text-slate-900 hover:text-blue-600 transition-colors block text-xs">
+                                {p.full_name}
+                              </Link>
+                              <div className="text-[11px] font-mono text-slate-500 mt-0.5 block whitespace-nowrap">
+                                {p.sol_id}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3.5 text-xs text-slate-700 tabular-nums">
+                              {p.mobile || "—"}
+                            </td>
+                            <td className="px-4 py-3.5 text-xs font-semibold tabular-nums text-slate-900">
+                              {p.system_kw || 0} <span className="text-[10px] font-normal text-slate-500">kW</span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <Link to={`/client-data/${p.id}`}>
+                                <Badge variant="outline" className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full border transition-colors cursor-pointer shadow-2xs ${stageBadgeCls}`}>
+                                  {current}
+                                </Badge>
+                              </Link>
+                            </td>
+                            <td className="px-4 py-3.5 text-xs text-slate-600">
+                              {p.assigned_team?.length ? (
+                                <div className="flex flex-wrap gap-1 max-w-[180px]">
+                                  {p.assigned_team.map((m, idx) => (
+                                    <span key={idx} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-700 font-medium">
+                                      {m}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : "—"}
+                            </td>
+                            <td className="px-4 py-3.5 text-xs text-slate-500 whitespace-nowrap">
+                              {p.updated_at ? dayjs(p.updated_at).format("MMM D, YYYY") : "—"}
+                            </td>
+                            <td className="px-4 py-3.5 text-right whitespace-nowrap">
                               {canProjectAssignment && (
-                                <Button size="sm" onClick={() => openAssign(p)} className="bg-blue-600 hover:bg-blue-700" data-testid={`assign-${p.id}`}>
+                                <Button size="sm" onClick={() => openAssign(p)} className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium h-8 px-3 rounded-lg shadow-2xs transition-all active:scale-[0.98]" data-testid={`assign-${p.id}`}>
                                   <Plus className="w-3.5 h-3.5 mr-1" /> Assign Work
                                 </Button>
                               )}
@@ -481,13 +590,14 @@ export default function ProjectExecution() {
                 </div>
 
                 {totalPages > 1 && (
-                  <div className="p-4 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
-                    <div className="text-xs text-slate-500">
-                      Showing {(projectPage - 1) * itemsPerPage + 1} to {Math.min(projectPage * itemsPerPage, projects.length)} of {projects.length} projects
+                  <div className="px-4 py-3 border-t border-slate-100 bg-slate-50/40 flex items-center justify-between flex-wrap gap-2 text-xs">
+                    <div className="text-slate-500">
+                      Showing <span className="font-semibold text-slate-700">{(projectPage - 1) * itemsPerPage + 1}</span> to <span className="font-semibold text-slate-700">{Math.min(projectPage * itemsPerPage, filteredProjects.length)}</span> of <span className="font-semibold text-slate-700">{filteredProjects.length}</span> projects
                     </div>
-                    <div className="flex gap-1">
-                      <Button variant="outline" size="sm" onClick={() => setProjectPage(p => Math.max(1, p - 1))} disabled={projectPage === 1}>Previous</Button>
-                      <Button variant="outline" size="sm" onClick={() => setProjectPage(p => Math.min(totalPages, p + 1))} disabled={projectPage === totalPages}>Next</Button>
+                    <div className="flex items-center gap-1.5">
+                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => setProjectPage(p => Math.max(1, p - 1))} disabled={projectPage === 1}>Previous</Button>
+                      <span className="text-xs text-slate-600 px-2 font-medium">Page {projectPage} of {totalPages}</span>
+                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => setProjectPage(p => Math.min(totalPages, p + 1))} disabled={projectPage === totalPages}>Next</Button>
                     </div>
                   </div>
                 )}
