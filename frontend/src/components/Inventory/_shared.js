@@ -113,9 +113,18 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
   // Sync incoming value to input if controlled from outside
   useEffect(() => { setInputVal(value || ""); }, [value]);
 
-  // ── Unified Product Source ────────────────────────────────────────────────
+  // ── Unified Product Source (strictly Product Master items only) ─────────────
   const sourceList = useMemo(() => {
-    return (products && products.length > 0) ? products : hookProducts;
+    const rawList = (products && products.length > 0) ? products : hookProducts;
+    if (!Array.isArray(rawList)) return [];
+    return rawList.filter((p) => {
+      if (!p || typeof p !== "object") return false;
+      // Exclude client, user, employee, vendor, or project records
+      if (p.full_name || p.contact_person || p.email || p.role || p.sol_id || p.gstin || p.is_client || p.is_vendor) {
+        return false;
+      }
+      return Boolean(p.name || p.product_name);
+    });
   }, [products, hookProducts]);
 
   // ── Pre-index: builds searchKey once when sourceList changes ───────────
@@ -125,11 +134,15 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
     const other = [];
 
     for (const p of sourceList) {
-      const nameUpper = (p.name || "").toUpperCase();
+      const pName = p.name || p.product_name || "";
+      const nameUpper = pName.toUpperCase();
       const rawSize = (p.size || "").toUpperCase();
       const cleanSize = normalizeSizeForMatching(p.size);
-      const _searchKey = `${nameUpper} ${cleanSize} ${rawSize}`;
-      const item = { ...p, _searchKey };
+      const unit = (p.unit || "").toUpperCase();
+      const category = (p.category || "").toUpperCase();
+      const sku = (p.sku || p.product_code || "").toUpperCase();
+      const _searchKey = `${nameUpper} ${cleanSize} ${rawSize} ${unit} ${category} ${sku}`;
+      const item = { ...p, name: pName, _searchKey };
 
       const isHV = Boolean(p.high_value_goods || p.high_value_asset || hvKeywords.some(kw => nameUpper.includes(kw)));
       if (isHV) hv.push(item);
@@ -169,6 +182,7 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
   // DOM slicing: max 50 HV + 100 other to prevent browser freeze
   const displayedHighValue = useMemo(() => filteredHighValue.slice(0, 50), [filteredHighValue]);
   const displayedOther = useMemo(() => filteredOther.slice(0, 100), [filteredOther]);
+  const hasAnyMatches = displayedHighValue.length > 0 || (!highValueOnly && displayedOther.length > 0);
 
   const handleSelect = useCallback((p) => {
     onChange(p);
@@ -195,6 +209,11 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
             data-testid={testid}
             required={required}
             ref={inputRef}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            name="material_product_name_autocomplete"
           />
         </div>
       </PopoverTrigger>
@@ -205,58 +224,61 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
           sideOffset={4}
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
-          <div className="px-2.5 py-1 text-[10px] font-bold text-blue-600 uppercase tracking-wider bg-slate-50 flex items-center justify-between sticky top-0 z-10 border-b border-slate-100">
-            <span>HIGH VALUE GOODS</span>
-            {filteredHighValue.length > 50 && <span className="text-[9px] text-slate-400 font-normal">Showing 50 of {filteredHighValue.length}</span>}
-          </div>
-          {displayedHighValue.length === 0 ? (
-            <div className="px-4 py-1.5 text-slate-400 italic">No high value goods found</div>
+          {!hasAnyMatches ? (
+            <div className="px-4 py-3 text-slate-400 italic text-center">
+              No materials/products found
+            </div>
           ) : (
-            displayedHighValue.map((p) => (
-              <button
-                key={p.id || `${p.name}-${p.size}`}
-                type="button"
-                className="w-full text-left px-4 py-2 hover:bg-blue-50/80 font-semibold text-slate-800 transition-colors border-b border-slate-50 last:border-0"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  handleSelect(p);
-                }}
-              >
-                <div className="flex flex-col">
-                  <span className="font-semibold text-slate-900">{p.name}</span>
-                  {p.size && <span className="text-[10px] text-slate-500 font-normal mt-0.5">{p.size}</span>}
-                </div>
-              </button>
-            ))
-          )}
-
-          {!highValueOnly && (
             <>
-              <div className="border-t border-slate-100 my-1"></div>
+              {displayedHighValue.length > 0 && (
+                <>
+                  <div className="px-2.5 py-1 text-[10px] font-bold text-blue-600 uppercase tracking-wider bg-slate-50 flex items-center justify-between sticky top-0 z-10 border-b border-slate-100">
+                    <span>HIGH VALUE GOODS</span>
+                    {filteredHighValue.length > 50 && <span className="text-[9px] text-slate-400 font-normal">Showing 50 of {filteredHighValue.length}</span>}
+                  </div>
+                  {displayedHighValue.map((p) => (
+                    <button
+                      key={p.id || `${p.name}-${p.size}`}
+                      type="button"
+                      className="w-full text-left px-4 py-2 hover:bg-blue-50/80 font-semibold text-slate-800 transition-colors border-b border-slate-50 last:border-0"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        handleSelect(p);
+                      }}
+                    >
+                      <div className="flex flex-col">
+                        <span className="font-semibold text-slate-900">{p.name}</span>
+                        {p.size && <span className="text-[10px] text-slate-500 font-normal mt-0.5">{p.size}</span>}
+                      </div>
+                    </button>
+                  ))}
+                </>
+              )}
 
-              <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider bg-slate-50 flex items-center justify-between sticky top-0 z-10 border-b border-slate-100">
-                <span>OTHER PRODUCTS (A-Z)</span>
-                {filteredOther.length > 100 && <span className="text-[9px] text-slate-400 font-normal">Showing 100 of {filteredOther.length}</span>}
-              </div>
-              {displayedOther.length === 0 ? (
-                <div className="px-4 py-1.5 text-slate-400 italic">No other products found</div>
-              ) : (
-                displayedOther.map((p) => (
-                  <button
-                    key={p.id || `${p.name}-${p.size}`}
-                    type="button"
-                    className="w-full text-left px-4 py-2 hover:bg-slate-100 text-slate-700 transition-colors border-b border-slate-50 last:border-0"
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      handleSelect(p);
-                    }}
-                  >
-                    <div className="flex flex-col">
-                      <span className="font-medium text-slate-800">{p.name}</span>
-                      {p.size && <span className="text-[10px] text-slate-500 font-normal mt-0.5">{p.size}</span>}
-                    </div>
-                  </button>
-                ))
+              {!highValueOnly && displayedOther.length > 0 && (
+                <>
+                  {displayedHighValue.length > 0 && <div className="border-t border-slate-100 my-1"></div>}
+                  <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider bg-slate-50 flex items-center justify-between sticky top-0 z-10 border-b border-slate-100">
+                    <span>OTHER PRODUCTS (A-Z)</span>
+                    {filteredOther.length > 100 && <span className="text-[9px] text-slate-400 font-normal">Showing 100 of {filteredOther.length}</span>}
+                  </div>
+                  {displayedOther.map((p) => (
+                    <button
+                      key={p.id || `${p.name}-${p.size}`}
+                      type="button"
+                      className="w-full text-left px-4 py-2 hover:bg-slate-100 text-slate-700 transition-colors border-b border-slate-50 last:border-0"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        handleSelect(p);
+                      }}
+                    >
+                      <div className="flex flex-col">
+                        <span className="font-medium text-slate-800">{p.name}</span>
+                        {p.size && <span className="text-[10px] text-slate-500 font-normal mt-0.5">{p.size}</span>}
+                      </div>
+                    </button>
+                  ))}
+                </>
               )}
             </>
           )}
