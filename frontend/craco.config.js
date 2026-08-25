@@ -51,6 +51,58 @@ let webpackConfig = {
         ],
       };
 
+      // Production splitChunks optimization
+      if (!isDevServer) {
+        webpackConfig.optimization = {
+          ...webpackConfig.optimization,
+          splitChunks: {
+            chunks: 'all',
+            maxInitialRequests: 25,
+            minSize: 20000,
+            cacheGroups: {
+              default: false,
+              vendors: false,
+              reactVendor: {
+                name: 'vendor-react',
+                test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+                priority: 40,
+                enforce: true,
+              },
+              routerVendor: {
+                name: 'vendor-router',
+                test: /[\\/]node_modules[\\/](react-router|react-router-dom|@remix-run)[\\/]/,
+                priority: 35,
+                enforce: true,
+              },
+              supabaseVendor: {
+                name: 'vendor-supabase',
+                test: /[\\/]node_modules[\\/]@supabase[\\/]/,
+                priority: 30,
+                enforce: true,
+              },
+              queryVendor: {
+                name: 'vendor-query',
+                test: /[\\/]node_modules[\\/]@tanstack[\\/]/,
+                priority: 25,
+                enforce: true,
+              },
+              uiVendor: {
+                name: 'vendor-ui',
+                test: /[\\/]node_modules[\\/](@radix-ui|lucide-react|tailwind-merge|clsx|class-variance-authority|sonner)[\\/]/,
+                priority: 20,
+                reuseExistingChunk: true,
+              },
+              common: {
+                name: 'common',
+                minChunks: 2,
+                priority: 10,
+                reuseExistingChunk: true,
+              },
+            },
+          },
+        };
+      }
+
       // Add health check plugin to webpack if enabled
       if (config.enableHealthCheck && healthPluginInstance) {
         webpackConfig.plugins.push(healthPluginInstance);

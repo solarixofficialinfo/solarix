@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import {
   CreditCard,
@@ -137,11 +137,7 @@ export default function PlansEntitlements() {
   const [loading, setLoading] = useState(true);
   const [savingPlan, setSavingPlan] = useState(null);
 
-  useEffect(() => {
-    fetchPlans();
-  }, []);
-
-  const fetchPlans = async () => {
+  const fetchPlans = useCallback(async () => {
     try {
       setLoading(true);
       const res = await api.get("/platform-owner/plans");
@@ -155,7 +151,11 @@ export default function PlansEntitlements() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [activePlan]);
+
+  useEffect(() => {
+    fetchPlans();
+  }, [fetchPlans]);
 
   const handlePriceChange = (pid, field, val) => {
     const num = Math.max(0, Number(val) || 0);

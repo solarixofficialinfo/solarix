@@ -36,7 +36,7 @@ export default function CustomerList() {
 
   useEffect(() => {
     fetchCustomers(false);
-  }, [statusFilter, planFilter]);
+  }, [statusFilter, planFilter, fetchCustomers]);
 
   useEffect(() => {
     // Auto-refresh every 12 seconds

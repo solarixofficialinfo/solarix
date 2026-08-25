@@ -173,9 +173,11 @@ export default function DocumentTemplates() {
   const activeClientInList = clientsList.find(
     (c) => c.id === selectedClientId || c.sol_id === selectedClientId || c._id === selectedClientId
   );
-  const activeClient = (activeClientInList || clientDetailData?.client || clientDetailData)
-    ? { ...(activeClientInList || {}), ...(clientDetailData || {}), ...(clientDetailData?.client || {}) }
-    : null;
+  const activeClient = useMemo(() => {
+    return (activeClientInList || clientDetailData?.client || clientDetailData)
+      ? { ...(activeClientInList || {}), ...(clientDetailData || {}), ...(clientDetailData?.client || {}) }
+      : null;
+  }, [activeClientInList, clientDetailData]);
   const company = companyDoc || {};
 
   // Active DISCOM resolution for current client

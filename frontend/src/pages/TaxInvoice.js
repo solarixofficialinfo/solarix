@@ -251,9 +251,9 @@ export default function TaxInvoice() {
     return isNaN(n) ? 0 : n;
   };
 
-  const taxableValue = (row) => parseNumber(row.quantity) * parseNumber(row.rate);
+  const taxableValue = useCallback((row) => parseNumber(row.quantity) * parseNumber(row.rate), []);
 
-  const gstAmounts = (row, interState, enabled = true) => {
+  const gstAmounts = useCallback((row, interState, enabled = true) => {
     if (!enabled) return { cgst: 0, sgst: 0, igst: 0, totalGst: 0 };
     const tv = taxableValue(row);
     const rate = parseNumber(row.gst);
@@ -263,13 +263,13 @@ export default function TaxInvoice() {
     }
     const half = totalGst / 2;
     return { cgst: half, sgst: half, igst: 0, totalGst };
-  };
+  }, [taxableValue]);
 
-  const rowAmount = (row, interState, enabled = true) => {
+  const rowAmount = useCallback((row, interState, enabled = true) => {
     const tv = taxableValue(row);
     const { totalGst } = gstAmounts(row, interState, enabled);
     return tv + totalGst;
-  };
+  }, [taxableValue, gstAmounts]);
 
   const totals = useMemo(() => {
     let subtotal = 0;
@@ -285,7 +285,7 @@ export default function TaxInvoice() {
     });
 
     return { subtotal, gstTotal, grandTotal };
-  }, [items, isInterState, applyGst]);
+  }, [items, isInterState, applyGst, taxableValue, gstAmounts]);
 
   const amountInWords = (amount) => {
     return `Rupees ${formatMoney(amount)} Only`;

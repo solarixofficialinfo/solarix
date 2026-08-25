@@ -6,11 +6,11 @@ dayjs.extend(relativeTime);
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { Toaster } from "sonner";
-import SubscriptionGuardModal from "@/components/SubscriptionGuardModal";
 // Eager load Login for instant auth rendering
 import Login from "@/pages/Login";
 
 // Lazy load layout & secondary pages for route code-splitting
+const SubscriptionGuardModal = lazy(() => import("@/components/SubscriptionGuardModal"));
 const Layout = lazy(() => import("@/components/Layout"));
 const Register = lazy(() => import("@/pages/Register"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
