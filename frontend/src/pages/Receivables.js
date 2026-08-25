@@ -805,28 +805,28 @@ export default function Receivables() {
       {/* Top Header & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-            <DollarSign className="w-6 h-6 text-blue-600" /> Receivables & Collection Management
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <DollarSign className="w-5 sm:w-6 h-5 sm:h-6 text-blue-600 shrink-0" /> Receivables & Collection Management
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Solar EPC Project Billing: Contract Value, Standalone Invoices, Payments Allocation & Unallocated Advances.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5 text-xs h-8">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <Button variant="outline" size="sm" onClick={() => refetch()} className="flex-1 sm:flex-initial gap-1.5 text-xs h-8">
             <RefreshCw className="w-3.5 h-3.5" /> Refresh
           </Button>
           <Button
             size="sm"
             onClick={() => handleOpenCreateInvoice()}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-8 gap-1 shadow-2xs"
+            className="flex-1 sm:flex-initial bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-8 gap-1 shadow-2xs whitespace-nowrap"
           >
             <Plus className="w-3.5 h-3.5" /> Create Invoice
           </Button>
           <Button
             size="sm"
             onClick={() => setNewProjectOpen(true)}
-            className="bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs h-8 gap-1 shadow-2xs"
+            className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs h-8 gap-1 shadow-2xs whitespace-nowrap"
           >
             <Plus className="w-3.5 h-3.5" /> New Project
           </Button>
@@ -1049,11 +1049,11 @@ export default function Receivables() {
       {/* ─── OPEN PROJECT FINANCIAL WORKSPACE MODAL ─────────────────────────── */}
       {activeProjectId && (
         <Dialog open={!!activeProjectId} onOpenChange={() => setActiveProjectId(null)}>
-          <DialogContent className="max-w-5xl max-h-[92vh] overflow-y-auto p-5 rounded-2xl">
+          <DialogContent className="max-w-5xl max-h-[92vh] overflow-y-auto p-3.5 sm:p-5 w-[96vw] sm:w-full rounded-2xl">
             <DialogHeader className="border-b border-slate-100 pb-3">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                 <div>
-                  <DialogTitle className="flex items-center gap-2 text-slate-900 text-base font-bold">
+                  <DialogTitle className="flex flex-wrap items-center gap-2 text-slate-900 text-base font-bold">
                     <Layers className="w-5 h-5 text-blue-600" />
                     {projectWorkspace?.project?.project_name || "Project Details"}
                     {projectWorkspace?.project?.capacity_kw && (
@@ -1068,18 +1068,18 @@ export default function Receivables() {
                 </div>
 
                 {/* Primary Action Buttons in Workspace Header */}
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto">
                   <Button
                     size="sm"
                     onClick={() => handleOpenCreateInvoice(activeProjectId)}
-                    className="h-8 text-xs bg-blue-600 hover:bg-blue-700 text-white font-semibold gap-1 rounded-lg shadow-2xs"
+                    className="flex-1 sm:flex-initial h-8 text-xs bg-blue-600 hover:bg-blue-700 text-white font-semibold gap-1 rounded-lg shadow-2xs whitespace-nowrap"
                   >
                     <Plus className="w-3.5 h-3.5" /> + Create Invoice
                   </Button>
                   <Button
                     size="sm"
                     onClick={() => handleOpenAddPayment(activeProjectId)}
-                    className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1 rounded-lg shadow-2xs"
+                    className="flex-1 sm:flex-initial h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1 rounded-lg shadow-2xs whitespace-nowrap"
                   >
                     <Plus className="w-3.5 h-3.5" /> + Add Payment
                   </Button>
@@ -1093,16 +1093,18 @@ export default function Receivables() {
               <div className="py-2 space-y-4">
                 {/* Workspace Tabs (8 Tabs) */}
                 <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                  <TabsList className="grid grid-cols-3 sm:grid-cols-6 bg-slate-100 p-1 rounded-xl text-xs">
-                    <TabsTrigger value="overview" className="text-xs py-1.5">Overview</TabsTrigger>
-                    <TabsTrigger value="payment_plan" className="text-xs py-1.5">Payment Plan</TabsTrigger>
-                    <TabsTrigger value="invoices" className="text-xs py-1.5 flex items-center gap-1 font-semibold text-blue-700">
-                      Invoices ({projectWorkspace?.invoices?.length || 0})
-                    </TabsTrigger>
-                    <TabsTrigger value="payments" className="text-xs py-1.5">Payments</TabsTrigger>
-                    <TabsTrigger value="loan_finance" className="text-xs py-1.5">Loan / Finance</TabsTrigger>
-                    <TabsTrigger value="expenses" className="text-xs py-1.5">Expenses</TabsTrigger>
-                  </TabsList>
+                  <div className="overflow-x-auto pb-1 -mx-1 px-1 custom-scrollbar">
+                    <TabsList className="inline-flex w-max min-w-full justify-start gap-1 bg-slate-100 p-1 rounded-xl text-xs">
+                      <TabsTrigger value="overview" className="shrink-0 whitespace-nowrap text-xs py-1.5 px-3">Overview</TabsTrigger>
+                      <TabsTrigger value="payment_plan" className="shrink-0 whitespace-nowrap text-xs py-1.5 px-3">Payment Plan</TabsTrigger>
+                      <TabsTrigger value="invoices" className="shrink-0 whitespace-nowrap text-xs py-1.5 px-3 flex items-center gap-1 font-semibold text-blue-700">
+                        Invoices ({projectWorkspace?.invoices?.length || 0})
+                      </TabsTrigger>
+                      <TabsTrigger value="payments" className="shrink-0 whitespace-nowrap text-xs py-1.5 px-3">Payments</TabsTrigger>
+                      <TabsTrigger value="loan_finance" className="shrink-0 whitespace-nowrap text-xs py-1.5 px-3">Loan / Finance</TabsTrigger>
+                      <TabsTrigger value="expenses" className="shrink-0 whitespace-nowrap text-xs py-1.5 px-3">Expenses</TabsTrigger>
+                    </TabsList>
+                  </div>
 
                   {/* ─── TAB 1: OVERVIEW ────────────────────────────────────────── */}
                   <TabsContent value="overview" className="space-y-4 pt-3">
@@ -1723,9 +1725,9 @@ export default function Receivables() {
       {/* ─── CREATE INVOICE DIALOG ────────────────────────────────────────── */}
       {createInvoiceOpen && (
         <Dialog open={createInvoiceOpen} onOpenChange={setCreateInvoiceOpen}>
-          <DialogContent className="max-w-5xl max-h-[92vh] overflow-y-auto rounded-xl p-6">
+          <DialogContent className="max-w-5xl max-h-[92vh] overflow-y-auto rounded-xl p-3.5 sm:p-6 w-[96vw] sm:w-full">
             <DialogHeader className="border-b border-slate-100 pb-3">
-              <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-lg">
+              <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-lg flex-wrap">
                 <FileText className="w-5 h-5 text-blue-600" />
                 {invoiceForm.id ? "Edit " : "Create "}
                 {invoiceForm.doc_type === "customer_invoice" && "Customer Invoice"}
@@ -1754,7 +1756,7 @@ export default function Receivables() {
               </DialogDescription>
 
               {/* DOCUMENT TYPE SELECTOR TABS */}
-              <div className="flex items-center gap-1.5 pt-3 overflow-x-auto">
+              <div className="flex items-center gap-1.5 pt-3 overflow-x-auto pb-1 -mx-1 px-1 custom-scrollbar">
                 {[
                   { id: "tax_invoice", label: "TAX INVOICE", prefix: "INV" },
                   { id: "customer_invoice", label: "CUSTOMER INVOICE", prefix: "INV" },
@@ -2250,7 +2252,7 @@ export default function Receivables() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-3 gap-2">
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                             <div>
                               <Label className="text-[11px] font-semibold text-slate-600">Quantity</Label>
                               <Input
@@ -2271,7 +2273,7 @@ export default function Receivables() {
                                 className="h-8 text-xs text-center mt-0.5"
                               />
                             </div>
-                            <div>
+                            <div className="col-span-2 sm:col-span-1">
                               <Label className="text-[11px] font-semibold text-slate-600">Rate (₹)</Label>
                               <Input
                                 type="number"
@@ -2355,63 +2357,63 @@ export default function Receivables() {
                 </div>
 
                 <div className="space-y-2 font-mono text-xs bg-white p-3.5 rounded-lg border border-slate-200">
-                  <div className="flex justify-between py-1 border-b border-slate-100">
+                  <div className="flex items-center justify-between py-1 border-b border-slate-100 gap-2">
                     <span className="font-sans text-slate-600">Subtotal</span>
-                    <span className="font-bold text-slate-900">₹{invoiceForm.subtotal.toLocaleString("en-IN")}</span>
+                    <span className="font-bold text-slate-900 shrink-0 text-right">₹{invoiceForm.subtotal.toLocaleString("en-IN")}</span>
                   </div>
 
                   {invoiceForm.discount > 0 && (
-                    <div className="flex justify-between py-1 border-b border-slate-100 text-rose-600">
+                    <div className="flex items-center justify-between py-1 border-b border-slate-100 text-rose-600 gap-2">
                       <span className="font-sans">Discount</span>
-                      <span className="font-bold">-₹{invoiceForm.discount.toLocaleString("en-IN")}</span>
+                      <span className="font-bold shrink-0 text-right">-₹{invoiceForm.discount.toLocaleString("en-IN")}</span>
                     </div>
                   )}
 
-                  <div className="flex justify-between py-1 border-b border-slate-100">
+                  <div className="flex items-center justify-between py-1 border-b border-slate-100 gap-2">
                     <span className="font-sans text-slate-600">Taxable Amount</span>
-                    <span className="font-bold text-slate-900">₹{invoiceForm.taxable_amount.toLocaleString("en-IN")}</span>
+                    <span className="font-bold text-slate-900 shrink-0 text-right">₹{invoiceForm.taxable_amount.toLocaleString("en-IN")}</span>
                   </div>
 
                   {invoiceForm.gst_applicable ? (
                     invoiceForm.is_intra_state ? (
                       <>
-                        <div className="flex justify-between py-1 border-b border-slate-100 text-slate-700">
+                        <div className="flex items-center justify-between py-1 border-b border-slate-100 text-slate-700 gap-2">
                           <span className="font-sans">CGST ({invoiceForm.cgst_rate}%)</span>
-                          <span>₹{(((invoiceForm.taxable_amount) * invoiceForm.cgst_rate) / 100).toLocaleString("en-IN")}</span>
+                          <span className="shrink-0 text-right">₹{(((invoiceForm.taxable_amount) * invoiceForm.cgst_rate) / 100).toLocaleString("en-IN")}</span>
                         </div>
-                        <div className="flex justify-between py-1 border-b border-slate-100 text-slate-700">
+                        <div className="flex items-center justify-between py-1 border-b border-slate-100 text-slate-700 gap-2">
                           <span className="font-sans">SGST ({invoiceForm.sgst_rate}%)</span>
-                          <span>₹{(((invoiceForm.taxable_amount) * invoiceForm.sgst_rate) / 100).toLocaleString("en-IN")}</span>
+                          <span className="shrink-0 text-right">₹{(((invoiceForm.taxable_amount) * invoiceForm.sgst_rate) / 100).toLocaleString("en-IN")}</span>
                         </div>
                       </>
                     ) : (
-                      <div className="flex justify-between py-1 border-b border-slate-100 text-slate-700">
+                      <div className="flex items-center justify-between py-1 border-b border-slate-100 text-slate-700 gap-2">
                         <span className="font-sans">IGST ({invoiceForm.igst_rate}%)</span>
-                        <span>₹{(((invoiceForm.taxable_amount) * invoiceForm.igst_rate) / 100).toLocaleString("en-IN")}</span>
+                        <span className="shrink-0 text-right">₹{(((invoiceForm.taxable_amount) * invoiceForm.igst_rate) / 100).toLocaleString("en-IN")}</span>
                       </div>
                     )
                   ) : (
-                    <div className="flex justify-between py-1 border-b border-slate-100 text-slate-500 italic">
+                    <div className="flex items-center justify-between py-1 border-b border-slate-100 text-slate-500 italic gap-2">
                       <span className="font-sans">GST Status</span>
-                      <span>Not Applicable (₹0)</span>
+                      <span className="shrink-0 text-right">Not Applicable (₹0)</span>
                     </div>
                   )}
 
                   {invoiceForm.freight > 0 && (
-                    <div className="flex justify-between py-1 border-b border-slate-100 text-slate-700">
+                    <div className="flex items-center justify-between py-1 border-b border-slate-100 text-slate-700 gap-2">
                       <span className="font-sans">Freight</span>
-                      <span>₹{invoiceForm.freight.toLocaleString("en-IN")}</span>
+                      <span className="shrink-0 text-right">₹{invoiceForm.freight.toLocaleString("en-IN")}</span>
                     </div>
                   )}
 
-                  <div className="flex justify-between py-2 border-t-2 border-slate-300 font-bold text-base bg-blue-50/80 p-2.5 rounded text-blue-900 mt-2">
+                  <div className="flex items-center justify-between py-2 border-t-2 border-slate-300 font-bold text-base bg-blue-50/80 p-2.5 rounded text-blue-900 mt-2 gap-2">
                     <span className="font-sans">Grand Total</span>
-                    <span>₹{invoiceForm.grand_total.toLocaleString("en-IN")}</span>
+                    <span className="shrink-0 text-right">₹{invoiceForm.grand_total.toLocaleString("en-IN")}</span>
                   </div>
 
                   {/* INITIAL AMOUNT RECEIVED & BALANCE DUE BREAKDOWN */}
                   <div className="pt-3 border-t border-slate-200 mt-2 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-2">
                       <Label className="text-xs font-semibold text-slate-700 font-sans">Amount Received Now (₹)</Label>
                       <Input
                         type="number"
@@ -2421,13 +2423,13 @@ export default function Receivables() {
                         value={invoiceForm.amount_received !== undefined && invoiceForm.amount_received !== null ? invoiceForm.amount_received : 0}
                         onChange={(e) => setInvoiceForm({ ...invoiceForm, amount_received: e.target.value })}
                         placeholder="0.00"
-                        className="h-8 text-xs font-mono font-bold bg-white text-emerald-700 border-slate-300 w-36 text-right"
+                        className="h-8 text-xs font-mono font-bold bg-white text-emerald-700 border-slate-300 w-full sm:w-36 text-right"
                       />
                     </div>
 
-                    <div className="flex justify-between py-1 text-xs font-bold text-amber-800 bg-amber-50 p-2 rounded border border-amber-200">
+                    <div className="flex items-center justify-between py-1 text-xs font-bold text-amber-800 bg-amber-50 p-2 rounded border border-amber-200 gap-2">
                       <span className="font-sans">Balance Due</span>
-                      <span>
+                      <span className="shrink-0 text-right">
                         ₹{Math.max(0, invoiceForm.grand_total - (parseFloat(String(invoiceForm.amount_received || "0").replace(/[^0-9.]/g, "")) || 0)).toLocaleString("en-IN")}
                       </span>
                     </div>
@@ -2435,7 +2437,7 @@ export default function Receivables() {
                 </div>
               </div>
 
-              <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-between">
+              <DialogFooter className="pt-3 border-t border-slate-100 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
                 <Button
                   type="button"
                   variant="outline"
@@ -2454,15 +2456,15 @@ export default function Receivables() {
                     createInvoiceMutation.mutate(payload);
                   }}
                   disabled={createInvoiceMutation.isPending}
-                  className="text-slate-700 border-slate-300"
+                  className="w-full sm:w-auto text-slate-700 border-slate-300"
                 >
                   Save Draft
                 </Button>
-                <div className="flex items-center gap-2">
-                  <Button type="button" variant="outline" size="sm" onClick={() => setCreateInvoiceOpen(false)} disabled={createInvoiceMutation.isPending}>
+                <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                  <Button type="button" variant="outline" size="sm" onClick={() => setCreateInvoiceOpen(false)} disabled={createInvoiceMutation.isPending} className="w-full sm:w-auto">
                     Cancel
                   </Button>
-                  <Button type="submit" size="sm" disabled={createInvoiceMutation.isPending} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-2xs">
+                  <Button type="submit" size="sm" disabled={createInvoiceMutation.isPending} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-2xs">
                     {createInvoiceMutation.isPending ? "Generating Document..." : "Generate Invoice"}
                   </Button>
                 </div>
@@ -2717,11 +2719,11 @@ export default function Receivables() {
       {/* ─── FULL INVOICE DETAIL VIEW DIALOG ──────────────────────────────── */}
       {invoiceDetailOpen && selectedInvoiceDetail && (
         <Dialog open={invoiceDetailOpen} onOpenChange={setInvoiceDetailOpen}>
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto rounded-xl p-6">
-            <DialogHeader className="border-b border-slate-100 pb-3 flex flex-row items-center justify-between">
+          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto rounded-xl p-4 sm:p-6 w-[96vw] sm:w-full">
+            <DialogHeader className="border-b border-slate-100 pb-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <div>
-                <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-lg">
-                  <FileText className="w-5 h-5 text-blue-600" /> Invoice #{selectedInvoiceDetail.invoice_number}
+                <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-lg flex-wrap">
+                  <FileText className="w-5 h-5 text-blue-600 shrink-0" /> Invoice #{selectedInvoiceDetail.invoice_number}
                   <Badge
                     variant="outline"
                     className={`ml-2 text-xs capitalize ${
@@ -2743,7 +2745,7 @@ export default function Receivables() {
               </div>
 
               {/* ACTION BUTTONS */}
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                 {selectedInvoiceDetail.status === "Draft" && (
                   <Button
                     size="xs"
@@ -3498,7 +3500,7 @@ function NewProjectDialog({ clients, onClose, onSave, saving }) {
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl rounded-2xl p-5">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl p-4 sm:p-5 w-[96vw] sm:w-full">
         <DialogHeader className="border-b border-slate-100 pb-2">
           <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-base">
             <FolderPlus className="w-5 h-5 text-blue-600" /> Create New Financial Project

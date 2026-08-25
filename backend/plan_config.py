@@ -177,6 +177,68 @@ PLANS: Dict[str, Dict[str, Any]] = {
     }
 }
 
+def generate_plan_feature_bullets(plan: Dict[str, Any]) -> List[str]:
+    """Dynamically generate human-readable feature bullet points based on active plan limits and features."""
+    pid = plan.get("id", "starter").lower()
+    bullets = []
+    
+    if pid == "starter":
+        bullets.append(f"Up to {plan.get('max_users', 3)} users")
+        bullets.append(f"Up to {plan.get('max_clients', 100):,} active clients/projects")
+        bullets.append(f"{plan.get('storage_gb', 5)} GB secure document storage")
+        bullets.append(f"{plan.get('monthly_pdf_docx', 200):,} PDF/DOCX generations/month")
+        bullets.append(f"{plan.get('monthly_inventory_transactions', 2500):,} inventory transactions/month")
+        bullets.append(f"{plan.get('monthly_material_requests', 1000):,} material requests/month")
+        bullets.append("Core CRM & Client Onboarding")
+        bullets.append("Project Management & Task Portal")
+        bullets.append("Inward & Outward Stock Tracking")
+        bullets.append("Basic Import / Export")
+    elif pid == "growth":
+        bullets.append("Everything in Starter, plus:")
+        bullets.append(f"Up to {plan.get('max_users', 10)} users")
+        bullets.append(f"Up to {plan.get('max_clients', 500):,} active clients/projects")
+        bullets.append(f"{plan.get('storage_gb', 25)} GB secure document storage")
+        bullets.append(f"{plan.get('monthly_pdf_docx', 1000):,} PDF/DOCX generations/month")
+        bullets.append(f"{plan.get('monthly_inventory_transactions', 10000):,} inventory transactions/month")
+        if plan.get("monthly_api_requests", 0) > 0:
+            bullets.append(f"{plan.get('monthly_api_requests', 5000):,} API requests/month")
+        feats = plan.get("features", {})
+        if feats.get("advanced_inventory") or feats.get("high_value_goods"):
+            bullets.append("Advanced Inventory & High Value Goods")
+        if feats.get("serial_tracking") or feats.get("procurement"):
+            bullets.append("Serial Number & Procurement Tracking")
+        if feats.get("advanced_documents"):
+            bullets.append("Advanced Documents & Sales Invoices")
+        if feats.get("receivables") or feats.get("loan_finance"):
+            bullets.append("Receivables & Loan Tracking")
+        if feats.get("expenses") or feats.get("project_profitability"):
+            bullets.append("Expenses & Project Profitability")
+        if feats.get("advanced_reports") or feats.get("advanced_permissions"):
+            bullets.append("Advanced Reports & Permissions")
+    else:  # pro
+        bullets.append("Everything in Growth, plus:")
+        bullets.append(f"Up to {plan.get('max_users', 25)} users")
+        bullets.append(f"Up to {plan.get('max_clients', 2500):,} active clients/projects")
+        bullets.append(f"{plan.get('storage_gb', 100)} GB secure document storage")
+        bullets.append(f"{plan.get('monthly_pdf_docx', 5000):,} PDF/DOCX generations/month")
+        bullets.append(f"{plan.get('monthly_inventory_transactions', 50000):,} inventory transactions/month")
+        if plan.get("monthly_api_requests", 0) > 0:
+            bullets.append(f"{plan.get('monthly_api_requests', 50000):,} API requests/month")
+        feats = plan.get("features", {})
+        if feats.get("multi_branch"):
+            bullets.append("Multi-branch Support")
+        bullets.append("Advanced Financial & Operational Controls")
+        if feats.get("advanced_permissions"):
+            bullets.append("Advanced Role & Field Permissions")
+        if feats.get("api_integrations"):
+            bullets.append("API & External Integrations")
+        if feats.get("custom_branding"):
+            bullets.append("Custom Branding & Header Logo")
+        if feats.get("dedicated_support") or feats.get("priority_support"):
+            bullets.append("Dedicated Priority Account Manager")
+            
+    return bullets
+
 def get_plan_details(plan_id: str, db_override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Get plan metadata or fallback to Starter, merging optional database overrides."""
     pid = (plan_id or "starter").lower()
@@ -205,6 +267,7 @@ def get_plan_details(plan_id: str, db_override: Optional[Dict[str, Any]] = None)
     plan["normal_annual_equivalent"] = normal_annual_equivalent
     plan["annual_savings"] = annual_savings
     plan["savings_percentage"] = savings_percentage
+    plan["feature_bullets"] = generate_plan_feature_bullets(plan)
     return plan
 
 def get_all_plans(db_plans_list: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Dict[str, Any]]:

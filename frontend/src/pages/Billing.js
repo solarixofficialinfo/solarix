@@ -35,6 +35,13 @@ export default function Billing() {
 
   useEffect(() => {
     fetchSubscription();
+    const handleRefresh = () => { fetchSubscription(); };
+    window.addEventListener("solarix:plan-config-updated", handleRefresh);
+    window.addEventListener("solarix:auth-refresh", handleRefresh);
+    return () => {
+      window.removeEventListener("solarix:plan-config-updated", handleRefresh);
+      window.removeEventListener("solarix:auth-refresh", handleRefresh);
+    };
   }, [fetchSubscription]);
 
   const handleApplyCoupon = async () => {

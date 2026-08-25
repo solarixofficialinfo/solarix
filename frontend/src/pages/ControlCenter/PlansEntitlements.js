@@ -236,8 +236,11 @@ export default function PlansEntitlements() {
         features: planData.features || {},
       });
       toast.success(`Plan '${planData.name}' entitlements & limits updated successfully!`);
-      // Trigger live auth / subscription refresh across open tabs
+      // Trigger live plan and auth / subscription refresh across open views
+      window.dispatchEvent(new Event("solarix:plan-config-updated"));
       window.dispatchEvent(new Event("solarix:auth-refresh"));
+      // Refetch saved canonical values directly from backend
+      await fetchPlans();
     } catch (err) {
       toast.error(formatApiError(err));
     } finally {

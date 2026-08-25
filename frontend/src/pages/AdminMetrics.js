@@ -157,15 +157,15 @@ export default function AdminMetrics() {
           </CardHeader>
           <CardContent className="space-y-3 pt-2">
             <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs">
-              <span className="font-semibold text-slate-800">STARTER (₹2,999/mo)</span>
+              <span className="font-semibold text-slate-800">STARTER</span>
               <Badge className="bg-blue-100 text-blue-800">{data?.plan_breakdown?.starter || 0} Companies</Badge>
             </div>
             <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs">
-              <span className="font-semibold text-slate-800">GROWTH (₹5,999/mo)</span>
+              <span className="font-semibold text-slate-800">GROWTH</span>
               <Badge className="bg-indigo-100 text-indigo-800">{data?.plan_breakdown?.growth || 0} Companies</Badge>
             </div>
             <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs">
-              <span className="font-semibold text-slate-800">PRO (₹9,999/mo)</span>
+              <span className="font-semibold text-slate-800">PRO</span>
               <Badge className="bg-purple-100 text-purple-800">{data?.plan_breakdown?.pro || 0} Companies</Badge>
             </div>
           </CardContent>

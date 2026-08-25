@@ -16,11 +16,9 @@ export default function Pricing() {
   const [loadingPlan, setLoadingPlan] = useState(null);
   const [plansData, setPlansData] = useState(PLANS);
 
-  useEffect(() => {
-    let active = true;
+  const fetchLivePlans = useCallback(() => {
     api.get("/billing/plans")
       .then((res) => {
-        if (!active) return;
         const fetched = res.data?.plans || res.data;
         if (fetched && typeof fetched === "object") {
           setPlansData((prev) => {
@@ -35,6 +33,10 @@ export default function Pricing() {
                   name: matched.name || next[key].name,
                   tagline: matched.tagline || next[key].tagline,
                   turnover: matched.target_turnover || matched.turnover || next[key].turnover,
+                  badge: matched.badge !== undefined ? matched.badge : next[key].badge,
+                  features: Array.isArray(matched.feature_bullets) && matched.feature_bullets.length > 0
+                    ? matched.feature_bullets
+                    : next[key].features
                 };
               }
             });
@@ -45,8 +47,15 @@ export default function Pricing() {
       .catch(() => {
         // Silently fallback to default PLANS
       });
-    return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    fetchLivePlans();
+    window.addEventListener("solarix:plan-config-updated", fetchLivePlans);
+    return () => {
+      window.removeEventListener("solarix:plan-config-updated", fetchLivePlans);
+    };
+  }, [fetchLivePlans]);
 
   const handleBack = () => {
     if (window.history.length > 1 && window.history.state?.idx > 0) {
@@ -313,8 +322,8 @@ export default function Pricing() {
             <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center mx-auto">
               <Zap className="w-5 h-5" />
             </div>
-            <div className="font-semibold text-slate-900 text-sm">15-Day Full Trial</div>
-            <div className="text-xs text-slate-500">Access all PRO features during trial with zero restrictions.</div>
+            <div className="font-semibold text-slate-900 text-sm">15-Day Free Trial</div>
+            <div className="text-xs text-slate-500">Explore complete solar EPC workflows with zero commitments.</div>
           </div>
           <div className="space-y-2">
             <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center mx-auto">

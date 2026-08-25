@@ -2817,9 +2817,11 @@ def require_feature_entitlement(feature_key: str):
             raise HTTPException(status_code=403, detail="SUBSCRIPTION_REQUIRED: No company workspace found")
         from plan_config import check_feature_access
         company = await db.companies.find_one({"id": cid}, {"_id": 0})
-        has_access = check_feature_access(company or cid, feature_key)
+        plan_id = (company.get("plan_id") or company.get("plan") or "starter").lower() if company else "starter"
+        db_plan_override = await db.plans_config.find_one({"id": plan_id}, {"_id": 0})
+        has_access = check_feature_access(company or cid, feature_key, db_override=db_plan_override)
         if not has_access:
-            plan_name = (company.get("plan_id") or "starter").upper() if company else "STARTER"
+            plan_name = plan_id.upper()
             raise HTTPException(
                 status_code=403,
                 detail=f"FEATURE_NOT_ENTITLED: '{feature_key.replace('_', ' ').title()}' is not available on your {plan_name} plan. Upgrade to Growth or Pro to unlock this feature."
@@ -16319,22 +16321,32 @@ async def list_platform_plans(user=Depends(require_super_admin())):
 @api_router.put("/admin/plans/{plan_id}")
 @api_router.put("/platform-owner/plans/{plan_id}")
 async def update_platform_plan(plan_id: str, data: PlatformPlanUpdateIn, user=Depends(require_super_admin())):
+    pid = plan_id.lower()
+    default_prod = 15000 if pid == "pro" else 5000 if pid == "growth" else 1000
+    default_storage = 100 if pid == "pro" else 25 if pid == "growth" else 5
+    default_docs = 10000 if pid == "pro" else 2000 if pid == "growth" else 500
+    default_pdf = 5000 if pid == "pro" else 1000 if pid == "growth" else 200
+    default_exports = 1000 if pid == "pro" else 250 if pid == "growth" else 50
+    default_mr = 20000 if pid == "pro" else 5000 if pid == "growth" else 1000
+    default_inv = 50000 if pid == "pro" else 10000 if pid == "growth" else 2500
+    default_api = 50000 if pid == "pro" else 5000 if pid == "growth" else 0
+
     doc = {
-        "id": plan_id.lower(),
+        "id": pid,
         "name": data.name,
         "tagline": data.tagline or "",
-        "monthly_price": data.monthly_price,
-        "yearly_price": data.yearly_price,
-        "max_users": data.max_users,
-        "max_clients": data.max_clients,
-        "max_products": data.max_products or (15000 if plan_id.lower() == "pro" else 5000 if plan_id.lower() == "growth" else 1000),
-        "storage_gb": data.storage_gb or (100 if plan_id.lower() == "pro" else 25 if plan_id.lower() == "growth" else 5),
-        "monthly_documents": data.monthly_documents or (10000 if plan_id.lower() == "pro" else 2000 if plan_id.lower() == "growth" else 500),
-        "monthly_pdf_docx": data.monthly_pdf_docx or (5000 if plan_id.lower() == "pro" else 1000 if plan_id.lower() == "growth" else 200),
-        "monthly_exports": data.monthly_exports or (1000 if plan_id.lower() == "pro" else 250 if plan_id.lower() == "growth" else 50),
-        "monthly_material_requests": data.monthly_material_requests or (20000 if plan_id.lower() == "pro" else 5000 if plan_id.lower() == "growth" else 1000),
-        "monthly_inventory_transactions": data.monthly_inventory_transactions or (50000 if plan_id.lower() == "pro" else 10000 if plan_id.lower() == "growth" else 2500),
-        "monthly_api_requests": data.monthly_api_requests or (50000 if plan_id.lower() == "pro" else 5000 if plan_id.lower() == "growth" else 0),
+        "monthly_price": float(data.monthly_price),
+        "yearly_price": float(data.yearly_price),
+        "max_users": int(data.max_users),
+        "max_clients": int(data.max_clients),
+        "max_products": int(data.max_products) if data.max_products is not None else default_prod,
+        "storage_gb": int(data.storage_gb) if data.storage_gb is not None else default_storage,
+        "monthly_documents": int(data.monthly_documents) if data.monthly_documents is not None else default_docs,
+        "monthly_pdf_docx": int(data.monthly_pdf_docx) if data.monthly_pdf_docx is not None else default_pdf,
+        "monthly_exports": int(data.monthly_exports) if data.monthly_exports is not None else default_exports,
+        "monthly_material_requests": int(data.monthly_material_requests) if data.monthly_material_requests is not None else default_mr,
+        "monthly_inventory_transactions": int(data.monthly_inventory_transactions) if data.monthly_inventory_transactions is not None else default_inv,
+        "monthly_api_requests": int(data.monthly_api_requests) if data.monthly_api_requests is not None else default_api,
         "active": data.active if data.active is not None else True,
         "features": data.features,
         "updated_at": now_iso()

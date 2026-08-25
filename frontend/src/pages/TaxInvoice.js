@@ -366,15 +366,15 @@ export default function TaxInvoice() {
             Create GST-compliant invoices using client and product master data
           </p>
         </div>
-        <div className="flex flex-wrap gap-2 items-center">
+        <div className="flex flex-wrap gap-2 items-center w-full sm:w-auto">
           {generatedFiles.length > 0 && (
-            <Button variant="outline" className="border-slate-300 text-slate-700 h-10 text-xs font-semibold rounded-xl" onClick={() => window.open(fileUrl(generatedFiles[0].id), "_blank")}>
+            <Button variant="outline" className="flex-1 sm:flex-initial border-slate-300 text-slate-700 h-10 text-xs font-semibold rounded-xl" onClick={() => window.open(fileUrl(generatedFiles[0].id), "_blank")}>
               Open {generatedFiles[0].filename?.endsWith(".docx") ? "Document" : "PDF"}
             </Button>
           )}
           <Button
             variant="outline"
-            className="border-blue-300 text-blue-700 hover:bg-blue-50 font-semibold text-xs h-10 px-4 rounded-xl shadow-xs transition gap-1.5"
+            className="flex-1 sm:flex-initial border-blue-300 text-blue-700 hover:bg-blue-50 font-semibold text-xs h-10 px-4 rounded-xl shadow-xs transition gap-1.5 whitespace-nowrap"
             onClick={() => saveInvoice("docx")}
             disabled={busy}
             data-testid="download-word-btn"
@@ -383,7 +383,7 @@ export default function TaxInvoice() {
             {busy ? "Generating…" : "Download Word"}
           </Button>
           <Button
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-10 px-5 rounded-xl shadow-xs transition gap-2"
+            className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-10 px-5 rounded-xl shadow-xs transition gap-2 whitespace-nowrap"
             onClick={() => saveInvoice("pdf")}
             disabled={busy}
             data-testid="download-pdf-btn"

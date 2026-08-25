@@ -120,6 +120,8 @@ export default function CustomerDetail() {
         }).catch(() => {});
       }
       toast.success(`Subscription updated to ${subForm.plan_id.toUpperCase()} successfully!`);
+      window.dispatchEvent(new Event("solarix:plan-config-updated"));
+      window.dispatchEvent(new Event("solarix:auth-refresh"));
       setSubOpen(false);
       fetchCustomerDetail();
     } catch (err) {
@@ -145,6 +147,8 @@ export default function CustomerDetail() {
         reason: "Manual feature override by Super Admin"
       });
       toast.success("Feature entitlements & temporary expiries saved successfully");
+      window.dispatchEvent(new Event("solarix:plan-config-updated"));
+      window.dispatchEvent(new Event("solarix:auth-refresh"));
       fetchCustomerDetail();
     } catch (err) {
       toast.error(formatApiError(err));
@@ -295,7 +299,7 @@ export default function CustomerDetail() {
                   <PlanBadge planId={company.plan_id} size="md" />
                 </div>
                 <div className="text-[11px] text-slate-400 pt-1 font-sans">
-                  {company.plan_id === "pro" ? "₹9,999 / month" : company.plan_id === "growth" ? "₹5,999 / month" : "₹2,999 / month"}
+                  {company.plan_name || company.plan_id?.toUpperCase() || "STARTER"} Plan
                 </div>
               </div>
 
@@ -527,9 +531,9 @@ export default function CustomerDetail() {
               <Select value={subForm.plan_id} onValueChange={(v) => setSubForm({ ...subForm, plan_id: v })}>
                 <SelectTrigger className="mt-1 bg-slate-900 border-slate-700 text-white h-9"><SelectValue /></SelectTrigger>
                 <SelectContent className="bg-slate-900 text-white border-slate-700">
-                  <SelectItem value="starter">STARTER (₹2,999 / mo)</SelectItem>
-                  <SelectItem value="growth">GROWTH (₹5,999 / mo)</SelectItem>
-                  <SelectItem value="pro">PRO (₹9,999 / mo)</SelectItem>
+                  <SelectItem value="starter">STARTER</SelectItem>
+                  <SelectItem value="growth">GROWTH</SelectItem>
+                  <SelectItem value="pro">PRO</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -351,21 +351,23 @@ export default function DocumentTemplates() {
             badge="Compliance Engine"
           />
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <Button
             size="sm"
             variant="outline"
             onClick={() => openMappingModalForDiscom(activeDiscomCode)}
-            className="border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold gap-1.5"
+            className="flex-1 sm:flex-initial border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold gap-1.5 whitespace-nowrap"
             data-testid="open-discom-mapping-btn"
           >
             <Sliders className="w-3.5 h-3.5 text-blue-600" /> DISCOM Document Mapping
           </Button>
           {activeClient && (
-            <div className="bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 flex items-center gap-2 text-xs">
-              <User className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-              <span className="font-bold text-slate-900">{activeClient.full_name || activeClient.name}</span>
-              <span className="text-blue-700 font-mono font-medium">({activeClient.sol_id || activeClient.client_code || "SOL ID"})</span>
+            <div className="bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 flex items-center gap-2 text-xs w-full sm:w-auto justify-between sm:justify-start">
+              <div className="flex items-center gap-2 truncate">
+                <User className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <span className="font-bold text-slate-900 truncate">{activeClient.full_name || activeClient.name}</span>
+              </div>
+              <span className="text-blue-700 font-mono font-medium shrink-0">({activeClient.sol_id || activeClient.client_code || "SOL ID"})</span>
             </div>
           )}
         </div>
@@ -487,7 +489,7 @@ export default function DocumentTemplates() {
                       </CardDescription>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Badge className="bg-emerald-600 text-white font-bold text-xs px-2.5 py-1">
                         {activeClient?.system_kw ? `${activeClient.system_kw} kW System` : "Solar Project"}
                       </Badge>
@@ -507,7 +509,7 @@ export default function DocumentTemplates() {
                         <span className="text-sky-800 text-[11px] truncate">({activeDiscomMeta.name})</span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
                       <Button
                         size="xs"
                         variant="outline"
@@ -766,7 +768,7 @@ export default function DocumentTemplates() {
 
       {/* ─── MODAL 1: SEARCHABLE DISCOM SELECTOR MODAL ─────────────────────────── */}
       <Dialog open={discomModalOpen} onOpenChange={setDiscomModalOpen}>
-        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col p-6">
+        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col p-4 sm:p-6 w-[96vw] sm:w-full">
           <DialogHeader>
             <DialogTitle className="text-base font-bold flex items-center gap-2">
               <Globe className="w-5 h-5 text-sky-600" />
@@ -861,7 +863,7 @@ export default function DocumentTemplates() {
 
       {/* ─── MODAL 2: DISCOM DOCUMENT MAPPING CONFIGURATION MODAL ──────────── */}
       <Dialog open={mappingModalOpen} onOpenChange={setMappingModalOpen}>
-        <DialogContent className="max-w-xl max-h-[85vh] flex flex-col p-6">
+        <DialogContent className="max-w-xl max-h-[85vh] flex flex-col p-4 sm:p-6 w-[96vw] sm:w-full">
           <DialogHeader>
             <DialogTitle className="text-base font-bold flex items-center gap-2">
               <Sliders className="w-5 h-5 text-blue-600" />
