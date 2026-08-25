@@ -83,7 +83,13 @@ function Protected({ children }) {
 
 function PublicOnly({ children }) {
   const { user, loading } = useAuth();
-  if (loading) return null;
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="text-slate-400 text-sm font-medium animate-pulse">Loading Solarix…</div>
+      </div>
+    );
+  }
   if (user) return <Navigate to="/dashboard" replace />;
   return children;
 }

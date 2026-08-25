@@ -85,12 +85,14 @@ export const AuthProvider = ({ children }) => {
     }
     fetchingRef.current = true;
     try {
-      const { data } = await api.get("/auth/me");
+      const { data } = await api.get("/auth/me", { timeout: 5000 });
       setUser(data.user);
       setCompany(data.company);
       // Prefetch commonly used data so first navigation is instant
       _prefetchCommonData(queryClient);
     } catch {
+      localStorage.removeItem("solarix_token");
+      localStorage.removeItem("solarix_refresh_token");
       setUser(false);
       setCompany(null);
     } finally {

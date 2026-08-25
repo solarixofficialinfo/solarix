@@ -28,6 +28,21 @@ export default function Login() {
     let mounted = true;
     let handled = false;
 
+    // Check if the current URL actually contains OAuth callback parameters
+    const hasOAuthParams = () => {
+      const hash = typeof window !== "undefined" ? (window.location.hash || "") : "";
+      const search = typeof window !== "undefined" ? (window.location.search || "") : "";
+      const pathname = typeof window !== "undefined" ? (window.location.pathname || "") : "";
+      return (
+        hash.includes("access_token") ||
+        hash.includes("refresh_token") ||
+        hash.includes("error_description") ||
+        search.includes("code=") ||
+        search.includes("error=") ||
+        pathname === "/auth/callback"
+      );
+    };
+
     const processSession = async (session) => {
       if (handled || !session || !session.user || !session.user.email) return;
       handled = true;
@@ -43,22 +58,45 @@ export default function Login() {
           toast.error(formatApiError(err));
           setGoogleLoading(false);
         }
-        if (window.location.hash) {
+      } finally {
+        if (typeof window !== "undefined" && (window.location.hash || window.location.search.includes("code="))) {
           window.history.replaceState(null, "", window.location.pathname);
         }
       }
     };
 
-    // 1. Initial check
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (mounted && session) {
-        processSession(session);
+    // Check for error in URL hash or query params
+    if (typeof window !== "undefined") {
+      const hash = window.location.hash || "";
+      const search = window.location.search || "";
+      if (hash.includes("error_description=") || search.includes("error_description=")) {
+        const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : search);
+        const desc = params.get("error_description") || params.get("error") || "Authentication failed";
+        toast.error(decodeURIComponent(desc.replace(/\+/g, " ")));
+        window.history.replaceState(null, "", window.location.pathname);
+        return;
       }
-    }).catch(() => {});
+    }
 
-    // 2. Auth state change listener (catches hash token completion)
+    // 1. Check existing session ONLY if URL contains OAuth redirect parameters
+    if (hasOAuthParams()) {
+      supabase.auth.getSession().then(({ data: { session }, error }) => {
+        if (error) {
+          toast.error(error.message || "Google authentication failed");
+          if (window.location.hash) {
+            window.history.replaceState(null, "", window.location.pathname);
+          }
+          return;
+        }
+        if (mounted && session) {
+          processSession(session);
+        }
+      }).catch(() => {});
+    }
+
+    // 2. Auth state change listener (catches SIGNED_IN event from OAuth redirect)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (mounted && session && (event === "SIGNED_IN" || event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED")) {
+      if (mounted && session && (event === "SIGNED_IN" || (event === "TOKEN_REFRESHED" && hasOAuthParams()))) {
         processSession(session);
       }
     });

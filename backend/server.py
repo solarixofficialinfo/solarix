@@ -2244,6 +2244,7 @@ async def get_current_user(request: Request) -> dict:
     # ── Slow path: validate with JWT secret or Supabase and fetch profile ──
     user_id = None
     payload = None
+    res = None
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         user_id = payload.get("sub") or payload.get("user_id") or payload.get("id")
@@ -2273,10 +2274,10 @@ async def get_current_user(request: Request) -> dict:
             user = None
 
     if not user or not isinstance(user, dict):
-        user_email = (payload.get("email") if isinstance(payload, dict) else None) or (getattr(locals().get('res', None), 'user', None) and getattr(res.user, 'email', None))
+        user_email = (payload.get("email") if isinstance(payload, dict) else None) or (res.user.email if (res and getattr(res, 'user', None) and getattr(res.user, 'email', None)) else None)
         if user_email:
             try:
-                user = await db.users.find_one({"email": user_email.lower().strip()}, {"_id": 0})
+                user = await db.users.find_one({"email": str(user_email).lower().strip()}, {"_id": 0})
             except Exception:
                 user = None
 
@@ -2291,7 +2292,7 @@ async def get_current_user(request: Request) -> dict:
                 "email": payload.get("email") or "",
                 "permissions": payload.get("permissions") or default_perms_for_role(payload.get("role") or "Staff")
             }
-        elif locals().get('res') is not None and hasattr(locals()['res'], 'user') and locals()['res'].user:
+        elif res and getattr(res, 'user', None):
             user_meta = getattr(res.user, 'user_metadata', {}) or {}
             u_name = user_meta.get("full_name") or user_meta.get("name") or getattr(res.user, 'email', '') or "User"
             user = {
@@ -2314,7 +2315,7 @@ async def get_current_user(request: Request) -> dict:
     if not user.get("name"):
         user["name"] = user.get("full_name") or "User"
 
-    if (user.get("email") or "").strip().lower() in SUPER_ADMIN_EMAILS:
+    if str(user.get("email") or "").strip().lower() in SUPER_ADMIN_EMAILS:
         user["is_super_admin"] = True
         user["is_platform_owner"] = True
         user["user_type"] = "super_admin"
@@ -3177,32 +3178,42 @@ async def login(data: LoginIn, response: Response):
                     raise HTTPException(status_code=401, detail="Email not confirmed. Please check your inbox.")
                 raise HTTPException(status_code=401, detail="Invalid credentials")
 
-        # Fetch user profile using the user's own JWT (bypasses RLS without needing service key)
+        # Fetch user profile using fast DB lookup first, with bounded RPC fallback
         logger.info(f"[LOGIN] step=profile_lookup_start elapsed={_elapsed()}ms")
         if auth_user_id:
             try:
-                user = await asyncio.to_thread(_lookup_user_profile_with_token_sync, auth_user_id, token)
+                user = await db.users.find_one({"id": auth_user_id}, {"_id": 0})
+                if not user and ident:
+                    user = await db.users.find_one({"email": ident}, {"_id": 0})
                 if user:
-                    logger.info(f"[LOGIN] step=profile_via_user_jwt elapsed={_elapsed()}ms")
-            except Exception:
-                pass
+                    logger.info(f"[LOGIN] step=profile_via_db elapsed={_elapsed()}ms")
+            except Exception as e:
+                logger.warning(f"[LOGIN] step=profile_db_err elapsed={_elapsed()}ms err={e}")
+                user = None
+
+            if not user:
+                try:
+                    user = await asyncio.wait_for(
+                        asyncio.to_thread(_lookup_user_profile_with_token_sync, auth_user_id, token),
+                        timeout=1.5
+                    )
+                    if user:
+                        logger.info(f"[LOGIN] step=profile_via_user_jwt elapsed={_elapsed()}ms")
+                except Exception:
+                    pass
+
             if not user:
                 try:
                     # Fallback: try service RPC
-                    rpc_res = await asyncio.to_thread(
-                        lambda: get_rpc_client().rpc("get_user_by_id", {"p_user_id": auth_user_id}).execute()
+                    rpc_res = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            lambda: get_rpc_client().rpc("get_user_by_id", {"p_user_id": auth_user_id}).execute()
+                        ),
+                        timeout=1.5
                     )
                     user = rpc_res.data[0] if isinstance(rpc_res.data, list) and rpc_res.data else None
                     if user:
                         logger.info(f"[LOGIN] step=profile_via_service_rpc elapsed={_elapsed()}ms")
-                except Exception:
-                    pass
-            if not user:
-                # Last resort: try direct DB lookup via CollectionAdapter
-                try:
-                    user = await db.users.find_one({"id": auth_user_id}, {"_id": 0})
-                    if user:
-                        logger.info(f"[LOGIN] step=profile_via_db elapsed={_elapsed()}ms")
                 except Exception:
                     pass
 
@@ -3651,10 +3662,13 @@ async def google_login(data: GoogleLoginIn, response: Response):
     if not email:
         raise HTTPException(status_code=400, detail="Google email is required")
 
-    # Optional: If Supabase access token is supplied, verify it against Supabase auth.get_user
+    # Optional: If Supabase access token is supplied, verify it asynchronously with strict timeout
     if data.supabase_access_token:
         try:
-            sb_user_res = supabase.auth.get_user(data.supabase_access_token)
+            sb_user_res = await asyncio.wait_for(
+                asyncio.to_thread(supabase.auth.get_user, data.supabase_access_token),
+                timeout=3.0
+            )
             if sb_user_res and sb_user_res.user and sb_user_res.user.email:
                 sb_email = sb_user_res.user.email.strip().lower()
                 if sb_email and sb_email != email:
@@ -3679,17 +3693,32 @@ async def google_login(data: GoogleLoginIn, response: Response):
         raise HTTPException(status_code=403, detail="This Google account is inactive. Contact your company administrator.")
 
     cid = str(user.get("company_id") or "")
-    if not cid:
-        raise HTTPException(status_code=403, detail="Account not authorized. No valid company associated.")
-
-    company = _cache_get_company(cid)
-    if not company:
+    company = _cache_get_company(cid) if cid else None
+    if not company and cid:
         company = await db.companies.find_one({"id": cid}, {"_id": 0})
-        if company and isinstance(company, dict):
-            _cache_put_company(cid, company)
 
+    # Safe company resolution fallback by email (same safe logic as normal login flow)
     if not company:
+        user_email = (user.get("email") or email).lower().strip()
+        if user_email:
+            try:
+                company = await db.companies.find_one({"email": user_email}, {"_id": 0})
+                if company and isinstance(company, dict):
+                    user["company_id"] = company["id"]
+                    cid = company["id"]
+                    await db.users.update_one({"id": user["id"]}, {"$set": {"company_id": company["id"]}})
+            except Exception as e:
+                logger.error(f"[GOOGLE_AUTH] company_by_email_failed err={e}")
+
+    if not company or not cid:
         raise HTTPException(status_code=403, detail="Account not authorized. Company workspace not found.")
+
+    if company and isinstance(company, dict):
+        local_c = await LocalFileCollection("companies").find_one({"id": company.get("id") or cid})
+        if local_c:
+            company = {**company, **local_c}
+        company = _enrich_company_doc(company)
+        _cache_put_company(company.get("id") or cid, company)
 
     if user.get("role") == "Installer":
         perms = user.get("permissions")
@@ -4588,6 +4617,7 @@ def _verify_client_db_write(original_payload: dict, read_back_doc: dict):
 async def update_client(client_id: str, data: ClientIn, user=Depends(get_current_user)):
     if not has_perm(user, "clients", "edit"):
         raise HTTPException(status_code=403, detail="Missing permission: clients.edit")
+    existing = await db.clients.find_one({"id": client_id, "company_id": user["company_id"]}, {"_id": 0})
     raw_payload = data.model_dump()
     update = _normalize_client_payload(dict(raw_payload))
     subsidy_eligible = data.subsidy_eligible is True if data.subsidy_eligible is not None else ((existing.get("subsidy_eligible") is True) if existing else False)
