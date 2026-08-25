@@ -15,6 +15,8 @@ import BalanceTab from "@/components/Inventory/BalanceTab";
 import HistoryTab from "@/components/Inventory/HistoryTab";
 import SerialTrackingTab from "@/components/Inventory/SerialTrackingTab";
 import PageHeader from "@/components/PageHeader";
+import useEntitlements from "@/hooks/useEntitlements";
+import LockedFeatureCard from "@/components/LockedFeatureCard";
 const HighValueAssets = React.lazy(() => import("@/pages/HighValueAssets"));
 
 const StatCard = ({ label, value, sub, icon: Ic, accent }) => (
@@ -31,6 +33,7 @@ const StatCard = ({ label, value, sub, icon: Ic, accent }) => (
 );
 
 export default function Inventory() {
+  const { hasFeature } = useEntitlements();
   const { data: rawProducts = [], isLoading: productsLoading } = useProductList();
   const products = Array.isArray(rawProducts) ? rawProducts : [];
   const invalidateInventory = useInvalidateInventory();
@@ -145,13 +148,41 @@ export default function Inventory() {
         </div>
         <div style={{ display: tab === "high-value-goods" ? "block" : "none" }}>
           {visitedTabs.has("high-value-goods") && (
-            <Suspense fallback={<div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500">Loading high value goods…</div>}>
-              <HighValueAssets />
-            </Suspense>
+            !hasFeature("high_value_goods") ? (
+              <LockedFeatureCard
+                featureName="High Value Goods & Capital Equipment"
+                requiredPlan="Growth"
+                description="Manage serialized solar panels, inverters, batteries, and high-capital equipment with dispatch warranties."
+                benefits={[
+                  "Serialized asset tracking & warranty management",
+                  "Barcode / QR tracking for high-value dispatch",
+                  "Dedicated equipment status and location history",
+                ]}
+              />
+            ) : (
+              <Suspense fallback={<div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500">Loading high value goods…</div>}>
+                <HighValueAssets />
+              </Suspense>
+            )
           )}
         </div>
         <div style={{ display: tab === "serial-tracking" ? "block" : "none" }}>
-          {visitedTabs.has("serial-tracking") && <SerialTrackingTab globalSearch={search} />}
+          {visitedTabs.has("serial-tracking") && (
+            !hasFeature("serial_tracking") ? (
+              <LockedFeatureCard
+                featureName="Serial Number Tracking & Verification"
+                requiredPlan="Growth"
+                description="Track individual serial numbers for inward and outward dispatches with complete audit trails."
+                benefits={[
+                  "Individual item serial barcode scanning",
+                  "Serial number reconciliation with challans",
+                  "Project-to-serial number assignment",
+                ]}
+              />
+            ) : (
+              <SerialTrackingTab globalSearch={search} />
+            )
+          )}
         </div>
       </Tabs>
     </div>

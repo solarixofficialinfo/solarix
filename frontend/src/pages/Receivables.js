@@ -17,9 +17,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
 import { toast } from "sonner";
 import { useAuth } from "../context/AuthContext";
+import useEntitlements from "@/hooks/useEntitlements";
+import LockedFeatureCard from "@/components/LockedFeatureCard";
 
 export default function Receivables() {
   const { company: companyProfile } = useAuth();
+  const { hasFeature } = useEntitlements();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -1536,176 +1539,206 @@ export default function Receivables() {
 
                   {/* ─── TAB 5: LOAN / FINANCE ──────────────────────────────────── */}
                   <TabsContent value="loan_finance" className="space-y-3 pt-3">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-bold text-xs text-slate-900">Loan & Finance Lifecycle Tracking</h4>
-                      <Button
-                        size="sm"
-                        onClick={() => handleOpenAddLoan(activeProjectId)}
-                        className="h-7 text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold gap-1"
-                      >
-                        <Plus className="w-3.5 h-3.5" /> + Add Loan
-                      </Button>
-                    </div>
-
-                    <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2">
-                      <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                      <div>
-                        <strong>Strict Loan Accounting Rule:</strong> A planned or approved loan is <em>NOT</em> automatically a received payment.
-                        Only the <strong>Actual Disbursed Amount</strong> counts toward Actual Received.
-                      </div>
-                    </div>
-
-                    {(projectWorkspace?.loans || []).length === 0 ? (
-                      <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-50 rounded-xl border">
-                        No loan records logged for this project.
-                      </div>
+                    {!hasFeature("loan_finance") ? (
+                      <LockedFeatureCard
+                        featureName="Loan & Finance Lifecycle Tracking"
+                        requiredPlan="Growth"
+                        description="Track loan providers, sanctions, disbursement milestones, and bank release payments per project."
+                        benefits={[
+                          "Multiple loan accounts per client/project",
+                          "Disbursement vs Approval tracking",
+                          "One-click conversion from Disbursed Loan to Received Payment",
+                        ]}
+                      />
                     ) : (
-                      <div className="space-y-3">
-                        {projectWorkspace.loans.map((loan) => {
-                          const isRecorded = loan.payment_recorded || (projectWorkspace?.payments || []).some(p => p.loan_id === loan.id && (p.status || "Received").toLowerCase() === "received");
-                          return (
-                            <div key={loan.id} className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2 text-xs">
-                              <div className="flex items-start justify-between gap-2">
-                                <div>
-                                  <div className="font-bold text-sm text-slate-900">{loan.provider}</div>
-                                  <div className="text-slate-500 text-[11px]">Loan Ref: {loan.loan_ref || "—"}</div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[10px]">
-                                    {loan.status}
-                                  </Badge>
-                                  {isRecorded ? (
-                                    <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-semibold flex items-center gap-1">
-                                      <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Payment Recorded
-                                    </Badge>
-                                  ) : (
-                                    <Button
-                                      size="xs"
-                                      onClick={() => handleConvertLoanToPayment(loan)}
-                                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] h-6 px-2 gap-1"
-                                    >
-                                      <DollarSign className="w-3 h-3" /> Record as Received
-                                    </Button>
+                      <>
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-bold text-xs text-slate-900">Loan & Finance Lifecycle Tracking</h4>
+                          <Button
+                            size="sm"
+                            onClick={() => handleOpenAddLoan(activeProjectId)}
+                            className="h-7 text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold gap-1"
+                          >
+                            <Plus className="w-3.5 h-3.5" /> + Add Loan
+                          </Button>
+                        </div>
+
+                        <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2">
+                          <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <div>
+                            <strong>Strict Loan Accounting Rule:</strong> A planned or approved loan is <em>NOT</em> automatically a received payment.
+                            Only the <strong>Actual Disbursed Amount</strong> counts toward Actual Received.
+                          </div>
+                        </div>
+
+                        {(projectWorkspace?.loans || []).length === 0 ? (
+                          <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-50 rounded-xl border">
+                            No loan records logged for this project.
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            {projectWorkspace.loans.map((loan) => {
+                              const isRecorded = loan.payment_recorded || (projectWorkspace?.payments || []).some(p => p.loan_id === loan.id && (p.status || "Received").toLowerCase() === "received");
+                              return (
+                                <div key={loan.id} className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2 text-xs">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div>
+                                      <div className="font-bold text-sm text-slate-900">{loan.provider}</div>
+                                      <div className="text-slate-500 text-[11px]">Loan Ref: {loan.loan_ref || "—"}</div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[10px]">
+                                        {loan.status}
+                                      </Badge>
+                                      {isRecorded ? (
+                                        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-semibold flex items-center gap-1">
+                                          <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Payment Recorded
+                                        </Badge>
+                                      ) : (
+                                        <Button
+                                          size="xs"
+                                          onClick={() => handleConvertLoanToPayment(loan)}
+                                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] h-6 px-2 gap-1"
+                                        >
+                                          <DollarSign className="w-3 h-3" /> Record as Received
+                                        </Button>
+                                      )}
+                                      <Button
+                                        size="xs"
+                                        variant="ghost"
+                                        onClick={() => handleOpenEditLoan(loan)}
+                                        className="h-6 w-6 p-0 text-slate-500 hover:text-blue-600"
+                                      >
+                                        <Edit3 className="w-3.5 h-3.5" />
+                                      </Button>
+                                      <Button
+                                        size="xs"
+                                        variant="ghost"
+                                        onClick={() => {
+                                          if (window.confirm("Delete this loan record?")) {
+                                            deleteLoanMutation.mutate(loan.id);
+                                          }
+                                        }}
+                                        className="h-6 w-6 p-0 text-slate-500 hover:text-rose-600"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </Button>
+                                    </div>
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100 text-[11px]">
+                                    <div>
+                                      <span className="text-slate-400 block">Loan Requested</span>
+                                      <strong className="text-slate-700">₹{(loan.loan_amount || 0).toLocaleString("en-IN")}</strong>
+                                    </div>
+                                    <div>
+                                      <span className="text-slate-400 block">Approved Amount</span>
+                                      <strong className="text-indigo-700">₹{(loan.approved_amount || 0).toLocaleString("en-IN")}</strong>
+                                    </div>
+                                    <div>
+                                      <span className="text-slate-400 block">Actual Disbursed</span>
+                                      <strong className="text-emerald-700">₹{(loan.disbursed_amount || 0).toLocaleString("en-IN")}</strong>
+                                    </div>
+                                  </div>
+                                  {(loan.approved_date || loan.expected_disbursement_date || loan.remarks) && (
+                                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-slate-500 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                      {loan.approved_date && <span><strong>Approved Date:</strong> {loan.approved_date}</span>}
+                                      {loan.expected_disbursement_date && <span><strong>Expected Disb.:</strong> {loan.expected_disbursement_date}</span>}
+                                      {loan.remarks && <span className="italic">"{loan.remarks}"</span>}
+                                    </div>
                                   )}
-                                  <Button
-                                    size="xs"
-                                    variant="ghost"
-                                    onClick={() => handleOpenEditLoan(loan)}
-                                    className="h-6 w-6 p-0 text-slate-500 hover:text-blue-600"
-                                  >
-                                    <Edit3 className="w-3.5 h-3.5" />
-                                  </Button>
-                                  <Button
-                                    size="xs"
-                                    variant="ghost"
-                                    onClick={() => {
-                                      if (window.confirm("Delete this loan record?")) {
-                                        deleteLoanMutation.mutate(loan.id);
-                                      }
-                                    }}
-                                    className="h-6 w-6 p-0 text-slate-500 hover:text-rose-600"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </Button>
                                 </div>
-                              </div>
-                              <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-100 text-[11px]">
-                                <div>
-                                  <span className="text-slate-400 block">Loan Requested</span>
-                                  <strong className="text-slate-700">₹{(loan.loan_amount || 0).toLocaleString("en-IN")}</strong>
-                                </div>
-                                <div>
-                                  <span className="text-slate-400 block">Approved Amount</span>
-                                  <strong className="text-indigo-700">₹{(loan.approved_amount || 0).toLocaleString("en-IN")}</strong>
-                                </div>
-                                <div>
-                                  <span className="text-slate-400 block">Actual Disbursed</span>
-                                  <strong className="text-emerald-700">₹{(loan.disbursed_amount || 0).toLocaleString("en-IN")}</strong>
-                                </div>
-                              </div>
-                              {(loan.approved_date || loan.expected_disbursement_date || loan.remarks) && (
-                                <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-slate-500 bg-slate-50 p-2 rounded-lg border border-slate-100">
-                                  {loan.approved_date && <span><strong>Approved Date:</strong> {loan.approved_date}</span>}
-                                  {loan.expected_disbursement_date && <span><strong>Expected Disb.:</strong> {loan.expected_disbursement_date}</span>}
-                                  {loan.remarks && <span className="italic">"{loan.remarks}"</span>}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
                     )}
                   </TabsContent>
 
                   {/* ─── TAB 6: EXPENSES ────────────────────────────────────────── */}
                   <TabsContent value="expenses" className="space-y-3 pt-3">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-bold text-xs text-slate-900">Direct Project Expenses</h4>
-                      <Button
-                        size="sm"
-                        onClick={() => handleOpenAddExpense(activeProjectId)}
-                        className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white font-semibold gap-1"
-                      >
-                        <Plus className="w-3.5 h-3.5" /> Log Expense
-                      </Button>
-                    </div>
-
-                    {(projectWorkspace?.expenses || []).length === 0 ? (
-                      <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-50 rounded-xl border">
-                        No direct project expenses logged yet.
-                      </div>
+                    {!hasFeature("expenses") ? (
+                      <LockedFeatureCard
+                        featureName="Project Direct Expenses"
+                        requiredPlan="Growth"
+                        description="Track direct project labor, transport, civil works, local purchases, and overhead expenses with real-time margins."
+                        benefits={[
+                          "Categorized expense logs (Labor, Transport, BOS, Permits)",
+                          "Vendor invoice tracking and payment mode records",
+                          "Direct calculation of project profitability",
+                        ]}
+                      />
                     ) : (
-                      <div className="overflow-x-auto rounded-xl border border-slate-200">
-                        <table className="w-full text-xs text-left">
-                          <thead className="bg-slate-100 text-slate-600 font-semibold">
-                            <tr>
-                              <th className="p-2.5">Date</th>
-                              <th className="p-2.5">Category</th>
-                              <th className="p-2.5">Vendor</th>
-                              <th className="p-2.5">Mode</th>
-                              <th className="p-2.5 text-right">Amount</th>
-                              <th className="p-2.5 text-center">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {projectWorkspace.expenses.map((exp) => (
-                              <tr key={exp.id} className="hover:bg-slate-50">
-                                <td className="p-2.5 font-medium whitespace-nowrap">{exp.expense_date || (exp.created_at || "").slice(0, 10)}</td>
-                                <td className="p-2.5 font-semibold text-slate-800">{exp.category}</td>
-                                <td className="p-2.5 text-slate-600">{exp.vendor_name || "—"}</td>
-                                <td className="p-2.5">{exp.payment_mode || "Cash/UPI"}</td>
-                                <td className="p-2.5 text-right font-bold text-amber-700 font-mono">
-                                  ₹{Number(exp.amount).toLocaleString("en-IN")}
-                                </td>
-                                <td className="p-2.5 text-center whitespace-nowrap">
-                                  <div className="flex items-center justify-center gap-1">
-                                    <Button
-                                      size="xs"
-                                      variant="ghost"
-                                      onClick={() => handleOpenEditExpense(exp)}
-                                      className="h-6 w-6 p-0 text-slate-500 hover:text-blue-600"
-                                    >
-                                      <Edit3 className="w-3.5 h-3.5" />
-                                    </Button>
-                                    <Button
-                                      size="xs"
-                                      variant="ghost"
-                                      onClick={() => {
-                                        if (window.confirm("Delete this expense record?")) {
-                                          deleteExpenseMutation.mutate(exp.id);
-                                        }
-                                      }}
-                                      className="h-6 w-6 p-0 text-slate-500 hover:text-rose-600"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </Button>
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                      <>
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-bold text-xs text-slate-900">Direct Project Expenses</h4>
+                          <Button
+                            size="sm"
+                            onClick={() => handleOpenAddExpense(activeProjectId)}
+                            className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white font-semibold gap-1"
+                          >
+                            <Plus className="w-3.5 h-3.5" /> Log Expense
+                          </Button>
+                        </div>
+
+                        {(projectWorkspace?.expenses || []).length === 0 ? (
+                          <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-50 rounded-xl border">
+                            No direct project expenses logged yet.
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto rounded-xl border border-slate-200">
+                            <table className="w-full text-xs text-left">
+                              <thead className="bg-slate-100 text-slate-600 font-semibold">
+                                <tr>
+                                  <th className="p-2.5">Date</th>
+                                  <th className="p-2.5">Category</th>
+                                  <th className="p-2.5">Vendor</th>
+                                  <th className="p-2.5">Mode</th>
+                                  <th className="p-2.5 text-right">Amount</th>
+                                  <th className="p-2.5 text-center">Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {projectWorkspace.expenses.map((exp) => (
+                                  <tr key={exp.id} className="hover:bg-slate-50">
+                                    <td className="p-2.5 font-medium whitespace-nowrap">{exp.expense_date || (exp.created_at || "").slice(0, 10)}</td>
+                                    <td className="p-2.5 font-semibold text-slate-800">{exp.category}</td>
+                                    <td className="p-2.5 text-slate-600">{exp.vendor_name || "—"}</td>
+                                    <td className="p-2.5">{exp.payment_mode || "Cash/UPI"}</td>
+                                    <td className="p-2.5 text-right font-bold text-amber-700 font-mono">
+                                      ₹{Number(exp.amount).toLocaleString("en-IN")}
+                                    </td>
+                                    <td className="p-2.5 text-center whitespace-nowrap">
+                                      <div className="flex items-center justify-center gap-1">
+                                        <Button
+                                          size="xs"
+                                          variant="ghost"
+                                          onClick={() => handleOpenEditExpense(exp)}
+                                          className="h-6 w-6 p-0 text-slate-500 hover:text-blue-600"
+                                        >
+                                          <Edit3 className="w-3.5 h-3.5" />
+                                        </Button>
+                                        <Button
+                                          size="xs"
+                                          variant="ghost"
+                                          onClick={() => {
+                                            if (window.confirm("Delete this expense record?")) {
+                                              deleteExpenseMutation.mutate(exp.id);
+                                            }
+                                          }}
+                                          className="h-6 w-6 p-0 text-slate-500 hover:text-rose-600"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </Button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </>
                     )}
                   </TabsContent>
 

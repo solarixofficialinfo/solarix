@@ -67,6 +67,12 @@ export const queryKeys = {
   salesDocuments: {
     list: () => ["sales-documents"],
   },
+  subscription: {
+    current: () => ["subscription", "current"],
+  },
+  plans: {
+    list: () => ["plans", "list"],
+  },
 };
 
 export const invalidateAllClientQueries = (queryClient, clientId) => {
