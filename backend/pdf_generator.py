@@ -12,6 +12,7 @@ from reportlab.pdfgen import canvas
 from reportlab.graphics.shapes import Drawing, Rect, String, Line, Group, Circle, PolyLine
 
 import os
+import re
 import logging
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -2656,6 +2657,50 @@ def _build_sldr_drawing(sol_kw="5", sol_wp="540", num_panels="10", panel_make="G
     return d
 
 
+def _parse_capacity_kw(val: Any) -> float:
+    if val is None:
+        return 0.0
+    val_str = str(val).strip()
+    if not val_str:
+        return 0.0
+    m = re.search(r"[-+]?\d*\.?\d+", val_str)
+    if m:
+        try:
+            return float(m.group(0))
+        except (ValueError, TypeError):
+            return 0.0
+    return 0.0
+
+def _parse_quantity_num(val: Any) -> int:
+    if val is None:
+        return 1
+    val_str = str(val).strip()
+    if not val_str:
+        return 1
+    m = re.search(r"\d+", val_str)
+    if m:
+        try:
+            q = int(m.group(0))
+            return q if q > 0 else 1
+        except (ValueError, TypeError):
+            return 1
+    return 1
+
+def _format_kw_value(kw_val: float) -> str:
+    if kw_val <= 0:
+        return ""
+    if kw_val == int(kw_val):
+        return f"{int(kw_val)} kW"
+    return f"{kw_val:g} kW"
+
+def _format_kw_value_upper(kw_val: float) -> str:
+    if kw_val <= 0:
+        return ""
+    if kw_val == int(kw_val):
+        return f"{int(kw_val)} KW"
+    return f"{kw_val:g} KW"
+
+
 def _get_inverters_list(client: dict) -> list[dict]:
     stages_dict = dict(client.get("stages") or {})
     ob_dict = dict(stages_dict.get("onboarding_data") or {})
@@ -2773,14 +2818,23 @@ def generate_sldr_pdf(client: dict, company: dict) -> bytes:
     panel_make = (client.get('panel_brand') or client.get('panel_make') or '').upper()
     
     inverter_list = _get_inverters_list(client)
-    first_inv = inverter_list[0] if inverter_list else {}
-    inverter_make = (first_inv.get("brand") or client.get('inverter_make') or '').upper()
     
-    raw_ob_cap = str(client.get('inverter_capacity') or ob_dict.get('inverter_capacity') or '').strip()
-    if raw_ob_cap:
-        inverter_kw = raw_ob_cap.upper() if "KW" in raw_ob_cap.upper() else f"{raw_ob_cap} KW"
+    distinct_brands = []
+    for inv in inverter_list:
+        b = str(inv.get("brand") or inv.get("make") or "").strip().upper()
+        if b and b not in distinct_brands:
+            distinct_brands.append(b)
+    inverter_make = " / ".join(distinct_brands) if distinct_brands else (client.get('inverter_make') or client.get('inverter_brand') or '').upper() or "GROWATT"
+
+    calc_total_inv_kw = sum(_parse_capacity_kw(inv.get("capacity")) * _parse_quantity_num(inv.get("quantity")) for inv in inverter_list)
+    if calc_total_inv_kw > 0:
+        total_inverter_kw_str = _format_kw_value_upper(calc_total_inv_kw)
     else:
-        inverter_kw = f"{sol_kw} KW" if sol_kw else ""
+        raw_ob_cap = str(client.get('inverter_capacity') or ob_dict.get('inverter_capacity') or '').strip()
+        if raw_ob_cap:
+            total_inverter_kw_str = raw_ob_cap.upper() if "KW" in raw_ob_cap.upper() else f"{raw_ob_cap} KW"
+        else:
+            total_inverter_kw_str = f"{sol_kw} KW" if sol_kw else ""
 
     company_name = (company.get('company_name') or '').upper()
 
@@ -2801,7 +2855,7 @@ def generate_sldr_pdf(client: dict, company: dict) -> bytes:
     story.append(Paragraph(meta_text, STYLE_SLDR_META))
     story.append(Spacer(1, 0.2 * cm))
 
-    story.append(_build_sldr_drawing(sol_kw, sol_wp, num_panels, panel_make, inverter_make, inverter_kw))
+    story.append(_build_sldr_drawing(sol_kw, sol_wp, num_panels, panel_make, inverter_make, total_inverter_kw_str))
     story.append(Spacer(1, 0.25 * cm))
 
     story.append(Paragraph("<b>TECHNICAL SPECIFICATIONS</b>", ParagraphStyle('tech_title', parent=styles['Normal'], fontSize=9.5, fontName='Helvetica-Bold', spaceAfter=4, textColor=colors.HexColor('#0f172a'))))
@@ -2814,22 +2868,41 @@ def generate_sldr_pdf(client: dict, company: dict) -> bytes:
     if inverter_list:
         for idx, inv in enumerate(inverter_list):
             inv_label = f"INVERTER #{idx+1}" if len(inverter_list) > 1 else "INVERTER"
-            c_val = inv.get("capacity") or ""
-            cap_str = f"{c_val}" if "KW" in c_val.upper() else (f"{c_val} kW" if c_val else "")
-            q_val = inv.get("quantity") or "1"
-            spec_str = f"{cap_str} × {q_val} Nos" if cap_str else f"{q_val} Nos"
-            make_str = f"{inv.get('brand','')} {inv.get('model','')}".strip().upper()
-            kw_str = inverter_kw
+            c_num = _parse_capacity_kw(inv.get("capacity"))
+            q_num = _parse_quantity_num(inv.get("quantity"))
+            row_kw_num = c_num * q_num
+
+            if c_num > 0:
+                cap_str = _format_kw_value(c_num)
+            else:
+                c_val = str(inv.get("capacity") or "").strip()
+                cap_str = f"{c_val}" if "KW" in c_val.upper() else (f"{c_val} kW" if c_val else "")
+            spec_str = f"{cap_str} × {q_num} Nos" if cap_str else f"{q_num} Nos"
+
+            make_str = f"{inv.get('brand') or inv.get('make') or ''} {inv.get('model') or ''}".strip().upper()
+            if not make_str:
+                make_str = inverter_make
+
+            if row_kw_num > 0:
+                row_kw_str = _format_kw_value_upper(row_kw_num)
+            elif c_num > 0:
+                row_kw_str = _format_kw_value_upper(c_num)
+            else:
+                row_kw_str = total_inverter_kw_str or "-"
+
             tech_table_data.append([
                 Paragraph(inv_label, STYLE_TBL_CELL),
                 Paragraph(spec_str, STYLE_TBL_CELL),
                 Paragraph(make_str, STYLE_TBL_CELL),
-                Paragraph(kw_str, STYLE_TBL_CELL)
+                Paragraph(row_kw_str, STYLE_TBL_CELL)
             ])
     else:
-        inverter_kw_display = f"{inverter_kw}" if "KW" in inverter_kw.upper() else (f"{inverter_kw} kW" if inverter_kw else "")
+        inverter_kw_display = f"{total_inverter_kw_str}" if "KW" in total_inverter_kw_str.upper() else (f"{total_inverter_kw_str} kW" if total_inverter_kw_str else "")
         tech_table_data.append([
-            Paragraph("INVERTER", STYLE_TBL_CELL), Paragraph(f"{inverter_kw_display} × 1 Nos", STYLE_TBL_CELL), Paragraph(inverter_make, STYLE_TBL_CELL), Paragraph(f"{inverter_kw}", STYLE_TBL_CELL)
+            Paragraph("INVERTER", STYLE_TBL_CELL),
+            Paragraph(f"{inverter_kw_display} × 1 Nos" if inverter_kw_display else "1 Nos", STYLE_TBL_CELL),
+            Paragraph(inverter_make, STYLE_TBL_CELL),
+            Paragraph(f"{total_inverter_kw_str}" if total_inverter_kw_str else "-", STYLE_TBL_CELL)
         ])
 
     t_tech = Table(tech_table_data, colWidths=[4.5 * cm, 5.5 * cm, 4.6 * cm, 4.0 * cm])
@@ -4538,14 +4611,22 @@ def _generate_sldr_docx(client: dict, company: dict) -> bytes:
     ob_dict      = dict(stages_dict.get("onboarding_data") or {})
 
     inverter_list = _get_inverters_list(client)
-    first_inv    = inverter_list[0] if inverter_list else {}
-    inverter_make = (first_inv.get("brand") or client.get('inverter_make') or '').upper()
+    distinct_brands = []
+    for inv in inverter_list:
+        b = str(inv.get("brand") or inv.get("make") or "").strip().upper()
+        if b and b not in distinct_brands:
+            distinct_brands.append(b)
+    inverter_make = " / ".join(distinct_brands) if distinct_brands else (client.get('inverter_make') or client.get('inverter_brand') or '').upper() or "GROWATT"
 
-    raw_ob_cap   = str(client.get('inverter_capacity') or ob_dict.get('inverter_capacity') or '').strip()
-    if raw_ob_cap:
-        inverter_kw = raw_ob_cap.upper() if "KW" in raw_ob_cap.upper() else f"{raw_ob_cap} KW"
+    calc_total_inv_kw = sum(_parse_capacity_kw(inv.get("capacity")) * _parse_quantity_num(inv.get("quantity")) for inv in inverter_list)
+    if calc_total_inv_kw > 0:
+        total_inverter_kw_str = _format_kw_value_upper(calc_total_inv_kw)
     else:
-        inverter_kw = f"{sol_kw} KW" if sol_kw else ""
+        raw_ob_cap   = str(client.get('inverter_capacity') or ob_dict.get('inverter_capacity') or '').strip()
+        if raw_ob_cap:
+            total_inverter_kw_str = raw_ob_cap.upper() if "KW" in raw_ob_cap.upper() else f"{raw_ob_cap} KW"
+        else:
+            total_inverter_kw_str = f"{sol_kw} KW" if sol_kw else ""
 
     title_p = doc.add_paragraph()
     title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -4585,7 +4666,7 @@ def _generate_sldr_docx(client: dict, company: dict) -> bytes:
     note_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     nr = note_p.add_run(
         f"Grid Tied Solar Inverter System Electrical Single Line Diagram\n\n"
-        f"PV Array: {num_panels} x {sol_wp}Wp  |  Inverter: {inverter_make} ({inverter_kw})\n\n"
+        f"PV Array: {num_panels} x {sol_wp}Wp  |  Inverter: {inverter_make} ({total_inverter_kw_str})\n\n"
         f"DC side: PV Array -> DCDB (Surge Arrester + DC Isolator) -> Inverter MPPT\n"
         f"AC side: Inverter -> ACDB (MCB + RCBO) -> Net Meter -> DISCOM Grid\n"
         f"Earthing: Separate earth pits for AC, DC and Lightning Arrester (IS 3043)"
@@ -4601,15 +4682,32 @@ def _generate_sldr_docx(client: dict, company: dict) -> bytes:
     if inverter_list:
         for idx, inv in enumerate(inverter_list):
             inv_label = f"INVERTER #{idx+1}" if len(inverter_list) > 1 else "INVERTER"
-            c_val = inv.get("capacity") or ""
-            cap_str = c_val if "KW" in c_val.upper() else (f"{c_val} kW" if c_val else "")
-            q_val = inv.get("quantity") or "1"
-            spec_str = f"{cap_str} x {q_val} Nos" if cap_str else f"{q_val} Nos"
-            make_str = f"{inv.get('brand','')} {inv.get('model','')}".strip().upper()
-            tech_rows_data.append([inv_label, spec_str, make_str, inverter_kw])
+            c_num = _parse_capacity_kw(inv.get("capacity"))
+            q_num = _parse_quantity_num(inv.get("quantity"))
+            row_kw_num = c_num * q_num
+
+            if c_num > 0:
+                cap_str = _format_kw_value(c_num)
+            else:
+                c_val = str(inv.get("capacity") or "").strip()
+                cap_str = f"{c_val}" if "KW" in c_val.upper() else (f"{c_val} kW" if c_val else "")
+            spec_str = f"{cap_str} x {q_num} Nos" if cap_str else f"{q_num} Nos"
+
+            make_str = f"{inv.get('brand') or inv.get('make') or ''} {inv.get('model') or ''}".strip().upper()
+            if not make_str:
+                make_str = inverter_make
+
+            if row_kw_num > 0:
+                row_kw_str = _format_kw_value_upper(row_kw_num)
+            elif c_num > 0:
+                row_kw_str = _format_kw_value_upper(c_num)
+            else:
+                row_kw_str = total_inverter_kw_str or "-"
+
+            tech_rows_data.append([inv_label, spec_str, make_str, row_kw_str])
     else:
-        inv_kw_d = inverter_kw if "KW" in inverter_kw else (f"{inverter_kw} kW" if inverter_kw else "")
-        tech_rows_data.append(["INVERTER", f"{inv_kw_d} x 1 Nos", inverter_make, inverter_kw])
+        inv_kw_d = total_inverter_kw_str if "KW" in total_inverter_kw_str else (f"{total_inverter_kw_str} kW" if total_inverter_kw_str else "")
+        tech_rows_data.append(["INVERTER", f"{inv_kw_d} x 1 Nos" if inv_kw_d else "1 Nos", inverter_make, total_inverter_kw_str if total_inverter_kw_str else "-"])
 
     tech_tbl = doc.add_table(rows=len(tech_rows_data), cols=4)
     tech_tbl.style = 'Table Grid'

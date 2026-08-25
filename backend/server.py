@@ -814,6 +814,11 @@ def _enrich_client_doc(c: dict) -> dict:
     else:
         c["cleared_assets"] = []
 
+    if isinstance(c.get("inverters"), list):
+        c["inverters"] = c["inverters"]
+    elif isinstance(ob.get("inverters"), list):
+        c["inverters"] = ob["inverters"]
+
     # DISCOM Resolution
     discom_val = c.get("discom") or ob.get("discom") or c.get("discom_name") or ob.get("discom_name") or c.get("discom_code") or ob.get("discom_code") or ""
     d_meta = None
@@ -5670,9 +5675,9 @@ async def generate_document_preview(payload: Dict[str, Any], user=Depends(get_cu
         gen_content_type = "application/pdf"
     elif doc_type == "annexure":
         import annexure_generator as _annex_gen
-        pdf_bytes, gen_content_type = await asyncio.to_thread(_annex_gen.generate_annexure, client_doc, company_doc or {})
+        pdf_bytes, gen_content_type = await asyncio.to_thread(_annex_gen.generate_annexure, client_doc or {}, company_doc or {})
     else:
-        pdf_bytes = await asyncio.to_thread(pdf_generator.generate, doc_type, client_doc, company_doc or {})
+        pdf_bytes = await asyncio.to_thread(pdf_generator.generate, doc_type, client_doc or {}, company_doc or {})
         gen_content_type = "application/pdf"
 
     # Extract document number and clean up duplicates
