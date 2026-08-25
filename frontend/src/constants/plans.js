@@ -4,7 +4,7 @@ export const PLANS = {
     name: "STARTER",
     tagline: "Small installers & small EPC teams",
     turnover: "Annual turnover: Up to ₹15 lakh",
-    monthly_price: 2999,
+    monthly_price: 3999,
     yearly_price: 29990,
     max_users: 3,
     max_clients: 100,

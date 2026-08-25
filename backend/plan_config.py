@@ -24,7 +24,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "name": "STARTER",
         "tagline": "Small installers & small EPC teams",
         "target_turnover": "For businesses with annual turnover up to ₹15 lakh",
-        "monthly_price": 2999,
+        "monthly_price": 3999,
         "yearly_price": 29990,
         "max_users": 3,
         "max_clients": 100,
