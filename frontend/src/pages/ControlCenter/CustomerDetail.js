@@ -318,6 +318,64 @@ export default function CustomerDetail() {
               </div>
             </div>
 
+            {/* LIVE PLAN LIMITS & USAGE METRICS */}
+            <div className="p-4 bg-slate-900/60 rounded-xl border border-slate-800/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400 text-[10px] uppercase font-semibold">LIVE RESOURCE USAGE & PLAN LIMITS</span>
+                <span className="text-slate-500 text-[10px]">Real-time Database Quotas</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-2.5 bg-slate-950/80 rounded-lg border border-slate-800/60">
+                  <span className="text-[10px] text-slate-400 block">Team Users</span>
+                  <span className="text-sm font-bold text-white font-mono">
+                    {data?.usage?.users || 0} / {data?.entitlement?.limits?.max_users || 3}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-950/80 rounded-lg border border-slate-800/60">
+                  <span className="text-[10px] text-slate-400 block">Clients & Projects</span>
+                  <span className="text-sm font-bold text-white font-mono">
+                    {data?.usage?.clients || 0} / {data?.entitlement?.limits?.max_clients || 100}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-950/80 rounded-lg border border-slate-800/60">
+                  <span className="text-[10px] text-slate-400 block">Product Master</span>
+                  <span className="text-sm font-bold text-white font-mono">
+                    {data?.usage?.products || 0} / {data?.entitlement?.limits?.max_products || 1000}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-950/80 rounded-lg border border-slate-800/60">
+                  <span className="text-[10px] text-slate-400 block">Storage Quota</span>
+                  <span className="text-sm font-bold text-white font-mono">
+                    {data?.detailed_usage?.storage_gb || 0} / {data?.entitlement?.limits?.storage_gb || 5} GB
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-950/80 rounded-lg border border-slate-800/60">
+                  <span className="text-[10px] text-slate-400 block">Monthly PDF/DOCX</span>
+                  <span className="text-sm font-bold text-white font-mono">
+                    {data?.detailed_usage?.monthly_pdf_docx || 0} / {data?.entitlement?.limits?.monthly_pdf_docx || 200}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-950/80 rounded-lg border border-slate-800/60">
+                  <span className="text-[10px] text-slate-400 block">Monthly Exports</span>
+                  <span className="text-sm font-bold text-white font-mono">
+                    {data?.detailed_usage?.monthly_exports || 0} / {data?.entitlement?.limits?.monthly_exports || 50}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-950/80 rounded-lg border border-slate-800/60">
+                  <span className="text-[10px] text-slate-400 block">Material Requests</span>
+                  <span className="text-sm font-bold text-white font-mono">
+                    {data?.detailed_usage?.monthly_material_requests || 0} / {data?.entitlement?.limits?.monthly_material_requests || 1000}
+                  </span>
+                </div>
+                <div className="p-2.5 bg-slate-950/80 rounded-lg border border-slate-800/60">
+                  <span className="text-[10px] text-slate-400 block">Inventory Txns</span>
+                  <span className="text-sm font-bold text-white font-mono">
+                    {data?.detailed_usage?.monthly_inventory_transactions || 0} / {data?.entitlement?.limits?.monthly_inventory_transactions || 2500}
+                  </span>
+                </div>
+              </div>
+            </div>
+
             {/* BILLING & PAYMENT GATEWAY RECORD */}
             <div className="p-4 bg-slate-900/60 rounded-xl border border-slate-800/80 space-y-2">
               <span className="text-slate-400 text-[10px] uppercase font-semibold">PAYMENT & GATEWAY DETAILS</span>

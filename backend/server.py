@@ -2807,6 +2807,26 @@ def require_active_subscription():
         return user
     return _checker
 
+def require_feature_entitlement(feature_key: str):
+    """FastAPI dependency requiring a plan that entitles the given feature."""
+    async def _checker(user=Depends(get_current_user)):
+        if is_super_admin_user(user):
+            return user
+        cid = user.get("company_id")
+        if not cid:
+            raise HTTPException(status_code=403, detail="SUBSCRIPTION_REQUIRED: No company workspace found")
+        from plan_config import check_feature_access
+        company = await db.companies.find_one({"id": cid}, {"_id": 0})
+        has_access = check_feature_access(company or cid, feature_key)
+        if not has_access:
+            plan_name = (company.get("plan_id") or "starter").upper() if company else "STARTER"
+            raise HTTPException(
+                status_code=403,
+                detail=f"FEATURE_NOT_ENTITLED: '{feature_key.replace('_', ' ').title()}' is not available on your {plan_name} plan. Upgrade to Growth or Pro to unlock this feature."
+            )
+        return user
+    return _checker
+
 
 
 class AccessRequestIn(BaseModel):
@@ -7896,7 +7916,7 @@ async def list_products(user=Depends(get_current_user)):
     return items
 
 @api_router.get("/inventory/high-value-ledger")
-async def get_high_value_ledger(search: Optional[str] = None, user=Depends(get_current_user)):
+async def get_high_value_ledger(search: Optional[str] = None, user=Depends(require_feature_entitlement("high_value_goods"))):
     cid = user["company_id"]
     search_term = (search or "").strip().lower()
     
@@ -10036,7 +10056,7 @@ async def bulk_delete_history(data: BulkDeleteIn, user=Depends(get_current_user)
 @api_router.get("/inventory/serial-tracking")
 async def list_serial_tracking(
     request: Request = None,  # type: ignore
-    user=Depends(get_current_user),
+    user=Depends(require_feature_entitlement("serial_tracking")),
     type: Optional[str] = None,  # all | inward | outward
     product: Optional[str] = None,
     vendor: Optional[str] = None,
@@ -16134,10 +16154,16 @@ async def get_platform_customer_detail(company_id: str, user=Depends(require_sup
 
     recent_activity = await db.activity_logs.find({"company_id": company_id}, {"_id": 0}).sort("created_at", -1).to_list(25)
 
+    from plan_config import get_company_entitlement, get_company_usage
+    entitlement = await get_company_entitlement(company_id, db=db)
+    detailed_usage = await get_company_usage(company_id, db=db)
+
     return {
         "company": company,
         "owner": owner or {},
         "team_users": team_users,
+        "entitlement": entitlement,
+        "detailed_usage": detailed_usage,
         "usage": {
             "users": user_count,
             "clients": client_count,
