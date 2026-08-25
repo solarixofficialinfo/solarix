@@ -3,13 +3,14 @@
     background-color: hsl(210 40% 98%);
 }
 
-/* Scoped number input spinner removal for Material Dispatch Items Table */
-.dispatch-no-spinner::-webkit-outer-spin-button,
-.dispatch-no-spinner::-webkit-inner-spin-button {
+/* Global removal of native browser number-input spinner controls (Chromium/WebKit & Firefox) */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
     -webkit-appearance: none;
     margin: 0;
 }
-.dispatch-no-spinner {
+
+input[type="number"] {
     -moz-appearance: textfield;
     appearance: textfield;
 }

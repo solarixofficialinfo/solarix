@@ -573,8 +573,8 @@ export default function DeliveryBill() {
                     </td>
                     <td className="p-2.5 align-top"><Input value={row.size} onChange={(e) => handleRowChange(row.id, "size", e.target.value)} className="h-9 text-xs bg-white rounded-xl" /></td>
                     <td className="p-2.5 align-top"><Input value={row.unit} onChange={(e) => handleRowChange(row.id, "unit", e.target.value)} className="h-9 text-xs bg-white rounded-xl" /></td>
-                    <td className="p-2.5 align-top"><Input type="number" value={row.dispatch_qty} onChange={(e) => handleRowChange(row.id, "dispatch_qty", e.target.value)} className="h-9 text-xs font-bold text-right bg-white rounded-xl dispatch-no-spinner" /></td>
-                    {showRate && <td className="p-2.5 align-top"><Input type="number" value={row.rate} onChange={(e) => handleRowChange(row.id, "rate", e.target.value)} className="h-9 text-xs font-semibold text-right bg-white rounded-xl dispatch-no-spinner" /></td>}
+                    <td className="p-2.5 align-top"><Input type="number" value={row.dispatch_qty} onChange={(e) => handleRowChange(row.id, "dispatch_qty", e.target.value)} className="h-9 text-xs font-bold text-right bg-white rounded-xl" /></td>
+                    {showRate && <td className="p-2.5 align-top"><Input type="number" value={row.rate} onChange={(e) => handleRowChange(row.id, "rate", e.target.value)} className="h-9 text-xs font-semibold text-right bg-white rounded-xl" /></td>}
                     {showAmount && <td className="p-2.5 align-top text-right font-bold tabular-nums text-xs pt-4">{formatMoney(rowAmount(row))}</td>}
                     <td className="p-2.5 align-top text-center pt-3"><button type="button" onClick={() => removeRow(row.id)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50"><Trash2 className="w-4 h-4" /></button></td>
                   </tr>
