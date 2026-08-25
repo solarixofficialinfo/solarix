@@ -2,7 +2,24 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-const Input = React.forwardRef(({ className, type, ...props }, ref) => {
+const Input = React.forwardRef(({ className, type, onFocus, onChange, ...props }, ref) => {
+  const handleFocus = React.useCallback((e) => {
+    if (type === "number" && (e.target.value === "0" || e.target.value === 0)) {
+      e.target.select?.();
+    }
+    onFocus?.(e);
+  }, [type, onFocus]);
+
+  const handleChange = React.useCallback((e) => {
+    if (type === "number" && typeof e.target?.value === "string") {
+      const val = e.target.value;
+      if (/^0[0-9]+$/.test(val)) {
+        e.target.value = val.replace(/^0+(?=\d)/, "");
+      }
+    }
+    onChange?.(e);
+  }, [type, onChange]);
+
   return (
     <input
       type={type}
@@ -11,6 +28,8 @@ const Input = React.forwardRef(({ className, type, ...props }, ref) => {
         className
       )}
       ref={ref}
+      onFocus={handleFocus}
+      onChange={handleChange}
       {...props} />
   );
 })
