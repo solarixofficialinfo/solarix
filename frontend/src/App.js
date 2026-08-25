@@ -238,6 +238,7 @@ function App() {
         <Toaster position="top-right" richColors />
         <Suspense fallback={<PageFallback />}>
           <Routes>
+            <Route path="/" element={<PublicOnly><Login /></PublicOnly>} />
             <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
             <Route path="/auth/callback" element={<PublicOnly><Login /></PublicOnly>} />
             <Route path="/vendor/login" element={<PublicOnly><Login /></PublicOnly>} />
