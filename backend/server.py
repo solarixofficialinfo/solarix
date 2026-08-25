@@ -16289,12 +16289,19 @@ async def global_search(q: str, user=Depends(get_current_user)):
 # ---------- LEVEL 1: SOLRIX PLATFORM OWNER CONTROL CENTER ----------
 
 class PlatformSubscriptionActionIn(BaseModel):
-    action: str  # assign_plan, extend_trial, update_expiry, change_status, cancel
+    action: Optional[str] = "save_subscription"  # save_subscription, assign_plan, extend_trial, update_expiry, change_status, cancel
     plan_id: Optional[str] = None
-    status: Optional[str] = None
+    billing_cycle: Optional[str] = None  # monthly, yearly
+    status: Optional[str] = None  # active, trialing, expired, past_due, suspended, cancelled
+    access_type: Optional[str] = None  # paid, trial, free_grant
+    extra_days: Optional[int] = 0
     trial_days: Optional[int] = 0
+    free_grant_days: Optional[int] = 0
+    start_date: Optional[str] = None
     expiry_date: Optional[str] = None
     reason: Optional[str] = ""
+    notify: Optional[bool] = False
+    feature_entitlements: Optional[Dict[str, bool]] = None
 
 class PlatformFeatureEntitlementsIn(BaseModel):
     feature_entitlements: Dict[str, bool]
@@ -16436,8 +16443,13 @@ async def list_platform_customers(
             "email": owner_email,
             "mobile": owner_mobile,
             "plan_id": c.get("plan_id", "starter"),
+            "billing_cycle": c.get("billing_cycle", "monthly"),
             "subscription_status": c.get("subscription_status", "trialing"),
+            "is_free": bool(c.get("is_free", False)),
+            "extra_days": int(c.get("extra_days", 0) or 0),
+            "access_type": "free_grant" if c.get("is_free") else ("trial" if c.get("subscription_status") == "trialing" else "paid"),
             "trial_ends_at": c.get("trial_ends_at"),
+            "subscription_expires_at": c.get("subscription_expires_at"),
             "user_count": user_count,
             "project_count": project_count,
             "client_count": client_count,
@@ -16508,47 +16520,144 @@ async def update_platform_customer_subscription(
     if not company:
         raise HTTPException(status_code=404, detail="Customer workspace not found")
 
-    old_plan = company.get("plan_id", "starter")
-    old_status = company.get("subscription_status", "trialing")
-    update_doc = {"updated_at": now_iso()}
+    old_plan = str(company.get("plan_id") or "starter").lower()
+    old_status = str(company.get("subscription_status") or "trialing").lower()
+    old_cycle = str(company.get("billing_cycle") or "monthly").lower()
+    old_is_free = bool(company.get("is_free", False))
+    old_extra_days = int(company.get("extra_days", 0) or 0)
+    old_expires_at = company.get("subscription_expires_at") or company.get("trial_ends_at")
 
-    if data.action == "assign_plan" or data.plan_id:
-        update_doc["plan_id"] = (data.plan_id or old_plan).lower()
-        update_doc["plan"] = (data.plan_id or old_plan).lower()
-    if data.status:
-        update_doc["subscription_status"] = data.status.lower()
-        if data.status.lower() == "active" and not company.get("subscription_started_at"):
-            update_doc["subscription_started_at"] = now_iso()
+    now = datetime.now(timezone.utc)
+    now_iso_str = now.isoformat()
+    update_doc: Dict[str, Any] = {"updated_at": now_iso_str}
+    audit_actions = []
 
-    if data.action == "extend_trial" and data.trial_days:
-        curr_end = company.get("trial_ends_at")
+    def _parse_dt(iso_str):
+        if not iso_str:
+            return None
         try:
-            curr_dt = datetime.fromisoformat(curr_end.replace("Z", "+00:00")) if curr_end else datetime.now(timezone.utc)
+            return datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
         except Exception:
-            curr_dt = datetime.now(timezone.utc)
-        new_dt = curr_dt + timedelta(days=data.trial_days)
-        update_doc["trial_ends_at"] = new_dt.isoformat()
+            return None
+
+    # 1. Target Plan
+    target_plan = (data.plan_id or old_plan).lower()
+    if target_plan in ("starter", "growth", "pro"):
+        update_doc["plan_id"] = target_plan
+        update_doc["plan"] = target_plan
+        if target_plan != old_plan:
+            audit_actions.append(f"Plan changed {old_plan.upper()} → {target_plan.upper()}")
+
+    # 2. Billing Cycle
+    target_cycle = (data.billing_cycle or old_cycle).lower()
+    if target_cycle in ("monthly", "yearly"):
+        update_doc["billing_cycle"] = target_cycle
+        if target_cycle != old_cycle:
+            audit_actions.append(f"Billing cycle changed {old_cycle.upper()} → {target_cycle.upper()}")
+
+    # 3. Access Type & Expiry Calculations
+    access_type = (data.access_type or ("free_grant" if old_is_free else ("trial" if old_status == "trialing" else "paid"))).lower()
+    extra_days = max(0, int(data.extra_days or 0))
+    if data.trial_days and data.trial_days > 0 and extra_days == 0:
+        extra_days = int(data.trial_days)
+
+    if access_type == "free_grant":
+        free_days = max(1, int(data.free_grant_days or extra_days or 365))
+        start_dt = _parse_dt(data.start_date) or now
+        eff_expiry_dt = start_dt + timedelta(days=free_days)
+
+        update_doc["is_free"] = True
+        update_doc["is_trial"] = False
+        update_doc["free_grant_started_at"] = start_dt.isoformat()
+        update_doc["free_grant_days"] = free_days
+        update_doc["subscription_status"] = (data.status or "active").lower()
+        update_doc["subscription_expires_at"] = eff_expiry_dt.isoformat()
+        update_doc["trial_ends_at"] = None
+        audit_actions.append(f"Granted {free_days} days Free Admin Access ({target_plan.upper()}) expiring {eff_expiry_dt.strftime('%d %b %Y')}")
+
+    elif access_type == "trial":
+        update_doc["is_free"] = False
+        update_doc["is_trial"] = True
         update_doc["subscription_status"] = "trialing"
 
-    if data.expiry_date:
-        update_doc["trial_ends_at"] = data.expiry_date
-        update_doc["subscription_expires_at"] = data.expiry_date
+        curr_trial_end = _parse_dt(company.get("trial_ends_at")) or (now + timedelta(days=15))
+        if data.expiry_date:
+            update_doc["trial_ends_at"] = data.expiry_date
+            audit_actions.append(f"Set trial expiry to {data.expiry_date}")
+        elif extra_days > 0:
+            base_trial_dt = curr_trial_end if curr_trial_end > now else now
+            eff_trial_end = base_trial_dt + timedelta(days=extra_days)
+            update_doc["trial_ends_at"] = eff_trial_end.isoformat()
+            update_doc["extra_days"] = old_extra_days + extra_days
+            audit_actions.append(f"Extended trial by +{extra_days} extra days (New trial expiry: {eff_trial_end.strftime('%d %b %Y')})")
 
-    if update_doc:
-        await db.companies.update_one({"id": company_id}, {"$set": update_doc}, upsert=True)
-        _cache_invalidate_company(company_id)
+        update_doc["subscription_expires_at"] = update_doc.get("trial_ends_at") or company.get("trial_ends_at")
 
+    else:  # access_type == "paid"
+        update_doc["is_free"] = False
+        update_doc["is_trial"] = False
+        target_status = (data.status or "active").lower()
+        update_doc["subscription_status"] = target_status
+
+        if not company.get("subscription_started_at"):
+            update_doc["subscription_started_at"] = now_iso_str
+
+        curr_sub_end = _parse_dt(company.get("subscription_expires_at"))
+
+        if data.expiry_date:
+            update_doc["subscription_expires_at"] = data.expiry_date
+            audit_actions.append(f"Set subscription expiry to {data.expiry_date}")
+        elif extra_days > 0:
+            base_dt = curr_sub_end if (curr_sub_end and curr_sub_end > now) else now
+            eff_sub_end = base_dt + timedelta(days=extra_days)
+            update_doc["subscription_expires_at"] = eff_sub_end.isoformat()
+            update_doc["extra_days"] = old_extra_days + extra_days
+            audit_actions.append(f"Added +{extra_days} subscription extension days (New expiry: {eff_sub_end.strftime('%d %b %Y')})")
+        elif not curr_sub_end or (target_status == "active" and curr_sub_end <= now):
+            cycle_days = 365 if update_doc.get("billing_cycle", target_cycle) == "yearly" else 30
+            eff_sub_end = now + timedelta(days=cycle_days)
+            update_doc["subscription_expires_at"] = eff_sub_end.isoformat()
+            audit_actions.append(f"Activated {update_doc.get('billing_cycle', target_cycle)} paid subscription expiring {eff_sub_end.strftime('%d %b %Y')}")
+
+        if old_is_free:
+            audit_actions.append("Removed free admin grant; switched to paid subscription")
+
+    # 4. Custom Feature Entitlements Overrides
+    if data.feature_entitlements is not None and isinstance(data.feature_entitlements, dict):
+        update_doc["feature_entitlements"] = data.feature_entitlements
+        audit_actions.append(f"Updated feature entitlements ({len(data.feature_entitlements)} flags)")
+
+    # Execute atomic DB update
+    await db.companies.update_one({"id": company_id}, {"$set": update_doc}, upsert=True)
+    _cache_invalidate_company(company_id)
+
+    # Invalidate and fetch canonical resolved entitlement
+    from plan_config import get_company_entitlement
+    canonical_entitlement = await get_company_entitlement(company_id, db=db)
+
+    # Audit Logging
+    audit_summary = "; ".join(audit_actions) if audit_actions else f"Updated subscription ({target_plan} / {data.status or old_status})"
     await _log_platform_audit(
         user=user,
-        action=f"Subscription Action: {data.action} ({data.plan_id or old_plan} / {data.status or old_status})",
+        action=f"Subscription: {audit_summary}",
         target_company_id=company_id,
         target_name=company.get("company_name", company_id),
-        old_val={"plan_id": old_plan, "status": old_status},
+        old_val={
+            "plan_id": old_plan,
+            "status": old_status,
+            "billing_cycle": old_cycle,
+            "is_free": old_is_free,
+            "expires_at": old_expires_at
+        },
         new_val=update_doc,
-        reason=data.reason or "Super Admin manual subscription update"
+        reason=data.reason or "Super Admin unified subscription update"
     )
 
-    return {"message": "Subscription updated successfully", "updated": update_doc}
+    return {
+        "message": "Subscription updated successfully",
+        "updated": update_doc,
+        "entitlement": canonical_entitlement
+    }
 
 @api_router.post("/admin/customers/{company_id}/features")
 @api_router.post("/platform-owner/customers/{company_id}/features")

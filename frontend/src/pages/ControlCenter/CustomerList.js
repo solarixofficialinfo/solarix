@@ -161,21 +161,33 @@ export default function CustomerList() {
                     <div className="text-[11px] text-slate-400 font-mono">{c.email}</div>
                   </td>
                   <td className="px-4 py-3">
-                    <PlanBadge planId={c.plan_id} />
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <PlanBadge planId={c.plan_id} />
+                      <Badge variant="outline" className="text-[9px] px-1.5 py-0 uppercase bg-slate-900 border-slate-700 text-slate-400 font-mono">
+                        {c.billing_cycle === "yearly" ? "Annual" : "Monthly"}
+                      </Badge>
+                    </div>
                   </td>
                   <td className="px-4 py-3">
-                    <Badge
-                      variant="outline"
-                      className={
-                        c.subscription_status === "active"
-                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                          : c.subscription_status === "suspended"
-                          ? "bg-rose-500/10 text-rose-400 border-rose-500/30"
-                          : "bg-amber-500/10 text-amber-300 border-amber-500/30"
-                      }
-                    >
-                      {c.subscription_status}
-                    </Badge>
+                    <div className="space-y-1">
+                      <Badge
+                        variant="outline"
+                        className={
+                          c.subscription_status === "active"
+                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 font-semibold uppercase text-[10px]"
+                            : c.subscription_status === "suspended"
+                            ? "bg-rose-500/10 text-rose-400 border-rose-500/30 uppercase text-[10px]"
+                            : "bg-amber-500/10 text-amber-300 border-amber-500/30 uppercase text-[10px]"
+                        }
+                      >
+                        {c.subscription_status}
+                      </Badge>
+                      {c.is_free && (
+                        <span className="block text-[10px] text-purple-400 font-semibold font-mono">
+                          ★ Free Admin Grant
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-center font-mono">{c.user_count}</td>
                   <td className="px-4 py-3 text-center font-mono">{c.project_count}</td>

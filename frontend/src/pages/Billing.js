@@ -84,6 +84,9 @@ export default function Billing() {
   }
 
   const getStatusBadge = (status) => {
+    if (data?.is_free) {
+      return <Badge className="bg-purple-100 text-purple-800 border-purple-300 font-bold">Free Admin Grant (₹0)</Badge>;
+    }
     switch (status) {
       case "active":
         return <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300">Active Paid</Badge>;
