@@ -98,26 +98,42 @@ async def get_company_subscription(user=Depends(get_current_user_dep())):
     storage_limit_gb = limits.get("storage_gb", 5)
     storage_used_gb = usage.get("storage_gb", 0)
 
-    percentages = {
-        "users": min(100, int((usage.get("active_users", 0) / max(1, limits.get("max_users", 1))) * 100)),
-        "clients": min(100, int((usage.get("active_clients", 0) / max(1, limits.get("max_clients", 1))) * 100)),
-        "products": min(100, int((usage.get("products", 0) / max(1, limits.get("max_products", 1))) * 100)),
-        "storage": min(100, int((storage_used_gb / max(0.1, storage_limit_gb)) * 100)),
-        "monthly_documents": min(100, int((usage.get("monthly_documents", 0) / max(1, limits.get("monthly_documents", 1))) * 100)),
-        "monthly_pdf_docx": min(100, int((usage.get("monthly_pdf_docx", 0) / max(1, limits.get("monthly_pdf_docx", 1))) * 100)),
-        "monthly_exports": min(100, int((usage.get("monthly_exports", 0) / max(1, limits.get("monthly_exports", 1))) * 100)),
-        "monthly_material_requests": min(100, int((usage.get("monthly_material_requests", 0) / max(1, limits.get("monthly_material_requests", 1))) * 100)),
-        "monthly_inventory_transactions": min(100, int((usage.get("monthly_inventory_transactions", 0) / max(1, limits.get("monthly_inventory_transactions", 1))) * 100)),
-        "monthly_api_requests": min(100, int((usage.get("monthly_api_requests", 0) / max(1, limits.get("monthly_api_requests", 1))) * 100)),
-    }
+    is_trial = entitlement.get("is_trial", False)
+    if is_trial:
+        percentages = {
+            "users": 0,
+            "clients": 0,
+            "products": 0,
+            "storage": 0,
+            "monthly_documents": 0,
+            "monthly_pdf_docx": 0,
+            "monthly_exports": 0,
+            "monthly_material_requests": 0,
+            "monthly_inventory_transactions": 0,
+            "monthly_api_requests": 0,
+        }
+        warnings = []
+    else:
+        percentages = {
+            "users": min(100, int((usage.get("active_users", 0) / max(1, limits.get("max_users", 1))) * 100)),
+            "clients": min(100, int((usage.get("active_clients", 0) / max(1, limits.get("max_clients", 1))) * 100)),
+            "products": min(100, int((usage.get("products", 0) / max(1, limits.get("max_products", 1))) * 100)),
+            "storage": min(100, int((storage_used_gb / max(0.1, storage_limit_gb)) * 100)),
+            "monthly_documents": min(100, int((usage.get("monthly_documents", 0) / max(1, limits.get("monthly_documents", 1))) * 100)),
+            "monthly_pdf_docx": min(100, int((usage.get("monthly_pdf_docx", 0) / max(1, limits.get("monthly_pdf_docx", 1))) * 100)),
+            "monthly_exports": min(100, int((usage.get("monthly_exports", 0) / max(1, limits.get("monthly_exports", 1))) * 100)),
+            "monthly_material_requests": min(100, int((usage.get("monthly_material_requests", 0) / max(1, limits.get("monthly_material_requests", 1))) * 100)),
+            "monthly_inventory_transactions": min(100, int((usage.get("monthly_inventory_transactions", 0) / max(1, limits.get("monthly_inventory_transactions", 1))) * 100)),
+            "monthly_api_requests": min(100, int((usage.get("monthly_api_requests", 0) / max(1, limits.get("monthly_api_requests", 1))) * 100)),
+        }
 
-    # Warnings for UI proactive banners
-    warnings = []
-    for k, pct in percentages.items():
-        if pct >= 90:
-            warnings.append({"resource": k, "percentage": pct, "level": "danger", "message": f"You are using {pct}% of your plan limit for {k.replace('_', ' ')}."})
-        elif pct >= 80:
-            warnings.append({"resource": k, "percentage": pct, "level": "warning", "message": f"You are using {pct}% of your plan limit for {k.replace('_', ' ')}."})
+        # Warnings for UI proactive banners
+        warnings = []
+        for k, pct in percentages.items():
+            if pct >= 90:
+                warnings.append({"resource": k, "percentage": pct, "level": "danger", "message": f"You are using {pct}% of your plan limit for {k.replace('_', ' ')}."})
+            elif pct >= 80:
+                warnings.append({"resource": k, "percentage": pct, "level": "warning", "message": f"You are using {pct}% of your plan limit for {k.replace('_', ' ')}."})
 
     return {
         **entitlement,

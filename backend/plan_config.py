@@ -282,17 +282,27 @@ def check_feature_access(target: Any, feature_key: str, is_trial: bool = False, 
     Check if a feature is accessible for a company or plan.
     Supports passing a company_doc dict or plan_id string.
     Order of Evaluation:
-    1. Temporary feature entitlement with expiry date
-    2. Explicit workspace feature entitlement overrides
-    3. Plan definition features matrix for the company's assigned plan
+    1. Active 15-Day Free Trial -> Full Feature Access
+    2. Temporary feature entitlement with expiry date
+    3. Explicit workspace feature entitlement overrides
+    4. Plan definition features matrix for the company's assigned plan
     """
     company_doc = target if isinstance(target, dict) else {}
-    plan_id = target if isinstance(target, str) else (company_doc.get("plan_id") or company_doc.get("plan") or "starter")
-    plan_id = str(plan_id).lower()
-    if plan_id not in ("starter", "growth", "pro"):
-        plan_id = "starter"
+    
+    # 1. Check if trial is active
+    trial_active = is_trial or bool(company_doc.get("is_trial"))
+    if not trial_active and isinstance(company_doc, dict) and company_doc.get("subscription_status") == "trialing":
+        trial_ends = parse_iso(company_doc.get("trial_ends_at"))
+        now = datetime.now(timezone.utc)
+        if trial_ends:
+            trial_active = (now <= trial_ends)
+        else:
+            trial_active = True
 
-    # 1. Temporary feature entitlement with expiry date check
+    if trial_active:
+        return True
+
+    # 2. Temporary feature entitlement with expiry date check
     temp_features = company_doc.get("temporary_features")
     if isinstance(temp_features, dict) and feature_key in temp_features:
         expiry_val = temp_features[feature_key]
@@ -306,17 +316,36 @@ def check_feature_access(target: Any, feature_key: str, is_trial: bool = False, 
         elif isinstance(expiry_val, bool):
             return expiry_val
 
-    # 2. Explicit workspace entitlement override takes priority
+    # 3. Explicit workspace entitlement override takes priority
     entitlements = company_doc.get("feature_entitlements")
     if isinstance(entitlements, dict) and feature_key in entitlements:
         return bool(entitlements[feature_key])
 
-    # 3. Fallback to assigned plan definition
+    # 4. Fallback to assigned plan definition
+    plan_id = target if isinstance(target, str) else (company_doc.get("plan_id") or company_doc.get("plan") or "starter")
+    plan_id = str(plan_id).lower()
+    if plan_id not in ("starter", "growth", "pro"):
+        plan_id = "starter"
+
     plan = get_plan_details(plan_id, db_override=db_override)
     return bool(plan.get("features", {}).get(feature_key, False))
 
 def get_plan_limits(plan_id: str, is_trial: bool = False, db_override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Return complete EPC resource limits dictionary for the assigned plan."""
+    """Return complete EPC resource limits dictionary for the assigned plan or full trial access."""
+    if is_trial:
+        return {
+            "max_users": 999999,
+            "max_clients": 999999,
+            "max_products": 999999,
+            "storage_gb": 999999,
+            "storage_bytes": 999999 * 1024 * 1024 * 1024,
+            "monthly_documents": 999999,
+            "monthly_pdf_docx": 999999,
+            "monthly_exports": 999999,
+            "monthly_material_requests": 999999,
+            "monthly_inventory_transactions": 999999,
+            "monthly_api_requests": 999999,
+        }
     pid = str(plan_id or "starter").lower()
     if pid not in ("starter", "growth", "pro"):
         pid = "starter"
@@ -420,12 +449,33 @@ async def check_plan_limit(company_id: str, resource_key: str, increment: int = 
         db = app_db
 
     company = await db.companies.find_one({"id": company_id}) or {}
-    plan_id = (company.get("plan_id") or "starter").lower()
-    is_trial = company.get("subscription_status") == "trialing"
+    status = (company.get("subscription_status") or "trialing").lower()
+    
+    # Check if active free trial (15-day trial has no plan-based quotas)
+    now = datetime.now(timezone.utc)
+    trial_end = parse_iso(company.get("trial_ends_at"))
+    if not trial_end:
+        trial_start = parse_iso(company.get("trial_started_at") or company.get("created_at")) or now
+        trial_end = trial_start + timedelta(days=15)
 
-    db_plan_override = await db.plans_config.find_one({"id": plan_id}, {"_id": 0})
-    limits = get_plan_limits(plan_id, is_trial=is_trial, db_override=db_plan_override)
+    is_trial = (status == "trialing" and now <= trial_end)
     usage = await get_company_usage(company_id, db=db)
+
+    if is_trial:
+        return {
+            "allowed": True,
+            "current_usage": usage.get(resource_key, 0),
+            "limit": 999999,
+            "warning_level": None,
+            "percentage": 0,
+            "message": "",
+            "plan_id": "trial",
+            "resource_key": resource_key
+        }
+
+    plan_id = (company.get("plan_id") or "starter").lower()
+    db_plan_override = await db.plans_config.find_one({"id": plan_id}, {"_id": 0})
+    limits = get_plan_limits(plan_id, is_trial=False, db_override=db_plan_override)
 
     RESOURCE_MAP = {
         "active_clients": ("max_clients", "active clients/projects", usage.get("active_clients", 0)),
@@ -617,19 +667,24 @@ async def get_company_entitlement(company_id: str, db=None) -> Dict[str, Any]:
 
     db_plan_override = await db.plans_config.find_one({"id": plan_id}, {"_id": 0})
     plan_info = get_plan_details(plan_id, db_override=db_plan_override)
-    can_write = (status in ("active", "trialing"))
+    can_write = (status in ("active", "trialing")) and not is_expired
 
-    limits = get_plan_limits(plan_id, is_trial=is_trial, db_override=db_plan_override)
+    if is_trial:
+        plan_name = "FREE TRIAL"
+        limits = get_plan_limits(plan_id, is_trial=True)
+    else:
+        plan_name = plan_info["name"]
+        limits = get_plan_limits(plan_id, is_trial=False, db_override=db_plan_override)
 
     return {
         "company_id": company_id,
         "company_name": company.get("company_name"),
         "plan_id": plan_id,
-        "plan_name": plan_info["name"],
+        "plan_name": plan_name,
         "subscription_status": status,
         "billing_cycle": company.get("billing_cycle", "monthly"),
         "is_trial": is_trial,
-        "is_active": (status in ("active", "trialing")),
+        "is_active": (status in ("active", "trialing")) and not is_expired,
         "is_expired": is_expired,
         "trial_started_at": trial_start.isoformat(),
         "trial_ends_at": trial_end.isoformat(),

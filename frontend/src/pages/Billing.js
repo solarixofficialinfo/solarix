@@ -237,7 +237,7 @@ export default function Billing() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-slate-700">Team Users</span>
                   <span className="font-mono text-slate-600 font-bold">
-                    {data?.usage?.users || 0} / {data?.limits?.max_users || 3}
+                    {data?.usage?.users || 0} / {data?.is_trial ? "Unlimited (Trial)" : (data?.limits?.max_users || 3)}
                   </span>
                 </div>
                 <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
@@ -255,7 +255,7 @@ export default function Billing() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-slate-700">Active Clients & Projects</span>
                   <span className="font-mono text-slate-600 font-bold">
-                    {data?.usage?.clients || 0} / {data?.limits?.max_clients || 100}
+                    {data?.usage?.clients || 0} / {data?.is_trial ? "Unlimited (Trial)" : (data?.limits?.max_clients || 100)}
                   </span>
                 </div>
                 <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
@@ -273,7 +273,7 @@ export default function Billing() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-slate-700">Product Master</span>
                   <span className="font-mono text-slate-600 font-bold">
-                    {data?.usage?.products || 0} / {data?.limits?.max_products || 1000}
+                    {data?.usage?.products || 0} / {data?.is_trial ? "Unlimited (Trial)" : (data?.limits?.max_products || 1000)}
                   </span>
                 </div>
                 <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
@@ -291,7 +291,7 @@ export default function Billing() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-slate-700">Document & Photo Storage</span>
                   <span className="font-mono text-slate-600 font-bold">
-                    {data?.usage?.storage_gb || 0} GB / {data?.limits?.storage_gb || 5} GB
+                    {data?.usage?.storage_gb || 0} GB / {data?.is_trial ? "Unlimited (Trial)" : `${data?.limits?.storage_gb || 5} GB`}
                   </span>
                 </div>
                 <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
@@ -309,7 +309,7 @@ export default function Billing() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-slate-700">PDF / DOCX Generation (Monthly)</span>
                   <span className="font-mono text-slate-600 font-bold">
-                    {data?.usage?.monthly_pdf_docx || 0} / {data?.limits?.monthly_pdf_docx || 200}
+                    {data?.usage?.monthly_pdf_docx || 0} / {data?.is_trial ? "Unlimited (Trial)" : (data?.limits?.monthly_pdf_docx || 200)}
                   </span>
                 </div>
                 <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
@@ -327,13 +327,13 @@ export default function Billing() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-slate-700">Excel / PDF Exports (Monthly)</span>
                   <span className="font-mono text-slate-600 font-bold">
-                    {data?.usage?.monthly_exports || 0} / {data?.limits?.monthly_exports || 50}
+                    {data?.usage?.monthly_exports || 0} / {data?.is_trial ? "Unlimited (Trial)" : (data?.limits?.monthly_exports || 50)}
                   </span>
                 </div>
                 <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
                   <div
                     className={`h-full transition-all duration-300 ${
-                      (data?.percentages?.monthly_exports || 0) >= 100 ? "bg-rose-500" : (data?.percentages?.monthly_exports || 0) >= 80 ? "bg-amber-500" : "bg-teal-600"
+                      (data?.percentages?.monthly_exports || 0) >= 100 ? "bg-rose-500" : (data?.percentages?.monthly_exports || 0) >= 80 ? "bg-amber-500" : "bg-emerald-600"
                     }`}
                     style={{ width: `${data?.percentages?.monthly_exports || 0}%` }}
                   />
@@ -345,7 +345,7 @@ export default function Billing() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-slate-700">Material Requests (Monthly)</span>
                   <span className="font-mono text-slate-600 font-bold">
-                    {data?.usage?.monthly_material_requests || 0} / {data?.limits?.monthly_material_requests || 1000}
+                    {data?.usage?.monthly_material_requests || 0} / {data?.is_trial ? "Unlimited (Trial)" : (data?.limits?.monthly_material_requests || 1000)}
                   </span>
                 </div>
                 <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
@@ -363,7 +363,7 @@ export default function Billing() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-slate-700">Inward / Outward Stock (Monthly)</span>
                   <span className="font-mono text-slate-600 font-bold">
-                    {data?.usage?.monthly_inventory_transactions || 0} / {data?.limits?.monthly_inventory_transactions || 2500}
+                    {data?.usage?.monthly_inventory_transactions || 0} / {data?.is_trial ? "Unlimited (Trial)" : (data?.limits?.monthly_inventory_transactions || 2500)}
                   </span>
                 </div>
                 <div className="w-full h-2 bg-slate-200/80 rounded-full overflow-hidden">
