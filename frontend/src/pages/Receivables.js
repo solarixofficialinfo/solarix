@@ -267,7 +267,7 @@ export default function Receivables() {
         toast.success("Tax Invoice created successfully");
       }
       queryClient.invalidateQueries({ queryKey: ["finance", "receivables"] });
-      queryClient.invalidateQueries({ queryKey: ["finance", "projects", activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["finance", "projects"] });
       queryClient.invalidateQueries({ queryKey: ["client"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       setCreateInvoiceOpen(false);
@@ -291,7 +291,7 @@ export default function Receivables() {
     onSuccess: (data) => {
       toast.success(data.message || "Payment allocated successfully");
       queryClient.invalidateQueries({ queryKey: ["finance", "receivables"] });
-      queryClient.invalidateQueries({ queryKey: ["finance", "projects", activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["finance", "projects"] });
       queryClient.invalidateQueries({ queryKey: ["client"] });
       setApplyPaymentOpen(false);
       setSelectedInvoice(null);
@@ -307,7 +307,7 @@ export default function Receivables() {
     onSuccess: (data) => {
       toast.success(data?.message || "Invoice deleted successfully");
       queryClient.invalidateQueries({ queryKey: ["finance", "receivables"] });
-      queryClient.invalidateQueries({ queryKey: ["finance", "projects", activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["finance", "projects"] });
       queryClient.invalidateQueries({ queryKey: ["client"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       setInvoiceDetailOpen(false);
@@ -330,7 +330,7 @@ export default function Receivables() {
     onSuccess: () => {
       toast.success(editingLoan ? "Loan record updated" : "Loan record logged successfully");
       queryClient.invalidateQueries({ queryKey: ["finance", "receivables"] });
-      queryClient.invalidateQueries({ queryKey: ["finance", "projects", activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["finance", "projects"] });
       queryClient.invalidateQueries({ queryKey: ["client"] });
       setAddLoanOpen(false);
       setEditingLoan(null);
@@ -346,7 +346,7 @@ export default function Receivables() {
     onSuccess: () => {
       toast.success("Loan record deleted");
       queryClient.invalidateQueries({ queryKey: ["finance", "receivables"] });
-      queryClient.invalidateQueries({ queryKey: ["finance", "projects", activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["finance", "projects"] });
       queryClient.invalidateQueries({ queryKey: ["client"] });
     },
     onError: (err) => toast.error(formatApiError(err))
@@ -365,7 +365,7 @@ export default function Receivables() {
     onSuccess: () => {
       toast.success(editingExpense ? "Expense updated" : "Expense logged successfully");
       queryClient.invalidateQueries({ queryKey: ["finance", "receivables"] });
-      queryClient.invalidateQueries({ queryKey: ["finance", "projects", activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["finance", "projects"] });
       queryClient.invalidateQueries({ queryKey: ["client"] });
       setAddExpenseOpen(false);
       setEditingExpense(null);
@@ -381,7 +381,7 @@ export default function Receivables() {
     onSuccess: () => {
       toast.success("Expense deleted");
       queryClient.invalidateQueries({ queryKey: ["finance", "receivables"] });
-      queryClient.invalidateQueries({ queryKey: ["finance", "projects", activeProjectId] });
+      queryClient.invalidateQueries({ queryKey: ["finance", "projects"] });
       queryClient.invalidateQueries({ queryKey: ["client"] });
     },
     onError: (err) => toast.error(formatApiError(err))
@@ -2513,6 +2513,7 @@ export default function Receivables() {
                           ...prev,
                           client_id: c.id,
                           client_name: c.full_name,
+                          project_id: prev.project_id && !prev.project_id.startsWith("proj_") ? prev.project_id : `proj_${c.id}`,
                           buyer_gstin: c.gstin || "",
                           place_of_supply: c.state || prev.place_of_supply
                         }));

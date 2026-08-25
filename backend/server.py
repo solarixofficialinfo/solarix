@@ -477,7 +477,8 @@ class CursorAdapter:
         return self
 
     async def to_list(self, length=None):
-        builder = supabase.table(self.collection.table_name).select("*")
+        supa_table = getattr(self.collection, "_supabase_table_name", self.collection.table_name)
+        builder = supabase.table(supa_table).select("*")
         
         # Intercept and extract unsupported filters for files table
         filter_to_apply = self.filter
@@ -509,23 +510,19 @@ class CursorAdapter:
             data = res.data or []
         except Exception as e:
             err_str = str(e).lower()
-            if "42501" in err_str or "row-level security" in err_str or "unauthorized" in err_str or "timeout" in err_str or "timed out" in err_str or "connection" in err_str or "400" in err_str or "bad request" in err_str or "pgrst" in err_str:
+            if "42501" in err_str or "row-level security" in err_str or "unauthorized" in err_str or "timeout" in err_str or "timed out" in err_str or "connection" in err_str or "400" in err_str or "bad request" in err_str or "pgrst" in err_str or "does not exist" in err_str or "schema cache" in err_str:
                 logger.warning(f"Supabase query failed ({e}), falling back to local files for {self.collection.table_name}")
                 return await LocalFileCollection(self.collection.table_name).find(self.filter, self.projection).sort(self.sort_fields).to_list(length)
-            elif "pgrst205" in err_str or "does not exist" in err_str or "schema cache" in err_str:
-                data = []
             else:
                 raise e
         
-        # ── Local-file merge (fallback/offline data) ─────────────────────────────
-        skip_local_merge = len(data) > 0
-        if not skip_local_merge:
-            local_records = await LocalFileCollection(self.collection.table_name).find(self.filter, self.projection).sort(self.sort_fields).to_list(length)
-            if local_records:
-                existing_ids = {d.get("id") for d in data if isinstance(d, dict) and d.get("id")}
-                for lr in local_records:
-                    if lr.get("id") not in existing_ids:
-                        data.append(lr)
+        # ── Local-file merge (fallback/offline data with safe ID deduplication) ─────────────────────────────
+        local_records = await LocalFileCollection(self.collection.table_name).find(self.filter, self.projection).sort(self.sort_fields).to_list(length)
+        if local_records:
+            existing_ids = {str(d.get("id")) for d in data if isinstance(d, dict) and d.get("id")}
+            for lr in local_records:
+                if str(lr.get("id")) not in existing_ids:
+                    data.append(lr)
 
         deserialized_data = []
         for doc in data:
@@ -922,9 +919,132 @@ def _enrich_company_doc(doc: dict) -> dict:
 
     return enriched
 
+async def _sync_client_financial_record(cid: str, client_id: str, record_type: str, record: dict, action: str = "upsert"):
+    """
+    Persistently synchronizes financial records (expenses, payments, loans, invoices)
+    into client's stages.onboarding_data in Supabase PostgreSQL database and local storage.
+    """
+    if not client_id or not cid or not record:
+        return
+    try:
+        supa = get_supabase_client(use_service_key=True)
+        c_id_clean = str(client_id).strip()
+        res = supa.table("clients").select("id, stages").eq("company_id", cid).or_(f"id.eq.{c_id_clean},sol_id.eq.{c_id_clean}").limit(1).execute()
+        client_row = res.data[0] if res.data else None
+        target_client_uuid = client_row["id"] if client_row else (c_id_clean if not c_id_clean.startswith("SOL-") else None)
+        
+        stages = dict((client_row.get("stages") if client_row else None) or {})
+        ob = dict(stages.get("onboarding_data") or {})
+        rec_list = list(ob.get(record_type) or [])
+        
+        rec_id = record.get("id")
+        if action == "delete":
+            rec_list = [r for r in rec_list if r.get("id") != rec_id]
+        else:
+            updated = False
+            for idx, r in enumerate(rec_list):
+                if r.get("id") == rec_id:
+                    rec_list[idx] = {**r, **record}
+                    updated = True
+                    break
+            if not updated:
+                rec_list.append(record)
+                
+        ob[record_type] = rec_list
+        stages["onboarding_data"] = ob
+        
+        if target_client_uuid:
+            try:
+                supa.table("clients").update({"stages": stages, "updated_at": now_iso()}).eq("id", target_client_uuid).eq("company_id", cid).execute()
+            except Exception as e_supa:
+                logger.debug(f"Supabase stages update for {record_type}: {e_supa}")
+                
+        # Also update local client file if present
+        try:
+            local_client = await LocalFileCollection("clients").find_one({"$or": [{"id": c_id_clean}, {"sol_id": c_id_clean}], "company_id": cid})
+            if local_client:
+                loc_stages = dict(local_client.get("stages") or {})
+                loc_ob = dict(loc_stages.get("onboarding_data") or {})
+                loc_ob[record_type] = rec_list
+                loc_stages["onboarding_data"] = loc_ob
+                await LocalFileCollection("clients").update_one(
+                    {"id": local_client["id"], "company_id": cid},
+                    {"$set": {"stages": loc_stages, "updated_at": now_iso()}}
+                )
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning(f"Error in _sync_client_financial_record ({record_type}, {action}): {e}")
+
+async def recover_and_sync_financial_data():
+    """
+    Recovers and synchronizes all existing local invoices (including drafts),
+    expenses, payments, and loans into Supabase PostgreSQL.
+    """
+    try:
+        supa = get_supabase_client(use_service_key=True)
+        
+        # 1. Recover and sync Invoices to Supabase tax_invoices
+        local_invs = await LocalFileCollection("invoices").find({}).to_list(10000)
+        logger.info(f"[FINANCIAL RECOVERY] Found {len(local_invs)} local invoices to verify/sync to Supabase tax_invoices")
+        for inv in local_invs:
+            inv_id = inv.get("id")
+            if not inv_id:
+                continue
+            supa_doc = {
+                "id": inv_id,
+                "company_id": inv.get("company_id"),
+                "client_id": inv.get("client_id") or None,
+                "project_id": inv.get("project_id") or None,
+                "details": json.dumps(inv, default=str),
+                "created_at": inv.get("created_at") or now_iso(),
+                "updated_at": inv.get("updated_at") or now_iso()
+            }
+            try:
+                supa.table("tax_invoices").upsert(supa_doc).execute()
+            except Exception as e:
+                logger.debug(f"[FINANCIAL RECOVERY] tax_invoices upsert {inv_id}: {e}")
+            if inv.get("client_id") and inv.get("company_id"):
+                await _sync_client_financial_record(inv["company_id"], inv["client_id"], "invoices", inv, "upsert")
+
+        # 2. Recover and sync Expenses to clients in Supabase
+        local_exps = await LocalFileCollection("expenses").find({}).to_list(10000)
+        logger.info(f"[FINANCIAL RECOVERY] Found {len(local_exps)} local expenses to verify/sync to Supabase")
+        for exp in local_exps:
+            c_id = exp.get("client_id")
+            comp_id = exp.get("company_id")
+            if c_id and comp_id:
+                await _sync_client_financial_record(comp_id, c_id, "expenses", exp, "upsert")
+
+        # 3. Recover and sync Payments to clients in Supabase
+        local_pays = await LocalFileCollection("payments").find({}).to_list(10000)
+        for pay in local_pays:
+            c_id = pay.get("client_id")
+            comp_id = pay.get("company_id")
+            if c_id and comp_id:
+                await _sync_client_financial_record(comp_id, c_id, "payments", pay, "upsert")
+
+        # 4. Recover and sync Loans to clients in Supabase
+        local_loans = await LocalFileCollection("loans").find({}).to_list(10000)
+        for loan in local_loans:
+            c_id = loan.get("client_id")
+            comp_id = loan.get("company_id")
+            if c_id and comp_id:
+                await _sync_client_financial_record(comp_id, c_id, "loans", loan, "upsert")
+                
+        logger.info("[FINANCIAL RECOVERY] Complete: Invoices, Expenses, Payments, Loans synced with database.")
+    except Exception as e:
+        logger.warning(f"[FINANCIAL RECOVERY] Error in recover_and_sync_financial_data: {e}")
+
 class CollectionAdapter:
     def __init__(self, table_name: str):
         self.table_name = table_name
+
+    @property
+    def _supabase_table_name(self) -> str:
+        if self.table_name == "invoices":
+            return "tax_invoices"
+        return self.table_name
 
     def _extract_and_remove_unsupported_filters(self, filter_dict):
         extracted = {}
@@ -941,7 +1061,19 @@ class CollectionAdapter:
     def _deserialize_document(self, doc):
         if not doc or not isinstance(doc, dict):
             return doc
-        if self.table_name == "files" and "original_filename" in doc:
+        if self.table_name in ("invoices", "tax_invoices"):
+            if "details" in doc and doc["details"]:
+                details_val = doc.pop("details", None)
+                if isinstance(details_val, str):
+                    try:
+                        parsed = json.loads(details_val)
+                        if isinstance(parsed, dict):
+                            doc = {**parsed, **{k: v for k, v in doc.items() if v is not None}}
+                    except Exception:
+                        pass
+                elif isinstance(details_val, dict):
+                    doc = {**details_val, **{k: v for k, v in doc.items() if v is not None}}
+        elif self.table_name == "files" and "original_filename" in doc:
             orig_filename = doc["original_filename"] or ""
             if orig_filename.startswith("__METADATA__:"):
                 try:
@@ -1117,7 +1249,7 @@ class CollectionAdapter:
                 return None
 
         # Always select * from Supabase so missing columns in custom projection dictionaries never cause 400 Bad Request
-        builder = supabase.table(self.table_name).select("*")
+        builder = supabase.table(self._supabase_table_name).select("*")
         builder = self._apply_filters(builder, filter)
         if sort:
             for k, dir in sort:
@@ -1171,9 +1303,40 @@ class CollectionAdapter:
     async def insert_one(self, document):
         global _PRODUCTS_HAS_RATE, _PRODUCTS_HAS_OPENING_STOCK, _PRODUCTS_HAS_HV, _PRODUCTS_HAS_SN_REQ
         if "id" not in document and self.table_name not in ["counters", "inventory_defaults", "password_reset_tokens"]:
-            document["id"] = str(uuid.uuid4())
+            prefix = "inv_" if self.table_name in ("invoices", "tax_invoices") else ("exp_" if self.table_name == "expenses" else "")
+            document["id"] = f"{prefix}{uuid.uuid4().hex[:12]}" if prefix else str(uuid.uuid4())
         document = self._clean_empty_fks(document)
         
+        # Dedicated persistent storage for invoices in Supabase tax_invoices table
+        if self.table_name in ("invoices", "tax_invoices"):
+            inv_id = str(document.get("id") or f"inv_{uuid.uuid4().hex[:12]}")
+            document["id"] = inv_id
+            supa_doc = {
+                "id": inv_id,
+                "company_id": document.get("company_id"),
+                "client_id": document.get("client_id") or None,
+                "project_id": document.get("project_id") or None,
+                "details": json.dumps(document, default=str),
+                "created_at": document.get("created_at") or now_iso(),
+                "updated_at": document.get("updated_at") or now_iso()
+            }
+            try:
+                supabase.table("tax_invoices").upsert(supa_doc).execute()
+            except Exception as e_supa:
+                logger.warning(f"Supabase tax_invoices insert/upsert warning: {e_supa}")
+            await LocalFileCollection("invoices").insert_one(document)
+            if document.get("client_id") and document.get("company_id"):
+                await _sync_client_financial_record(document["company_id"], document["client_id"], "invoices", document, "upsert")
+            return InsertOneResult(inv_id)
+
+        # Dedicated persistent synchronization for expenses, payments, loans
+        if self.table_name in ("expenses", "payments", "loans"):
+            rec_id = str(document.get("id"))
+            await LocalFileCollection(self.table_name).insert_one(document)
+            if document.get("client_id") and document.get("company_id"):
+                await _sync_client_financial_record(document["company_id"], document["client_id"], self.table_name, document, "upsert")
+            return InsertOneResult(rec_id)
+
         # Serialize metadata for files
         if self.table_name == "files" and "doc_type" in document:
             doc_type = document.pop("doc_type", None)
@@ -1202,13 +1365,13 @@ class CollectionAdapter:
         
         while True:
             try:
-                res = supabase.table(self.table_name).insert(document, returning="minimal").execute()
+                res = supabase.table(self._supabase_table_name).insert(document, returning="minimal").execute()
                 await LocalFileCollection(self.table_name).insert_one(document)
                 return InsertOneResult(document.get("id"))
             except Exception as e:
                 err_str = str(e)
                 if "PGRST204" in err_str or "Could not find the" in err_str:
-                    logger.warning(f"Supabase table '{self.table_name}' missing schema column. Saving full insert locally: {err_str}")
+                    logger.warning(f"Supabase table '{self._supabase_table_name}' missing schema column. Saving full insert locally: {err_str}")
                     await LocalFileCollection(self.table_name).insert_one(document)
                     unsupported = set()
                     if "Could not find the '" in err_str:
@@ -1218,9 +1381,9 @@ class CollectionAdapter:
                         unsupported.update({"high_value_goods", "serial_number_required", "opening_stock", "rate"})
                     doc_clean = {k: v for k, v in document.items() if k not in unsupported}
                     try:
-                        supabase.table(self.table_name).insert(doc_clean, returning="minimal").execute()
+                        supabase.table(self._supabase_table_name).insert(doc_clean, returning="minimal").execute()
                     except Exception as e2:
-                        logger.warning(f"Fallback insert_one for {self.table_name}: {e2}")
+                        logger.warning(f"Fallback insert_one for {self._supabase_table_name}: {e2}")
                     return InsertOneResult(document.get("id"))
                 if "42501" in err_str or "409" in err_str or "23503" in err_str or "foreign key" in err_str.lower() or "row-level security" in err_str.lower() or "unauthorized" in err_str.lower() or "401" in err_str:
                     return await LocalFileCollection(self.table_name).insert_one(document)
@@ -1230,18 +1393,51 @@ class CollectionAdapter:
         global _PRODUCTS_HAS_RATE
         for doc in documents:
             if "id" not in doc and self.table_name not in ["counters", "inventory_defaults", "password_reset_tokens"]:
-                doc["id"] = str(uuid.uuid4())
+                prefix = "inv_" if self.table_name in ("invoices", "tax_invoices") else ("exp_" if self.table_name == "expenses" else "")
+                doc["id"] = f"{prefix}{uuid.uuid4().hex[:12]}" if prefix else str(uuid.uuid4())
             doc = self._clean_empty_fks(doc)
+
+        if self.table_name in ("invoices", "tax_invoices"):
+            supa_docs = []
+            for doc in documents:
+                inv_id = str(doc.get("id") or f"inv_{uuid.uuid4().hex[:12]}")
+                doc["id"] = inv_id
+                supa_docs.append({
+                    "id": inv_id,
+                    "company_id": doc.get("company_id"),
+                    "client_id": doc.get("client_id") or None,
+                    "project_id": doc.get("project_id") or None,
+                    "details": json.dumps(doc, default=str),
+                    "created_at": doc.get("created_at") or now_iso(),
+                    "updated_at": doc.get("updated_at") or now_iso()
+                })
+            try:
+                supabase.table("tax_invoices").upsert(supa_docs).execute()
+            except Exception as e:
+                logger.warning(f"tax_invoices insert_many warning: {e}")
+            await LocalFileCollection("invoices").insert_many(documents)
+            for doc in documents:
+                if doc.get("client_id") and doc.get("company_id"):
+                    await _sync_client_financial_record(doc["company_id"], doc["client_id"], "invoices", doc, "upsert")
+            return InsertManyResult([doc.get("id") for doc in documents])
+
+        if self.table_name in ("expenses", "payments", "loans"):
+            await LocalFileCollection(self.table_name).insert_many(documents)
+            for doc in documents:
+                if doc.get("client_id") and doc.get("company_id"):
+                    await _sync_client_financial_record(doc["company_id"], doc["client_id"], self.table_name, doc, "upsert")
+            return InsertManyResult([doc.get("id") for doc in documents])
+
         if self.table_name == "products" and not _PRODUCTS_HAS_RATE:
             documents = [{k: v for k, v in doc.items() if k != "rate"} for doc in documents]
         try:
-            res = supabase.table(self.table_name).insert(documents, returning="minimal").execute()
+            res = supabase.table(self._supabase_table_name).insert(documents, returning="minimal").execute()
         except Exception as e:
             err_str = str(e)
             if "PGRST204" in err_str or "Could not find the" in err_str:
                 docs_copy = [{k: v for k, v in doc.items() if k not in ["high_value_asset", "high_value_goods", "serial_number_required", "rate", "opening_stock"]} for doc in documents]
                 try:
-                    res = supabase.table(self.table_name).insert(docs_copy, returning="minimal").execute()
+                    res = supabase.table(self._supabase_table_name).insert(docs_copy, returning="minimal").execute()
                 except Exception as e2:
                     if "42501" in str(e2) or "row-level security" in str(e2).lower() or "unauthorized" in str(e2).lower() or "401" in str(e2) or "PGRST204" in str(e2):
                         return await LocalFileCollection(self.table_name).insert_many(documents)
@@ -1259,13 +1455,50 @@ class CollectionAdapter:
         if "$set" in update:
             patch.update(update["$set"])
             patch = self._clean_empty_fks(patch)
+
+        # Dedicated persistent storage for invoices in Supabase tax_invoices table
+        if self.table_name in ("invoices", "tax_invoices"):
+            existing_inv = await self.find_one(filter)
+            merged_inv = dict(existing_inv or {})
+            if "$set" in update:
+                merged_inv.update(update["$set"])
+            inv_id = merged_inv.get("id") or (filter.get("id") if isinstance(filter, dict) else None)
+            if inv_id:
+                merged_inv["id"] = inv_id
+                supa_doc = {
+                    "id": inv_id,
+                    "company_id": merged_inv.get("company_id"),
+                    "client_id": merged_inv.get("client_id") or None,
+                    "project_id": merged_inv.get("project_id") or None,
+                    "details": json.dumps(merged_inv, default=str),
+                    "updated_at": now_iso()
+                }
+                try:
+                    supabase.table("tax_invoices").upsert(supa_doc).execute()
+                except Exception as e_supa:
+                    logger.warning(f"tax_invoices update/upsert warning: {e_supa}")
+                if merged_inv.get("client_id") and merged_inv.get("company_id"):
+                    await _sync_client_financial_record(merged_inv["company_id"], merged_inv["client_id"], "invoices", merged_inv, "upsert")
+            await LocalFileCollection("invoices").update_one(filter, update, upsert=upsert)
+            return UpdateResult(1, 1)
+
+        # Dedicated persistent synchronization for expenses, payments, loans
+        if self.table_name in ("expenses", "payments", "loans"):
+            existing_rec = await self.find_one(filter)
+            merged_rec = dict(existing_rec or {})
+            if "$set" in update:
+                merged_rec.update(update["$set"])
+            await LocalFileCollection(self.table_name).update_one(filter, update, upsert=upsert)
+            if merged_rec.get("client_id") and merged_rec.get("company_id"):
+                await _sync_client_financial_record(merged_rec["company_id"], merged_rec["client_id"], self.table_name, merged_rec, "upsert")
+            return UpdateResult(1, 1)
         
         # Need existing document for $inc, $pull, $addToSet, $push
         existing = {}
         ex_ob = {}
         if any(op in update for op in ["$inc", "$pull", "$addToSet", "$push"]):
             try:
-                builder = supabase.table(self.table_name).select("*").limit(1)
+                builder = supabase.table(self._supabase_table_name).select("*").limit(1)
                 builder = self._apply_filters(builder, filter)
                 res = builder.execute()
                 if res.data:
@@ -1317,17 +1550,13 @@ class CollectionAdapter:
             patch = _prepare_company_supabase_payload(patch)
 
         if self.table_name == "clients":
-            logger.info(f"[CLIENT-SAVE DIAG] ▶ update_one called. filter={filter}")
-            logger.info(f"[CLIENT-SAVE DIAG] ▶ raw patch before prepare: {json.dumps({k: v for k, v in patch.items() if k != 'stages'}, default=str)}")
             try:
                 builder = supabase.table(self.table_name).select("stages").limit(1)
                 builder = self._apply_filters(builder, filter)
                 ex_res = builder.execute()
-                logger.info(f"[CLIENT-SAVE DIAG] ▶ pre-fetch stages result rows={len(ex_res.data or [])}")
                 if ex_res.data and isinstance(ex_res.data[0], dict):
                     ex_doc = ex_res.data[0]
                     ex_stages = dict(ex_doc.get("stages") or {})
-                    logger.info(f"[CLIENT-SAVE DIAG] ▶ existing stages keys: {list(ex_stages.keys())}")
                     if "stages" not in patch:
                         patch["stages"] = ex_stages
                     else:
@@ -1339,39 +1568,21 @@ class CollectionAdapter:
                         ex_ob.update(inc_ob)
                         merged_stages["onboarding_data"] = ex_ob
                         patch["stages"] = merged_stages
-                else:
-                    logger.warning(f"[CLIENT-SAVE DIAG] ⚠ pre-fetch returned NO data — WHERE clause may be wrong! filter={filter}")
             except Exception as ex_err:
-                logger.warning(f"[CLIENT-SAVE DIAG] ⚠ Could not pre-fetch existing client stages: {ex_err}")
+                logger.warning(f"Could not pre-fetch existing client stages: {ex_err}")
             patch = _prepare_client_supabase_payload(patch)
-            ob_data = (patch.get("stages") or {}).get("onboarding_data") or {}
-            logger.info(f"[CLIENT-SAVE DIAG] ▶ final Supabase patch keys: {list(patch.keys())}")
-            logger.info(f"[CLIENT-SAVE DIAG] ▶ panel_wattage in patch: {patch.get('panel_wattage')}")
-            logger.info(f"[CLIENT-SAVE DIAG] ▶ panel_make in patch: {patch.get('panel_make')}")
-            logger.info(f"[CLIENT-SAVE DIAG] ▶ onboarding_data.consumer_category: {ob_data.get('consumer_category')}")
-            logger.info(f"[CLIENT-SAVE DIAG] ▶ onboarding_data.section_number: {ob_data.get('section_number')}")
-            logger.info(f"[CLIENT-SAVE DIAG] ▶ onboarding_data.inverters count: {len(ob_data.get('inverters') or [])}")
 
         if not patch:
             return UpdateResult(1, 1)
 
         try:
-            builder = supabase.table(self.table_name).update(patch)
+            builder = supabase.table(self._supabase_table_name).update(patch)
             builder = self._apply_filters(builder, filter)
-            logger.info(f"[CLIENT-SAVE DIAG] ▶ Executing Supabase UPDATE on table='{self.table_name}' WHERE filter={filter}")
             res = builder.execute()
-            logger.info(f"[CLIENT-SAVE DIAG] ▶ Supabase UPDATE raw response: data_count={len(res.data or [])} data={json.dumps(res.data, default=str)[:500]}")
-            if self.table_name == "clients":
-                if not res.data:
-                    logger.error(f"[CLIENT-SAVE DIAG] ✗ Supabase UPDATE returned EMPTY data — row may not exist with filter={filter}, or RLS is blocking the write!")
-                else:
-                    logger.info(f"[CLIENT-SAVE DIAG] ✓ Supabase UPDATE returned {len(res.data)} row(s)")
         except Exception as e:
-            logger.error(f"[CLIENT-SAVE DIAG] ✗ Supabase UPDATE EXCEPTION for table='{self.table_name}': {e}")
-            logger.error(f"Supabase update failed for table '{self.table_name}': {e}")
             err_str = str(e)
             if "PGRST204" in err_str or "Could not find the" in err_str:
-                logger.warning(f"Supabase table '{self.table_name}' missing schema column on update. Updating locally: {err_str}")
+                logger.warning(f"Supabase table '{self._supabase_table_name}' missing schema column on update. Updating locally: {err_str}")
                 await LocalFileCollection(self.table_name).update_one(filter, update, upsert=upsert)
                 unsupported = set()
                 if "Could not find the '" in err_str:
@@ -1382,11 +1593,11 @@ class CollectionAdapter:
                 patch_clean = {k: v for k, v in patch.items() if k not in unsupported}
                 if patch_clean:
                     try:
-                        builder = supabase.table(self.table_name).update(patch_clean)
+                        builder = supabase.table(self._supabase_table_name).update(patch_clean)
                         builder = self._apply_filters(builder, filter)
                         res = builder.execute()
                     except Exception as e2:
-                        logger.warning(f"Fallback update_one for {self.table_name}: {e2}")
+                        logger.warning(f"Fallback update_one for {self._supabase_table_name}: {e2}")
                 return UpdateResult(1, 1)
             if "42501" in err_str or "row-level security" in err_str.lower() or "unauthorized" in err_str.lower() or "401" in err_str:
                 await LocalFileCollection(self.table_name).update_one(filter, update, upsert=upsert)
@@ -1400,7 +1611,6 @@ class CollectionAdapter:
 
         if not res.data and upsert:
             insert_doc = {}
-            # Flatten filter keys if they are simple equality
             for fk, fv in filter.items():
                 if not fk.startswith("$") and not isinstance(fv, dict):
                     insert_doc[fk] = fv
@@ -1411,7 +1621,7 @@ class CollectionAdapter:
             if self.table_name == "products" and not _PRODUCTS_HAS_RATE:
                 insert_doc = {k: v for k, v in insert_doc.items() if k != "rate"}
             try:
-                supabase.table(self.table_name).insert(insert_doc, returning="minimal").execute()
+                supabase.table(self._supabase_table_name).insert(insert_doc, returning="minimal").execute()
             except Exception as e:
                 if self.table_name == "products" and "rate" in insert_doc:
                     err_str = str(e)
@@ -1419,7 +1629,7 @@ class CollectionAdapter:
                         logger.warning("Supabase table products does not have rate column. Disabling rate writes.")
                         _PRODUCTS_HAS_RATE = False
                         insert_doc_copy = {k: v for k, v in insert_doc.items() if k != "rate"}
-                        supabase.table(self.table_name).insert(insert_doc_copy, returning="minimal").execute()
+                        supabase.table(self._supabase_table_name).insert(insert_doc_copy, returning="minimal").execute()
                     else:
                         raise e
                 else:
@@ -1449,14 +1659,14 @@ class CollectionAdapter:
 
         res_count = 1
         try:
-            builder = supabase.table(self.table_name).update(patch)
+            builder = supabase.table(self._supabase_table_name).update(patch)
             builder = self._apply_filters(builder, filter)
             res = builder.execute()
             res_count = len(res.data) if res.data else 1
         except Exception as e:
             err_str = str(e).lower()
             if "pgrst205" in err_str or "does not exist" in err_str or "schema cache" in err_str:
-                logger.warning(f"Supabase update_many failed for table '{self.table_name}', updating local fallback: {e}")
+                logger.warning(f"Supabase update_many failed for table '{self._supabase_table_name}', updating local fallback: {e}")
             elif self.table_name == "products" and "rate" in patch:
                 if "pgrst204" in err_str or "rate" in err_str:
                     logger.warning("Supabase table products does not have rate column. Disabling rate writes.")
@@ -1464,7 +1674,7 @@ class CollectionAdapter:
                     patch_copy = {k: v for k, v in patch.items() if k != "rate"}
                     if patch_copy:
                         try:
-                            builder = supabase.table(self.table_name).update(patch_copy)
+                            builder = supabase.table(self._supabase_table_name).update(patch_copy)
                             builder = self._apply_filters(builder, filter)
                             res = builder.execute()
                             res_count = len(res.data) if res.data else 1
@@ -1479,8 +1689,29 @@ class CollectionAdapter:
         return UpdateResult(res_count, res_count)
 
     async def delete_one(self, filter):
+        # Dedicated persistent deletion for invoices in Supabase tax_invoices table
+        if self.table_name in ("invoices", "tax_invoices"):
+            inv_to_del = await self.find_one(filter)
+            if inv_to_del and inv_to_del.get("id"):
+                try:
+                    supabase.table("tax_invoices").delete().eq("id", inv_to_del["id"]).execute()
+                except Exception as e_supa:
+                    logger.warning(f"tax_invoices delete warning: {e_supa}")
+                if inv_to_del.get("client_id") and inv_to_del.get("company_id"):
+                    await _sync_client_financial_record(inv_to_del["company_id"], inv_to_del["client_id"], "invoices", inv_to_del, "delete")
+            await LocalFileCollection("invoices").delete_one(filter)
+            return DeleteResult(1)
+
+        # Dedicated persistent synchronization for expenses, payments, loans
+        if self.table_name in ("expenses", "payments", "loans"):
+            rec_to_del = await self.find_one(filter)
+            if rec_to_del and rec_to_del.get("client_id") and rec_to_del.get("company_id"):
+                await _sync_client_financial_record(rec_to_del["company_id"], rec_to_del["client_id"], self.table_name, rec_to_del, "delete")
+            await LocalFileCollection(self.table_name).delete_one(filter)
+            return DeleteResult(1)
+
         try:
-            builder = supabase.table(self.table_name).delete()
+            builder = supabase.table(self._supabase_table_name).delete()
             builder = self._apply_filters(builder, filter)
             res = builder.execute()
         except Exception as e:
@@ -1493,8 +1724,29 @@ class CollectionAdapter:
         return DeleteResult(1)
 
     async def delete_many(self, filter):
+        if self.table_name in ("invoices", "tax_invoices"):
+            invs_to_del = await self.find(filter).to_list(1000)
+            for inv_to_del in invs_to_del:
+                if inv_to_del.get("id"):
+                    try:
+                        supabase.table("tax_invoices").delete().eq("id", inv_to_del["id"]).execute()
+                    except Exception:
+                        pass
+                    if inv_to_del.get("client_id") and inv_to_del.get("company_id"):
+                        await _sync_client_financial_record(inv_to_del["company_id"], inv_to_del["client_id"], "invoices", inv_to_del, "delete")
+            await LocalFileCollection("invoices").delete_many(filter)
+            return DeleteResult(len(invs_to_del))
+
+        if self.table_name in ("expenses", "payments", "loans"):
+            recs_to_del = await self.find(filter).to_list(1000)
+            for rec_to_del in recs_to_del:
+                if rec_to_del.get("client_id") and rec_to_del.get("company_id"):
+                    await _sync_client_financial_record(rec_to_del["company_id"], rec_to_del["client_id"], self.table_name, rec_to_del, "delete")
+            await LocalFileCollection(self.table_name).delete_many(filter)
+            return DeleteResult(len(recs_to_del))
+
         try:
-            builder = supabase.table(self.table_name).delete()
+            builder = supabase.table(self._supabase_table_name).delete()
             builder = self._apply_filters(builder, filter)
             res = builder.execute()
         except Exception as e:
@@ -1507,7 +1759,7 @@ class CollectionAdapter:
         return DeleteResult(1)
 
     async def count_documents(self, filter=None):
-        builder = supabase.table(self.table_name).select("id", count="exact")
+        builder = supabase.table(self._supabase_table_name).select("id", count="exact")
         builder = self._apply_filters(builder, filter)
         try:
             res = builder.execute()
@@ -1519,7 +1771,7 @@ class CollectionAdapter:
             raise e
 
     async def distinct(self, field, filter=None):
-        builder = supabase.table(self.table_name).select(field)
+        builder = supabase.table(self._supabase_table_name).select(field)
         builder = self._apply_filters(builder, filter)
         res = builder.execute()
         vals = {row[field] for row in res.data if row.get(field) is not None}
@@ -2027,6 +2279,11 @@ async def run_one_time_size_standardization_migration():
 
 async def _deferred_startup_tasks():
     """Non-critical startup tasks deferred so they don't block the first request."""
+    try:
+        await recover_and_sync_financial_data()
+    except Exception as e:
+        logger.warning(f"Financial recovery startup task error: {e}")
+
     should_run_migrations = os.environ.get("RUN_STARTUP_MIGRATIONS", "false").lower() in ("true", "1", "yes")
     if should_run_migrations:
         await asyncio.sleep(5)  # Wait 5s for the server to be warm before doing heavy migration work
@@ -4978,6 +5235,21 @@ async def get_client_financials(client_id: str, user=Depends(get_current_user)):
             {"project_id": project.get("id")} if project else {"client_id": client.get("id")}
         ]
     }, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+    # Recover any onboarding stage financial records for full persistence
+    ob_data = dict((client.get("stages") or {}).get("onboarding_data") or {})
+    for obe in (ob_data.get("expenses") or []):
+        if isinstance(obe, dict) and obe.get("id"):
+            if not any(e.get("id") == obe.get("id") for e in expenses):
+                expenses.append(obe)
+    for obp in (ob_data.get("payments") or []):
+        if isinstance(obp, dict) and obp.get("id"):
+            if not any(p.get("id") == obp.get("id") for p in payments):
+                payments.append(obp)
+    for obl in (ob_data.get("loans") or []):
+        if isinstance(obl, dict) and obl.get("id"):
+            if not any(l.get("id") == obl.get("id") for l in loans):
+                loans.append(obl)
 
     # Allocated material cost from inventory outward
     outward_records = await db.outward_entries.find({
@@ -13839,6 +14111,27 @@ async def get_receivables_dashboard(
     payments = await db.payments.find({"company_id": cid}, {"_id": 0}).to_list(10000)
     expenses = await db.expenses.find({"company_id": cid}, {"_id": 0}).to_list(10000)
     loans = await db.loans.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+    invoices = await db.invoices.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+
+    # Recover any onboarding stage financial records for full persistence
+    for c in clients:
+        ob = dict((c.get("stages") or {}).get("onboarding_data") or {})
+        for ob_exp in (ob.get("expenses") or []):
+            if isinstance(ob_exp, dict) and ob_exp.get("id"):
+                if not any(e.get("id") == ob_exp.get("id") for e in expenses):
+                    expenses.append(ob_exp)
+        for ob_pay in (ob.get("payments") or []):
+            if isinstance(ob_pay, dict) and ob_pay.get("id"):
+                if not any(p.get("id") == ob_pay.get("id") for p in payments):
+                    payments.append(ob_pay)
+        for ob_loan in (ob.get("loans") or []):
+            if isinstance(ob_loan, dict) and ob_loan.get("id"):
+                if not any(l.get("id") == ob_loan.get("id") for l in loans):
+                    loans.append(ob_loan)
+        for ob_inv in (ob.get("invoices") or []):
+            if isinstance(ob_inv, dict) and ob_inv.get("id"):
+                if not any(i.get("id") == ob_inv.get("id") for i in invoices):
+                    invoices.append(ob_inv)
 
     total_project_val = 0.0
     total_received = 0.0
@@ -14112,9 +14405,9 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
     if not client:
         raise HTTPException(status_code=404, detail="Client not found for this project")
 
-    c_identifiers = list({x for x in [client.get("id"), client.get("sol_id"), project.get("client_id")] if x})
+    c_identifiers = list({str(x) for x in [client.get("id"), client.get("sol_id"), project.get("client_id"), target_pid.replace("proj_", "")] if x})
     is_def = project.get("is_default", False)
-    p_ids = list({x for x in [
+    p_ids = list({str(x) for x in [
         project.get("id"),
         target_pid,
         f"proj_{client.get('id')}",
@@ -14134,14 +14427,28 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
     raw_expenses = await db.expenses.find(pay_query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     raw_loans = await db.loans.find(pay_query, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
-    payments = [p for p in raw_payments if (p.get("client_id") in c_identifiers) or (p.get("project_id") in p_ids)]
-    expenses = [e for e in raw_expenses if (e.get("client_id") in c_identifiers) or (e.get("project_id") in p_ids)]
-    loans = [l for l in raw_loans if (l.get("client_id") in c_identifiers) or (l.get("project_id") in p_ids)]
+    payments = [p for p in raw_payments if (str(p.get("client_id") or "") in c_identifiers) or (str(p.get("project_id") or "") in p_ids)]
+    expenses = [e for e in raw_expenses if (str(e.get("client_id") or "") in c_identifiers) or (str(e.get("project_id") or "") in p_ids)]
+    loans = [l for l in raw_loans if (str(l.get("client_id") or "") in c_identifiers) or (str(l.get("project_id") or "") in p_ids)]
+
+    # Recover any onboarding stage financial records for full persistence
+    ob_stages = dict(client.get("stages") or {})
+    ob_data = dict(ob_stages.get("onboarding_data") or {})
+    for obe in (ob_data.get("expenses") or []):
+        if isinstance(obe, dict) and obe.get("id"):
+            if not any(e.get("id") == obe.get("id") for e in expenses):
+                expenses.append(obe)
+    for obp in (ob_data.get("payments") or []):
+        if isinstance(obp, dict) and obp.get("id"):
+            if not any(p.get("id") == obp.get("id") for p in payments):
+                payments.append(obp)
+    for obl in (ob_data.get("loans") or []):
+        if isinstance(obl, dict) and obl.get("id"):
+            if not any(l.get("id") == obl.get("id") for l in loans):
+                loans.append(obl)
 
     # If no separate loan records exist in db.loans, bridge/fallback from client onboarding loan_setup
     if not loans:
-        ob_stages = dict(client.get("stages") or {})
-        ob_data = dict(ob_stages.get("onboarding_data") or {})
         c_loan_setup = client.get("loan_setup") or ob_data.get("loan_setup") or ob_stages.get("loan_setup") or {}
         if isinstance(c_loan_setup, dict):
             provider = (c_loan_setup.get("provider") or "").strip()
@@ -14205,7 +14512,11 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
         ]
     }
     raw_invoices = await db.invoices.find(inv_query, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    invoices = [inv for inv in raw_invoices if (inv.get("client_id") in c_identifiers) or (inv.get("project_id") in p_ids)]
+    invoices = [inv for inv in raw_invoices if (str(inv.get("client_id") or "") in c_identifiers) or (str(inv.get("project_id") or "") in p_ids)]
+    for obi in (ob_data.get("invoices") or []):
+        if isinstance(obi, dict) and obi.get("id"):
+            if not any(i.get("id") == obi.get("id") for i in invoices):
+                invoices.append(obi)
 
     total_invoiced = sum(float(inv.get("grand_total") or 0) for inv in invoices if inv.get("status") not in ("Cancelled", "Draft"))
     

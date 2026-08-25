@@ -2,3 +2,14 @@
     min-height: 100vh;
     background-color: hsl(210 40% 98%);
 }
+
+/* Scoped number input spinner removal for Material Dispatch Items Table */
+.dispatch-no-spinner::-webkit-outer-spin-button,
+.dispatch-no-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+.dispatch-no-spinner {
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
