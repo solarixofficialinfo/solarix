@@ -221,11 +221,13 @@ def check_feature_access(target: Any, feature_key: str, is_trial: bool = False, 
     Order of Evaluation:
     1. Temporary feature entitlement with expiry date
     2. Explicit workspace feature entitlement overrides
-    3. Active trial status
-    4. Plan definition features matrix
+    3. Plan definition features matrix for the company's assigned plan
     """
     company_doc = target if isinstance(target, dict) else {}
-    plan_id = target if isinstance(target, str) else company_doc.get("plan_id", "starter")
+    plan_id = target if isinstance(target, str) else (company_doc.get("plan_id") or company_doc.get("plan") or "starter")
+    plan_id = str(plan_id).lower()
+    if plan_id not in ("starter", "growth", "pro"):
+        plan_id = "starter"
 
     # 1. Temporary feature entitlement with expiry date check
     temp_features = company_doc.get("temporary_features")
@@ -246,17 +248,16 @@ def check_feature_access(target: Any, feature_key: str, is_trial: bool = False, 
     if isinstance(entitlements, dict) and feature_key in entitlements:
         return bool(entitlements[feature_key])
 
-    # 3. Trial status grants full access
-    if is_trial or company_doc.get("subscription_status") == "trialing":
-        return True
-
-    # 4. Fallback to plan definition
+    # 3. Fallback to assigned plan definition
     plan = get_plan_details(plan_id, db_override=db_override)
     return bool(plan.get("features", {}).get(feature_key, False))
 
 def get_plan_limits(plan_id: str, is_trial: bool = False, db_override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Return complete EPC resource limits dictionary for plan."""
-    plan = get_plan_details(plan_id, db_override=db_override)
+    """Return complete EPC resource limits dictionary for the assigned plan."""
+    pid = str(plan_id or "starter").lower()
+    if pid not in ("starter", "growth", "pro"):
+        pid = "starter"
+    plan = get_plan_details(pid, db_override=db_override)
     limits = {
         "max_users": plan.get("max_users", 3),
         "max_clients": plan.get("max_clients", 100),
@@ -270,22 +271,6 @@ def get_plan_limits(plan_id: str, is_trial: bool = False, db_override: Optional[
         "monthly_inventory_transactions": plan.get("monthly_inventory_transactions", 2500),
         "monthly_api_requests": plan.get("monthly_api_requests", 0),
     }
-    if is_trial:
-        # Full Pro limits during trial
-        pro_plan = get_plan_details("pro", db_override=db_override)
-        return {
-            "max_users": pro_plan.get("max_users", 25),
-            "max_clients": pro_plan.get("max_clients", 2500),
-            "max_products": pro_plan.get("max_products", 15000),
-            "storage_gb": pro_plan.get("storage_gb", 100),
-            "storage_bytes": pro_plan.get("storage_gb", 100) * 1024 * 1024 * 1024,
-            "monthly_documents": pro_plan.get("monthly_documents", 10000),
-            "monthly_pdf_docx": pro_plan.get("monthly_pdf_docx", 5000),
-            "monthly_exports": pro_plan.get("monthly_exports", 1000),
-            "monthly_material_requests": pro_plan.get("monthly_material_requests", 20000),
-            "monthly_inventory_transactions": pro_plan.get("monthly_inventory_transactions", 50000),
-            "monthly_api_requests": pro_plan.get("monthly_api_requests", 50000),
-        }
     return limits
 
 async def get_company_usage(company_id: str, db=None) -> Dict[str, Any]:
@@ -498,8 +483,10 @@ async def get_company_entitlement(company_id: str, db=None) -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
     now_iso_str = now.isoformat()
 
-    status = (company.get("subscription_status") or company.get("plan") or "trialing").lower()
-    plan_id = (company.get("plan_id") or "starter").lower()
+    status = (company.get("subscription_status") or "trialing").lower()
+    plan_id = str(company.get("plan_id") or company.get("plan") or "starter").lower()
+    if plan_id not in ("starter", "growth", "pro"):
+        plan_id = "starter"
 
     # Trial dates
     trial_start_str = company.get("trial_started_at") or company.get("created_at") or now_iso_str
@@ -565,10 +552,10 @@ async def get_company_entitlement(company_id: str, db=None) -> Dict[str, Any]:
         is_expired = (status == "expired")
         days_remaining = 0
 
-    plan_info = get_plan_details(plan_id)
+    db_plan_override = await db.plans_config.find_one({"id": plan_id}, {"_id": 0})
+    plan_info = get_plan_details(plan_id, db_override=db_plan_override)
     can_write = (status in ("active", "trialing"))
 
-    db_plan_override = await db.plans_config.find_one({"id": plan_id}, {"_id": 0})
     limits = get_plan_limits(plan_id, is_trial=is_trial, db_override=db_plan_override)
 
     return {

@@ -890,19 +890,16 @@ def _enrich_company_doc(doc: dict) -> dict:
         return doc
     enriched = dict(doc)
     
-    # Normalize plan_id and plan
+    # Normalize plan_id and plan strictly to canonical identifiers
     raw_plan = str(enriched.get("plan_id") or enriched.get("plan") or "starter").lower()
-    if raw_plan in ("active", "completed"):
-        raw_plan = "pro"
+    if raw_plan not in ("starter", "growth", "pro"):
+        raw_plan = "starter"
     enriched["plan_id"] = raw_plan
     enriched["plan"] = raw_plan
     
     # Normalize subscription_status
     if not enriched.get("subscription_status"):
-        if raw_plan in ("pro", "growth"):
-            enriched["subscription_status"] = "active"
-        else:
-            enriched["subscription_status"] = "trialing"
+        enriched["subscription_status"] = "trialing"
             
     # Normalize trial dates
     t_start = enriched.get("trial_started_at") or enriched.get("trial_start")
@@ -16173,6 +16170,7 @@ async def update_platform_customer_subscription(
 
     if data.action == "assign_plan" or data.plan_id:
         update_doc["plan_id"] = (data.plan_id or old_plan).lower()
+        update_doc["plan"] = (data.plan_id or old_plan).lower()
     if data.status:
         update_doc["subscription_status"] = data.status.lower()
         if data.status.lower() == "active" and not company.get("subscription_started_at"):
@@ -16316,6 +16314,8 @@ async def update_platform_plan(plan_id: str, data: PlatformPlanUpdateIn, user=De
         "updated_at": now_iso()
     }
     await db.plans_config.update_one({"id": doc["id"]}, {"$set": doc}, upsert=True)
+    with _company_cache_lock:
+        _company_cache.clear()
     await _log_platform_audit(
         user=user,
         action="Updated Plan Entitlements & Limits",
