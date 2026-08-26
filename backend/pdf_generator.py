@@ -1033,6 +1033,8 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
         return data
 
     comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "GVP SOLAR ENERGY").strip()
+    if "ENEGYR" in comp_name:
+        comp_name = comp_name.replace("ENEGYR", "ENERGY")
     comp_gst = (company.get("gst_number") or company.get("gstin") or company.get("gst") or "").strip()
     comp_addr = (company.get("address") or company.get("address_line_1") or company.get("office_address") or "").strip()
     comp_phone = (company.get("mobile") or company.get("mobile_number") or company.get("phone") or company.get("phone_number") or "").strip()
@@ -1235,6 +1237,8 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
 
 def make_sales_doc_canvas(company: dict, doc_type: str = "tax_invoice"):
     comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "GVP SOLAR ENERGY").strip()
+    if "ENEGYR" in comp_name:
+        comp_name = comp_name.replace("ENEGYR", "ENERGY")
     mobile = (company.get("mobile") or company.get("mobile_number") or company.get("phone") or company.get("phone_number") or "").strip()
     email = (company.get("email") or "").strip()
     website = (company.get("website") or "").strip()
@@ -1334,10 +1338,14 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         try:
             from PIL import Image as PILImage
             img = PILImage.open(BytesIO(logo_bytes))
+            # Auto-trim transparent outer padding so company name sits directly below the visible logo
+            bbox = img.getbbox() if hasattr(img, "getbbox") else None
+            if bbox:
+                img = img.crop(bbox)
             orig_w, orig_h = img.size
             if orig_w > 0 and orig_h > 0:
-                # 2x visual size: max_h increased from 2.2 cm to 4.4 cm, max_w up to 7.5 cm
-                max_w, max_h = 7.5 * cm, 4.4 * cm
+                # Approximately 1.8–2x visual size while strictly preserving original aspect ratio
+                max_w, max_h = 6.8 * cm, 3.2 * cm
                 aspect = orig_w / float(orig_h or 1)
                 target_w = max_w
                 target_h = max_w / aspect
@@ -1353,11 +1361,32 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     hdr_left_flow = []
     if logo_d:
         hdr_left_flow.append(logo_d)
-        hdr_left_flow.append(Spacer(1, 0.2 * cm))
+        hdr_left_flow.append(Spacer(1, 0.12 * cm))
 
-    comp_title_style = ParagraphStyle('inv_comp_title', parent=styles['Normal'], fontSize=13.5, leading=16, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD)
-    comp_gst_style = ParagraphStyle('inv_comp_gst', parent=styles['Normal'], fontSize=8.5, leading=11.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT_BOLD)
-    comp_sub_style = ParagraphStyle('inv_comp_sub', parent=styles['Normal'], fontSize=8, leading=11, textColor=colors.HexColor('#475569'), fontName=PDF_FONT)
+    comp_title_style = ParagraphStyle(
+        'inv_comp_title',
+        parent=styles['Normal'],
+        fontSize=13,
+        leading=15.5,
+        textColor=colors.HexColor('#1e3a8a'),
+        fontName=PDF_FONT_BOLD
+    )
+    comp_gst_style = ParagraphStyle(
+        'inv_comp_gst',
+        parent=styles['Normal'],
+        fontSize=8.5,
+        leading=11.5,
+        textColor=colors.HexColor('#0f172a'),
+        fontName=PDF_FONT_BOLD
+    )
+    comp_sub_style = ParagraphStyle(
+        'inv_comp_sub',
+        parent=styles['Normal'],
+        fontSize=8,
+        leading=11,
+        textColor=colors.HexColor('#475569'),
+        fontName=PDF_FONT
+    )
 
     hdr_left_flow.append(Paragraph(seller["name"], comp_title_style))
     if seller["gstin"]:
@@ -1370,8 +1399,16 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     if contact_parts:
         hdr_left_flow.append(Paragraph(" | ".join(contact_parts), comp_sub_style))
 
-    inv_title_style = ParagraphStyle('inv_title', parent=styles['Normal'], fontSize=17, leading=20, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD, alignment=2)
-    hdr_right_flow: list[Any] = [Paragraph(title_text, inv_title_style), Spacer(1, 0.25 * cm)]
+    inv_title_style = ParagraphStyle(
+        'inv_title',
+        parent=styles['Normal'],
+        fontSize=14.5,
+        leading=17.5,
+        textColor=colors.HexColor('#1e3a8a'),
+        fontName=PDF_FONT_BOLD,
+        alignment=2
+    )
+    hdr_right_flow: list[Any] = [Paragraph(title_text, inv_title_style), Spacer(1, 0.18 * cm)]
 
     meta_table_data = [
         [Paragraph(f"<b>{title_text} NO.</b>", BOLD_SMALL), Paragraph(inv["number"] or "—", SMALL)],
@@ -1388,8 +1425,8 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     meta_table.setStyle(TableStyle([
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
         ('BACKGROUND', (0,0), (0,-1), colors.HexColor('#f8fafc')),
-        ('TOPPADDING', (0,0), (-1,-1), 3.5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 3.5),
+        ('TOPPADDING', (0,0), (-1,-1), 3.0),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3.0),
         ('LEFTPADDING', (0,0), (-1,-1), 5),
         ('RIGHTPADDING', (0,0), (-1,-1), 5),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
@@ -1405,7 +1442,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         ('BOTTOMPADDING', (0,0), (-1,-1), 0),
     ]))
     story.append(header_table)
-    story.append(Spacer(1, 0.45 * cm))
+    story.append(Spacer(1, 0.25 * cm))
 
     # 2. SELLER & BUYER DETAILS (2 BALANCED COLUMNS)
     s_lines = [f"<font size='9'><b>{seller['name']}</b></font>"]
@@ -1666,11 +1703,14 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
         try:
             from PIL import Image as _PILImage
             img = _PILImage.open(BytesIO(logo_bytes))
+            bbox = img.getbbox() if hasattr(img, "getbbox") else None
+            if bbox:
+                img = img.crop(bbox)
             orig_w, orig_h = img.size
             if orig_w > 0 and orig_h > 0:
                 aspect = orig_h / float(orig_w or 1)
-                max_w_in = 2.95
-                max_h_in = 1.73
+                max_w_in = 2.68
+                max_h_in = 1.26
                 target_w_in = max_w_in
                 target_h_in = target_w_in * aspect
                 if target_h_in > max_h_in:
@@ -1680,18 +1720,24 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
                 img.save(res_buf, format="PNG")
                 res_buf.seek(0)
                 p_logo = cell_l.paragraphs[0]
+                p_logo.paragraph_format.space_before = Pt(0)
+                p_logo.paragraph_format.space_after = Pt(3)
                 p_logo.add_run().add_picture(res_buf, width=Inches(target_w_in), height=Inches(target_h_in))
         except Exception:
             pass
 
     p_comp = cell_l.add_paragraph() if logo_bytes else cell_l.paragraphs[0]
+    p_comp.paragraph_format.space_before = Pt(0)
+    p_comp.paragraph_format.space_after = Pt(1)
     r_comp = p_comp.add_run(seller["name"])
     r_comp.bold = True
-    r_comp.font.size = Pt(13.5)
+    r_comp.font.size = Pt(13)
     r_comp.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
 
     if seller["gstin"]:
         p_gst = cell_l.add_paragraph()
+        p_gst.paragraph_format.space_before = Pt(0)
+        p_gst.paragraph_format.space_after = Pt(1)
         r_gst = p_gst.add_run(f"GSTIN: {seller['gstin']}")
         r_gst.bold = True
         r_gst.font.size = Pt(8.5)
@@ -1699,6 +1745,8 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
 
     if seller["address"]:
         p_addr = cell_l.add_paragraph()
+        p_addr.paragraph_format.space_before = Pt(0)
+        p_addr.paragraph_format.space_after = Pt(1)
         r_addr = p_addr.add_run(seller["address"])
         r_addr.font.size = Pt(8)
         r_addr.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
@@ -1708,15 +1756,19 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     if seller["email"]: contact_parts.append(f"Email: {seller['email']}")
     if contact_parts:
         p_cnt = cell_l.add_paragraph()
+        p_cnt.paragraph_format.space_before = Pt(0)
+        p_cnt.paragraph_format.space_after = Pt(2)
         r_cnt = p_cnt.add_run(" | ".join(contact_parts))
         r_cnt.font.size = Pt(8)
         r_cnt.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
 
     p_title = cell_r.paragraphs[0]
     p_title.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    r_title = p_title.add_run(f"{title_text}\n")
+    p_title.paragraph_format.space_before = Pt(0)
+    p_title.paragraph_format.space_after = Pt(4)
+    r_title = p_title.add_run(title_text)
     r_title.bold = True
-    r_title.font.size = Pt(17)
+    r_title.font.size = Pt(14.5)
     r_title.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
 
     meta_items = [
