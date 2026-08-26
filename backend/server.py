@@ -15932,6 +15932,12 @@ async def _process_po_payload(payload: Dict[str, Any], cid: str, user: Dict[str,
     }
     return po_doc
 
+@api_router.get("/purchase-orders")
+async def get_purchase_orders(user=Depends(get_current_user)):
+    cid = user["company_id"]
+    pos = await db.purchase_orders.find({"company_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    return {"purchase_orders": pos}
+
 @api_router.post("/purchase-orders")
 async def create_purchase_order(payload: Dict[str, Any], user=Depends(get_current_user)):
     cid = user["company_id"]
