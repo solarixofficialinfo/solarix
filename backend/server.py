@@ -15691,103 +15691,286 @@ async def toggle_vendor_status(vendor_id: str, payload: Dict[str, Any], user=Dep
     await log_activity(cid, user["id"], user["name"], "Updated Vendor Status", f"Vendor ID: {vendor_id} to {new_status}")
     return {"message": f"Vendor status updated to {new_status}"}
 
-@api_router.put("/vendors/{vendor_id}")
-async def update_vendor_detail(vendor_id: str, payload: Dict[str, Any], user=Depends(get_current_user)):
-    cid = user["company_id"]
-    vendor = await db.vendors.find_one({"id": vendor_id, "company_id": cid})
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
-    
-    update_fields = {
-        "name": str(payload.get("name") or vendor.get("name") or "").strip(),
-        "contact_person": payload.get("contact_person", vendor.get("contact_person", "")),
-        "phone": payload.get("phone", vendor.get("phone", "")),
-        "email": payload.get("email", vendor.get("email", "")),
-        "gstin": payload.get("gstin", vendor.get("gstin", "")),
-        "address": payload.get("address", vendor.get("address", "")),
-        "notes": payload.get("notes", vendor.get("notes", "")),
+async def _process_po_payload(payload: Dict[str, Any], cid: str, user: Dict[str, Any], existing_po: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    vendor_name = (payload.get("vendor_name") or (existing_po.get("vendor_name") if existing_po else "") or "").strip()
+    if not vendor_name:
+        raise HTTPException(status_code=400, detail="Vendor name is required")
+
+    po_number = (payload.get("po_number") or (existing_po.get("po_number") if existing_po else "") or f"PO-{uuid.uuid4().hex[:6].upper()}").strip()
+    po_id = payload.get("id") or (existing_po.get("id") if existing_po else f"po_{uuid.uuid4().hex[:12]}")
+
+    # Check po_number uniqueness within company
+    dup = await db.purchase_orders.find_one({"po_number": po_number, "company_id": cid})
+    if dup and dup.get("id") != po_id:
+        raise HTTPException(status_code=400, detail=f"Purchase Order number '{po_number}' already exists")
+
+    # Project / Client Reference auto-population and validation
+    project_id = payload.get("project_id") or payload.get("client_id") or (existing_po.get("project_id") if existing_po else "")
+    project_number = payload.get("project_number") or payload.get("sol_id") or (existing_po.get("project_number") if existing_po else "")
+    client_name = payload.get("client_name") or (existing_po.get("client_name") if existing_po else "")
+    site_address = payload.get("site_address") or (existing_po.get("site_address") if existing_po else "")
+    site_city = payload.get("site_city") or (existing_po.get("site_city") if existing_po else "")
+    site_district = payload.get("site_district") or (existing_po.get("site_district") if existing_po else "")
+    site_state = payload.get("site_state") or (existing_po.get("site_state") if existing_po else "")
+    site_pincode = payload.get("site_pincode") or (existing_po.get("site_pincode") if existing_po else "")
+    consumer_number = payload.get("consumer_number") or (existing_po.get("consumer_number") if existing_po else "")
+
+    if project_id:
+        client_doc = await db.clients.find_one({"id": project_id, "company_id": cid}, {"_id": 0})
+        if client_doc:
+            project_number = project_number or client_doc.get("sol_id") or ""
+            client_name = client_name or client_doc.get("full_name") or ""
+            site_address = site_address or client_doc.get("site_address") or client_doc.get("address") or ""
+            site_city = site_city or client_doc.get("city") or ""
+            site_district = site_district or client_doc.get("district") or ""
+            site_state = site_state or client_doc.get("state") or ""
+            site_pincode = site_pincode or client_doc.get("pincode") or ""
+            consumer_number = consumer_number or client_doc.get("consumer_number") or ""
+
+    # Company billing details fallback
+    company_doc = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
+    billing_name = payload.get("billing_name") or company_doc.get("company_name") or company_doc.get("name") or "GVP SOLAR ENERGY"
+    if "ENEGYR" in billing_name:
+        billing_name = billing_name.replace("ENEGYR", "ENERGY")
+    billing_address = payload.get("billing_address") or company_doc.get("address") or ""
+    billing_state = payload.get("billing_state") or company_doc.get("state") or "Maharashtra"
+    billing_pincode = payload.get("billing_pincode") or company_doc.get("pincode") or ""
+    billing_gstin = payload.get("billing_gstin") or company_doc.get("gst_number") or company_doc.get("gstin") or ""
+
+    vendor_id = payload.get("vendor_id") or (existing_po.get("vendor_id") if existing_po else "")
+    vendor_gstin = (payload.get("vendor_gstin") or (existing_po.get("vendor_gstin") if existing_po else "") or "").strip()
+    vendor_contact_person = payload.get("vendor_contact_person") or (existing_po.get("vendor_contact_person") if existing_po else "") or ""
+    vendor_address = payload.get("vendor_address") or (existing_po.get("vendor_address") if existing_po else "") or ""
+    vendor_phone = payload.get("vendor_phone") or (existing_po.get("vendor_phone") if existing_po else "") or ""
+    vendor_email = payload.get("vendor_email") or (existing_po.get("vendor_email") if existing_po else "") or ""
+
+    # Tax Type resolution (Intra-State vs Inter-State vs Exempt)
+    tax_type = (payload.get("tax_type") or "").lower().strip()
+    if tax_type not in ("intra", "inter", "exempt"):
+        v_state_code = vendor_gstin[:2] if len(vendor_gstin) >= 2 and vendor_gstin[:2].isdigit() else ""
+        b_state_code = billing_gstin[:2] if len(billing_gstin) >= 2 and billing_gstin[:2].isdigit() else ""
+        if v_state_code and b_state_code:
+            tax_type = "intra" if v_state_code == b_state_code else "inter"
+        elif vendor_address and billing_state and billing_state.lower() in vendor_address.lower():
+            tax_type = "intra"
+        elif not vendor_gstin:
+            tax_type = "intra"
+        else:
+            tax_type = "inter"
+
+    # Line Items validation and calculations
+    raw_items = payload.get("items")
+    if raw_items is None and existing_po:
+        raw_items = existing_po.get("items") or []
+    if not isinstance(raw_items, list) or len(raw_items) == 0:
+        raise HTTPException(status_code=400, detail="At least one line item is required")
+
+    processed_items = []
+    subtotal_calc = 0.0
+    total_item_discount = 0.0
+    total_taxable = 0.0
+    total_cgst = 0.0
+    total_sgst = 0.0
+    total_igst = 0.0
+
+    for idx, it in enumerate(raw_items, 1):
+        if not isinstance(it, dict):
+            continue
+        p_name = (it.get("product_name") or it.get("product") or "").strip()
+        if not p_name:
+            continue
+        qty = float(it.get("quantity") if it.get("quantity") is not None and str(it.get("quantity")).strip() != "" else (it.get("qty") or 0.0))
+        if qty < 0:
+            raise HTTPException(status_code=400, detail=f"Item {idx}: quantity cannot be negative")
+        rate = float(it.get("unit_price") if it.get("unit_price") is not None and str(it.get("unit_price")).strip() != "" else (it.get("rate") or 0.0))
+        if rate < 0:
+            raise HTTPException(status_code=400, detail=f"Item {idx}: rate cannot be negative")
+        disc = max(0.0, float(it.get("discount") or 0.0))
+        taxable = round(max(0.0, (qty * rate) - disc), 2)
+        gst_r = float(it.get("gst_rate") if it.get("gst_rate") is not None and str(it.get("gst_rate")).strip() != "" else (it.get("gst") if it.get("gst") is not None and str(it.get("gst")).strip() != "" else (float(payload.get("cgst_rate") or 0) * 2 if payload.get("cgst_rate") else 18.0)))
+
+        if tax_type == "exempt" or gst_r == 0:
+            line_cgst = 0.0
+            line_sgst = 0.0
+            line_igst = 0.0
+        elif tax_type == "inter":
+            line_cgst = 0.0
+            line_sgst = 0.0
+            line_igst = round(taxable * (gst_r / 100.0), 2)
+        else:  # intra
+            line_cgst = round(taxable * (gst_r / 200.0), 2)
+            line_sgst = round(taxable * (gst_r / 200.0), 2)
+            line_igst = 0.0
+
+        line_total = round(taxable + line_cgst + line_sgst + line_igst, 2)
+        subtotal_calc += round(qty * rate, 2)
+        total_item_discount += disc
+        total_taxable += taxable
+        total_cgst += line_cgst
+        total_sgst += line_sgst
+        total_igst += line_igst
+
+        processed_items.append({
+            "id": it.get("id") or f"po_item_{uuid.uuid4().hex[:8]}",
+            "product_id": str(it.get("product_id") or ""),
+            "product_name": p_name,
+            "description": (it.get("description") or "").strip(),
+            "hsn_sac": (it.get("hsn_sac") or it.get("hsn") or "").strip(),
+            "specification": (it.get("specification") or it.get("spec") or it.get("size") or "").strip(),
+            "size": (it.get("size") or it.get("specification") or "").strip(),
+            "quantity": qty,
+            "unit": (it.get("unit") or "Nos").strip(),
+            "unit_price": rate,
+            "rate": rate,
+            "discount": disc,
+            "taxable_amount": taxable,
+            "gst_rate": gst_r,
+            "cgst": line_cgst,
+            "sgst": line_sgst,
+            "igst": line_igst,
+            "amount": line_total,
+            "line_total": line_total
+        })
+
+    if len(processed_items) == 0:
+        raise HTTPException(status_code=400, detail="At least one valid line item is required")
+
+    order_discount = max(0.0, float(payload.get("order_discount") or 0.0))
+    final_discount = round(total_item_discount + order_discount, 2)
+    freight = max(0.0, float(payload.get("freight") or 0.0))
+    other_charges = max(0.0, float(payload.get("other_charges") or 0.0))
+
+    calc_total_before_round = round(total_taxable + total_cgst + total_sgst + total_igst + freight + other_charges, 2)
+    round_off = float(payload.get("round_off") if payload.get("round_off") is not None else round(round(calc_total_before_round) - calc_total_before_round, 2))
+    grand_total = round(calc_total_before_round + round_off, 2)
+
+    po_doc: Dict[str, Any] = {
+        "id": po_id,
+        "company_id": cid,
+        "po_number": po_number,
+        "po_date": payload.get("po_date") or (existing_po.get("po_date") if existing_po else now_iso()[:10]),
+        "vendor_reference_number": (payload.get("vendor_reference_number") or (existing_po.get("vendor_reference_number") if existing_po else "") or "").strip(),
+        "vendor_reference_date": (payload.get("vendor_reference_date") or (existing_po.get("vendor_reference_date") if existing_po else "") or "").strip(),
+
+        # Project reference
+        "project_id": project_id,
+        "project_number": project_number,
+        "sol_id": project_number,
+        "client_id": project_id,
+        "client_name": client_name,
+
+        # Bill to
+        "billing_name": billing_name,
+        "billing_address": billing_address,
+        "billing_state": billing_state,
+        "billing_pincode": billing_pincode,
+        "billing_gstin": billing_gstin,
+
+        # Vendor details
+        "vendor_id": vendor_id,
+        "vendor_name": vendor_name,
+        "vendor_contact_person": vendor_contact_person,
+        "vendor_address": vendor_address,
+        "vendor_phone": vendor_phone,
+        "vendor_email": vendor_email,
+        "vendor_gstin": vendor_gstin,
+
+        # Ship to
+        "ship_to_type": payload.get("ship_to_type") or ("project" if project_id else "company"),
+        "ship_to_name": payload.get("ship_to_name") or (client_name if project_id else billing_name),
+        "site_address": site_address,
+        "site_city": site_city,
+        "site_district": site_district,
+        "site_state": site_state,
+        "site_pincode": site_pincode,
+        "consumer_number": consumer_number,
+
+        # Shipping & Delivery
+        "ship_via": payload.get("ship_via") or "FOR",
+        "shipping_method": payload.get("shipping_method") or "PAID",
+        "shipping_term": payload.get("shipping_term") or "DOOR DELIVERY",
+        "delivery_date": payload.get("delivery_date") or "",
+        "transporter_name": (payload.get("transporter_name") or "").strip(),
+        "expected_dispatch_date": (payload.get("expected_dispatch_date") or "").strip(),
+        "delivery_instructions": (payload.get("delivery_instructions") or "").strip(),
+
+        # Commercial & Payment
+        "quotation_number": (payload.get("quotation_number") or "").strip(),
+        "quotation_date": (payload.get("quotation_date") or "").strip(),
+        "payment_terms": (payload.get("payment_terms") or "Due on Delivery").strip(),
+        "advance_percentage": float(payload.get("advance_percentage") or 0.0),
+        "advance_amount": float(payload.get("advance_amount") or 0.0),
+        "balance_payment_terms": (payload.get("balance_payment_terms") or "").strip(),
+        "commercial_terms": (payload.get("commercial_terms") or "").strip(),
+
+        # Items & Notes
+        "items": processed_items,
+        "notes": payload.get("notes") or "DELIVERY WILL BE F.O.R. ON-SITE\nLOCATION OF SITE WILL BE PROVIDED AT THE TIME OF DISPATCH",
+
+        # Taxes & Totals (authoritative)
+        "tax_type": tax_type,
+        "subtotal": subtotal_calc,
+        "discount": final_discount,
+        "taxable_amount": total_taxable,
+        "cgst_rate": (processed_items[0]["gst_rate"] / 2.0) if (processed_items and tax_type == "intra") else 0.0,
+        "sgst_rate": (processed_items[0]["gst_rate"] / 2.0) if (processed_items and tax_type == "intra") else 0.0,
+        "igst_rate": processed_items[0]["gst_rate"] if (processed_items and tax_type == "inter") else 0.0,
+        "cgst_amount": total_cgst,
+        "sgst_amount": total_sgst,
+        "igst_amount": total_igst,
+        "freight": freight,
+        "other_charges": other_charges,
+        "round_off": round_off,
+        "grand_total": grand_total,
+
+        # Status & Audit
+        "status": payload.get("status") or (existing_po.get("status") if existing_po else "Created"),
+        "created_by": (existing_po.get("created_by") if existing_po else user["id"]),
+        "created_by_name": (existing_po.get("created_by_name") if existing_po else user["name"]),
+        "created_at": (existing_po.get("created_at") if existing_po else now_iso()),
         "updated_at": now_iso()
     }
-    await db.vendors.update_one({"id": vendor_id, "company_id": cid}, {"$set": update_fields})
-    await log_activity(cid, user["id"], user["name"], "Updated Vendor Master", f"Vendor: {update_fields['name']}")
-    return {"message": "Vendor details updated successfully"}
-
-# ── PURCHASE ORDERS CRUD ENDPOINTS ──────────────────────────────────────────
-@api_router.get("/purchase-orders")
-async def list_purchase_orders(user=Depends(get_current_user)):
-    cid = user["company_id"]
-    pos = await db.purchase_orders.find({"company_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    return {"purchase_orders": pos}
+    return po_doc
 
 @api_router.post("/purchase-orders")
 async def create_purchase_order(payload: Dict[str, Any], user=Depends(get_current_user)):
     cid = user["company_id"]
-    po_id = payload.get("id") or f"po_{uuid.uuid4().hex[:12]}"
-    
-    vendor_name = (payload.get("vendor_name") or "").strip()
-    vendor_id = payload.get("vendor_id") or ""
+    po_doc = await _process_po_payload(payload, cid, user, existing_po=None)
     
     # Auto-save / Update Vendor in Vendor Master if requested
-    if payload.get("save_vendor_master") and vendor_name:
+    if payload.get("save_vendor_master") and po_doc["vendor_name"]:
         existing_v = None
-        if vendor_id:
-            existing_v = await db.vendors.find_one({"id": vendor_id, "company_id": cid})
+        if po_doc["vendor_id"]:
+            existing_v = await db.vendors.find_one({"id": po_doc["vendor_id"], "company_id": cid})
         if not existing_v:
-            existing_v = await db.vendors.find_one({"name": {"$regex": f"^{re.escape(vendor_name)}$", "$options": "i"}, "company_id": cid})
+            existing_v = await db.vendors.find_one({"name": {"$regex": f"^{re.escape(po_doc['vendor_name'])}$", "$options": "i"}, "company_id": cid})
         
         v_doc = {
-            "name": vendor_name,
-            "address": payload.get("vendor_address") or "",
-            "phone": payload.get("vendor_phone") or "",
-            "email": payload.get("vendor_email") or "",
-            "gstin": payload.get("vendor_gstin") or "",
+            "name": po_doc["vendor_name"],
+            "contact_person": po_doc["vendor_contact_person"],
+            "address": po_doc["vendor_address"],
+            "phone": po_doc["vendor_phone"],
+            "email": po_doc["vendor_email"],
+            "gstin": po_doc["vendor_gstin"],
+            "payment_terms": po_doc["payment_terms"],
             "updated_at": now_iso()
         }
         if existing_v:
             await db.vendors.update_one({"id": existing_v["id"], "company_id": cid}, {"$set": v_doc})
-            vendor_id = existing_v["id"]
+            po_doc["vendor_id"] = existing_v["id"]
         else:
-            vendor_id = vendor_id or f"ven_{uuid.uuid4().hex[:12]}"
+            new_v_id = po_doc["vendor_id"] or f"ven_{uuid.uuid4().hex[:12]}"
             v_doc.update({
-                "id": vendor_id,
+                "id": new_v_id,
                 "company_id": cid,
                 "status": "Active",
                 "created_at": now_iso()
             })
             await db.vendors.insert_one(v_doc)
+            po_doc["vendor_id"] = new_v_id
 
-    po_doc = {
-        "id": po_id,
-        "company_id": cid,
-        "po_number": payload.get("po_number") or f"PO-{uuid.uuid4().hex[:6].upper()}",
-        "po_date": payload.get("po_date") or now_iso()[:10],
-        "vendor_id": vendor_id,
-        "vendor_name": vendor_name,
-        "vendor_address": payload.get("vendor_address") or "",
-        "vendor_phone": payload.get("vendor_phone") or "",
-        "vendor_email": payload.get("vendor_email") or "",
-        "vendor_gstin": payload.get("vendor_gstin") or "",
-        "ship_via": payload.get("ship_via") or "",
-        "shipping_method": payload.get("shipping_method") or "",
-        "shipping_term": payload.get("shipping_term") or "",
-        "delivery_date": payload.get("delivery_date") or "",
-        "items": payload.get("items") or [],
-        "notes": payload.get("notes") or "",
-        "cgst_rate": float(payload.get("cgst_rate") or 0),
-        "sgst_rate": float(payload.get("sgst_rate") or 0),
-        "igst_rate": float(payload.get("igst_rate") or 0),
-        "freight": float(payload.get("freight") or 0),
-        "subtotal": float(payload.get("subtotal") or 0),
-        "grand_total": float(payload.get("grand_total") or 0),
-        "status": payload.get("status") or "Created",
-        "created_by": user["id"],
-        "created_by_name": user["name"],
-        "created_at": now_iso(),
-        "updated_at": now_iso()
-    }
-    
     await db.purchase_orders.update_one(
-        {"id": po_id, "company_id": cid},
+        {"id": po_doc["id"], "company_id": cid},
         {"$set": po_doc},
         upsert=True
     )
@@ -15809,12 +15992,12 @@ async def update_purchase_order(po_id: str, payload: Dict[str, Any], user=Depend
     if not po:
         raise HTTPException(status_code=404, detail="Purchase Order not found")
     
-    update_data = {k: v for k, v in payload.items() if k not in ("_id", "id", "company_id", "created_at")}
-    update_data["updated_at"] = now_iso()
+    merged_payload = {**po, **payload, "id": po_id}
+    po_doc = await _process_po_payload(merged_payload, cid, user, existing_po=po)
     
-    await db.purchase_orders.update_one({"id": po_id, "company_id": cid}, {"$set": update_data})
-    await log_activity(cid, user["id"], user["name"], "Updated Purchase Order", f"PO ID: {po_id}")
-    return {"message": "Purchase Order updated successfully"}
+    await db.purchase_orders.update_one({"id": po_id, "company_id": cid}, {"$set": po_doc})
+    await log_activity(cid, user["id"], user["name"], "Updated Purchase Order", f"PO #: {po_doc['po_number']}")
+    return {"message": "Purchase Order updated successfully", "purchase_order": po_doc}
 
 @api_router.delete("/purchase-orders/{po_id}")
 async def delete_purchase_order(po_id: str, user=Depends(get_current_user)):

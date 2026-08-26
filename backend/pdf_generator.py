@@ -570,19 +570,24 @@ def _normalize_po_document_data(data: dict, company: dict) -> dict:
     if not isinstance(company, dict):
         company = {}
 
-    comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "SOLARIX").strip()
-    comp_gst = (company.get("gst_number") or company.get("gstin") or company.get("gst") or "").strip()
-    comp_addr = (company.get("address") or company.get("address_line_1") or company.get("office_address") or "").strip()
+    comp_name = (data.get("billing_name") or company.get("company_name") or company.get("name") or company.get("legal_business_name") or "GVP SOLAR ENERGY").strip()
+    if "ENEGYR" in comp_name:
+        comp_name = comp_name.replace("ENEGYR", "ENERGY")
+    comp_gst = (data.get("billing_gstin") or company.get("gst_number") or company.get("gstin") or company.get("gst") or "").strip()
+    comp_addr = (data.get("billing_address") or company.get("address") or company.get("address_line_1") or company.get("office_address") or "").strip()
     comp_phone = (company.get("mobile") or company.get("mobile_number") or company.get("phone") or company.get("phone_number") or "").strip()
     comp_email = (company.get("email") or "").strip()
     comp_tagline = (company.get("tagline") or company.get("subtitle") or "").strip()
+    comp_state = (data.get("billing_state") or company.get("state") or "Maharashtra").strip()
+    comp_pincode = (data.get("billing_pincode") or company.get("pincode") or "").strip()
     logo_bytes = company.get("logo_bytes")
 
     vendor_raw = data.get("vendor") or {}
     if not isinstance(vendor_raw, dict):
         vendor_raw = {}
-        
+
     v_name = (data.get("vendor_name") or vendor_raw.get("name") or vendor_raw.get("vendor_name") or "").strip()
+    v_contact = (data.get("vendor_contact_person") or vendor_raw.get("contact_person") or vendor_raw.get("contact") or "").strip()
     v_addr = (data.get("vendor_address") or vendor_raw.get("address") or vendor_raw.get("vendor_address") or "").strip()
     v_phone = (data.get("vendor_phone") or vendor_raw.get("phone") or vendor_raw.get("vendor_phone") or "").strip()
     v_email = (data.get("vendor_email") or vendor_raw.get("email") or vendor_raw.get("vendor_email") or "").strip()
@@ -592,28 +597,64 @@ def _normalize_po_document_data(data: dict, company: dict) -> dict:
     po_num = (data.get("po_number") or data.get("document_number") or data.get("id") or "").strip()
     po_date = (data.get("po_date") or data.get("document_date") or data.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
     del_date = (data.get("delivery_date") or "").strip()
+    v_ref_no = (data.get("vendor_reference_number") or data.get("vendor_ref_no") or "").strip()
+    v_ref_date = (data.get("vendor_reference_date") or data.get("vendor_ref_date") or "").strip()
+    quote_no = (data.get("quotation_number") or data.get("quote_no") or "").strip()
+    quote_date = (data.get("quotation_date") or data.get("quote_date") or "").strip()
+
+    # Project reference
+    proj_id = (data.get("project_id") or data.get("client_id") or "").strip()
+    proj_num = (data.get("project_number") or data.get("sol_id") or "").strip()
+    c_name = (data.get("client_name") or (data.get("client") or {}).get("full_name") or (data.get("client") or {}).get("name") or "").strip()
+    has_project = bool(proj_num or c_name or proj_id)
+
+    # Ship To details
+    ship_to_raw = data.get("ship_to") or {}
+    if not isinstance(ship_to_raw, dict):
+        ship_to_raw = {}
+    ship_type = (data.get("ship_to_type") or ("project" if has_project else "company")).lower().strip()
+    ship_name = (data.get("ship_to_name") or ship_to_raw.get("name") or (f"{c_name} (Site)" if c_name else comp_name)).strip()
+    site_addr = (data.get("site_address") or ship_to_raw.get("address") or ship_to_raw.get("site_address") or (comp_addr if ship_type == "company" else "")).strip()
+    site_city = (data.get("site_city") or ship_to_raw.get("city") or "").strip()
+    site_district = (data.get("site_district") or ship_to_raw.get("district") or "").strip()
+    site_state = (data.get("site_state") or ship_to_raw.get("state") or comp_state).strip()
+    site_pin = (data.get("site_pincode") or ship_to_raw.get("pincode") or "").strip()
+    consumer_no = (data.get("consumer_number") or (data.get("client") or {}).get("consumer_number") or "").strip()
 
     ship_via = (data.get("ship_via") or "FOR").strip()
     shipping_method = (data.get("shipping_method") or "PAID").strip()
     shipping_term = (data.get("shipping_term") or "DOOR DELIVERY").strip()
+    transporter = (data.get("transporter_name") or "").strip()
+    dispatch_date = (data.get("expected_dispatch_date") or "").strip()
+    del_instructions = (data.get("delivery_instructions") or "").strip()
 
-    ship_to_raw = data.get("ship_to") or {}
-    if isinstance(ship_to_raw, dict) and ship_to_raw.get("name"):
-        ship_name = (ship_to_raw.get("name") or comp_name).strip()
-        ship_addr = (ship_to_raw.get("address") or comp_addr).strip()
-        ship_phone = (ship_to_raw.get("phone") or comp_phone).strip()
-        ship_email = (ship_to_raw.get("email") or comp_email).strip()
-        ship_gstin = (ship_to_raw.get("gstin") or ship_to_raw.get("gst_number") or comp_gst).strip()
-    else:
-        ship_name = comp_name
-        ship_addr = comp_addr
-        ship_phone = comp_phone
-        ship_email = comp_email
-        ship_gstin = comp_gst
+    payment_terms = (data.get("payment_terms") or "Due on Delivery").strip()
+    adv_pct = float(data.get("advance_percentage") or 0.0)
+    adv_amt = float(data.get("advance_amount") or 0.0)
+    bal_terms = (data.get("balance_payment_terms") or "").strip()
+    comm_terms = (data.get("commercial_terms") or "").strip()
+
+    # Tax Type resolution
+    tax_type = (data.get("tax_type") or "").lower().strip()
+    if tax_type not in ("intra", "inter", "exempt"):
+        v_code = v_gstin[:2] if len(v_gstin) >= 2 and v_gstin[:2].isdigit() else ""
+        c_code = comp_gst[:2] if len(comp_gst) >= 2 and comp_gst[:2].isdigit() else ""
+        if v_code and c_code:
+            tax_type = "intra" if v_code == c_code else "inter"
+        elif v_addr and comp_state and comp_state.lower() in v_addr.lower():
+            tax_type = "intra"
+        elif not v_gstin:
+            tax_type = "intra"
+        else:
+            tax_type = "inter"
 
     items_raw = data.get("items") or []
     line_items = []
     subtotal_calc = 0.0
+    total_taxable_calc = 0.0
+    cgst_calc = 0.0
+    sgst_calc = 0.0
+    igst_calc = 0.0
 
     for idx, item in enumerate(items_raw, 1):
         if not isinstance(item, dict):
@@ -621,57 +662,92 @@ def _normalize_po_document_data(data: dict, company: dict) -> dict:
         p_name = (item.get("product_name") or item.get("product") or "").strip()
         if not p_name:
             continue
-        size = (item.get("size") or "").strip()
-        qty = float(item.get("quantity") or item.get("qty") or 0.0)
+        hsn = (item.get("hsn_sac") or item.get("hsn") or "").strip()
+        spec = (item.get("specification") or item.get("spec") or item.get("size") or "").strip()
+        size = (item.get("size") or spec).strip()
+        desc = (item.get("description") or "").strip()
+        qty = float(item.get("quantity") if item.get("quantity") is not None and str(item.get("quantity")).strip() != "" else (item.get("qty") or 0.0))
         unit = (item.get("unit") or "Nos").strip()
-        price = float(item.get("unit_price") or item.get("rate") or 0.0)
-        amount = float(item.get("amount") or (qty * price))
-        subtotal_calc += amount
+        price = float(item.get("unit_price") if item.get("unit_price") is not None and str(item.get("unit_price")).strip() != "" else (item.get("rate") or 0.0))
+        disc = max(0.0, float(item.get("discount") or 0.0))
+        taxable = max(0.0, (qty * price) - disc)
+
+        gst_r = float(item.get("gst_rate") if item.get("gst_rate") is not None and str(item.get("gst_rate")).strip() != "" else (item.get("gst") if item.get("gst") is not None and str(item.get("gst")).strip() != "" else (float(data.get("cgst_rate") or 0) * 2 if data.get("cgst_rate") else 18.0)))
+
+        if tax_type == "exempt" or gst_r == 0:
+            it_cgst, it_sgst, it_igst = 0.0, 0.0, 0.0
+        elif tax_type == "inter":
+            it_cgst, it_sgst = 0.0, 0.0
+            it_igst = round(taxable * (gst_r / 100.0), 2)
+        else:
+            it_cgst = round(taxable * (gst_r / 200.0), 2)
+            it_sgst = round(taxable * (gst_r / 200.0), 2)
+            it_igst = 0.0
+
+        line_amt = round(taxable + it_cgst + it_sgst + it_igst, 2)
+        subtotal_calc += round(qty * price, 2)
+        total_taxable_calc += taxable
+        cgst_calc += it_cgst
+        sgst_calc += it_sgst
+        igst_calc += it_igst
 
         line_items.append({
             "code": str(idx),
+            "product_id": str(item.get("product_id") or ""),
             "product_name": p_name,
+            "description": desc,
+            "hsn_sac": hsn,
+            "specification": spec,
             "size": size,
             "quantity": qty,
             "unit": unit,
             "unit_price": price,
-            "amount": amount
+            "rate": price,
+            "discount": disc,
+            "taxable_amount": taxable,
+            "gst_rate": gst_r,
+            "cgst": it_cgst,
+            "sgst": it_sgst,
+            "igst": it_igst,
+            "amount": line_amt,
+            "line_total": line_amt
         })
 
-    subtotal = float(data.get("subtotal") or subtotal_calc)
+    subtotal = float(data.get("subtotal") if data.get("subtotal") is not None else subtotal_calc)
     discount = float(data.get("discount") or 0.0)
+    taxable_amount = float(data.get("taxable_amount") if data.get("taxable_amount") is not None else (total_taxable_calc if total_taxable_calc > 0 else (subtotal - discount)))
 
-    try:
-        cgst_rate = float(data.get("cgst_rate") if data.get("cgst_rate") is not None else 2.5)
-    except (ValueError, TypeError):
-        cgst_rate = 2.5
+    # Fallback to legacy single-rate fields if per-item tax didn't calculate
+    if cgst_calc == 0.0 and sgst_calc == 0.0 and igst_calc == 0.0 and tax_type != "exempt":
+        try:
+            cgst_rate = float(data.get("cgst_rate") if data.get("cgst_rate") is not None else (2.5 if tax_type == "intra" else 0.0))
+        except (ValueError, TypeError):
+            cgst_rate = 0.0
+        try:
+            sgst_rate = float(data.get("sgst_rate") if data.get("sgst_rate") is not None else (2.5 if tax_type == "intra" else 0.0))
+        except (ValueError, TypeError):
+            sgst_rate = 0.0
+        try:
+            igst_rate = float(data.get("igst_rate") if data.get("igst_rate") is not None else (5.0 if tax_type == "inter" else 0.0))
+        except (ValueError, TypeError):
+            igst_rate = 0.0
+        cgst_amount = float(data.get("cgst_amount") if data.get("cgst_amount") is not None else round(taxable_amount * (cgst_rate / 100.0), 2))
+        sgst_amount = float(data.get("sgst_amount") if data.get("sgst_amount") is not None else round(taxable_amount * (sgst_rate / 100.0), 2))
+        igst_amount = float(data.get("igst_amount") if data.get("igst_amount") is not None else round(taxable_amount * (igst_rate / 100.0), 2))
+    else:
+        cgst_rate = (line_items[0]["gst_rate"] / 2.0) if (line_items and tax_type == "intra") else 0.0
+        sgst_rate = (line_items[0]["gst_rate"] / 2.0) if (line_items and tax_type == "intra") else 0.0
+        igst_rate = line_items[0]["gst_rate"] if (line_items and tax_type == "inter") else 0.0
+        cgst_amount = float(data.get("cgst_amount") if data.get("cgst_amount") is not None else round(cgst_calc, 2))
+        sgst_amount = float(data.get("sgst_amount") if data.get("sgst_amount") is not None else round(sgst_calc, 2))
+        igst_amount = float(data.get("igst_amount") if data.get("igst_amount") is not None else round(igst_calc, 2))
 
-    try:
-        sgst_rate = float(data.get("sgst_rate") if data.get("sgst_rate") is not None else 2.5)
-    except (ValueError, TypeError):
-        sgst_rate = 2.5
+    freight = float(data.get("freight") or data.get("sh_freight") or 0.0)
+    other_charges = float(data.get("other_charges") or 0.0)
 
-    try:
-        igst_rate = float(data.get("igst_rate") if data.get("igst_rate") is not None else 0.0)
-    except (ValueError, TypeError):
-        igst_rate = 0.0
-
-    try:
-        freight = float(data.get("freight") or data.get("sh_freight") or 0.0)
-    except (ValueError, TypeError):
-        freight = 0.0
-
-    cgst_amount = round(subtotal * (cgst_rate / 100.0), 2)
-    sgst_amount = round(subtotal * (sgst_rate / 100.0), 2)
-    igst_amount = round(subtotal * (igst_rate / 100.0), 2)
-
-    grand_total_calc = round(subtotal - discount + cgst_amount + sgst_amount + igst_amount + freight, 2)
-    try:
-        saved_grand_total = float(data.get("grand_total") or 0.0)
-    except (ValueError, TypeError):
-        saved_grand_total = 0.0
-
-    grand_total = saved_grand_total if saved_grand_total > 0 else grand_total_calc
+    calc_total = taxable_amount + cgst_amount + sgst_amount + igst_amount + freight + other_charges
+    round_off = float(data.get("round_off") if data.get("round_off") is not None else round(round(calc_total) - calc_total, 2))
+    grand_total = float(data.get("grand_total") if data.get("grand_total") is not None else round(calc_total + round_off, 2))
 
     notes = (data.get("notes") or "DELIVERY WILL BE F.O.R. ON-SITE\nLOCATION OF SITE WILL BE PROVIDED AT THE TIME OF DISPATCH").strip()
 
@@ -683,38 +759,77 @@ def _normalize_po_document_data(data: dict, company: dict) -> dict:
             "phone": comp_phone,
             "email": comp_email,
             "gstin": comp_gst,
+            "state": comp_state,
+            "pincode": comp_pincode,
             "logo_bytes": logo_bytes
         },
         "poDetails": {
             "po_number": po_num,
             "po_date": po_date,
             "vendor_id": v_id,
-            "delivery_date": del_date
+            "delivery_date": del_date,
+            "vendor_reference_number": v_ref_no,
+            "vendor_reference_date": v_ref_date,
+            "quotation_number": quote_no,
+            "quotation_date": quote_date
+        },
+        "project": {
+            "has_project": has_project,
+            "project_id": proj_id,
+            "project_number": proj_num or proj_id,
+            "sol_id": proj_num or proj_id,
+            "client_name": c_name,
+            "consumer_number": consumer_no
         },
         "vendor": {
             "name": v_name,
+            "contact_person": v_contact,
             "address": v_addr,
             "phone": v_phone,
             "email": v_email,
             "gstin": v_gstin
         },
+        "billTo": {
+            "name": comp_name,
+            "address": comp_addr,
+            "state": comp_state,
+            "pincode": comp_pincode,
+            "gstin": comp_gst
+        },
         "shipTo": {
+            "type": ship_type,
             "name": ship_name,
-            "address": ship_addr,
-            "phone": ship_phone,
-            "email": ship_email,
-            "gstin": ship_gstin
+            "address": site_addr,
+            "city": site_city,
+            "district": site_district,
+            "state": site_state,
+            "pincode": site_pin,
+            "consumer_number": consumer_no
         },
         "shipping": {
             "ship_via": ship_via,
             "shipping_method": shipping_method,
             "shipping_term": shipping_term,
-            "delivery_date": del_date
+            "delivery_date": del_date,
+            "transporter_name": transporter,
+            "expected_dispatch_date": dispatch_date,
+            "delivery_instructions": del_instructions
+        },
+        "payment": {
+            "payment_terms": payment_terms,
+            "advance_percentage": adv_pct,
+            "advance_amount": adv_amt,
+            "balance_payment_terms": bal_terms,
+            "commercial_terms": comm_terms,
+            "quotation_number": quote_no,
+            "quotation_date": quote_date
         },
         "lineItems": line_items,
         "financials": {
+            "tax_type": tax_type,
             "subtotal": subtotal,
             "discount": discount,
+            "taxable_amount": taxable_amount,
             "cgst_rate": cgst_rate,
             "cgst_amount": cgst_amount,
             "sgst_rate": sgst_rate,
@@ -722,6 +837,8 @@ def _normalize_po_document_data(data: dict, company: dict) -> dict:
             "igst_rate": igst_rate,
             "igst_amount": igst_amount,
             "freight": freight,
+            "other_charges": other_charges,
+            "round_off": round_off,
             "grand_total": grand_total
         },
         "notes": notes,
@@ -730,15 +847,18 @@ def _normalize_po_document_data(data: dict, company: dict) -> dict:
 
 
 def generate_po_pdf(data: dict, company: dict) -> bytes:
-    """Generate professional PDF for Purchase Orders matching GVP reference layout."""
+    """Generate professional PDF for Purchase Orders matching GVP Solarix executive branding layout."""
     norm = _normalize_po_document_data(data, company)
     comp = norm["company"]
     po = norm["poDetails"]
+    proj = norm["project"]
     vendor = norm["vendor"]
+    bill_to = norm["billTo"]
     ship_to = norm["shipTo"]
     shipping = norm["shipping"]
     items = norm["lineItems"]
     fin = norm["financials"]
+    payment = norm["payment"]
     notes = norm["notes"]
 
     buf = BytesIO()
@@ -752,29 +872,25 @@ def generate_po_pdf(data: dict, company: dict) -> bytes:
     )
     story = []
 
-    # 1. HEADER (Logo/Company Left, Title/Meta Right)
+    # 1. HEADER (1.8x Logo + GVP SOLAR ENERGY directly below on Left, Title/Meta on Right)
     logo_bytes = comp.get("logo_bytes")
     logo_d = None
     if logo_bytes:
         try:
             from PIL import Image as PILImage
             img = PILImage.open(BytesIO(logo_bytes))
+            bbox = img.getbbox() if hasattr(img, "getbbox") else None
+            if bbox:
+                img = img.crop(bbox)
             orig_w, orig_h = img.size
             if orig_w > 0 and orig_h > 0:
-                max_w, max_h = 11.0 * cm, 3.0 * cm
+                max_w, max_h = 6.8 * cm, 3.2 * cm
                 aspect = orig_w / float(orig_h or 1)
-                if orig_w > orig_h:
-                    target_w = max_w
-                    target_h = max_w / aspect
-                    if target_h > max_h:
-                        target_h = max_h
-                        target_w = max_h * aspect
-                else:
+                target_w = max_w
+                target_h = max_w / aspect
+                if target_h > max_h:
                     target_h = max_h
                     target_w = max_h * aspect
-                    if target_w > max_w:
-                        target_w = max_w
-                        target_h = max_w / aspect
                 res_buf = BytesIO()
                 img.save(res_buf, format="PNG")
                 logo_d = RLImage(BytesIO(res_buf.getvalue()), width=target_w, height=target_h)
@@ -784,39 +900,52 @@ def generate_po_pdf(data: dict, company: dict) -> bytes:
     hdr_left_flow = []
     if logo_d:
         hdr_left_flow.append(logo_d)
-        hdr_left_flow.append(Spacer(1, 0.1 * cm))
+        hdr_left_flow.append(Spacer(1, 0.12 * cm))
 
-    comp_title_style = ParagraphStyle('po_comp_title', parent=styles['Normal'], fontSize=13, leading=15, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold')
-    comp_sub_style = ParagraphStyle('po_comp_sub', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#475569'), fontName='Helvetica-Bold')
-    comp_gst_style = ParagraphStyle('po_comp_gst', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'), fontName='Helvetica-Bold')
+    comp_title_style = ParagraphStyle('po_comp_title', parent=styles['Normal'], fontSize=13, leading=15.5, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD)
+    comp_sub_style = ParagraphStyle('po_comp_sub', parent=styles['Normal'], fontSize=8, leading=11, textColor=colors.HexColor('#475569'), fontName=PDF_FONT)
+    comp_gst_style = ParagraphStyle('po_comp_gst', parent=styles['Normal'], fontSize=8.5, leading=11.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT_BOLD)
 
     hdr_left_flow.append(Paragraph(comp["name"], comp_title_style))
-    if comp["tagline"]:
-        hdr_left_flow.append(Paragraph(comp["tagline"], comp_sub_style))
     if comp["gstin"]:
-        hdr_left_flow.append(Paragraph(f"GST: {comp['gstin']}", comp_gst_style))
+        hdr_left_flow.append(Paragraph(f"GSTIN: {comp['gstin']}", comp_gst_style))
+    if comp["address"]:
+        hdr_left_flow.append(Paragraph(comp["address"], comp_sub_style))
+    contact_parts = []
+    if comp["phone"]: contact_parts.append(f"Phone: {comp['phone']}")
+    if comp["email"]: contact_parts.append(f"Email: {comp['email']}")
+    if contact_parts:
+        hdr_left_flow.append(Paragraph(" | ".join(contact_parts), comp_sub_style))
 
-    po_title_style = ParagraphStyle('po_title', parent=styles['Normal'], fontSize=16, leading=18, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold', alignment=2)
-    hdr_right_flow: list[Any] = [Paragraph("PURCHASE ORDER", po_title_style), Spacer(1, 0.2 * cm)]
+    po_title_style = ParagraphStyle('po_title', parent=styles['Normal'], fontSize=14.5, leading=17.5, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD, alignment=2)
+    hdr_right_flow: list[Any] = [Paragraph("PURCHASE ORDER", po_title_style), Spacer(1, 0.18 * cm)]
 
     meta_table_data = [
-        [Paragraph("<b>DATE</b>", BOLD_SMALL), Paragraph(po["po_date"], SMALL)],
-        [Paragraph("<b>P.O. NUMBER</b>", BOLD_SMALL), Paragraph(po["po_number"], SMALL)],
-        [Paragraph("<b>VENDOR ID</b>", BOLD_SMALL), Paragraph(po["vendor_id"] or "—", SMALL)],
+        [Paragraph("<b>P.O. NUMBER</b>", BOLD_SMALL), Paragraph(po["po_number"] or "—", SMALL)],
+        [Paragraph("<b>DATE</b>", BOLD_SMALL), Paragraph(po["po_date"] or "—", SMALL)],
     ]
-    meta_table = Table(meta_table_data, colWidths=[2.8 * cm, 4.5 * cm])
+    if po.get("vendor_reference_number"):
+        ref_txt = po["vendor_reference_number"]
+        if po.get("vendor_reference_date"): ref_txt += f" ({po['vendor_reference_date']})"
+        meta_table_data.append([Paragraph("<b>VENDOR REF</b>", BOLD_SMALL), Paragraph(ref_txt, SMALL)])
+    if proj.get("has_project") and (proj.get("sol_id") or proj.get("project_number")):
+        meta_table_data.append([Paragraph("<b>PROJECT / SOL ID</b>", BOLD_SMALL), Paragraph(proj.get("sol_id") or proj.get("project_number"), SMALL)])
+    if po.get("vendor_id"):
+        meta_table_data.append([Paragraph("<b>VENDOR ID</b>", BOLD_SMALL), Paragraph(po["vendor_id"], SMALL)])
+
+    meta_table = Table(meta_table_data, colWidths=[3.3 * cm, 4.3 * cm])
     meta_table.setStyle(TableStyle([
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
         ('BACKGROUND', (0,0), (0,-1), colors.HexColor('#f8fafc')),
-        ('TOPPADDING', (0,0), (-1,-1), 3),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+        ('TOPPADDING', (0,0), (-1,-1), 3.0),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3.0),
         ('LEFTPADDING', (0,0), (-1,-1), 5),
         ('RIGHTPADDING', (0,0), (-1,-1), 5),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
     ]))
     hdr_right_flow.append(meta_table)
 
-    header_table = Table([[hdr_left_flow, hdr_right_flow]], colWidths=[10.8 * cm, 7.8 * cm])
+    header_table = Table([[hdr_left_flow, hdr_right_flow]], colWidths=[11.0 * cm, 7.6 * cm])
     header_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
         ('LEFTPADDING', (0,0), (-1,-1), 0),
@@ -825,53 +954,100 @@ def generate_po_pdf(data: dict, company: dict) -> bytes:
         ('BOTTOMPADDING', (0,0), (-1,-1), 0),
     ]))
     story.append(header_table)
-    story.append(Spacer(1, 0.4 * cm))
+    story.append(Spacer(1, 0.25 * cm))
 
-    # 2. TWO-COLUMN PARTY SECTION (VENDOR | SHIP TO)
-    v_body = f"<b>{vendor['name']}</b><br/>"
-    if vendor['address']:
-        v_body += f"{vendor['address']}<br/>"
-    if vendor['phone']:
-        v_body += f"Phone: {vendor['phone']}<br/>"
-    if vendor['email']:
-        v_body += f"Email: {vendor['email']}<br/>"
-    if vendor['gstin']:
-        v_body += f"GSTIN: {vendor['gstin']}"
+    # 2. TWO-COLUMN PARTY SECTION (VENDOR | BILL TO)
+    v_lines = [f"<font size='9'><b>{vendor['name']}</b></font>"]
+    if vendor.get("contact_person"):
+        v_lines.append(f"<b>Contact Person:</b> {vendor['contact_person']}")
+    if vendor.get("address"):
+        v_lines.append(vendor['address'])
+    v_contact_parts = []
+    if vendor.get("phone"): v_contact_parts.append(f"Phone: {vendor['phone']}")
+    if vendor.get("email"): v_contact_parts.append(f"Email: {vendor['email']}")
+    if v_contact_parts:
+        v_lines.append(" | ".join(v_contact_parts))
+    if vendor.get("gstin"):
+        v_lines.append(f"<b>GSTIN:</b> {vendor['gstin']}")
+    v_body = "<br/>".join(v_lines)
 
-    s_body = f"<b>{ship_to['name']}</b><br/>"
-    if ship_to['address']:
-        s_body += f"{ship_to['address']}<br/>"
-    if ship_to['phone']:
-        s_body += f"Phone: {ship_to['phone']}<br/>"
-    if ship_to['email']:
-        s_body += f"Email: {ship_to['email']}<br/>"
-    if ship_to['gstin']:
-        s_body += f"GSTIN: {ship_to['gstin']}"
+    b_lines = [f"<font size='9'><b>{bill_to['name']}</b></font>"]
+    if bill_to.get("address"):
+        b_lines.append(bill_to['address'])
+    b_loc = []
+    if bill_to.get("state"): b_loc.append(f"State: {bill_to['state']}")
+    if bill_to.get("pincode"): b_loc.append(f"PIN: {bill_to['pincode']}")
+    if b_loc: b_lines.append(" | ".join(b_loc))
+    if bill_to.get("gstin"):
+        b_lines.append(f"<b>GSTIN:</b> {bill_to['gstin']}")
+    b_body = "<br/>".join(b_lines)
 
-    party_header_style = ParagraphStyle('p_hdr', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#ffffff'), fontName='Helvetica-Bold')
-    party_body_style = ParagraphStyle('p_bdy', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'))
+    party_header_style = ParagraphStyle('po_p_hdr', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#ffffff'), fontName=PDF_FONT_BOLD)
+    party_body_style = ParagraphStyle('po_p_bdy', parent=styles['Normal'], fontSize=8, leading=11.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT)
 
     party_table_data = [
-        [Paragraph("VENDOR", party_header_style), Paragraph("SHIP TO", party_header_style)],
-        [Paragraph(v_body, party_body_style), Paragraph(s_body, party_body_style)]
+        [Paragraph("VENDOR DETAILS", party_header_style), Paragraph("BILL TO (BUYER DETAILS)", party_header_style)],
+        [Paragraph(v_body, party_body_style), Paragraph(b_body, party_body_style)]
     ]
-    party_table = Table(party_table_data, colWidths=[9.1 * cm, 9.1 * cm])
+    party_table = Table(party_table_data, colWidths=[9.3 * cm, 9.3 * cm])
     party_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e3a8a')),
         ('BACKGROUND', (0,1), (-1,1), colors.HexColor('#ffffff')),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
-        ('TOPPADDING', (0,0), (-1,-1), 5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-        ('LEFTPADDING', (0,0), (-1,-1), 6),
-        ('RIGHTPADDING', (0,0), (-1,-1), 6),
+        ('TOPPADDING', (0,0), (-1,-1), 4.5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4.5),
+        ('LEFTPADDING', (0,0), (-1,-1), 7),
+        ('RIGHTPADDING', (0,0), (-1,-1), 7),
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
     ]))
     story.append(party_table)
-    story.append(Spacer(1, 0.3 * cm))
+    story.append(Spacer(1, 0.25 * cm))
 
-    # 3. SHIPPING TERMS BAR
-    ship_hdr_style = ParagraphStyle('s_hdr', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#ffffff'), fontName='Helvetica-Bold', alignment=1)
-    ship_val_style = ParagraphStyle('s_val', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'), fontName='Helvetica-Bold', alignment=1)
+    # 3. PROJECT / SITE REFERENCE (Rendered when project or site is present)
+    if proj.get("has_project") or ship_to.get("address"):
+        site_lines = []
+        if ship_to.get("name"):
+            site_lines.append(f"<b>Delivery Site / Recipient:</b> {ship_to['name']}")
+        if ship_to.get("address"):
+            site_lines.append(f"<b>Site Address:</b> {ship_to['address']}")
+        site_loc = []
+        if ship_to.get("city"): site_loc.append(ship_to["city"])
+        if ship_to.get("district"): site_loc.append(ship_to["district"])
+        if ship_to.get("state"): site_loc.append(ship_to["state"])
+        if ship_to.get("pincode"): site_loc.append(f"PIN: {ship_to['pincode']}")
+        if site_loc:
+            site_lines.append(", ".join(site_loc))
+
+        proj_meta = []
+        if proj.get("sol_id"):
+            proj_meta.append(f"<b>SOL ID:</b> {proj['sol_id']}")
+        if proj.get("client_name"):
+            proj_meta.append(f"<b>Client:</b> {proj['client_name']}")
+        if proj.get("consumer_number"):
+            proj_meta.append(f"<b>Consumer No:</b> {proj['consumer_number']}")
+
+        site_table_data = [
+            [
+                Paragraph("<font size='8' color='#1e3a8a'><b>PROJECT REFERENCE:</b></font><br/>" + (" | ".join(proj_meta) if proj_meta else "General Procurement"), party_body_style),
+                Paragraph("<font size='8' color='#1e3a8a'><b>SHIP TO / SITE DETAILS:</b></font><br/>" + ("<br/>".join(site_lines) if site_lines else "Same as Billing Address"), party_body_style)
+            ]
+        ]
+        site_table = Table(site_table_data, colWidths=[9.3 * cm, 9.3 * cm])
+        site_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f8fafc')),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ('LEFTPADDING', (0,0), (-1,-1), 7),
+            ('RIGHTPADDING', (0,0), (-1,-1), 7),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ]))
+        story.append(site_table)
+        story.append(Spacer(1, 0.25 * cm))
+
+    # 4. SHIPPING TERMS BAR
+    ship_hdr_style = ParagraphStyle('po_s_hdr', parent=styles['Normal'], fontSize=7.5, leading=9.5, textColor=colors.HexColor('#ffffff'), fontName=PDF_FONT_BOLD, alignment=1)
+    ship_val_style = ParagraphStyle('po_s_val', parent=styles['Normal'], fontSize=8, leading=10.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT_BOLD, alignment=1)
 
     ship_bar_data = [
         [
@@ -887,99 +1063,139 @@ def generate_po_pdf(data: dict, company: dict) -> bytes:
             Paragraph(shipping["delivery_date"] or "—", ship_val_style)
         ]
     ]
-    ship_table = Table(ship_bar_data, colWidths=[4.55 * cm, 4.55 * cm, 4.55 * cm, 4.55 * cm])
+    ship_table = Table(ship_bar_data, colWidths=[4.65 * cm, 4.65 * cm, 4.65 * cm, 4.65 * cm])
     ship_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e3a8a')),
         ('BACKGROUND', (0,1), (-1,1), colors.HexColor('#f8fafc')),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('TOPPADDING', (0,0), (-1,-1), 3.5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3.5),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
     ]))
     story.append(ship_table)
     story.append(Spacer(1, 0.3 * cm))
 
-    # 4. LINE ITEMS TABLE
-    th_style = ParagraphStyle('th_style', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#ffffff'), fontName='Helvetica-Bold')
-    th_center = ParagraphStyle('th_c', parent=th_style, alignment=1)
-    th_right = ParagraphStyle('th_r', parent=th_style, alignment=2)
+    # 5. LINE ITEMS TABLE (10 COLUMNS WITH HSN, SPEC, GST)
+    th_style = ParagraphStyle('po_th', parent=styles['Normal'], fontSize=6.8, leading=8.5, textColor=colors.HexColor('#ffffff'), fontName=PDF_FONT_BOLD)
+    th_c = ParagraphStyle('po_th_c', parent=th_style, alignment=1)
+    th_r = ParagraphStyle('po_th_r', parent=th_style, alignment=2)
 
     item_headers = [
-        Paragraph("CODE", th_center),
-        Paragraph("PRODUCT NAME / DESCRIPTION", th_style),
-        Paragraph("QTY", th_center),
-        Paragraph("UNIT", th_center),
-        Paragraph("UNIT PRICE", th_right),
-        Paragraph("TOTAL", th_right),
+        Paragraph("S.NO", th_c),
+        Paragraph("DESCRIPTION OF GOODS / SERVICES", th_style),
+        Paragraph("HSN/SAC", th_c),
+        Paragraph("SPEC / SIZE", th_c),
+        Paragraph("QTY", th_c),
+        Paragraph("UNIT", th_c),
+        Paragraph("RATE", th_r),
+        Paragraph("GST %", th_c),
+        Paragraph("AMOUNT", th_r),
     ]
     item_rows = [item_headers]
 
-    tb_style = ParagraphStyle('tb_style', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'))
-    tb_center = ParagraphStyle('tb_c', parent=tb_style, alignment=1)
-    tb_right = ParagraphStyle('tb_r', parent=tb_style, alignment=2)
+    tb_style = ParagraphStyle('po_tb', parent=styles['Normal'], fontSize=7.2, leading=9.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT)
+    tb_c = ParagraphStyle('po_tb_c', parent=tb_style, alignment=1)
+    tb_r = ParagraphStyle('po_tb_r', parent=tb_style, alignment=2)
 
     for it in items:
         p_name = it["product_name"]
-        if it["size"] and it["size"] not in p_name:
-            p_name += f" ({it['size']})"
+        if it.get("description") and it["description"] not in p_name:
+            p_name += f"<br/><font size='6.5' color='#64748b'>{it['description']}</font>"
 
         item_rows.append([
-            Paragraph(it["code"], tb_center),
+            Paragraph(it["code"], tb_c),
             Paragraph(p_name, tb_style),
-            Paragraph(f"{it['quantity']:g}", tb_center),
-            Paragraph(it["unit"], tb_center),
-            Paragraph(_format_currency(it["unit_price"]), tb_right),
-            Paragraph(_format_currency(it["amount"]), tb_right),
+            Paragraph(it["hsn_sac"] or "—", tb_c),
+            Paragraph(it["size"] or "—", tb_c),
+            Paragraph(f"{it['quantity']:g}", tb_c),
+            Paragraph(it["unit"], tb_c),
+            Paragraph(_format_currency(it["unit_price"]), tb_r),
+            Paragraph(f"{it['gst_rate']:g}%", tb_c),
+            Paragraph(_format_currency(it["amount"]), tb_r),
         ])
 
-    items_table = Table(item_rows, colWidths=[1.2 * cm, 8.0 * cm, 1.8 * cm, 1.6 * cm, 3.0 * cm, 3.0 * cm])
+    # Col widths sum to 18.6 cm: 0.9 + 6.1 + 1.6 + 1.6 + 1.0 + 1.0 + 2.3 + 1.4 + 2.7 = 18.6 cm
+    items_table = Table(
+        item_rows,
+        colWidths=[0.9 * cm, 6.1 * cm, 1.6 * cm, 1.6 * cm, 1.0 * cm, 1.0 * cm, 2.3 * cm, 1.4 * cm, 2.7 * cm],
+        repeatRows=1
+    )
     items_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e3a8a')),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
-        ('TOPPADDING', (0,0), (-1,-1), 5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-        ('LEFTPADDING', (0,0), (-1,-1), 4),
-        ('RIGHTPADDING', (0,0), (-1,-1), 4),
+        ('TOPPADDING', (0,0), (-1,-1), 4.5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4.5),
+        ('LEFTPADDING', (0,0), (-1,-1), 2.5),
+        ('RIGHTPADDING', (0,0), (-1,-1), 2.5),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
     ]))
     story.append(items_table)
     story.append(Spacer(1, 0.3 * cm))
 
-    # 5. BOTTOM SECTION (NOTES & TOTALS)
-    notes_p = Paragraph(f"<b>NOTES AND INSTRUCTION</b><br/><br/>{notes.replace(chr(10), '<br/>')}", ParagraphStyle('notes_p', parent=styles['Normal'], fontSize=8, leading=11, textColor=colors.HexColor('#1e293b')))
+    # 6. BOTTOM SECTION (NOTES & PAYMENT TERMS LEFT, TOTALS RIGHT)
+    left_notes_parts = []
+    if notes:
+        left_notes_parts.append(f"<b>NOTES AND INSTRUCTION</b><br/>{notes.replace(chr(10), '<br/>')}")
 
-    tot_label = ParagraphStyle('tot_lbl', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#334155'), fontName='Helvetica-Bold')
-    tot_val = ParagraphStyle('tot_v', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'), alignment=2)
-    tot_grand_lbl = ParagraphStyle('tot_g_lbl', parent=styles['Normal'], fontSize=9.5, leading=12, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold')
-    tot_grand_val = ParagraphStyle('tot_g_v', parent=styles['Normal'], fontSize=10, leading=12, textColor=colors.HexColor('#1e3a8a'), fontName='Helvetica-Bold', alignment=2)
+    comm_parts = []
+    if payment.get("payment_terms"):
+        comm_parts.append(f"<b>Payment Terms:</b> {payment['payment_terms']}")
+    if payment.get("advance_percentage", 0) > 0 or payment.get("advance_amount", 0) > 0:
+        adv_str = f"{payment['advance_percentage']:g}%" if payment.get("advance_percentage") else _format_currency(payment['advance_amount'])
+        comm_parts.append(f"<b>Advance:</b> {adv_str}")
+    if payment.get("balance_payment_terms"):
+        comm_parts.append(f"<b>Balance Terms:</b> {payment['balance_payment_terms']}")
+    if payment.get("quotation_number"):
+        q_str = payment["quotation_number"]
+        if payment.get("quotation_date"): q_str += f" (Date: {payment['quotation_date']})"
+        comm_parts.append(f"<b>Quotation Ref:</b> {q_str}")
+    if payment.get("commercial_terms"):
+        comm_parts.append(f"<b>Commercial Terms:</b> {payment['commercial_terms']}")
+
+    if comm_parts:
+        left_notes_parts.append("<b>COMMERCIAL & PAYMENT TERMS</b><br/>" + "<br/>".join(comm_parts))
+
+    left_html = "<br/><br/>".join(left_notes_parts) if left_notes_parts else "Thank you for your business!"
+    notes_p = Paragraph(left_html, ParagraphStyle('po_notes_p', parent=styles['Normal'], fontSize=7.5, leading=10.5, textColor=colors.HexColor('#1e293b'), fontName=PDF_FONT))
+
+    tot_lbl = ParagraphStyle('po_tot_lbl', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#334155'), fontName=PDF_FONT_BOLD)
+    tot_val = ParagraphStyle('po_tot_v', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT, alignment=2)
+    tot_grand_lbl = ParagraphStyle('po_tot_g_lbl', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD)
+    tot_grand_val = ParagraphStyle('po_tot_g_v', parent=styles['Normal'], fontSize=10, leading=12, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD, alignment=2)
 
     totals_rows = [
-        [Paragraph("SUBTOTAL", tot_label), Paragraph(_format_currency(fin["subtotal"]), tot_val)]
+        [Paragraph("SUBTOTAL", tot_lbl), Paragraph(_format_currency(fin["subtotal"]), tot_val)]
     ]
     if fin["discount"] > 0:
-        totals_rows.append([Paragraph("DISCOUNT", tot_label), Paragraph(_format_currency(fin["discount"]), tot_val)])
+        totals_rows.append([Paragraph("DISCOUNT", tot_lbl), Paragraph(_format_currency(fin["discount"]), tot_val)])
+    totals_rows.append([Paragraph("TAXABLE AMOUNT", tot_lbl), Paragraph(_format_currency(fin["taxable_amount"]), tot_val)])
+
     if fin["cgst_amount"] > 0 or fin["cgst_rate"] > 0:
-        totals_rows.append([Paragraph(f"CGST ({fin['cgst_rate']}%)", tot_label), Paragraph(_format_currency(fin["cgst_amount"]), tot_val)])
+        totals_rows.append([Paragraph(f"CGST ({fin['cgst_rate']:g}%)", tot_lbl), Paragraph(_format_currency(fin["cgst_amount"]), tot_val)])
     if fin["sgst_amount"] > 0 or fin["sgst_rate"] > 0:
-        totals_rows.append([Paragraph(f"SGST ({fin['sgst_rate']}%)", tot_label), Paragraph(_format_currency(fin["sgst_amount"]), tot_val)])
+        totals_rows.append([Paragraph(f"SGST ({fin['sgst_rate']:g}%)", tot_lbl), Paragraph(_format_currency(fin["sgst_amount"]), tot_val)])
     if fin["igst_amount"] > 0 or fin["igst_rate"] > 0:
-        totals_rows.append([Paragraph(f"IGST ({fin['igst_rate']}%)", tot_label), Paragraph(_format_currency(fin["igst_amount"]), tot_val)])
-    if fin["freight"] > 0:
-        totals_rows.append([Paragraph("S&H / FREIGHT", tot_label), Paragraph(_format_currency(fin["freight"]), tot_val)])
+        totals_rows.append([Paragraph(f"IGST ({fin['igst_rate']:g}%)", tot_lbl), Paragraph(_format_currency(fin["igst_amount"]), tot_val)])
+    if fin.get("freight", 0) > 0:
+        totals_rows.append([Paragraph("FREIGHT / S&H", tot_lbl), Paragraph(_format_currency(fin["freight"]), tot_val)])
+    if fin.get("other_charges", 0) > 0:
+        totals_rows.append([Paragraph("OTHER CHARGES", tot_lbl), Paragraph(_format_currency(fin["other_charges"]), tot_val)])
+    if fin.get("round_off", 0) != 0:
+        totals_rows.append([Paragraph("ROUND OFF", tot_lbl), Paragraph(_format_currency(fin["round_off"]), tot_val)])
 
     totals_rows.append([Paragraph("GRAND TOTAL", tot_grand_lbl), Paragraph(_format_currency(fin["grand_total"]), tot_grand_val)])
 
-    totals_table = Table(totals_rows, colWidths=[4.4 * cm, 3.7 * cm])
+    totals_table = Table(totals_rows, colWidths=[4.4 * cm, 4.0 * cm])
     totals_table.setStyle(TableStyle([
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
         ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#eff6ff')),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('TOPPADDING', (0,0), (-1,-1), 3.5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3.5),
         ('LEFTPADDING', (0,0), (-1,-1), 5),
         ('RIGHTPADDING', (0,0), (-1,-1), 5),
     ]))
 
-    bottom_table = Table([[notes_p, totals_table]], colWidths=[10.3 * cm, 8.3 * cm])
+    bottom_table = Table([[notes_p, totals_table]], colWidths=[10.2 * cm, 8.4 * cm])
     bottom_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
         ('LEFTPADDING', (0,0), (-1,-1), 0),
@@ -988,35 +1204,31 @@ def generate_po_pdf(data: dict, company: dict) -> bytes:
         ('BOTTOMPADDING', (0,0), (-1,-1), 0),
     ]))
     story.append(bottom_table)
+    story.append(Spacer(1, 0.3 * cm))
+
+    # 7. AMOUNT IN WORDS & SIGNATURE BLOCK
+    words_p = Paragraph(f"<b>Amount in Words:</b> {_amount_to_words(fin['grand_total'])}", ParagraphStyle('po_words', parent=styles['Normal'], fontSize=8.5, leading=11.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT))
+    story.append(words_p)
     story.append(Spacer(1, 0.4 * cm))
 
-    # Amount in Words
-    story.append(Paragraph("<b>Amount in Words</b>", ParagraphStyle('po_words_hdr', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold', textColor=colors.HexColor('#1e3a8a'))))
-    story.append(Paragraph(_amount_to_words(fin.get("grand_total") or 0), ParagraphStyle('po_words_body', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#334155'))))
-    story.append(Spacer(1, 0.5 * cm))
-
-    # Authorized Signature Block
-    SIG_LEFT = ParagraphStyle('po_sig_l', parent=styles['Normal'], fontSize=8.5, leading=12, textColor=colors.HexColor('#1f2937'), alignment=0)
-    SIG_RIGHT = ParagraphStyle('po_sig_r', parent=styles['Normal'], fontSize=8.5, leading=12, textColor=colors.HexColor('#1f2937'), alignment=2)
-    sig_table = Table([
-        [Paragraph("<b>Vendor Acceptance Signature</b><br/><br/>_______________________", SIG_LEFT), Paragraph(f"<b>For {comp['name']}</b><br/><br/>_______________________<br/>Authorized Signatory", SIG_RIGHT)]
-    ], colWidths=[9.3 * cm, 9.3 * cm])
+    sig_l = Paragraph("<b>Vendor Acceptance Signature</b><br/><br/><br/><br/>_______________________", ParagraphStyle('po_sig_l', parent=styles['Normal'], fontSize=8.5, leading=11, alignment=0, fontName=PDF_FONT))
+    sig_r = Paragraph(f"<b>For {comp['name']}</b><br/><br/><br/><br/>Authorized Signatory", ParagraphStyle('po_sig_r', parent=styles['Normal'], fontSize=8.5, leading=11, alignment=2, fontName=PDF_FONT))
+    sig_table = Table([[sig_l, sig_r]], colWidths=[9.3 * cm, 9.3 * cm])
     sig_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('LEFTPADDING', (0,0), (-1,-1), 0),
+        ('RIGHTPADDING', (0,0), (-1,-1), 0),
     ]))
     story.append(KeepTogether([sig_table]))
-    story.append(Spacer(1, 0.4 * cm))
+    story.append(Spacer(1, 0.25 * cm))
 
-    # 6. FOOTER & NOT TAX INVOICE NOTICE
-    footer_p = Paragraph(f"Enquiries: {comp['email']} | Contact: {comp['phone']} | Office: {comp['address']}", ParagraphStyle('po_ftr', parent=styles['Normal'], fontSize=7.5, leading=10, textColor=colors.HexColor('#64748b'), alignment=1))
+    # 8. FOOTER & DISCLAIMER
+    footer_text = f"Enquiries: {comp['email']} | Contact: {comp['phone']} | Office: {comp['address']}"
+    footer_p = Paragraph(footer_text, ParagraphStyle('po_ftr', parent=styles['Normal'], fontSize=7.5, leading=10, textColor=colors.HexColor('#64748b'), alignment=1))
     story.append(footer_p)
-    story.append(Spacer(1, 0.2 * cm))
+    story.append(Spacer(1, 0.15 * cm))
 
-    not_tax_p = Paragraph("<font size='10' color='#dc2626'><b>THIS IS NOT TAX INVOICE !</b></font>", ParagraphStyle('po_not_tax', parent=styles['Normal'], alignment=1))
+    not_tax_p = Paragraph("<font size='9.5' color='#dc2626'><b>THIS IS NOT TAX INVOICE !</b></font>", ParagraphStyle('po_not_tax', parent=styles['Normal'], alignment=1))
     story.append(not_tax_p)
 
     pdf.build(story)
@@ -5359,14 +5571,17 @@ def generate_po_docx(data: dict, company: dict) -> bytes:
     norm = _normalize_po_document_data(data, company)
     comp = norm["company"]
     po = norm["poDetails"]
+    proj = norm["project"]
     vendor = norm["vendor"]
+    bill_to = norm["billTo"]
     ship_to = norm["shipTo"]
     shipping = norm["shipping"]
     items = norm["lineItems"]
     fin = norm["financials"]
+    payment = norm["payment"]
     notes = norm["notes"]
 
-    doc = _build_docx_document(left_cm=1.2, right_cm=1.2, top_cm=1.0, bottom_cm=1.5)
+    doc = _build_docx_document(left_cm=1.2, right_cm=1.2, top_cm=1.0, bottom_cm=1.2)
 
     # 1. HEADER (Logo/Company Left, Title/Meta Right)
     hdr_table = doc.add_table(rows=1, cols=2)
@@ -5379,89 +5594,178 @@ def generate_po_docx(data: dict, company: dict) -> bytes:
     logo_bytes = comp.get("logo_bytes")
     if logo_bytes:
         try:
-            p_logo = cell_l.paragraphs[0]
-            p_logo.add_run().add_picture(BytesIO(logo_bytes), width=Inches(1.8))
+            from PIL import Image as PILImage
+            img = PILImage.open(BytesIO(logo_bytes))
+            bbox = img.getbbox() if hasattr(img, "getbbox") else None
+            if bbox:
+                img = img.crop(bbox)
+            orig_w, orig_h = img.size
+            if orig_w > 0 and orig_h > 0:
+                max_w_in, max_h_in = 2.68, 1.26
+                aspect = orig_w / float(orig_h or 1)
+                target_w_in = max_w_in
+                target_h_in = max_w_in / aspect
+                if target_h_in > max_h_in:
+                    target_h_in = max_h_in
+                    target_w_in = max_h_in * aspect
+                res_buf = BytesIO()
+                img.save(res_buf, format="PNG")
+                p_logo = cell_l.paragraphs[0]
+                p_logo.paragraph_format.space_after = Pt(2)
+                p_logo.add_run().add_picture(BytesIO(res_buf.getvalue()), width=Inches(target_w_in), height=Inches(target_h_in))
         except Exception:
             pass
 
     p_comp = cell_l.add_paragraph() if logo_bytes else cell_l.paragraphs[0]
+    p_comp.paragraph_format.space_after = Pt(1)
     r_comp = p_comp.add_run(comp["name"])
     r_comp.bold = True
-    r_comp.font.size = Pt(13)
+    r_comp.font.size = Pt(12.5)
     r_comp.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
-
-    if comp["tagline"]:
-        p_tag = cell_l.add_paragraph()
-        r_tag = p_tag.add_run(comp["tagline"])
-        r_tag.font.size = Pt(8.5)
-        r_tag.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
 
     if comp["gstin"]:
         p_gst = cell_l.add_paragraph()
-        r_gst = p_gst.add_run(f"GST: {comp['gstin']}")
+        p_gst.paragraph_format.space_after = Pt(1)
+        r_gst = p_gst.add_run(f"GSTIN: {comp['gstin']}")
         r_gst.bold = True
-        r_gst.font.size = Pt(9)
+        r_gst.font.size = Pt(8.5)
+
+    if comp["address"]:
+        p_addr = cell_l.add_paragraph()
+        p_addr.paragraph_format.space_after = Pt(1)
+        r_addr = p_addr.add_run(comp["address"])
+        r_addr.font.size = Pt(8)
+        r_addr.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
+
+    contact_parts = []
+    if comp["phone"]: contact_parts.append(f"Phone: {comp['phone']}")
+    if comp["email"]: contact_parts.append(f"Email: {comp['email']}")
+    if contact_parts:
+        p_cnt = cell_l.add_paragraph()
+        p_cnt.paragraph_format.space_after = Pt(2)
+        r_cnt = p_cnt.add_run(" | ".join(contact_parts))
+        r_cnt.font.size = Pt(8)
+        r_cnt.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
 
     p_title = cell_r.paragraphs[0]
     p_title.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p_title.paragraph_format.space_after = Pt(3)
     r_title = p_title.add_run("PURCHASE ORDER\n")
     r_title.bold = True
-    r_title.font.size = Pt(15)
+    r_title.font.size = Pt(14)
     r_title.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
 
-    r_meta = p_title.add_run(f"DATE: {po['po_date']}\nP.O. NUMBER: {po['po_number']}\nVENDOR ID: {po['vendor_id'] or '—'}")
-    r_meta.font.size = Pt(9)
+    meta_lines = [
+        f"P.O. NUMBER: {po['po_number'] or '—'}",
+        f"DATE: {po['po_date'] or '—'}"
+    ]
+    if po.get("vendor_reference_number"):
+        ref_txt = po["vendor_reference_number"]
+        if po.get("vendor_reference_date"): ref_txt += f" ({po['vendor_reference_date']})"
+        meta_lines.append(f"VENDOR REF: {ref_txt}")
+    if proj.get("has_project") and (proj.get("sol_id") or proj.get("project_number")):
+        meta_lines.append(f"PROJECT / SOL ID: {proj.get('sol_id') or proj.get('project_number')}")
+    if po.get("vendor_id"):
+        meta_lines.append(f"VENDOR ID: {po['vendor_id']}")
+
+    r_meta = p_title.add_run("\n".join(meta_lines))
+    r_meta.font.size = Pt(8.5)
     r_meta.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
 
     doc.add_paragraph()
 
-    # 2. TWO-COLUMN PARTY SECTION (VENDOR | SHIP TO)
+    # 2. TWO-COLUMN PARTY SECTION (VENDOR | BILL TO)
     party_tbl = doc.add_table(rows=2, cols=2)
     party_tbl.style = 'Table Grid'
 
     c_vh = party_tbl.rows[0].cells[0]
-    c_sh = party_tbl.rows[0].cells[1]
-    c_vh.text = "VENDOR"
-    c_sh.text = "SHIP TO"
+    c_bh = party_tbl.rows[0].cells[1]
+    c_vh.text = "VENDOR DETAILS"
+    c_bh.text = "BILL TO (BUYER DETAILS)"
     _docx_set_cell_bg(c_vh, "1e3a8a")
-    _docx_set_cell_bg(c_sh, "1e3a8a")
-    for c in (c_vh, c_sh):
+    _docx_set_cell_bg(c_bh, "1e3a8a")
+    for c in (c_vh, c_bh):
         for p in c.paragraphs:
             for r in p.runs:
                 r.bold = True
-                r.font.size = Pt(9.5)
+                r.font.size = Pt(9)
                 r.font.color.rgb = RGBColor(0xff, 0xff, 0xff)
 
     c_vb = party_tbl.rows[1].cells[0]
-    c_sb = party_tbl.rows[1].cells[1]
+    c_bb = party_tbl.rows[1].cells[1]
 
     p_v = c_vb.paragraphs[0]
     rv_name = p_v.add_run(f"{vendor['name']}\n")
     rv_name.bold = True
-    rv_name.font.size = Pt(9.5)
+    rv_name.font.size = Pt(9)
     v_details = []
-    if vendor['address']: v_details.append(vendor['address'])
-    if vendor['phone']: v_details.append(f"Phone: {vendor['phone']}")
-    if vendor['email']: v_details.append(f"Email: {vendor['email']}")
-    if vendor['gstin']: v_details.append(f"GSTIN: {vendor['gstin']}")
+    if vendor.get("contact_person"): v_details.append(f"Contact Person: {vendor['contact_person']}")
+    if vendor.get("address"): v_details.append(vendor['address'])
+    v_cparts = []
+    if vendor.get("phone"): v_cparts.append(f"Phone: {vendor['phone']}")
+    if vendor.get("email"): v_cparts.append(f"Email: {vendor['email']}")
+    if v_cparts: v_details.append(" | ".join(v_cparts))
+    if vendor.get("gstin"): v_details.append(f"GSTIN: {vendor['gstin']}")
     rv_body = p_v.add_run("\n".join(v_details))
-    rv_body.font.size = Pt(8.5)
+    rv_body.font.size = Pt(8)
 
-    p_s = c_sb.paragraphs[0]
-    rs_name = p_s.add_run(f"{ship_to['name']}\n")
-    rs_name.bold = True
-    rs_name.font.size = Pt(9.5)
-    s_details = []
-    if ship_to['address']: s_details.append(ship_to['address'])
-    if ship_to['phone']: s_details.append(f"Phone: {ship_to['phone']}")
-    if ship_to['email']: s_details.append(f"Email: {ship_to['email']}")
-    if ship_to['gstin']: s_details.append(f"GSTIN: {ship_to['gstin']}")
-    rs_body = p_s.add_run("\n".join(s_details))
-    rs_body.font.size = Pt(8.5)
+    p_b = c_bb.paragraphs[0]
+    rb_name = p_b.add_run(f"{bill_to['name']}\n")
+    rb_name.bold = True
+    rb_name.font.size = Pt(9)
+    b_details = []
+    if bill_to.get("address"): b_details.append(bill_to['address'])
+    b_loc = []
+    if bill_to.get("state"): b_loc.append(f"State: {bill_to['state']}")
+    if bill_to.get("pincode"): b_loc.append(f"PIN: {bill_to['pincode']}")
+    if b_loc: b_details.append(" | ".join(b_loc))
+    if bill_to.get("gstin"): b_details.append(f"GSTIN: {bill_to['gstin']}")
+    rb_body = p_b.add_run("\n".join(b_details))
+    rb_body.font.size = Pt(8)
 
     doc.add_paragraph()
 
-    # 3. SHIPPING BAR TABLE (4 COLUMNS)
+    # 3. PROJECT / SITE SECTION (If present)
+    if proj.get("has_project") or ship_to.get("address"):
+        site_tbl = doc.add_table(rows=1, cols=2)
+        site_tbl.style = 'Table Grid'
+        _docx_set_cell_bg(site_tbl.rows[0].cells[0], "f8fafc")
+        _docx_set_cell_bg(site_tbl.rows[0].cells[1], "f8fafc")
+
+        c_proj = site_tbl.rows[0].cells[0]
+        p_pr = c_proj.paragraphs[0]
+        r_pr_hdr = p_pr.add_run("PROJECT REFERENCE:\n")
+        r_pr_hdr.bold = True
+        r_pr_hdr.font.size = Pt(8)
+        r_pr_hdr.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
+        pr_lines = []
+        if proj.get("sol_id"): pr_lines.append(f"SOL ID: {proj['sol_id']}")
+        if proj.get("client_name"): pr_lines.append(f"Client: {proj['client_name']}")
+        if proj.get("consumer_number"): pr_lines.append(f"Consumer No: {proj['consumer_number']}")
+        r_pr_body = p_pr.add_run("\n".join(pr_lines) if pr_lines else "General Procurement")
+        r_pr_body.font.size = Pt(8)
+
+        c_site = site_tbl.rows[0].cells[1]
+        p_st = c_site.paragraphs[0]
+        r_st_hdr = p_st.add_run("SHIP TO / SITE DETAILS:\n")
+        r_st_hdr.bold = True
+        r_st_hdr.font.size = Pt(8)
+        r_st_hdr.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
+        st_lines = []
+        if ship_to.get("name"): st_lines.append(f"Site / Recipient: {ship_to['name']}")
+        if ship_to.get("address"): st_lines.append(ship_to['address'])
+        st_loc = []
+        if ship_to.get("city"): st_loc.append(ship_to['city'])
+        if ship_to.get("district"): st_loc.append(ship_to['district'])
+        if ship_to.get("state"): st_loc.append(ship_to['state'])
+        if ship_to.get("pincode"): st_loc.append(f"PIN: {ship_to['pincode']}")
+        if st_loc: st_lines.append(", ".join(st_loc))
+        r_st_body = p_st.add_run("\n".join(st_lines) if st_lines else "Same as Billing Address")
+        r_st_body.font.size = Pt(8)
+
+        doc.add_paragraph()
+
+    # 4. SHIPPING BAR TABLE (4 COLUMNS)
     ship_tbl = doc.add_table(rows=2, cols=4)
     ship_tbl.style = 'Table Grid'
     s_headers = ["SHIP VIA", "SHIPPING METHOD", "SHIPPING TERM", "DELIVERY DATE"]
@@ -5475,7 +5779,7 @@ def generate_po_docx(data: dict, company: dict) -> bytes:
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             for r in p.runs:
                 r.bold = True
-                r.font.size = Pt(8.5)
+                r.font.size = Pt(8)
                 r.font.color.rgb = RGBColor(0xff, 0xff, 0xff)
 
     for i, v in enumerate(s_vals):
@@ -5486,109 +5790,133 @@ def generate_po_docx(data: dict, company: dict) -> bytes:
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             for r in p.runs:
                 r.bold = True
-                r.font.size = Pt(8.5)
+                r.font.size = Pt(8)
 
     doc.add_paragraph()
 
-    # 4. LINE ITEMS TABLE
-    items_tbl = doc.add_table(rows=len(items) + 1, cols=6)
+    # 5. LINE ITEMS TABLE (9 COLUMNS)
+    items_tbl = doc.add_table(rows=len(items) + 1, cols=9)
     items_tbl.style = 'Table Grid'
 
-    i_headers = ["CODE", "PRODUCT NAME / DESCRIPTION", "QTY", "UNIT", "UNIT PRICE (Rs.)", "TOTAL (Rs.)"]
+    i_headers = ["S.NO", "DESCRIPTION OF GOODS / SERVICES", "HSN/SAC", "SPEC / SIZE", "QTY", "UNIT", "RATE (Rs.)", "GST %", "AMOUNT (Rs.)"]
     for i, h in enumerate(i_headers):
         cell = items_tbl.rows[0].cells[i]
         cell.text = h
         _docx_set_cell_bg(cell, "1e3a8a")
         for p in cell.paragraphs:
-            if i in (0, 2, 3):
+            if i in (0, 2, 3, 4, 5, 7):
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            elif i in (4, 5):
+            elif i in (6, 8):
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             for r in p.runs:
                 r.bold = True
-                r.font.size = Pt(8.5)
+                r.font.size = Pt(7.5)
                 r.font.color.rgb = RGBColor(0xff, 0xff, 0xff)
 
     for idx, item in enumerate(items, 1):
         row_cells = items_tbl.rows[idx].cells
         p_name = item["product_name"]
-        if item["size"] and item["size"] not in p_name:
-            p_name += f" ({item['size']})"
-        qty = item["quantity"]
-        unit = item["unit"]
-        price = item["unit_price"]
-        amount = item["amount"]
+        if item.get("description") and item["description"] not in p_name:
+            p_name += f"\n{item['description']}"
 
         row_cells[0].text = item["code"]
         row_cells[1].text = p_name
-        row_cells[2].text = f"{qty:g}"
-        row_cells[3].text = unit
-        row_cells[4].text = f"{price:,.2f}"
-        row_cells[5].text = f"{amount:,.2f}"
+        row_cells[2].text = item.get("hsn_sac") or "—"
+        row_cells[3].text = item.get("size") or "—"
+        row_cells[4].text = f"{item['quantity']:g}"
+        row_cells[5].text = item["unit"]
+        row_cells[6].text = f"{item['unit_price']:,.2f}"
+        row_cells[7].text = f"{item['gst_rate']:g}%"
+        row_cells[8].text = f"{item['amount']:,.2f}"
 
         for i, c in enumerate(row_cells):
             for p in c.paragraphs:
-                if i in (0, 2, 3):
+                if i in (0, 2, 3, 4, 5, 7):
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                elif i in (4, 5):
+                elif i in (6, 8):
                     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
                 for r in p.runs:
-                    r.font.size = Pt(8.5)
+                    r.font.size = Pt(7.5)
 
     doc.add_paragraph()
 
-    # 5. BOTTOM SECTION (NOTES & TOTALS)
+    # 6. BOTTOM SECTION (NOTES & COMMERCIAL TERMS LEFT, TOTALS RIGHT)
     bot_tbl = doc.add_table(rows=1, cols=2)
     bot_tbl.style = 'Table Grid'
     c_n = bot_tbl.rows[0].cells[0]
     c_t = bot_tbl.rows[0].cells[1]
 
     p_n = c_n.paragraphs[0]
-    rn_hdr = p_n.add_run("NOTES AND INSTRUCTION\n\n")
-    rn_hdr.bold = True
-    rn_hdr.font.size = Pt(9)
-    rn_bdy = p_n.add_run(notes)
-    rn_bdy.font.size = Pt(8)
+    if notes:
+        rn_hdr = p_n.add_run("NOTES AND INSTRUCTION\n")
+        rn_hdr.bold = True
+        rn_hdr.font.size = Pt(8.5)
+        rn_bdy = p_n.add_run(f"{notes}\n\n")
+        rn_bdy.font.size = Pt(7.5)
+
+    comm_lines = []
+    if payment.get("payment_terms"): comm_lines.append(f"Payment Terms: {payment['payment_terms']}")
+    if payment.get("advance_percentage", 0) > 0 or payment.get("advance_amount", 0) > 0:
+        adv_s = f"{payment['advance_percentage']:g}%" if payment.get("advance_percentage") else f"Rs. {payment['advance_amount']:,.2f}"
+        comm_lines.append(f"Advance: {adv_s}")
+    if payment.get("balance_payment_terms"): comm_lines.append(f"Balance Terms: {payment['balance_payment_terms']}")
+    if payment.get("quotation_number"):
+        q_s = payment["quotation_number"]
+        if payment.get("quotation_date"): q_s += f" (Date: {payment['quotation_date']})"
+        comm_lines.append(f"Quotation Ref: {q_s}")
+    if payment.get("commercial_terms"): comm_lines.append(f"Commercial Terms: {payment['commercial_terms']}")
+
+    if comm_lines:
+        rc_hdr = p_n.add_run("COMMERCIAL & PAYMENT TERMS\n")
+        rc_hdr.bold = True
+        rc_hdr.font.size = Pt(8.5)
+        rc_bdy = p_n.add_run("\n".join(comm_lines))
+        rc_bdy.font.size = Pt(7.5)
 
     totals_list = [
         ("SUBTOTAL", f"Rs. {fin['subtotal']:,.2f}")
     ]
     if fin["discount"] > 0:
         totals_list.append(("DISCOUNT", f"Rs. {fin['discount']:,.2f}"))
+    totals_list.append(("TAXABLE AMOUNT", f"Rs. {fin['taxable_amount']:,.2f}"))
+
     if fin["cgst_amount"] > 0 or fin["cgst_rate"] > 0:
-        totals_list.append((f"CGST ({fin['cgst_rate']}%)", f"Rs. {fin['cgst_amount']:,.2f}"))
+        totals_list.append((f"CGST ({fin['cgst_rate']:g}%)", f"Rs. {fin['cgst_amount']:,.2f}"))
     if fin["sgst_amount"] > 0 or fin["sgst_rate"] > 0:
-        totals_list.append((f"SGST ({fin['sgst_rate']}%)", f"Rs. {fin['sgst_amount']:,.2f}"))
+        totals_list.append((f"SGST ({fin['sgst_rate']:g}%)", f"Rs. {fin['sgst_amount']:,.2f}"))
     if fin["igst_amount"] > 0 or fin["igst_rate"] > 0:
-        totals_list.append((f"IGST ({fin['igst_rate']}%)", f"Rs. {fin['igst_amount']:,.2f}"))
-    if fin["freight"] > 0:
-        totals_list.append(("S&H / FREIGHT", f"Rs. {fin['freight']:,.2f}"))
+        totals_list.append((f"IGST ({fin['igst_rate']:g}%)", f"Rs. {fin['igst_amount']:,.2f}"))
+    if fin.get("freight", 0) > 0:
+        totals_list.append(("FREIGHT / S&H", f"Rs. {fin['freight']:,.2f}"))
+    if fin.get("other_charges", 0) > 0:
+        totals_list.append(("OTHER CHARGES", f"Rs. {fin['other_charges']:,.2f}"))
+    if fin.get("round_off", 0) != 0:
+        totals_list.append(("ROUND OFF", f"Rs. {fin['round_off']:,.2f}"))
+
     totals_list.append(("GRAND TOTAL", f"Rs. {fin['grand_total']:,.2f}"))
 
     for lbl, val in totals_list:
         p_row = c_t.add_paragraph()
         r_lbl = p_row.add_run(f"{lbl}: ")
         r_lbl.bold = True
-        r_lbl.font.size = Pt(8.5)
+        r_lbl.font.size = Pt(8)
         r_val = p_row.add_run(val)
-        r_val.font.size = Pt(8.5)
+        r_val.font.size = Pt(8)
         if lbl == "GRAND TOTAL":
-            r_lbl.font.size = Pt(9.5)
+            r_lbl.font.size = Pt(9)
             r_lbl.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
             r_val.bold = True
-            r_val.font.size = Pt(10)
+            r_val.font.size = Pt(9.5)
             r_val.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
 
     doc.add_paragraph()
 
     # Amount in Words
     p_w_hdr = doc.add_paragraph()
-    r_w_hdr = p_w_hdr.add_run("Amount in Words:")
+    r_w_hdr = p_w_hdr.add_run("Amount in Words: ")
     r_w_hdr.bold = True
-    r_w_hdr.font.size = Pt(9)
-    r_w_hdr.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
-    p_w_body = doc.add_paragraph()
-    r_w_body = p_w_body.add_run(_amount_to_words(fin.get("grand_total") or 0))
+    r_w_hdr.font.size = Pt(8.5)
+    r_w_body = p_w_hdr.add_run(_amount_to_words(fin.get("grand_total") or 0))
     r_w_body.font.size = Pt(8.5)
 
     doc.add_paragraph()
@@ -5606,7 +5934,7 @@ def generate_po_docx(data: dict, company: dict) -> bytes:
 
     doc.add_paragraph()
 
-    # 6. FOOTER & NOT TAX INVOICE
+    # 7. FOOTER & NOT TAX INVOICE
     p_ftr = doc.add_paragraph()
     p_ftr.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r_ftr = p_ftr.add_run(f"Enquiries: {comp['email']} | Contact: {comp['phone']} | Office: {comp['address']}")
