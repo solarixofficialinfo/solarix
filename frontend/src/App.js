@@ -5,6 +5,8 @@ import relativeTime from "dayjs/plugin/relativeTime";
 dayjs.extend(relativeTime);
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
+import useEntitlements from "@/hooks/useEntitlements";
+import LockedPageCard from "@/components/LockedPageCard";
 import { Toaster } from "sonner";
 // Eager load Login for instant auth rendering
 import Login from "@/pages/Login";
@@ -110,21 +112,31 @@ function AccessDenied() {
 
 function PermissionRoute({ page, children }) {
   const { user, loading } = useAuth();
+  const { isPageAllowed } = useEntitlements();
   if (loading) return null;
   const userEmail = (user?.email || "").trim().toLowerCase();
-  const isSuperOrAdmin =
+  const isSuperAdmin =
     user?.role === "Super Admin" ||
     user?.role === "Platform Owner" ||
-    user?.role === "Admin" ||
-    user?.role === "Owner" ||
-    user?.user_type === "owner" ||
     user?.user_type === "super_admin" ||
     user?.user_type === "platform_owner" ||
     user?.is_super_admin ||
     user?.is_platform_owner ||
-    user?.is_owner ||
     userEmail === "solarixofficial.info@gmail.com" ||
     userEmail === "solarixoffcial.info@gmail.com";
+  const isSuperOrAdmin =
+    isSuperAdmin ||
+    user?.role === "Admin" ||
+    user?.role === "Owner" ||
+    user?.user_type === "owner" ||
+    user?.is_owner;
+
+  // 1. Check Plan Page Entitlement FIRST (Direct URL access blocker)
+  if (!isSuperAdmin && page && !isPageAllowed(page)) {
+    return <LockedPageCard pageKey={page} />;
+  }
+
+  // 2. Check Role / User Permissions
   const hasPerm = isSuperOrAdmin || page === "complaints" || (user?.permissions?.[page]?.view === true);
 
   if (!hasPerm) {
@@ -133,13 +145,18 @@ function PermissionRoute({ page, children }) {
       { key: "clients", path: "/clients" },
       { key: "project_execution", path: "/projects" },
       { key: "task_portal", path: "/tasks" },
+      { key: "receivables", path: "/receivables" },
       { key: "data_management", path: "/inventory" },
+      { key: "material_requests", path: "/material" },
       { key: "client_data", path: "/client-data" },
       { key: "reports", path: "/reports" },
       { key: "sales_documents", path: "/sales-documents" },
+      { key: "documents", path: "/templates" },
+      { key: "purchase_orders", path: "/purchase-orders" },
       { key: "billing", path: "/billing" },
       { key: "team", path: "/team" },
       { key: "settings", path: "/profile" },
+      { key: "activity_log", path: "/activity" },
       { key: "complaints", path: "/complaints" },
     ];
     const allowed = pages.find((p) => p.key === "complaints" || isSuperOrAdmin || (user?.permissions?.[p.key]?.view === true));
@@ -256,7 +273,7 @@ function App() {
             <Route path="/team-access" element={<Navigate to="/team" replace />} />
             <Route path="/profile" element={<Protected><PermissionRoute page="settings"><Profile /></PermissionRoute></Protected>} />
             <Route path="/notifications" element={<Protected><Notifications /></Protected>} />
-            <Route path="/activity" element={<Protected><PermissionRoute page="settings"><ActivityLog /></PermissionRoute></Protected>} />
+            <Route path="/activity" element={<Protected><PermissionRoute page="activity_log"><ActivityLog /></PermissionRoute></Protected>} />
             <Route path="/projects" element={<Protected><PermissionRoute page="project_execution"><MainTabShell activeTab="projects" /></PermissionRoute></Protected>} />
             <Route path="/tasks" element={<Protected><PermissionRoute page="task_portal"><MainTabShell activeTab="tasks" /></PermissionRoute></Protected>} />
             <Route path="/inventory" element={<Protected><PermissionRoute page="data_management"><MainTabShell activeTab="inventory" /></PermissionRoute></Protected>} />
@@ -272,14 +289,14 @@ function App() {
             <Route path="/client-data/:id" element={<Protected><PermissionRoute page="client_data"><ClientDataDetail /></PermissionRoute></Protected>} />
             <Route path="/complaints" element={<Protected><PermissionRoute page="complaints"><Complaints /></PermissionRoute></Protected>} />
             <Route path="/complaints/:id" element={<Protected><PermissionRoute page="complaints"><ComplaintDetail /></PermissionRoute></Protected>} />
-            <Route path="/receivables" element={<Protected><Receivables /></Protected>} />
+            <Route path="/receivables" element={<Protected><PermissionRoute page="receivables"><Receivables /></PermissionRoute></Protected>} />
             <Route path="/vendors" element={<Protected><Vendors /></Protected>} />
-            <Route path="/material" element={<Protected><PermissionRoute page="data_management"><MaterialRequests /></PermissionRoute></Protected>} />
+            <Route path="/material" element={<Protected><PermissionRoute page="material_requests"><MaterialRequests /></PermissionRoute></Protected>} />
             <Route path="/materials" element={<Navigate to="/material" replace />} />
             <Route path="/material-requests" element={<Navigate to="/material" replace />} />
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/billing" element={<Protected><PermissionRoute page="billing"><Billing /></PermissionRoute></Protected>} />
-            <Route path="/purchase-orders" element={<Protected><PermissionRoute page="sales_documents"><PurchaseOrders /></PermissionRoute></Protected>} />
+            <Route path="/purchase-orders" element={<Protected><PermissionRoute page="purchase_orders"><PurchaseOrders /></PermissionRoute></Protected>} />
             {/* Level 1 SOLARIX Control Center Routes — Dedicated Full-Screen Admin Shell */}
             <Route path="/admin/metrics" element={<ProtectedAdmin><AdminMetrics /></ProtectedAdmin>} />
             <Route path="/admin" element={<Navigate to="/control-center" replace />} />

@@ -117,6 +117,22 @@ export function useEntitlements() {
     [usage]
   );
 
+  const resolvedPages = useMemo(() => {
+    return subData?.pages || subData?.page_access || defaultPlanConfig.pages || {};
+  }, [subData?.pages, subData?.page_access, defaultPlanConfig]);
+
+  const isPageAllowed = useCallback(
+    (pageKey) => {
+      if (isSuperAdmin) return true;
+      if (!pageKey) return true;
+      if (resolvedPages && typeof resolvedPages[pageKey] === "boolean") {
+        return resolvedPages[pageKey];
+      }
+      return true;
+    },
+    [isSuperAdmin, resolvedPages]
+  );
+
   return {
     entitlement: subData,
     planId,
@@ -135,6 +151,8 @@ export function useEntitlements() {
     trialEndsAt: subData?.trial_ends_at,
     subscriptionStartedAt: subData?.subscription_started_at,
     subscriptionExpiresAt: subData?.subscription_expires_at,
+    pages: resolvedPages,
+    isPageAllowed,
     features: resolvedFeatures,
     limits: resolvedLimits,
     usage,

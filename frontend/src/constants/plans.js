@@ -16,14 +16,16 @@ export const PLANS = {
     features: [
       "Up to 3 users",
       "Up to 100 active clients/projects",
+      "1,000 product master items",
       "5 GB secure document storage",
       "200 PDF/DOCX generations/month",
       "2,500 inventory transactions/month",
       "1,000 material requests/month",
       "Core CRM & Client Onboarding",
-      "Project Management & Task Portal",
+      "Project Execution & Task Portal",
       "Inward & Outward Stock Tracking",
-      "Basic Import / Export"
+      "Document Templates & Client Data",
+      "Client Material Ledger & Reports"
     ]
   },
   growth: {
@@ -45,16 +47,19 @@ export const PLANS = {
       "Everything in Starter, plus:",
       "Up to 10 users",
       "Up to 500 active clients/projects",
+      "5,000 product master items",
       "25 GB secure document storage",
       "1,000 PDF/DOCX generations/month",
       "10,000 inventory transactions/month",
+      "5,000 material requests/month",
       "5,000 API requests/month",
-      "Advanced Inventory & High Value Goods",
-      "Serial Number & Procurement Tracking",
-      "Advanced Documents & Sales Invoices",
-      "Receivables & Loan Tracking",
-      "Expenses & Project Profitability",
-      "Advanced Reports & Permissions"
+      "Receivables & Collection Workspace",
+      "Invoices, Payments, Loan & Expense Tracking",
+      "High Value Goods & Challans",
+      "Serial Number Tracking",
+      "Purchase Orders & Vendor Master",
+      "DOCX Document Templates Export",
+      "Custom Role & Page Permissions"
     ]
   },
   pro: {
@@ -76,16 +81,15 @@ export const PLANS = {
       "Everything in Growth, plus:",
       "Up to 25 users",
       "Up to 2,500 active clients/projects",
+      "15,000 product master items",
       "100 GB secure document storage",
       "5,000 PDF/DOCX generations/month",
       "50,000 inventory transactions/month",
+      "20,000 material requests/month",
       "50,000 API requests/month",
-      "Multi-branch Support",
-      "Advanced Financial & Operational Controls",
-      "Advanced Role & Field Permissions",
-      "API & External Integrations",
-      "Custom Branding & Header Logo",
-      "Dedicated Priority Account Manager"
+      "Full Operations & Financial Workspace Access",
+      "Maximum Quotas for High-Volume Solar EPCs",
+      "Enterprise Scale Data & Document Processing"
     ]
   }
 };

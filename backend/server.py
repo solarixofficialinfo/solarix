@@ -1282,7 +1282,7 @@ class CollectionAdapter:
                 return doc
         except Exception as e:
             err_str = str(e).lower()
-            if "42501" in err_str or "row-level security" in err_str or "unauthorized" in err_str or "pgrst205" in err_str or "schema cache" in err_str or "could not find the table" in err_str:
+            if "42501" in err_str or "row-level security" in err_str or "unauthorized" in err_str or "pgrst205" in err_str or "schema cache" in err_str or "could not find the table" in err_str or "42703" in err_str or "does not exist" in err_str or "400" in err_str or "bad request" in err_str:
                 local_doc = await LocalFileCollection(self.table_name).find_one(filter, projection)
                 if local_doc and self.table_name == "companies":
                     return _enrich_company_doc(local_doc)
@@ -1643,7 +1643,10 @@ class CollectionAdapter:
         patch = {}
         if "$set" in update:
             patch.update(update["$set"])
-            patch = self._clean_empty_fks(patch)
+        if "$unset" in update:
+            for unset_k in update["$unset"]:
+                patch[unset_k] = None
+        patch = self._clean_empty_fks(patch)
         if self.table_name == "products":
             patch = _clean_products_doc(patch)
             if not _PRODUCTS_HAS_RATE:
@@ -1692,12 +1695,13 @@ class CollectionAdapter:
         # Dedicated persistent deletion for invoices in Supabase tax_invoices table
         if self.table_name in ("invoices", "tax_invoices"):
             inv_to_del = await self.find_one(filter)
-            if inv_to_del and inv_to_del.get("id"):
+            del_id = (inv_to_del.get("id") if inv_to_del else None) or (filter.get("id") if isinstance(filter, dict) else None)
+            if del_id:
                 try:
-                    supabase.table("tax_invoices").delete().eq("id", inv_to_del["id"]).execute()
+                    supabase.table("tax_invoices").delete().eq("id", del_id).execute()
                 except Exception as e_supa:
                     logger.warning(f"tax_invoices delete warning: {e_supa}")
-                if inv_to_del.get("client_id") and inv_to_del.get("company_id"):
+                if inv_to_del and inv_to_del.get("client_id") and inv_to_del.get("company_id"):
                     await _sync_client_financial_record(inv_to_del["company_id"], inv_to_del["client_id"], "invoices", inv_to_del, "delete")
             await LocalFileCollection("invoices").delete_one(filter)
             return DeleteResult(1)
@@ -1929,6 +1933,9 @@ class LocalFileCollection:
         doc = data[matched_idx]
         if "$set" in update:
             doc.update(update["$set"])
+        if "$unset" in update:
+            for unset_k in update["$unset"]:
+                doc.pop(unset_k, None)
         if "$inc" in update:
             for inc_k, inc_v in update["$inc"].items():
                 doc[inc_k] = (doc.get(inc_k) or 0) + inc_v
@@ -1943,6 +1950,9 @@ class LocalFileCollection:
             if self._match(doc, filter):
                 if "$set" in update:
                     doc.update(update["$set"])
+                if "$unset" in update:
+                    for unset_k in update["$unset"]:
+                        doc.pop(unset_k, None)
                 if "$inc" in update:
                     for inc_k, inc_v in update["$inc"].items():
                         doc[inc_k] = (doc.get(inc_k) or 0) + inc_v
@@ -3087,6 +3097,28 @@ def require_feature_entitlement(feature_key: str):
             raise HTTPException(
                 status_code=403,
                 detail=f"FEATURE_NOT_ENTITLED: '{feature_key.replace('_', ' ').title()}' is not available on your {plan_name} plan. Upgrade to Growth or Pro to unlock this feature."
+            )
+        return user
+    return _checker
+
+def require_page_access(page_key: str):
+    """FastAPI dependency requiring that the company's plan grants access to the specified application page."""
+    async def _checker(user=Depends(get_current_user)):
+        if is_super_admin_user(user):
+            return user
+        cid = user.get("company_id")
+        if not cid:
+            raise HTTPException(status_code=403, detail="SUBSCRIPTION_REQUIRED: No company workspace found")
+        from plan_config import check_page_access
+        company = await db.companies.find_one({"id": cid}, {"_id": 0})
+        plan_id = (company.get("plan_id") or company.get("plan") or "starter").lower() if company else "starter"
+        db_plan_override = await db.plans_config.find_one({"id": plan_id}, {"_id": 0})
+        has_access = check_page_access(company or cid, page_key, db_override=db_plan_override)
+        if not has_access:
+            plan_name = plan_id.upper()
+            raise HTTPException(
+                status_code=403,
+                detail=f"PAGE_NOT_ENTITLED: Page '{page_key.replace('_', ' ').title()}' is not available on your {plan_name} plan. Upgrade to Growth or Pro to unlock this page."
             )
         return user
     return _checker
@@ -15138,13 +15170,15 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
     # Check if we are updating an existing draft or existing invoice
     existing_invoice = None
     if data.id and data.id.strip():
-        existing_invoice = await db.invoices.find_one({
-            "$or": [
-                {"id": data.id.strip()},
-                {"invoice_number": data.id.strip()}
-            ],
-            "company_id": cid
-        })
+        existing_invoice = await db.invoices.find_one({"id": data.id.strip(), "company_id": cid})
+        if not existing_invoice:
+            existing_invoice = await LocalFileCollection("invoices").find_one({
+                "$or": [
+                    {"id": data.id.strip()},
+                    {"invoice_number": data.id.strip()}
+                ],
+                "company_id": cid
+            })
 
     prefix_map = {
         "tax_invoice": "INV",
@@ -15328,14 +15362,38 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
     cid = user["company_id"]
     fmt = (payload.get("format") or "pdf").lower().strip()
     target_inv_id = invoice_id.strip()
-    invoice = await db.invoices.find_one({
-        "$or": [
-            {"id": target_inv_id},
-            {"invoice_number": target_inv_id},
-            {"invoice_no": target_inv_id}
-        ],
-        "company_id": cid
-    }, {"_id": 0})
+    invoice = await db.invoices.find_one({"id": target_inv_id, "company_id": cid}, {"_id": 0})
+    if not invoice:
+        invoice = await LocalFileCollection("invoices").find_one({
+            "$or": [
+                {"id": target_inv_id},
+                {"invoice_number": target_inv_id},
+                {"invoice_no": target_inv_id}
+            ],
+            "company_id": cid
+        }, {"_id": 0})
+    if not invoice:
+        # Check all in-memory local invoices
+        all_invs = await LocalFileCollection("invoices").find({"company_id": cid}, {"_id": 0}).to_list(1000)
+        for inv in all_invs:
+            if inv.get("id") == target_inv_id or inv.get("invoice_number") == target_inv_id or inv.get("invoice_no") == target_inv_id:
+                invoice = inv
+                break
+
+    if not invoice:
+        # Check client onboarding stages for invoices
+        all_clients = await db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "stages": 1}).to_list(1000)
+        for c in all_clients:
+            ob_invs = ((c.get("stages") or {}).get("onboarding_data") or {}).get("invoices") or []
+            for ob_inv in ob_invs:
+                if isinstance(ob_inv, dict) and (ob_inv.get("id") == target_inv_id or ob_inv.get("invoice_number") == target_inv_id or ob_inv.get("invoice_no") == target_inv_id):
+                    invoice = dict(ob_inv)
+                    if not invoice.get("client_id"):
+                        invoice["client_id"] = c.get("id")
+                    break
+            if invoice:
+                break
+
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
@@ -15435,10 +15493,15 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
     await db.files.insert_one(file_rec)
     
     update_field = "docx_file_id" if fmt == "docx" else "file_id"
-    await db.invoices.update_one(
-        {"$or": [{"id": invoice.get("id")}, {"invoice_number": invoice.get("invoice_number")}], "company_id": cid},
-        {"$set": {update_field: file_id, "updated_at": now_iso()}}
-    )
+    primary_inv_id = invoice.get("id") or invoice.get("_id")
+    if primary_inv_id:
+        try:
+            await db.invoices.update_one(
+                {"id": primary_inv_id, "company_id": cid},
+                {"$set": {update_field: file_id, "updated_at": now_iso()}}
+            )
+        except Exception as e_upd:
+            logger.warning(f"Error updating invoice file_id: {e_upd}")
 
     return {"id": file_id, "filename": filename, "file_id": file_id}
 
@@ -15494,34 +15557,77 @@ async def apply_payment_to_invoice(invoice_id: str, payload: ApplyPaymentPayload
 async def delete_invoice(invoice_id: str, user=Depends(get_current_user)):
     cid = user["company_id"]
     target_id = invoice_id.strip()
-    existing = await db.invoices.find_one({
-        "$or": [{"id": target_id}, {"invoice_number": target_id}],
-        "company_id": cid
-    })
+
+    # 1. Primary lookup by invoice ID
+    existing = await db.invoices.find_one({"id": target_id, "company_id": cid})
+    
+    # 2. Fallback lookup by invoice_number in local storage
+    if not existing:
+        existing = await LocalFileCollection("invoices").find_one({
+            "$or": [
+                {"id": target_id},
+                {"invoice_number": target_id},
+                {"invoice_no": target_id}
+            ],
+            "company_id": cid
+        })
+
+    # 3. Fallback scan all company invoices in memory
+    if not existing:
+        all_invs = await LocalFileCollection("invoices").find({"company_id": cid}).to_list(1000)
+        for inv in all_invs:
+            if inv.get("id") == target_id or inv.get("invoice_number") == target_id or inv.get("invoice_no") == target_id:
+                existing = inv
+                break
+
+    # 4. Fallback check client onboarding stages
+    if not existing:
+        all_clients = await db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "stages": 1}).to_list(1000)
+        for c in all_clients:
+            ob_invs = ((c.get("stages") or {}).get("onboarding_data") or {}).get("invoices") or []
+            for ob_inv in ob_invs:
+                if isinstance(ob_inv, dict) and (ob_inv.get("id") == target_id or ob_inv.get("invoice_number") == target_id or ob_inv.get("invoice_no") == target_id):
+                    existing = dict(ob_inv)
+                    break
+            if existing:
+                break
+
     if not existing:
         raise HTTPException(status_code=404, detail="Invoice not found")
+
+    inv_num = existing.get("invoice_number") or existing.get("invoice_no") or existing.get("id")
 
     # Safety check for Paid invoice with allocated payments
     inv_status = (existing.get("status") or "").lower()
     linked_payments = await db.payments.find({"invoice_id": existing.get("id"), "company_id": cid}).to_list(100)
-    if inv_status == "paid" and any((p.get("status") or "").lower() == "received" for p in linked_payments):
+    received_payments = [p for p in linked_payments if (p.get("status") or "").lower() == "received"]
+    total_received_alloc = sum(float(p.get("allocated_amount") or p.get("amount") or 0) for p in received_payments)
+    inv_total = float(existing.get("grand_total") or 0)
+    is_fully_paid = inv_status == "paid" or (inv_total > 0 and total_received_alloc >= inv_total)
+
+    if is_fully_paid and received_payments:
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot delete paid invoice {existing.get('invoice_number')} with allocated payments. Please deallocate or remove the payments first."
+            detail=f"Cannot delete paid invoice {inv_num} with allocated payments. Please deallocate or remove the payments first."
         )
 
     # Cleanly remove allocated invoice references from any linked payments
-    await db.payments.update_many(
-        {"invoice_id": existing.get("id"), "company_id": cid},
-        {"$unset": {"invoice_id": "", "invoice_no": "", "allocated_amount": ""}}
-    )
+    try:
+        await db.payments.update_many(
+            {"invoice_id": existing.get("id"), "company_id": cid},
+            {"$unset": {"invoice_id": "", "invoice_no": "", "allocated_amount": ""}}
+        )
+    except Exception as e_pay:
+        logger.warning(f"Error unsetting invoice from payments: {e_pay}")
 
     # Delete invoice record from database
     await db.invoices.delete_one({"id": existing.get("id"), "company_id": cid})
 
-    # Log activity
-    await log_activity(cid, user["id"], user["name"], "Deleted Invoice", f"Invoice ID: {existing.get('id')}, Number: {existing.get('invoice_number')}")
-    return {"message": f"Invoice {existing.get('invoice_number')} deleted successfully"}
+    # Log activity safely
+    u_id = user.get("id") or "user"
+    u_name = user.get("name") or user.get("full_name") or "User"
+    await log_activity(cid, u_id, u_name, "Deleted Invoice", f"Invoice ID: {existing.get('id')}, Number: {inv_num}")
+    return {"message": f"Invoice {inv_num} deleted successfully"}
 
 @api_router.get("/vendors")
 async def list_vendors(user=Depends(get_current_user)):
@@ -16710,6 +16816,7 @@ class PlatformPlanUpdateIn(BaseModel):
     monthly_inventory_transactions: Optional[int] = 2500
     monthly_api_requests: Optional[int] = 0
     active: Optional[bool] = True
+    pages: Optional[Dict[str, bool]] = None
     features: Dict[str, bool]
 
 class PlatformOfferIn(BaseModel):
@@ -16730,22 +16837,14 @@ class PageTrackIn(BaseModel):
 @api_router.get("/admin/plans")
 @api_router.get("/platform-owner/plans")
 async def list_platform_plans(user=Depends(require_super_admin())):
-    from plan_config import PLANS, get_all_plans
+    from plan_config import get_all_plans
     db_plans = await db.plans_config.find({}, {"_id": 0}).to_list(100)
-    db_map = {p["id"]: p for p in db_plans}
-    
-    merged = {}
-    default_plans = get_all_plans()
-    for pid, pdata in default_plans.items():
-        if pid in db_map:
-            merged[pid] = {**pdata, **db_map[pid]}
-        else:
-            merged[pid] = pdata
-    return merged
+    return get_all_plans(db_plans_list=db_plans)
 
 @api_router.put("/admin/plans/{plan_id}")
 @api_router.put("/platform-owner/plans/{plan_id}")
 async def update_platform_plan(plan_id: str, data: PlatformPlanUpdateIn, user=Depends(require_super_admin())):
+    from plan_config import get_plan_details, get_all_plans
     pid = plan_id.lower()
     default_prod = 15000 if pid == "pro" else 5000 if pid == "growth" else 1000
     default_storage = 100 if pid == "pro" else 25 if pid == "growth" else 5
@@ -16756,7 +16855,7 @@ async def update_platform_plan(plan_id: str, data: PlatformPlanUpdateIn, user=De
     default_inv = 50000 if pid == "pro" else 10000 if pid == "growth" else 2500
     default_api = 50000 if pid == "pro" else 5000 if pid == "growth" else 0
 
-    doc = {
+    doc: Dict[str, Any] = {
         "id": pid,
         "name": data.name,
         "tagline": data.tagline or "",
@@ -16773,20 +16872,30 @@ async def update_platform_plan(plan_id: str, data: PlatformPlanUpdateIn, user=De
         "monthly_inventory_transactions": int(data.monthly_inventory_transactions) if data.monthly_inventory_transactions is not None else default_inv,
         "monthly_api_requests": int(data.monthly_api_requests) if data.monthly_api_requests is not None else default_api,
         "active": data.active if data.active is not None else True,
-        "features": data.features,
         "updated_at": now_iso()
     }
+    if data.pages is not None:
+        doc["pages"] = data.pages
+    if data.features is not None:
+        doc["features"] = data.features
+
     await db.plans_config.update_one({"id": doc["id"]}, {"$set": doc}, upsert=True)
     with _company_cache_lock:
         _company_cache.clear()
     await _log_platform_audit(
         user=user,
-        action="Updated Plan Entitlements & Limits",
+        action="Updated Plan Pages, Features & Limits",
         target_company_id="ALL",
         target_name=f"Plan: {data.name}",
         new_val=doc
     )
-    return {"message": f"Plan '{data.name}' updated successfully", "plan": doc}
+    all_updated_plans = await db.plans_config.find({}, {"_id": 0}).to_list(100)
+    canonical_plans = get_all_plans(db_plans_list=all_updated_plans)
+    return {
+        "message": f"Plan '{data.name}' updated successfully",
+        "plan": canonical_plans.get(pid, doc),
+        "all_plans": canonical_plans
+    }
 
 @api_router.get("/admin/offers")
 @api_router.get("/platform-owner/offers")

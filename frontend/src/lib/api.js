@@ -395,13 +395,34 @@ export async function downloadFile(fileId, defaultFilename = "document.pdf") {
     const link = document.createElement("a");
     link.href = blobUrl;
     link.setAttribute("download", filename);
+    link.style.display = "none";
     document.body.appendChild(link);
     link.click();
-    link.remove();
-    setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
+    setTimeout(() => {
+      if (document.body.contains(link)) {
+        document.body.removeChild(link);
+      }
+      window.URL.revokeObjectURL(blobUrl);
+    }, 2000);
     return true;
   } catch (err) {
-    const errMsg = formatApiError(err);
+    let errorDetail = "";
+    if (err.response?.data && typeof err.response.data.text === "function") {
+      try {
+        const txt = await err.response.data.text();
+        const parsed = JSON.parse(txt);
+        errorDetail = parsed.detail || parsed.message || txt;
+      } catch {}
+    }
+    // Fallback: direct browser navigation to authenticated download URL
+    try {
+      const fallbackUrl = fileUrl(fileId, true);
+      if (fallbackUrl) {
+        window.open(fallbackUrl, "_blank");
+        return true;
+      }
+    } catch {}
+    const errMsg = errorDetail || formatApiError(err);
     toast.error(errMsg);
     return false;
   }

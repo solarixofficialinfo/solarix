@@ -17,7 +17,28 @@ def get_current_period() -> str:
     """Returns YYYY-MM period identifier for monthly quota reset."""
     return datetime.now(timezone.utc).strftime("%Y-%m")
 
-# Plan Definitions with Real Solar EPC Limits
+# Verified Real Solarix Application Pages
+REAL_APPLICATION_PAGES = [
+    {"key": "dashboard", "name": "Dashboard", "route": "/dashboard", "section": "WORKSPACE"},
+    {"key": "clients", "name": "Clients", "route": "/clients", "section": "WORKSPACE"},
+    {"key": "project_execution", "name": "Project Execution", "route": "/projects", "section": "WORKSPACE"},
+    {"key": "task_portal", "name": "Task Portal", "route": "/tasks", "section": "WORKSPACE"},
+    {"key": "receivables", "name": "Receivables & Collection", "route": "/receivables", "section": "OPERATIONS"},
+    {"key": "data_management", "name": "Data Management", "route": "/inventory", "section": "OPERATIONS"},
+    {"key": "material_requests", "name": "Material Requests", "route": "/material", "section": "OPERATIONS"},
+    {"key": "client_data", "name": "Client Data", "route": "/client-data", "section": "OPERATIONS"},
+    {"key": "reports", "name": "Reports", "route": "/reports", "section": "OPERATIONS"},
+    {"key": "sales_documents", "name": "Sales Documents", "route": "/sales-documents", "section": "DOCUMENTS"},
+    {"key": "documents", "name": "Document Templates", "route": "/templates", "section": "DOCUMENTS"},
+    {"key": "purchase_orders", "name": "Purchase Orders", "route": "/purchase-orders", "section": "DOCUMENTS"},
+    {"key": "complaints", "name": "Complaint Center", "route": "/complaints", "section": "ADMINISTRATION"},
+    {"key": "team", "name": "Team & Access", "route": "/team", "section": "ADMINISTRATION"},
+    {"key": "settings", "name": "Company Details", "route": "/profile", "section": "ADMINISTRATION"},
+    {"key": "activity_log", "name": "Activity Log", "route": "/activity", "section": "ADMINISTRATION"},
+    {"key": "billing", "name": "Billing & Subscription", "route": "/billing", "section": "ADMINISTRATION"},
+]
+
+# Plan Definitions with Real Pages, Features, and Limits
 PLANS: Dict[str, Dict[str, Any]] = {
     "starter": {
         "id": "starter",
@@ -37,38 +58,63 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "monthly_inventory_transactions": 2500,
         "monthly_api_requests": 0,
         "badge": None,
-        "features": {
-            "core_crm": True,
-            "client_onboarding": True,
-            "project_management": True,
+        "pages": {
+            "dashboard": True,
+            "clients": True,
+            "project_execution": True,
             "task_portal": True,
+            "receivables": False,
+            "data_management": True,
             "material_requests": True,
-            "basic_inventory": True,
+            "client_data": True,
+            "reports": True,
+            "sales_documents": True,
+            "documents": True,
+            "purchase_orders": False,
+            "complaints": True,
+            "team": True,
+            "settings": True,
+            "activity_log": True,
+            "billing": True,
+        },
+        "features": {
+            "client_onboarding": True,
             "inward": True,
             "outward": True,
             "product_master": True,
             "balance_report": True,
             "history": True,
+            "high_value_goods": False,
+            "serial_tracking": False,
+            "material_requests": True,
+            "invoices": False,
+            "payments": False,
+            "loan_finance": False,
+            "expenses": False,
+            "pdf_generation": True,
+            "docx_generation": False,
+            "discom_mapping": True,
+            "quotations": True,
+            "tax_invoices": True,
+            "delivery_bills": True,
+            "client_ledger": True,
+            "ledger_export": True,
+            "role_permissions": False,
+            # Legacy compatibility aliases
+            "core_crm": True,
+            "project_management": True,
+            "task_portal": True,
+            "basic_inventory": True,
             "basic_documents": True,
             "basic_reports": True,
             "basic_notifications": True,
             "basic_import_export": True,
             "advanced_inventory": False,
-            "high_value_goods": False,
-            "serial_tracking": False,
             "procurement": False,
             "advanced_documents": False,
             "receivables": False,
-            "loan_finance": False,
-            "expenses": False,
-            "project_profitability": False,
-            "advanced_reports": False,
             "advanced_permissions": False,
-            "priority_support": False,
-            "multi_branch": False,
             "api_integrations": False,
-            "custom_branding": False,
-            "dedicated_support": False,
         }
     },
     "growth": {
@@ -89,38 +135,63 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "monthly_inventory_transactions": 10000,
         "monthly_api_requests": 5000,
         "badge": "MOST POPULAR",
-        "features": {
-            "core_crm": True,
-            "client_onboarding": True,
-            "project_management": True,
+        "pages": {
+            "dashboard": True,
+            "clients": True,
+            "project_execution": True,
             "task_portal": True,
+            "receivables": True,
+            "data_management": True,
             "material_requests": True,
-            "basic_inventory": True,
+            "client_data": True,
+            "reports": True,
+            "sales_documents": True,
+            "documents": True,
+            "purchase_orders": True,
+            "complaints": True,
+            "team": True,
+            "settings": True,
+            "activity_log": True,
+            "billing": True,
+        },
+        "features": {
+            "client_onboarding": True,
             "inward": True,
             "outward": True,
             "product_master": True,
             "balance_report": True,
             "history": True,
+            "high_value_goods": True,
+            "serial_tracking": True,
+            "material_requests": True,
+            "invoices": True,
+            "payments": True,
+            "loan_finance": True,
+            "expenses": True,
+            "pdf_generation": True,
+            "docx_generation": True,
+            "discom_mapping": True,
+            "quotations": True,
+            "tax_invoices": True,
+            "delivery_bills": True,
+            "client_ledger": True,
+            "ledger_export": True,
+            "role_permissions": True,
+            # Legacy compatibility aliases
+            "core_crm": True,
+            "project_management": True,
+            "task_portal": True,
+            "basic_inventory": True,
             "basic_documents": True,
             "basic_reports": True,
             "basic_notifications": True,
             "basic_import_export": True,
             "advanced_inventory": True,
-            "high_value_goods": True,
-            "serial_tracking": True,
             "procurement": True,
             "advanced_documents": True,
             "receivables": True,
-            "loan_finance": True,
-            "expenses": True,
-            "project_profitability": True,
-            "advanced_reports": True,
             "advanced_permissions": True,
-            "priority_support": True,
-            "multi_branch": False,
             "api_integrations": True,
-            "custom_branding": False,
-            "dedicated_support": False,
         }
     },
     "pro": {
@@ -141,38 +212,63 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "monthly_inventory_transactions": 50000,
         "monthly_api_requests": 50000,
         "badge": "FULL POWER",
-        "features": {
-            "core_crm": True,
-            "client_onboarding": True,
-            "project_management": True,
+        "pages": {
+            "dashboard": True,
+            "clients": True,
+            "project_execution": True,
             "task_portal": True,
+            "receivables": True,
+            "data_management": True,
             "material_requests": True,
-            "basic_inventory": True,
+            "client_data": True,
+            "reports": True,
+            "sales_documents": True,
+            "documents": True,
+            "purchase_orders": True,
+            "complaints": True,
+            "team": True,
+            "settings": True,
+            "activity_log": True,
+            "billing": True,
+        },
+        "features": {
+            "client_onboarding": True,
             "inward": True,
             "outward": True,
             "product_master": True,
             "balance_report": True,
             "history": True,
+            "high_value_goods": True,
+            "serial_tracking": True,
+            "material_requests": True,
+            "invoices": True,
+            "payments": True,
+            "loan_finance": True,
+            "expenses": True,
+            "pdf_generation": True,
+            "docx_generation": True,
+            "discom_mapping": True,
+            "quotations": True,
+            "tax_invoices": True,
+            "delivery_bills": True,
+            "client_ledger": True,
+            "ledger_export": True,
+            "role_permissions": True,
+            # Legacy compatibility aliases
+            "core_crm": True,
+            "project_management": True,
+            "task_portal": True,
+            "basic_inventory": True,
             "basic_documents": True,
             "basic_reports": True,
             "basic_notifications": True,
             "basic_import_export": True,
             "advanced_inventory": True,
-            "high_value_goods": True,
-            "serial_tracking": True,
             "procurement": True,
             "advanced_documents": True,
             "receivables": True,
-            "loan_finance": True,
-            "expenses": True,
-            "project_profitability": True,
-            "advanced_reports": True,
             "advanced_permissions": True,
-            "priority_support": True,
-            "multi_branch": True,
             "api_integrations": True,
-            "custom_branding": True,
-            "dedicated_support": True,
         }
     }
 }
@@ -256,6 +352,8 @@ def get_plan_details(plan_id: str, db_override: Optional[Dict[str, Any]] = None)
         ]:
             if k in db_override and db_override[k] is not None:
                 plan[k] = db_override[k]
+        if "pages" in db_override and isinstance(db_override["pages"], dict):
+            plan["pages"] = {**plan.get("pages", {}), **db_override["pages"]}
         if "features" in db_override and isinstance(db_override["features"], dict):
             plan["features"] = {**plan.get("features", {}), **db_override["features"]}
     
@@ -276,6 +374,30 @@ def get_all_plans(db_plans_list: Optional[List[Dict[str, Any]]] = None) -> Dict[
     if db_plans_list and isinstance(db_plans_list, list):
         db_map = {p["id"]: p for p in db_plans_list if isinstance(p, dict) and "id" in p}
     return {pid: get_plan_details(pid, db_override=db_map.get(pid)) for pid in PLANS}
+
+def check_page_access(target: Any, page_key: str, db_override: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    Check if a real application page is accessible for a company or plan.
+    Supports passing a company_doc dict or plan_id string.
+    Order of Evaluation:
+    1. Explicit company-level page override in company_doc.get("page_access") or company_doc.get("pages")
+    2. Assigned plan's pages configuration (Trial accounts use assigned plan, default 'starter')
+    """
+    company_doc = target if isinstance(target, dict) else {}
+    
+    # 1. Company level page access override
+    custom_pages = company_doc.get("page_access") or company_doc.get("pages")
+    if isinstance(custom_pages, dict) and page_key in custom_pages:
+        return bool(custom_pages[page_key])
+        
+    # 2. Plan definition
+    plan_id = target if isinstance(target, str) else (company_doc.get("plan_id") or company_doc.get("plan") or "starter")
+    plan_id = str(plan_id).lower()
+    if plan_id not in ("starter", "growth", "pro"):
+        plan_id = "starter"
+
+    plan = get_plan_details(plan_id, db_override=db_override)
+    return bool(plan.get("pages", {}).get(page_key, True))
 
 def check_feature_access(target: Any, feature_key: str, is_trial: bool = False, db_override: Optional[Dict[str, Any]] = None) -> bool:
     """
@@ -640,6 +762,12 @@ async def get_company_entitlement(company_id: str, db=None) -> Dict[str, Any]:
     plan_name = plan_info["name"]
     limits = get_plan_limits(plan_id, is_trial=False, db_override=db_plan_override)
 
+    # Resolved pages (incorporating company-specific overrides)
+    resolved_pages = dict(plan_info.get("pages", {}))
+    custom_pages = company.get("page_access") or company.get("pages") or {}
+    if isinstance(custom_pages, dict):
+        resolved_pages.update(custom_pages)
+
     # Resolved features (incorporating temporary & explicit overrides)
     resolved_features = dict(plan_info.get("features", {}))
     custom_entitlements = company.get("feature_entitlements") or {}
@@ -675,6 +803,8 @@ async def get_company_entitlement(company_id: str, db=None) -> Dict[str, Any]:
         "can_write": can_write,
         "razorpay_subscription_id": company.get("razorpay_subscription_id"),
         "cancel_at_period_end": bool(company.get("cancel_at_period_end", False)),
+        "page_access": resolved_pages,
+        "pages": resolved_pages,
         "feature_entitlements": company.get("feature_entitlements", {}),
         "temporary_features": company.get("temporary_features", {}),
         "features": resolved_features,

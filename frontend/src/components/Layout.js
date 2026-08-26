@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import PlanBadge from "@/components/PlanBadge";
+import useEntitlements from "@/hooks/useEntitlements";
 
 function GlobalSearch() {
   const [open, setOpen] = useState(false);
@@ -114,27 +115,6 @@ function GlobalSearch() {
                     </div>
                   )}
 
-                  {/* {(results.vendors && Array.isArray(results.vendors) && results.vendors.length > 0) && (
-                    <div className="space-y-2">
-                      <div className="font-semibold text-slate-700 uppercase text-[10px] tracking-wider">Vendors ({results.vendors.length})</div>
-                      <div className="space-y-1">
-                        {(Array.isArray(results.vendors) ? results.vendors : []).map((v) => (
-                          <Link
-                            key={v.id}
-                            to="/vendors"
-                            onClick={() => setOpen(false)}
-                            className="flex items-center justify-between bg-slate-50 p-2.5 rounded border border-slate-200 hover:bg-blue-50/50 hover:border-blue-200 transition"
-                          >
-                            <div>
-                              <div className="font-semibold text-slate-900">{v.name}</div>
-                              <div className="text-[11px] text-slate-500">Category: {v.category} · Phone: {v.phone || "—"}</div>
-                            </div>
-                          </Link>
-                        ))}
-                      </div>
-                    </div>
-                  )} */}
-
                   {(results.tasks || []).length > 0 && (
                     <div className="space-y-2">
                       <div className="font-semibold text-slate-700 uppercase text-[10px] tracking-wider">Tasks ({(results.tasks).length})</div>
@@ -171,6 +151,7 @@ export default function Layout({ children }) {
   const { pathname } = useLocation();
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { isPageAllowed } = useEntitlements();
 
   const userEmail = (user?.email || "").trim().toLowerCase();
   const isExternalUser =
@@ -208,7 +189,7 @@ export default function Layout({ children }) {
       items: [
         { to: "/receivables", label: "Receivables & Collection", icon: DollarSign, key: "receivables" },
         { to: "/inventory", label: "Data Management", icon: Boxes, key: "data_management" },
-        { to: "/material", label: "Material Requests", icon: PackageSearch, key: "data_management" },
+        { to: "/material", label: "Material Requests", icon: PackageSearch, key: "material_requests" },
         { to: "/client-data", label: "Client Data", icon: LifeBuoy, key: "client_data" },
         { to: "/reports", label: "Reports", icon: ScrollText, key: "reports" },
       ],
@@ -218,7 +199,7 @@ export default function Layout({ children }) {
       items: [
         { to: "/sales-documents", label: "Sales Documents", icon: FileText, key: "sales_documents" },
         { to: "/templates", label: "Document Templates", icon: FileText, key: "documents" },
-        { to: "/purchase-orders", label: "Purchase Orders", icon: FileText, key: "sales_documents" },
+        { to: "/purchase-orders", label: "Purchase Orders", icon: FileText, key: "purchase_orders" },
       ],
     },
     {
@@ -229,7 +210,7 @@ export default function Layout({ children }) {
         { to: "/complaints", label: "Complaint Center", icon: Megaphone, key: "complaints" },
         { to: "/team", label: "Team & Access", icon: UserCog, key: "team", adminOnly: true },
         { to: "/profile", label: "Company Details", icon: Building2, key: "settings", adminOnly: true },
-        { to: "/activity", label: "Activity Log", icon: ScrollText, key: "settings", adminOnly: true },
+        { to: "/activity", label: "Activity Log", icon: ScrollText, key: "activity_log", adminOnly: true },
       ],
     },
   ];
@@ -269,6 +250,7 @@ export default function Layout({ children }) {
         {navSections.map((sec) => {
           const visibleItems = sec.items.filter((it) => {
             if (it.superAdminOnly) return isSuperAdmin;
+            if (!isSuperAdmin && !isPageAllowed(it.key)) return false;
             if (it.adminOnly) return isAdmin || allowed(it.key);
             return ALWAYS_VISIBLE.has(it.key) || allowed(it.key);
           });

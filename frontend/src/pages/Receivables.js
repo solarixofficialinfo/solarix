@@ -311,13 +311,19 @@ export default function Receivables() {
       toast.success(data?.message || "Invoice deleted successfully");
       queryClient.invalidateQueries({ queryKey: ["finance", "receivables"] });
       queryClient.invalidateQueries({ queryKey: ["finance", "projects"] });
+      if (activeProjectId) {
+        queryClient.invalidateQueries({ queryKey: ["finance", "projects", activeProjectId] });
+      }
       queryClient.invalidateQueries({ queryKey: ["client"] });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       setInvoiceDetailOpen(false);
       setSelectedInvoiceDetail(null);
       setInvoiceToDelete(null);
     },
-    onError: (err) => toast.error(formatApiError(err))
+    onError: (err) => {
+      toast.error(formatApiError(err));
+      setInvoiceToDelete(null);
+    }
   });
 
   const recordLoanMutation = useMutation({
@@ -392,16 +398,18 @@ export default function Receivables() {
 
   // Modal Handlers
   const handleDownloadInvoiceDoc = async (inv, format = "pdf") => {
-    if (!inv || !inv.id) {
+    const targetInvId = inv?.id || inv?._id || inv?.invoice_number;
+    if (!inv || !targetInvId) {
       toast.error("Invoice record is missing or invalid");
       return;
     }
     const fmt = (format || "pdf").toLowerCase().trim();
     const ext = fmt === "docx" ? ".docx" : ".pdf";
-    const defaultFilename = `Invoice_${(inv.invoice_number || inv.id).replace(/\s+/g, "_")}${ext}`;
+    const safeInvNum = String(inv.invoice_number || inv.invoice_no || targetInvId).replace(/\s+/g, "_");
+    const defaultFilename = `Invoice_${safeInvNum}${ext}`;
     try {
       toast.info(`Generating ${fmt.toUpperCase()}...`);
-      const res = await api.post(`/finance/invoices/${inv.id}/generate-doc`, { format: fmt });
+      const res = await api.post(`/finance/invoices/${targetInvId}/generate-doc`, { format: fmt });
       const targetFileId = res.data?.file_id || res.data?.id;
       const downloadFilename = res.data?.filename || defaultFilename;
       if (targetFileId) {
@@ -3454,7 +3462,10 @@ export default function Receivables() {
               variant="destructive"
               onClick={() => {
                 if (invoiceToDelete) {
-                  deleteInvoiceMutation.mutate(invoiceToDelete.id);
+                  const targetId = invoiceToDelete.id || invoiceToDelete._id || invoiceToDelete.invoice_number;
+                  if (targetId) {
+                    deleteInvoiceMutation.mutate(targetId);
+                  }
                 }
               }}
               disabled={deleteInvoiceMutation.isPending}

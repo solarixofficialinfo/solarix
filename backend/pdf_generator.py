@@ -1336,7 +1336,8 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
             img = PILImage.open(BytesIO(logo_bytes))
             orig_w, orig_h = img.size
             if orig_w > 0 and orig_h > 0:
-                max_w, max_h = 6.0 * cm, 2.2 * cm
+                # 2x visual size: max_h increased from 2.2 cm to 4.4 cm, max_w up to 7.5 cm
+                max_w, max_h = 7.5 * cm, 4.4 * cm
                 aspect = orig_w / float(orig_h or 1)
                 target_w = max_w
                 target_h = max_w / aspect
@@ -1352,11 +1353,11 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     hdr_left_flow = []
     if logo_d:
         hdr_left_flow.append(logo_d)
-        hdr_left_flow.append(Spacer(1, 0.1 * cm))
+        hdr_left_flow.append(Spacer(1, 0.2 * cm))
 
-    comp_title_style = ParagraphStyle('inv_comp_title', parent=styles['Normal'], fontSize=13, leading=15, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD)
-    comp_gst_style = ParagraphStyle('inv_comp_gst', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT_BOLD)
-    comp_sub_style = ParagraphStyle('inv_comp_sub', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#475569'), fontName=PDF_FONT)
+    comp_title_style = ParagraphStyle('inv_comp_title', parent=styles['Normal'], fontSize=13.5, leading=16, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD)
+    comp_gst_style = ParagraphStyle('inv_comp_gst', parent=styles['Normal'], fontSize=8.5, leading=11.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT_BOLD)
+    comp_sub_style = ParagraphStyle('inv_comp_sub', parent=styles['Normal'], fontSize=8, leading=11, textColor=colors.HexColor('#475569'), fontName=PDF_FONT)
 
     hdr_left_flow.append(Paragraph(seller["name"], comp_title_style))
     if seller["gstin"]:
@@ -1369,8 +1370,8 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     if contact_parts:
         hdr_left_flow.append(Paragraph(" | ".join(contact_parts), comp_sub_style))
 
-    inv_title_style = ParagraphStyle('inv_title', parent=styles['Normal'], fontSize=16, leading=18, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD, alignment=2)
-    hdr_right_flow: list[Any] = [Paragraph(title_text, inv_title_style), Spacer(1, 0.2 * cm)]
+    inv_title_style = ParagraphStyle('inv_title', parent=styles['Normal'], fontSize=17, leading=20, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD, alignment=2)
+    hdr_right_flow: list[Any] = [Paragraph(title_text, inv_title_style), Spacer(1, 0.25 * cm)]
 
     meta_table_data = [
         [Paragraph(f"<b>{title_text} NO.</b>", BOLD_SMALL), Paragraph(inv["number"] or "—", SMALL)],
@@ -1383,12 +1384,12 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     if inv["original_invoice_number"]:
         meta_table_data.append([Paragraph("<b>ORIGINAL INVOICE</b>", BOLD_SMALL), Paragraph(inv["original_invoice_number"], SMALL)])
 
-    meta_table = Table(meta_table_data, colWidths=[3.4 * cm, 4.2 * cm])
+    meta_table = Table(meta_table_data, colWidths=[3.3 * cm, 4.3 * cm])
     meta_table.setStyle(TableStyle([
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
         ('BACKGROUND', (0,0), (0,-1), colors.HexColor('#f8fafc')),
-        ('TOPPADDING', (0,0), (-1,-1), 3),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+        ('TOPPADDING', (0,0), (-1,-1), 3.5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3.5),
         ('LEFTPADDING', (0,0), (-1,-1), 5),
         ('RIGHTPADDING', (0,0), (-1,-1), 5),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
@@ -1404,24 +1405,34 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         ('BOTTOMPADDING', (0,0), (-1,-1), 0),
     ]))
     story.append(header_table)
-    story.append(Spacer(1, 0.35 * cm))
+    story.append(Spacer(1, 0.45 * cm))
 
     # 2. SELLER & BUYER DETAILS (2 BALANCED COLUMNS)
-    s_body = f"<b>{seller['name']}</b><br/>"
-    if seller['address']: s_body += f"{seller['address']}<br/>"
-    if seller['phone']: s_body += f"Phone: {seller['phone']}<br/>"
-    if seller['email']: s_body += f"Email: {seller['email']}<br/>"
-    if seller['gstin']: s_body += f"GSTIN: {seller['gstin']} (State Code: {seller['state_code']})"
+    s_lines = [f"<font size='9'><b>{seller['name']}</b></font>"]
+    if seller['address']: s_lines.append(seller['address'])
+    contact_parts_s = []
+    if seller['phone']: contact_parts_s.append(f"Phone: {seller['phone']}")
+    if seller['email']: contact_parts_s.append(f"Email: {seller['email']}")
+    if contact_parts_s: s_lines.append(" | ".join(contact_parts_s))
+    if seller['gstin']:
+        st_code = f" (State Code: {seller['state_code']})" if seller.get('state_code') else ""
+        s_lines.append(f"<b>GSTIN:</b> {seller['gstin']}{st_code}")
+    s_body = "<br/>".join(s_lines)
 
-    b_body = f"<b>{buyer['name']}</b><br/>"
-    if buyer['address'] and buyer['address'] != "—": b_body += f"{buyer['address']}<br/>"
-    if buyer['phone'] and buyer['phone'] != "—": b_body += f"Phone: {buyer['phone']}<br/>"
-    if buyer['email'] and buyer['email'] != "—": b_body += f"Email: {buyer['email']}<br/>"
-    if buyer['gstin'] and buyer['gstin'] != "—": b_body += f"GSTIN: {buyer['gstin']}<br/>"
-    if buyer['sol_id'] and buyer['sol_id'] != "—": b_body += f"SOL ID: {buyer['sol_id']}"
+    b_lines = [f"<font size='9'><b>{buyer['name']}</b></font>"]
+    if buyer['address'] and buyer['address'] != "—": b_lines.append(buyer['address'])
+    contact_parts_b = []
+    if buyer['phone'] and buyer['phone'] != "—": contact_parts_b.append(f"Phone: {buyer['phone']}")
+    if buyer['email'] and buyer['email'] != "—": contact_parts_b.append(f"Email: {buyer['email']}")
+    if contact_parts_b: b_lines.append(" | ".join(contact_parts_b))
+    id_parts_b = []
+    if buyer['gstin'] and buyer['gstin'] != "—": id_parts_b.append(f"<b>GSTIN:</b> {buyer['gstin']}")
+    if buyer.get('sol_id') and buyer['sol_id'] != "—": id_parts_b.append(f"<b>SOL ID:</b> {buyer['sol_id']}")
+    if id_parts_b: b_lines.append(" | ".join(id_parts_b))
+    b_body = "<br/>".join(b_lines)
 
-    party_header_style = ParagraphStyle('inv_p_hdr', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#ffffff'), fontName=PDF_FONT_BOLD)
-    party_body_style = ParagraphStyle('inv_p_bdy', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT)
+    party_header_style = ParagraphStyle('inv_p_hdr', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#ffffff'), fontName=PDF_FONT_BOLD)
+    party_body_style = ParagraphStyle('inv_p_bdy', parent=styles['Normal'], fontSize=8, leading=11.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT)
 
     party_table_data = [
         [Paragraph("SUPPLIER / SELLER DETAILS", party_header_style), Paragraph("BUYER / BILL TO", party_header_style)],
@@ -1432,17 +1443,17 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e3a8a')),
         ('BACKGROUND', (0,1), (-1,1), colors.HexColor('#ffffff')),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-        ('LEFTPADDING', (0,0), (-1,-1), 6),
-        ('RIGHTPADDING', (0,0), (-1,-1), 6),
+        ('TOPPADDING', (0,0), (-1,-1), 4.5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4.5),
+        ('LEFTPADDING', (0,0), (-1,-1), 7),
+        ('RIGHTPADDING', (0,0), (-1,-1), 7),
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
     ]))
     story.append(party_table)
-    story.append(Spacer(1, 0.3 * cm))
+    story.append(Spacer(1, 0.40 * cm))
 
-    # 3. LINE ITEMS TABLE (10 COLUMNS)
-    th_style = ParagraphStyle('inv_th', parent=styles['Normal'], fontSize=7.5, leading=9.5, textColor=colors.HexColor('#ffffff'), fontName=PDF_FONT_BOLD)
+    # 3. LINE ITEMS TABLE (10 COLUMNS WITH EXPANDED DESCRIPTION)
+    th_style = ParagraphStyle('inv_th', parent=styles['Normal'], fontSize=6.8, leading=8.5, textColor=colors.HexColor('#ffffff'), fontName=PDF_FONT_BOLD)
     th_c = ParagraphStyle('inv_th_c', parent=th_style, alignment=1)
     th_r = ParagraphStyle('inv_th_r', parent=th_style, alignment=2)
 
@@ -1460,7 +1471,7 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     ]
     item_rows = [item_headers]
 
-    tb_style = ParagraphStyle('inv_tb', parent=styles['Normal'], fontSize=7.5, leading=9.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT)
+    tb_style = ParagraphStyle('inv_tb', parent=styles['Normal'], fontSize=7.2, leading=9.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT)
     tb_c = ParagraphStyle('inv_tb_c', parent=tb_style, alignment=1)
     tb_r = ParagraphStyle('inv_tb_r', parent=tb_style, alignment=2)
 
@@ -1480,36 +1491,49 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
 
     items_table = Table(
         item_rows,
-        colWidths=[0.9 * cm, 5.3 * cm, 1.5 * cm, 1.4 * cm, 1.1 * cm, 1.1 * cm, 1.8 * cm, 1.9 * cm, 1.2 * cm, 2.4 * cm],
+        colWidths=[0.9 * cm, 5.6 * cm, 1.4 * cm, 1.4 * cm, 0.9 * cm, 0.9 * cm, 1.9 * cm, 2.0 * cm, 1.1 * cm, 2.5 * cm],
         repeatRows=1
     )
     items_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1e3a8a')),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
-        ('TOPPADDING', (0,0), (-1,-1), 3.5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 3.5),
-        ('LEFTPADDING', (0,0), (-1,-1), 3),
-        ('RIGHTPADDING', (0,0), (-1,-1), 3),
+        ('TOPPADDING', (0,0), (-1,-1), 4.5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4.5),
+        ('LEFTPADDING', (0,0), (-1,-1), 2.5),
+        ('RIGHTPADDING', (0,0), (-1,-1), 2.5),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
     ]))
     story.append(items_table)
-    story.append(Spacer(1, 0.3 * cm))
+    story.append(Spacer(1, 0.45 * cm))
 
     # 4. BOTTOM SECTION (BANK & TERMS LEFT, TOTALS RIGHT)
-    left_notes_text = ""
-    if seller["bank_name"] and seller["bank_account"]:
-        left_notes_text += f"<b>BANK DETAILS FOR PAYMENT</b><br/>Bank: {seller['bank_name']}<br/>A/C No: {seller['bank_account']}<br/>IFSC: {seller['ifsc']}<br/><br/>"
-    if notes:
-        left_notes_text += f"<b>NOTES & INSTRUCTION</b><br/>{notes.replace(chr(10), '<br/>')}<br/><br/>"
-    if terms:
-        left_notes_text += f"<b>TERMS & CONDITIONS</b><br/>{terms.replace(chr(10), '<br/>')}"
+    left_notes_parts = []
+    if seller.get("bank_name") and seller.get("bank_account"):
+        b_info = [
+            "<b>BANK DETAILS FOR PAYMENT</b>",
+            f"Bank: {seller['bank_name']}",
+            f"A/C No: {seller['bank_account']}",
+            f"IFSC: {seller['ifsc']}"
+        ]
+        if seller.get("bank_branch"):
+            b_info.append(f"Branch: {seller['bank_branch']}")
+        left_notes_parts.append("<br/>".join(b_info))
 
-    notes_p = Paragraph(left_notes_text or "Thank you for your business!", ParagraphStyle('inv_notes_p', parent=styles['Normal'], fontSize=8, leading=10.5, textColor=colors.HexColor('#1e293b'), fontName=PDF_FONT))
+    clean_notes = (notes or "").strip()
+    if clean_notes:
+        left_notes_parts.append(f"<b>NOTES & INSTRUCTION</b><br/>{clean_notes.replace(chr(10), '<br/>')}")
+
+    clean_terms = (terms or "").strip()
+    if clean_terms:
+        left_notes_parts.append(f"<b>TERMS & CONDITIONS</b><br/>{clean_terms.replace(chr(10), '<br/>')}")
+
+    left_notes_html = "<br/><br/>".join(left_notes_parts) if left_notes_parts else "Thank you for your business!"
+    notes_p = Paragraph(left_notes_html, ParagraphStyle('inv_notes_p', parent=styles['Normal'], fontSize=7.5, leading=10.5, textColor=colors.HexColor('#1e293b'), fontName=PDF_FONT))
 
     tot_lbl = ParagraphStyle('inv_tot_lbl', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#334155'), fontName=PDF_FONT_BOLD)
     tot_val = ParagraphStyle('inv_tot_v', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT, alignment=2)
     tot_grand_lbl = ParagraphStyle('inv_tot_g_lbl', parent=styles['Normal'], fontSize=9, leading=11, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD)
-    tot_grand_val = ParagraphStyle('inv_tot_g_v', parent=styles['Normal'], fontSize=9.5, leading=11, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD, alignment=2)
+    tot_grand_val = ParagraphStyle('inv_tot_g_v', parent=styles['Normal'], fontSize=10, leading=12, textColor=colors.HexColor('#1e3a8a'), fontName=PDF_FONT_BOLD, alignment=2)
 
     totals_rows = [
         [Paragraph("SUBTOTAL", tot_lbl), Paragraph(_format_currency(fin["subtotal"]), tot_val)]
@@ -1531,7 +1555,6 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
 
     totals_rows.append([Paragraph("GRAND TOTAL", tot_grand_lbl), Paragraph(_format_currency(fin["grand_total"]), tot_grand_val)])
 
-    # If payments are received or invoice has payment records, show Received & Outstanding
     if fin.get("paid_amount", 0) > 0 or fin.get("received_amount", 0) > 0:
         actual_paid = float(fin.get("paid_amount") or fin.get("received_amount") or 0.0)
         actual_out = float(fin.get("outstanding_amount") if fin.get("outstanding_amount") is not None else max(0.0, fin["grand_total"] - actual_paid))
@@ -1543,17 +1566,17 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         totals_rows.append([Paragraph("RECEIVED AMOUNT", tot_rec_lbl), Paragraph(_format_currency(actual_paid), tot_rec_val)])
         totals_rows.append([Paragraph("OUTSTANDING BALANCE", tot_out_lbl), Paragraph(_format_currency(actual_out), tot_out_val)])
 
-    totals_table = Table(totals_rows, colWidths=[4.4 * cm, 3.9 * cm])
+    totals_table = Table(totals_rows, colWidths=[4.4 * cm, 4.0 * cm])
     totals_table.setStyle(TableStyle([
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#cbd5e1')),
         ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor('#eff6ff')),
-        ('TOPPADDING', (0,0), (-1,-1), 3),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-        ('LEFTPADDING', (0,0), (-1,-1), 4),
-        ('RIGHTPADDING', (0,0), (-1,-1), 4),
+        ('TOPPADDING', (0,0), (-1,-1), 3.5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3.5),
+        ('LEFTPADDING', (0,0), (-1,-1), 5),
+        ('RIGHTPADDING', (0,0), (-1,-1), 5),
     ]))
 
-    bottom_table = Table([[notes_p, totals_table]], colWidths=[10.3 * cm, 8.3 * cm])
+    bottom_table = Table([[notes_p, totals_table]], colWidths=[10.2 * cm, 8.4 * cm])
     bottom_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
         ('LEFTPADDING', (0,0), (-1,-1), 0),
@@ -1562,15 +1585,15 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
         ('BOTTOMPADDING', (0,0), (-1,-1), 0),
     ]))
     story.append(bottom_table)
-    story.append(Spacer(1, 0.3 * cm))
+    story.append(Spacer(1, 0.40 * cm))
 
     # 5. AMOUNT IN WORDS & SIGNATURE BLOCK
-    words_p = Paragraph(f"<b>Amount in Words:</b> {_amount_to_words(fin['grand_total'])}", ParagraphStyle('inv_words', parent=styles['Normal'], fontSize=8.5, leading=11, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT))
+    words_p = Paragraph(f"<b>Amount in Words:</b> {_amount_to_words(fin['grand_total'])}", ParagraphStyle('inv_words', parent=styles['Normal'], fontSize=8.5, leading=11.5, textColor=colors.HexColor('#0f172a'), fontName=PDF_FONT))
     story.append(words_p)
-    story.append(Spacer(1, 0.35 * cm))
+    story.append(Spacer(1, 0.50 * cm))
 
-    sig_l = Paragraph("<b>Customer Signature</b><br/><br/><br/>_______________________", ParagraphStyle('sig_l', parent=styles['Normal'], fontSize=8.5, alignment=0, fontName=PDF_FONT))
-    sig_r = Paragraph(f"<b>For {seller['name']}</b><br/><br/><br/>Authorized Signatory", ParagraphStyle('sig_r', parent=styles['Normal'], fontSize=8.5, alignment=2, fontName=PDF_FONT))
+    sig_l = Paragraph("<b>Customer Signature</b><br/><br/><br/><br/>_______________________", ParagraphStyle('sig_l', parent=styles['Normal'], fontSize=8.5, leading=11, alignment=0, fontName=PDF_FONT))
+    sig_r = Paragraph(f"<b>For {seller['name']}</b><br/><br/><br/><br/>Authorized Signatory", ParagraphStyle('sig_r', parent=styles['Normal'], fontSize=8.5, leading=11, alignment=2, fontName=PDF_FONT))
     sig_table = Table([[sig_l, sig_r]], colWidths=[9.3 * cm, 9.3 * cm])
     sig_table.setStyle(TableStyle([
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
@@ -1645,11 +1668,13 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
             img = _PILImage.open(BytesIO(logo_bytes))
             orig_w, orig_h = img.size
             if orig_w > 0 and orig_h > 0:
-                aspect = orig_h / float(orig_w)
-                target_w_in = 2.2
+                aspect = orig_h / float(orig_w or 1)
+                max_w_in = 2.95
+                max_h_in = 1.73
+                target_w_in = max_w_in
                 target_h_in = target_w_in * aspect
-                if target_h_in > 0.86:
-                    target_h_in = 0.86
+                if target_h_in > max_h_in:
+                    target_h_in = max_h_in
                     target_w_in = target_h_in / aspect
                 res_buf = BytesIO()
                 img.save(res_buf, format="PNG")
@@ -1662,7 +1687,7 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     p_comp = cell_l.add_paragraph() if logo_bytes else cell_l.paragraphs[0]
     r_comp = p_comp.add_run(seller["name"])
     r_comp.bold = True
-    r_comp.font.size = Pt(13)
+    r_comp.font.size = Pt(13.5)
     r_comp.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
 
     if seller["gstin"]:
@@ -1691,7 +1716,7 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     p_title.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     r_title = p_title.add_run(f"{title_text}\n")
     r_title.bold = True
-    r_title.font.size = Pt(15)
+    r_title.font.size = Pt(17)
     r_title.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
 
     meta_items = [
@@ -1707,8 +1732,8 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     for r_idx, (m_lbl, m_val) in enumerate(meta_items):
         c0 = meta_tbl.rows[r_idx].cells[0]
         c1 = meta_tbl.rows[r_idx].cells[1]
-        c0.width = _emu(3.4 * 360000)
-        c1.width = _emu(4.2 * 360000)
+        c0.width = _emu(3.3 * 360000)
+        c1.width = _emu(4.3 * 360000)
         _docx_set_cell_bg(c0, "f8fafc")
         
         p0 = c0.paragraphs[0]
@@ -1740,7 +1765,7 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
         for p in c.paragraphs:
             for r in p.runs:
                 r.bold = True
-                r.font.size = Pt(9)
+                r.font.size = Pt(8.5)
                 r.font.color.rgb = RGBColor(0xff, 0xff, 0xff)
 
     c_sb = party_tbl.rows[1].cells[0]
@@ -1754,9 +1779,13 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     rs_name.font.size = Pt(9)
     s_details = []
     if seller['address']: s_details.append(seller['address'])
-    if seller['phone']: s_details.append(f"Phone: {seller['phone']}")
-    if seller['email']: s_details.append(f"Email: {seller['email']}")
-    if seller['gstin']: s_details.append(f"GSTIN: {seller['gstin']} (State Code: {seller['state_code']})")
+    contact_parts_s = []
+    if seller['phone']: contact_parts_s.append(f"Phone: {seller['phone']}")
+    if seller['email']: contact_parts_s.append(f"Email: {seller['email']}")
+    if contact_parts_s: s_details.append(" | ".join(contact_parts_s))
+    if seller['gstin']:
+        st_code = f" (State Code: {seller['state_code']})" if seller.get('state_code') else ""
+        s_details.append(f"GSTIN: {seller['gstin']}{st_code}")
     rs_body = p_s.add_run("\n".join(s_details))
     rs_body.font.size = Pt(8)
 
@@ -1766,17 +1795,21 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     rb_name.font.size = Pt(9)
     b_details = []
     if buyer['address'] and buyer['address'] != "—": b_details.append(buyer['address'])
-    if buyer['phone'] and buyer['phone'] != "—": b_details.append(f"Phone: {buyer['phone']}")
-    if buyer['email'] and buyer['email'] != "—": b_details.append(f"Email: {buyer['email']}")
-    if buyer['gstin'] and buyer['gstin'] != "—": b_details.append(f"GSTIN: {buyer['gstin']}")
-    if buyer['sol_id'] and buyer['sol_id'] != "—": b_details.append(f"SOL ID: {buyer['sol_id']}")
+    contact_parts_b = []
+    if buyer['phone'] and buyer['phone'] != "—": contact_parts_b.append(f"Phone: {buyer['phone']}")
+    if buyer['email'] and buyer['email'] != "—": contact_parts_b.append(f"Email: {buyer['email']}")
+    if contact_parts_b: b_details.append(" | ".join(contact_parts_b))
+    id_parts_b = []
+    if buyer['gstin'] and buyer['gstin'] != "—": id_parts_b.append(f"GSTIN: {buyer['gstin']}")
+    if buyer.get('sol_id') and buyer['sol_id'] != "—": id_parts_b.append(f"SOL ID: {buyer['sol_id']}")
+    if id_parts_b: b_details.append(" | ".join(id_parts_b))
     rb_body = p_b.add_run("\n".join(b_details))
     rb_body.font.size = Pt(8)
 
     doc.add_paragraph()
 
     # 3. LINE ITEMS TABLE (10 COLUMNS)
-    col_widths = [0.9, 5.3, 1.5, 1.4, 1.1, 1.1, 1.8, 1.9, 1.2, 2.4]
+    col_widths = [0.9, 5.6, 1.4, 1.4, 0.9, 0.9, 1.9, 2.0, 1.1, 2.5]
     items_tbl = doc.add_table(rows=len(items) + 1, cols=10)
     items_tbl.style = 'Table Grid'
 
@@ -1793,7 +1826,7 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             for r in p.runs:
                 r.bold = True
-                r.font.size = Pt(7.5)
+                r.font.size = Pt(7.2)
                 r.font.color.rgb = RGBColor(0xff, 0xff, 0xff)
 
     for idx, item in enumerate(items, 1):
@@ -1830,18 +1863,31 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
 
     c_n = bot_tbl.rows[0].cells[0]
     c_t = bot_tbl.rows[0].cells[1]
-    c_n.width = _emu(10.3 * 360000)
-    c_t.width = _emu(8.3 * 360000)
+    c_n.width = _emu(10.2 * 360000)
+    c_t.width = _emu(8.4 * 360000)
 
     p_n = c_n.paragraphs[0]
-    n_text = ""
-    if seller["bank_name"] and seller["bank_account"]:
-        n_text += f"BANK DETAILS FOR PAYMENT\nBank: {seller['bank_name']}\nA/C No: {seller['bank_account']}\nIFSC: {seller['ifsc']}\n\n"
-    if notes:
-        n_text += f"NOTES & INSTRUCTION\n{notes}\n\n"
-    if terms:
-        n_text += f"TERMS & CONDITIONS\n{terms}"
-    rn_bdy = p_n.add_run(n_text or "Thank you for your business!")
+    left_notes_parts = []
+    if seller.get("bank_name") and seller.get("bank_account"):
+        b_info = [
+            "BANK DETAILS FOR PAYMENT",
+            f"Bank: {seller['bank_name']}",
+            f"A/C No: {seller['bank_account']}",
+            f"IFSC: {seller['ifsc']}"
+        ]
+        if seller.get("bank_branch"):
+            b_info.append(f"Branch: {seller['bank_branch']}")
+        left_notes_parts.append("\n".join(b_info))
+
+    clean_notes = (notes or "").strip()
+    if clean_notes:
+        left_notes_parts.append(f"NOTES & INSTRUCTION\n{clean_notes}")
+
+    clean_terms = (terms or "").strip()
+    if clean_terms:
+        left_notes_parts.append(f"TERMS & CONDITIONS\n{clean_terms}")
+
+    rn_bdy = p_n.add_run("\n\n".join(left_notes_parts) if left_notes_parts else "Thank you for your business!")
     rn_bdy.font.size = Pt(7.5)
 
     totals_list = [
@@ -1876,7 +1922,7 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
         t_c0 = tot_sub_tbl.rows[r_idx].cells[0]
         t_c1 = tot_sub_tbl.rows[r_idx].cells[1]
         t_c0.width = _emu(4.4 * 360000)
-        t_c1.width = _emu(3.9 * 360000)
+        t_c1.width = _emu(4.0 * 360000)
 
         is_grand = (t_lbl == "GRAND TOTAL")
         is_rec = (t_lbl == "RECEIVED AMOUNT")
@@ -1894,7 +1940,7 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
         tp0 = t_c0.paragraphs[0]
         tr0 = tp0.add_run(t_lbl)
         tr0.bold = True
-        tr0.font.size = Pt(8.5 if (is_grand or is_rec or is_out) else 7.5)
+        tr0.font.size = Pt(9.0 if is_grand else (8.5 if (is_rec or is_out) else 7.5))
         if is_grand: tr0.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
         elif is_rec: tr0.font.color.rgb = RGBColor(0x05, 0x96, 0x69)
         elif is_out: tr0.font.color.rgb = RGBColor(0xdc, 0x26, 0x26)
@@ -1903,7 +1949,7 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
         tp1.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         tr1 = tp1.add_run(t_val)
         tr1.bold = (is_grand or is_rec or is_out)
-        tr1.font.size = Pt(9 if is_grand else (8.5 if (is_rec or is_out) else 7.5))
+        tr1.font.size = Pt(10.0 if is_grand else (8.5 if (is_rec or is_out) else 7.5))
         if is_grand: tr1.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
         elif is_rec: tr1.font.color.rgb = RGBColor(0x05, 0x96, 0x69)
         elif is_out: tr1.font.color.rgb = RGBColor(0xdc, 0x26, 0x26)
@@ -1929,13 +1975,13 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     sc1.width = _emu(9.3 * 360000)
 
     sp0 = sc0.paragraphs[0]
-    sr0 = sp0.add_run("Customer Signature\n\n\n_______________________")
+    sr0 = sp0.add_run("Customer Signature\n\n\n\n_______________________")
     sr0.bold = True
     sr0.font.size = Pt(8.5)
 
     sp1 = sc1.paragraphs[0]
     sp1.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    sr1 = sp1.add_run(f"For {seller['name']}\n\n\nAuthorized Signatory")
+    sr1 = sp1.add_run(f"For {seller['name']}\n\n\n\nAuthorized Signatory")
     sr1.bold = True
     sr1.font.size = Pt(8.5)
 
