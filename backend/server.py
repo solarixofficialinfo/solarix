@@ -13614,6 +13614,35 @@ async def export_product_master_pdf_endpoint(request: Request, user=Depends(requ
 
 # ─── LEAD MANAGEMENT ENDPOINTS ───────────────────────────────────────────────
 
+def can_user_view_team_leads(user: Dict[str, Any]) -> bool:
+    """Check whether user has permission to view all team leads."""
+    if not isinstance(user, dict):
+        return False
+    if is_super_admin_user(user) or is_owner(user) or user.get("role") in ("Super Admin", "Admin", "Owner"):
+        return True
+    return has_team_permission(user, "leads", "approve")
+
+def can_user_assign_leads(user: Dict[str, Any]) -> bool:
+    """Check whether user has permission to assign or reassign leads to another team member."""
+    if not isinstance(user, dict):
+        return False
+    if is_super_admin_user(user) or is_owner(user) or user.get("role") in ("Super Admin", "Admin", "Owner"):
+        return True
+    return has_team_permission(user, "leads", "approve")
+
+def can_user_edit_lead(user: Dict[str, Any], lead: Dict[str, Any]) -> bool:
+    """
+    Check whether user can edit this specific lead:
+    1. User must have general leads.edit permission.
+    2. AND either user has team oversight (Admin/Owner/leads.approve) OR the lead is assigned to them.
+    """
+    if not has_team_permission(user, "leads", "edit"):
+        return False
+    if can_user_view_team_leads(user):
+        return True
+    return str(lead.get("assigned_to") or "") == str(user.get("id") or "")
+
+
 @api_router.get("/leads")
 async def list_leads(
     stage: Optional[str] = None,
@@ -13630,10 +13659,15 @@ async def list_leads(
     cid = user["company_id"]
     query = {"company_id": cid}
 
-    if scope == "mine":
+    user_can_view_team = can_user_view_team_leads(user)
+
+    if not user_can_view_team or scope == "mine":
+        # Force to current user's assigned leads
         query["assigned_to"] = user["id"]
-    elif assigned_to and assigned_to != "all":
-        query["assigned_to"] = assigned_to
+    else:
+        # User has team-wide view access and scope is "team" (or not "mine")
+        if assigned_to and assigned_to != "all":
+            query["assigned_to"] = assigned_to
 
     if stage and stage != "all":
         query["stage"] = {"$regex": f"^{re.escape(stage)}$", "$options": "i"}
@@ -13692,8 +13726,10 @@ async def list_leads(
 @api_router.get("/leads/stats")
 async def get_lead_stats(scope: Optional[str] = None, user=Depends(require_perm("leads", "view"))):
     cid = user["company_id"]
+    user_can_view_team = can_user_view_team_leads(user)
+
     query = {"company_id": cid}
-    if scope == "mine":
+    if not user_can_view_team or scope == "mine":
         query["assigned_to"] = user["id"]
 
     all_leads = await db.leads.find(
@@ -13719,6 +13755,9 @@ async def get_lead_stats(scope: Optional[str] = None, user=Depends(require_perm(
            (l.get("next_followup_at") and str(l.get("next_followup_at"))[:10] < today_str and l.get("next_followup_at") != "")
     )
 
+    my_leads_total = await db.leads.count_documents({"company_id": cid, "assigned_to": user["id"]})
+    team_leads_total = await db.leads.count_documents({"company_id": cid}) if user_can_view_team else my_leads_total
+
     return {
         "total_leads": total_leads,
         "new_leads": new_leads,
@@ -13727,6 +13766,9 @@ async def get_lead_stats(scope: Optional[str] = None, user=Depends(require_perm(
         "lost": lost,
         "followups_due": followups_due,
         "overdue_followups": overdue_followups,
+        "my_leads_total": my_leads_total,
+        "team_leads_total": team_leads_total,
+        "can_view_team": user_can_view_team,
     }
 
 
@@ -13735,7 +13777,8 @@ async def list_followups(filter_type: Optional[str] = "today", scope: Optional[s
     cid = user["company_id"]
     query = {"company_id": cid, "status": "pending"}
 
-    if scope == "mine":
+    user_can_view_team = can_user_view_team_leads(user)
+    if not user_can_view_team or scope == "mine":
         query["assigned_to"] = user["id"]
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -13819,12 +13862,32 @@ async def create_lead(data: LeadIn, user=Depends(require_perm("leads", "create")
     stg = data.stage or "New Lead"
     f_date = data.followup_date or (data.next_followup_at[:10] if data.next_followup_at else None)
 
+    # Assignment logic:
+    # Only users with assignment authority can assign to other team members.
+    # Otherwise, automatically assign to current user.
+    can_assign = can_user_assign_leads(user)
+    if can_assign and data.assigned_to and data.assigned_to != user["id"]:
+        assigned_to = data.assigned_to
+        assigned_to_name = data.assigned_to_name
+        if not assigned_to_name:
+            emp = await db.users.find_one({"id": assigned_to, "company_id": cid}, {"_id": 0, "name": 1})
+            assigned_to_name = (emp or {}).get("name") or "Team Member"
+    else:
+        assigned_to = user["id"]
+        assigned_to_name = user["name"]
+
+    now_time = now_iso()
     doc = {
         "id": lead_id,
         "lead_no": lead_no,
         "company_id": cid,
         "created_by": user["id"],
         "created_by_name": user["name"],
+        "assigned_to": assigned_to,
+        "assigned_to_name": assigned_to_name,
+        "assigned_at": now_time,
+        "assigned_by": user["id"],
+        "assigned_by_name": user["name"],
         "name": data.name.strip(),
         "mobile": data.mobile.strip(),
         "alt_mobile": (data.alt_mobile or "").strip(),
@@ -13836,8 +13899,6 @@ async def create_lead(data: LeadIn, user=Depends(require_perm("leads", "create")
         "offer_price": p_price,
         "consumer_type": (data.consumer_type or "").strip(),
         "source": data.source or "Other",
-        "assigned_to": data.assigned_to or user["id"],
-        "assigned_to_name": data.assigned_to_name or user["name"],
         "stage": stg,
         "status": data.status or ("Confirmed / Onboarding" if stg == "Confirmed" else "New Lead"),
         "quotation_no": (data.quotation_no or "").strip(),
@@ -13855,11 +13916,11 @@ async def create_lead(data: LeadIn, user=Depends(require_perm("leads", "create")
         "converted_client_id": "",
         "converted_sol_id": "",
         "converted_at": "",
-        "confirmed_at": now_iso() if stg == "Confirmed" else "",
+        "confirmed_at": now_time if stg == "Confirmed" else "",
         "confirmed_by": user["id"] if stg == "Confirmed" else "",
         "confirmed_by_name": user["name"] if stg == "Confirmed" else "",
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
+        "created_at": now_time,
+        "updated_at": now_time,
     }
 
     await db.leads.insert_one(doc)
@@ -13889,6 +13950,9 @@ async def get_lead_detail(lead_id: str, user=Depends(require_perm("leads", "view
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
+    if not can_user_view_team_leads(user) and str(lead.get("assigned_to") or "") != str(user.get("id") or ""):
+        raise HTTPException(status_code=403, detail="Access denied: you can only view leads assigned to you.")
+
     calls = await db.lead_call_activities.find({"lead_id": lead_id, "company_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     followups = await db.lead_followups.find({"lead_id": lead_id, "company_id": cid}, {"_id": 0}).sort("followup_at", -1).to_list(1000)
 
@@ -13911,6 +13975,10 @@ async def update_lead(lead_id: str, data: LeadIn, user=Depends(require_perm("lea
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
+    # Record-level authorization check:
+    if not can_user_edit_lead(user, lead):
+        raise HTTPException(status_code=403, detail="Unauthorized: you can only edit leads assigned to you.")
+
     sys_kw = float(data.system_kw or data.estimated_kw or lead.get("system_kw") or lead.get("estimated_kw") or 0.0)
     p_price = float(data.proposed_price or data.offer_price or lead.get("proposed_price") or lead.get("offer_price") or 0.0)
     stg = data.stage or lead.get("stage", "New Lead")
@@ -13918,6 +13986,26 @@ async def update_lead(lead_id: str, data: LeadIn, user=Depends(require_perm("lea
         f_date = data.followup_date if data.followup_date not in ("", "none", "None", None) else None
     else:
         f_date = lead.get("followup_date")
+
+    # Check assignment changes
+    assigned_to = lead.get("assigned_to", user["id"])
+    assigned_to_name = lead.get("assigned_to_name", user["name"])
+    assigned_at = lead.get("assigned_at")
+    assigned_by = lead.get("assigned_by")
+    assigned_by_name = lead.get("assigned_by_name")
+
+    if data.assigned_to and data.assigned_to != assigned_to:
+        if not can_user_assign_leads(user):
+            raise HTTPException(status_code=403, detail="Missing permission: you cannot reassign leads to another team member.")
+        assigned_to = data.assigned_to
+        assigned_to_name = data.assigned_to_name
+        if not assigned_to_name:
+            emp = await db.users.find_one({"id": assigned_to, "company_id": cid}, {"_id": 0, "name": 1})
+            assigned_to_name = (emp or {}).get("name") or "Team Member"
+        assigned_at = now_iso()
+        assigned_by = user["id"]
+        assigned_by_name = user["name"]
+        await log_activity(cid, user["id"], user["name"], "Reassigned Lead", f"{lead['name']} to {assigned_to_name}")
 
     patch = {
         "name": data.name.strip(),
@@ -13931,8 +14019,11 @@ async def update_lead(lead_id: str, data: LeadIn, user=Depends(require_perm("lea
         "offer_price": p_price,
         "consumer_type": (data.consumer_type or "").strip(),
         "source": data.source or lead.get("source", "Other"),
-        "assigned_to": data.assigned_to or lead.get("assigned_to", user["id"]),
-        "assigned_to_name": data.assigned_to_name or lead.get("assigned_to_name", user["name"]),
+        "assigned_to": assigned_to,
+        "assigned_to_name": assigned_to_name,
+        "assigned_at": assigned_at,
+        "assigned_by": assigned_by,
+        "assigned_by_name": assigned_by_name,
         "stage": stg,
         "status": data.status or ("Confirmed / Onboarding" if stg == "Confirmed" else lead.get("status", "Active")),
         "quotation_no": (data.quotation_no or "").strip(),
@@ -13965,6 +14056,13 @@ async def delete_lead(lead_id: str, user=Depends(require_perm("leads", "delete")
     ent = await get_company_entitlement(cid, db=db)
     if not ent.get("can_write", True) and not is_super_admin_user(user):
         raise HTTPException(status_code=403, detail="SUBSCRIPTION_EXPIRED: Upgrade plan to delete leads.")
+
+    lead = await db.leads.find_one({"id": lead_id, "company_id": cid}, {"_id": 0})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    if not can_user_view_team_leads(user) and str(lead.get("assigned_to") or "") != str(user.get("id") or ""):
+        raise HTTPException(status_code=403, detail="Access denied: you can only delete leads assigned to you.")
 
     await db.leads.delete_one({"id": lead_id, "company_id": cid})
     await db.lead_call_activities.delete_many({"lead_id": lead_id, "company_id": cid})

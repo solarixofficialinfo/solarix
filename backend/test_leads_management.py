@@ -445,9 +445,218 @@ async def run_leads_verification_suite():
     print("✓ Test 9 PASSED: Expired subscription write-locks leads operations while preserving read access")
     passed_count += 1
 
+    # Restore subscription for subsequent ownership/assignment tests
+    db.companies.docs[comp_id]["subscription_status"] = "active"
+    _cache_invalidate_company(comp_id)
+
+    # -------------------------------------------------------------------------
+    # TEST 10: 3 Team Members Scenario (User A, User B, User C) & Admin Scope
+    # -------------------------------------------------------------------------
+    user_a = {
+        "id": "usr_a_101",
+        "name": "User A (Sales)",
+        "email": "usera@solarix.com",
+        "role": "Staff",
+        "company_id": comp_id,
+        "permissions": {
+            "leads": {"view": True, "create": True, "edit": True, "delete": True, "approve": False}
+        }
+    }
+    user_b = {
+        "id": "usr_b_102",
+        "name": "User B (Sales)",
+        "email": "userb@solarix.com",
+        "role": "Staff",
+        "company_id": comp_id,
+        "permissions": {
+            "leads": {"view": True, "create": True, "edit": True, "delete": True, "approve": False}
+        }
+    }
+    user_c = {
+        "id": "usr_c_103",
+        "name": "User C (Sales)",
+        "email": "userc@solarix.com",
+        "role": "Staff",
+        "company_id": comp_id,
+        "permissions": {
+            "leads": {"view": True, "create": True, "edit": True, "delete": True, "approve": False}
+        }
+    }
+    for u in [user_a, user_b, user_c]:
+        db.users.docs[u["id"]] = u
+
+    # User A creates Lead 1 (tries to pass assigned_to=User B, but lacking assignment perm, auto-assigns to User A)
+    l1_data = LeadIn(
+        name="Lead 1 - User A Customer",
+        mobile="9811111111",
+        assigned_to=user_b["id"], # Staff cannot assign to others
+        system_kw=5.0,
+        proposed_price=250000.0,
+    )
+    l1 = await create_lead(l1_data, user=user_a)
+    assert l1["created_by"] == user_a["id"]
+    assert l1["assigned_to"] == user_a["id"], "Test 10 failed: unprivileged user was able to assign to another worker"
+    assert l1["assigned_at"], "Test 10 failed: missing assigned_at"
+
+    # User B creates Lead 2
+    l2_data = LeadIn(
+        name="Lead 2 - User B Customer",
+        mobile="9822222222",
+        system_kw=7.5,
+        proposed_price=380000.0,
+    )
+    l2 = await create_lead(l2_data, user=user_b)
+    assert l2["created_by"] == user_b["id"]
+    assert l2["assigned_to"] == user_b["id"]
+
+    # User C creates Lead 3
+    l3_data = LeadIn(
+        name="Lead 3 - User C Customer",
+        mobile="9833333333",
+        system_kw=10.0,
+        proposed_price=500000.0,
+    )
+    l3 = await create_lead(l3_data, user=user_c)
+    assert l3["created_by"] == user_c["id"]
+    assert l3["assigned_to"] == user_c["id"]
+
+    # Verify User A sees ONLY Lead 1 in My Leads
+    res_a_mine = await list_leads(scope="mine", user=user_a)
+    assert len(res_a_mine["items"]) == 1 and res_a_mine["items"][0]["id"] == l1["id"], "Test 10 failed: User A did not see only Lead 1"
+
+    # Verify User A cannot bypass via scope="team"
+    res_a_team = await list_leads(scope="team", user=user_a)
+    assert len(res_a_team["items"]) == 1 and res_a_team["items"][0]["id"] == l1["id"], "Test 10 failed: User A bypassed scope via team"
+
+    # Verify User A cannot bypass via assigned_to query parameter
+    res_a_tamper = await list_leads(assigned_to=user_b["id"], user=user_a)
+    assert len(res_a_tamper["items"]) == 1 and res_a_tamper["items"][0]["id"] == l1["id"], "Test 10 failed: User A bypassed via assigned_to"
+
+    # Verify User B sees ONLY Lead 2
+    res_b_mine = await list_leads(scope="mine", user=user_b)
+    assert len(res_b_mine["items"]) == 1 and res_b_mine["items"][0]["id"] == l2["id"], "Test 10 failed: User B did not see only Lead 2"
+
+    # Verify User C sees ONLY Lead 3
+    res_c_mine = await list_leads(scope="mine", user=user_c)
+    assert len(res_c_mine["items"]) == 1 and res_c_mine["items"][0]["id"] == l3["id"], "Test 10 failed: User C did not see only Lead 3"
+
+    # Verify Admin My Leads shows ONLY leads assigned to Admin (0 here)
+    res_admin_mine = await list_leads(scope="mine", user=admin_user)
+    assert len(res_admin_mine["items"]) == 0, "Test 10 failed: Admin My Leads should only show leads assigned to Admin"
+
+    # Verify Admin All Team Leads shows all leads across the company
+    res_admin_team = await list_leads(scope="team", user=admin_user)
+    team_ids = [item["id"] for item in res_admin_team["items"]]
+    assert l1["id"] in team_ids and l2["id"] in team_ids and l3["id"] in team_ids, "Test 10 failed: Admin team leads missing items"
+
+    print("✓ Test 10 PASSED: 3 Team Members scenario isolated in My Leads, backend enforces dataset protection")
+    passed_count += 1
+
+    # -------------------------------------------------------------------------
+    # TEST 11: Reassignment Flow (Lead 1 from User A to User B)
+    # -------------------------------------------------------------------------
+    reassign_payload = LeadIn(
+        name=l1["name"],
+        mobile=l1["mobile"],
+        assigned_to=user_b["id"],
+        assigned_to_name=user_b["name"],
+        system_kw=5.0,
+    )
+    # Admin performs reassignment
+    reassigned_l1 = await update_lead(l1["id"], reassign_payload, user=admin_user)
+    assert reassigned_l1["assigned_to"] == user_b["id"], "Test 11 failed: assigned_to not updated"
+    assert reassigned_l1["assigned_by"] == admin_user["id"], "Test 11 failed: assigned_by not recorded"
+    assert reassigned_l1["assigned_at"], "Test 11 failed: assigned_at not recorded"
+    assert reassigned_l1["created_by"] == user_a["id"], "Test 11 failed: created_by was altered"
+
+    # Now verify User A My Leads: Lead 1 is gone
+    res_a_after = await list_leads(scope="mine", user=user_a)
+    assert len(res_a_after["items"]) == 0, "Test 11 failed: Lead 1 still visible in User A's My Leads"
+
+    # Verify User B My Leads: Lead 1 now appears alongside Lead 2
+    res_b_after = await list_leads(scope="mine", user=user_b)
+    b_ids = [item["id"] for item in res_b_after["items"]]
+    assert l1["id"] in b_ids and l2["id"] in b_ids, "Test 11 failed: User B My Leads does not include both leads"
+    assert len(res_b_after["items"]) == 2
+
+    # Verify All Team Leads still shows all leads
+    res_team_after = await list_leads(scope="team", user=admin_user)
+    team_ids_after = [item["id"] for item in res_team_after["items"]]
+    assert l1["id"] in team_ids_after and l2["id"] in team_ids_after
+
+    print("✓ Test 11 PASSED: Lead reassignment correctly transfers ownership, updates My Leads, and preserves created_by")
+    passed_count += 1
+
+    # -------------------------------------------------------------------------
+    # TEST 12: Record-Level Edit & Reassign Authorization (403 Enforcement)
+    # -------------------------------------------------------------------------
+    from fastapi import HTTPException
+
+    # User A attempts to edit Lead 2 (assigned to User B) -> must fail with 403
+    unauth_edit_data = LeadIn(name="Hacked Name", mobile=l2["mobile"])
+    got_403 = False
+    try:
+        await update_lead(l2["id"], unauth_edit_data, user=user_a)
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            got_403 = True
+    assert got_403, "Test 12 failed: User A was able to edit Lead 2 assigned to User B"
+
+    # User B edits Lead 2 (assigned to User B) -> succeeds
+    auth_edit_data = LeadIn(name="Lead 2 - Updated by User B", mobile=l2["mobile"], system_kw=8.0)
+    updated_l2 = await update_lead(l2["id"], auth_edit_data, user=user_b)
+    assert updated_l2["name"] == "Lead 2 - Updated by User B"
+
+    # User B attempts to reassign Lead 2 to User C without assignment authority -> must fail with 403
+    unauth_reassign = LeadIn(name=l2["name"], mobile=l2["mobile"], assigned_to=user_c["id"])
+    got_reassign_403 = False
+    try:
+        await update_lead(l2["id"], unauth_reassign, user=user_b)
+    except HTTPException as exc:
+        if exc.status_code == 403 and "cannot reassign" in exc.detail:
+            got_reassign_403 = True
+    assert got_reassign_403, "Test 12 failed: User B without assign perm was able to reassign"
+
+    # Admin edits Lead 2 -> succeeds
+    admin_edit = await update_lead(l2["id"], LeadIn(name="Lead 2 - Verified by Admin", mobile=l2["mobile"]), user=admin_user)
+    assert admin_edit["name"] == "Lead 2 - Verified by Admin"
+
+    print("✓ Test 12 PASSED: Record-level edit and reassign operations reject unauthorized access with 403")
+    passed_count += 1
+
+    # -------------------------------------------------------------------------
+    # TEST 13: Tab Counts & Statistics by Active Scope
+    # -------------------------------------------------------------------------
+    # User A stats (scope=mine) -> 0 leads
+    stats_a = await get_lead_stats(scope="mine", user=user_a)
+    assert stats_a["total_leads"] == 0
+    assert stats_a["my_leads_total"] == 0
+    assert stats_a["can_view_team"] is False
+
+    # User B stats (scope=mine) -> 2 leads
+    stats_b = await get_lead_stats(scope="mine", user=user_b)
+    assert stats_b["total_leads"] == 2
+    assert stats_b["my_leads_total"] == 2
+
+    # Admin stats (scope=mine) -> 0 leads assigned to Admin
+    stats_admin_mine = await get_lead_stats(scope="mine", user=admin_user)
+    assert stats_admin_mine["total_leads"] == 0
+    assert stats_admin_mine["my_leads_total"] == 0
+    assert stats_admin_mine["team_leads_total"] >= 3
+    assert stats_admin_mine["can_view_team"] is True
+
+    # Admin stats (scope=team) -> all team leads
+    stats_admin_team = await get_lead_stats(scope="team", user=admin_user)
+    assert stats_admin_team["total_leads"] >= 3
+    assert stats_admin_team["team_leads_total"] >= 3
+
+    print("✓ Test 13 PASSED: Tab counters and statistics accurately reflect selected dataset and active scope")
+    passed_count += 1
+
     print("=" * 70)
     print(f"ALL {passed_count}/{passed_count} TEST CASES PASSED WITH 100% SUCCESS!")
     print("=" * 70 + "\n")
 
 if __name__ == "__main__":
     asyncio.run(run_leads_verification_suite())
+

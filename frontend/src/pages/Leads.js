@@ -86,10 +86,11 @@ export default function Leads() {
   const canDelete = usePermission("leads", "delete");
   const canConfirm = usePermission("leads", "approve");
 
-  const isAdmin = user?.role === "Admin" || user?.role === "Super Admin" || user?.role === "Platform Owner";
+  const isAdmin = user?.role === "Admin" || user?.role === "Super Admin" || user?.role === "Platform Owner" || user?.role === "Owner";
+  const canViewTeam = isAdmin || canConfirm || user?.permissions?.leads?.approve === true;
 
   const [activeTab, setActiveTab] = useState("leads"); // TAB 1: leads, followups
-  const [scope, setScope] = useState(isAdmin ? "team" : "mine");
+  const [scope, setScope] = useState(canViewTeam ? "team" : "mine");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [leads, setLeads] = useState([]);
@@ -210,24 +211,26 @@ export default function Leads() {
         badge={`${total} Leads`}
         actions={
           <div className="flex items-center gap-3 flex-wrap">
-            {isAdmin && (
-              <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-xs">
-                <button
-                  type="button"
-                  onClick={() => { setScope("mine"); setPage(1); }}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${scope === "mine" ? "bg-blue-600 text-white font-semibold" : "text-slate-600 hover:bg-slate-50"}`}
-                >
-                  My Leads
-                </button>
+            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-xs" data-testid="lead-scope-toggle">
+              <button
+                type="button"
+                onClick={() => { setScope("mine"); setPage(1); }}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition ${scope === "mine" ? "bg-blue-600 text-white shadow-xs" : "text-slate-600 hover:bg-slate-50"}`}
+                data-testid="scope-mine-btn"
+              >
+                My Leads {stats?.my_leads_total !== undefined ? `(${stats.my_leads_total})` : ""}
+              </button>
+              {canViewTeam && (
                 <button
                   type="button"
                   onClick={() => { setScope("team"); setPage(1); }}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition ${scope === "team" ? "bg-blue-600 text-white font-semibold" : "text-slate-600 hover:bg-slate-50"}`}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition ${scope === "team" ? "bg-blue-600 text-white shadow-xs" : "text-slate-600 hover:bg-slate-50"}`}
+                  data-testid="scope-team-btn"
                 >
-                  All Team Leads
+                  All Team Leads {stats?.team_leads_total !== undefined ? `(${stats.team_leads_total})` : ""}
                 </button>
-              </div>
-            )}
+              )}
+            </div>
             {canCreate && (
               <Button
                 onClick={() => { setSelectedLead(null); setFormModalOpen(true); }}
@@ -305,7 +308,7 @@ export default function Leads() {
                   </SelectContent>
                 </Select>
 
-                {isAdmin && (
+                {canViewTeam && (
                   <Select value={assignedFilter} onValueChange={(v) => { setAssignedFilter(v); setPage(1); }}>
                     <SelectTrigger className="w-40 h-9 text-xs"><SelectValue placeholder="Assigned Worker" /></SelectTrigger>
                     <SelectContent>
@@ -378,6 +381,16 @@ export default function Leads() {
                                   <span>•</span>
                                   <span className="text-slate-500 font-sans">{lead.city}</span>
                                 </>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mt-1 flex-wrap">
+                              <span className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-medium">
+                                Assigned: <strong className="font-semibold text-slate-900">{lead.assigned_to_name || "Unassigned"}</strong>
+                              </span>
+                              {lead.created_by_name && (
+                                <span className="text-slate-400 text-[10px]">
+                                  • Created by: {lead.created_by_name}
+                                </span>
                               )}
                             </div>
                           </td>
@@ -483,7 +496,7 @@ export default function Leads() {
                           <td className="py-3 px-3 text-right">
                             <div className="flex items-center justify-end gap-1.5">
                               {/* Open/Edit Action */}
-                              {canEdit && (
+                              {canEdit && (canViewTeam || String(lead.assigned_to) === String(user?.id)) && (
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -521,7 +534,7 @@ export default function Leads() {
                               )}
 
                               {/* Delete Action */}
-                              {canDelete && (
+                              {canDelete && (canViewTeam || String(lead.assigned_to) === String(user?.id)) && (
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -610,8 +623,13 @@ export default function Leads() {
 
 // ─── 2-TAB ADD / EDIT LEAD MODAL ─────────────────────────────────────────────
 function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
+  const { user } = useAuth();
   const [activeModalTab, setActiveModalTab] = useState("basic");
   const [saving, setSaving] = useState(false);
+
+  const isAdmin = user?.role === "Admin" || user?.role === "Super Admin" || user?.role === "Platform Owner" || user?.role === "Owner";
+  const canConfirm = usePermission("leads", "approve");
+  const canAssign = isAdmin || canConfirm || user?.permissions?.leads?.approve === true;
 
   const [form, setForm] = useState(() => {
     if (initial) {
@@ -631,8 +649,8 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
         remarks: initial.remarks || "",
         followup_date: initial.followup_date || (initial.next_followup_at ? initial.next_followup_at.slice(0, 10) : ""),
         followup_time: initial.followup_time || "10:00",
-        assigned_to: initial.assigned_to || "",
-        assigned_to_name: initial.assigned_to_name || "",
+        assigned_to: initial.assigned_to || user?.id || "",
+        assigned_to_name: initial.assigned_to_name || user?.name || "",
         followup_type: initial.followup_type || "Call",
         other_note: initial.other_note || "",
       };
@@ -653,8 +671,8 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
       remarks: "",
       followup_date: dayjs().format("YYYY-MM-DD"), // default today
       followup_time: "10:00",
-      assigned_to: "",
-      assigned_to_name: "",
+      assigned_to: user?.id || "",
+      assigned_to_name: user?.name || "",
       followup_type: "Call",
       other_note: "",
     };
@@ -962,28 +980,35 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
 
                 <div>
                   <Label className="text-xs font-semibold text-slate-700">Assigned Worker / Executive</Label>
-                  <Select
-                    value={form.assigned_to}
-                    onValueChange={(v) => {
-                      const emp = employees.find((e) => e.id === v);
-                      setForm((prev) => ({
-                        ...prev,
-                        assigned_to: v,
-                        assigned_to_name: emp?.name || "",
-                      }));
-                    }}
-                  >
-                    <SelectTrigger className="mt-1 text-xs">
-                      <SelectValue placeholder="Select team member" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {employees.map((e) => (
-                        <SelectItem key={e.id} value={e.id}>
-                          {e.name} ({e.role})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {canAssign ? (
+                    <Select
+                      value={form.assigned_to}
+                      onValueChange={(v) => {
+                        const emp = employees.find((e) => e.id === v);
+                        setForm((prev) => ({
+                          ...prev,
+                          assigned_to: v,
+                          assigned_to_name: emp?.name || "",
+                        }));
+                      }}
+                    >
+                      <SelectTrigger className="mt-1 text-xs">
+                        <SelectValue placeholder="Select team member" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {employees.map((e) => (
+                          <SelectItem key={e.id} value={e.id}>
+                            {e.name} ({e.role})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <div className="mt-1 p-2.5 bg-slate-100 border border-slate-200 rounded-md text-xs font-medium text-slate-700 flex items-center justify-between">
+                      <span>{form.assigned_to_name || user?.name || "Assigned to You"}</span>
+                      <span className="text-[10px] text-slate-500 font-normal">Auto-assigned</span>
+                    </div>
+                  )}
                 </div>
 
                 <div>
