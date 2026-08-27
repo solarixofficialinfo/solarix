@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import dayjs from "dayjs";
 import { Field, SelectField, TextareaField, ConfirmDialog, UNIT_OPTIONS, OUTWARD_REF_TYPES, today, digitsOnly, ProductAutocompleteInput } from "./_shared";
 import { usePermission } from "@/lib/permissions";
+import { useEntitlements } from "@/hooks/useEntitlements";
 import ManualBulkImport from "@/components/ManualBulkImport";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -55,6 +56,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
   const canCreate = usePermission("data_management", "create");
   const canEdit = usePermission("data_management", "edit");
   const canDelete = usePermission("data_management", "delete");
+  const { hasFeature } = useEntitlements();
   const [form, setForm] = useState(EMPTY);
   const [editing, setEditing] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
@@ -599,7 +601,14 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
             <div className="flex-1" />
             {canCreate && (
               <Button variant="outline" className="border-slate-300 bg-slate-50 text-slate-700 hover:bg-slate-100"
-                onClick={() => setManualOpen(true)}
+                onClick={() => {
+                  if (!hasFeature("manual_import")) {
+                    toast.error("Manual Bulk Import is not included in your current plan.");
+                    return;
+                  }
+                  setManualOpen(true);
+                }}
+                disabled={!hasFeature("manual_import")}
                 data-testid="manual-import-outward-btn"
               >
                 <FileSpreadsheet className="w-4 h-4 mr-1.5" /> Manual Bulk Import

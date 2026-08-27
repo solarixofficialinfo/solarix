@@ -126,11 +126,16 @@ const REAL_APP_PAGE_DEFINITIONS = [
           { key: "balance_report", label: "Stock Balance Report", desc: "View real-time stock on hand and reorder levels" },
           { key: "history", label: "Transaction History", desc: "Searchable log of inward and outward stock movements" },
           { key: "high_value_goods", label: "High Value Goods & Challans", desc: "Track solar panels, inverters, and battery serials" },
-          { key: "serial_tracking", label: "Serial Number Tracking", desc: "Scan and trace equipment by serial numbers" }
+          { key: "serial_tracking", label: "Serial Number Tracking", desc: "Scan and trace equipment by serial numbers" },
+          { key: "inventory_intelligence", label: "Inventory Intelligence", desc: "Pro-only advanced material utilization, serial tracking analytics & site consumption reports" },
+          { key: "manual_import", label: "Manual Import", desc: "Bulk Excel/CSV inward and outward stock import" },
+          { key: "export", label: "Export", desc: "Excel, CSV, and PDF inventory reports export" }
         ],
         limits: [
           { key: "max_products", label: "Maximum Product Master Items", desc: "Enforced at POST /inventory/products", unit: "Products" },
-          { key: "monthly_inventory_transactions", label: "Monthly Inventory Transactions", desc: "Enforced on Inward/Outward creation", unit: "Txns / mo" }
+          { key: "monthly_inventory_transactions", label: "Monthly Inventory Transactions", desc: "Enforced on Inward/Outward creation", unit: "Txns / mo" },
+          { key: "monthly_manual_imports", label: "Monthly Manual Imports", desc: "Enforced on bulk inward/outward imports", unit: "Imports / mo" },
+          { key: "monthly_exports", label: "Monthly Exports", desc: "Enforced on CSV/PDF reports exports", unit: "Exports / mo" }
         ]
       },
       {
@@ -409,6 +414,7 @@ export default function PlansEntitlements() {
         monthly_documents: Number(planData.monthly_documents) || 500,
         monthly_pdf_docx: Number(planData.monthly_pdf_docx) || 200,
         monthly_exports: Number(planData.monthly_exports) || 50,
+        monthly_manual_imports: Number(planData.monthly_manual_imports) || 100,
         monthly_material_requests: Number(planData.monthly_material_requests) || 1000,
         monthly_inventory_transactions: Number(planData.monthly_inventory_transactions) || 2500,
         monthly_api_requests: Number(planData.monthly_api_requests) || 0,
@@ -427,6 +433,10 @@ export default function PlansEntitlements() {
       window.dispatchEvent(new Event("solarix:plan-config-updated"));
       window.dispatchEvent(new Event("solarix:subscription-updated"));
       window.dispatchEvent(new Event("solarix:auth-refresh"));
+      try {
+        localStorage.setItem("solarix:plan-config-updated", Date.now().toString());
+        localStorage.setItem("solarix:subscription-updated", Date.now().toString());
+      } catch (e) {}
     } catch (err) {
       toast.error(formatApiError(err));
     } finally {

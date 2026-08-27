@@ -6,7 +6,7 @@ import { queryKeys } from "@/lib/queryKeys";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Boxes, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, ClipboardList, Layers, Search, Activity, History, Hash } from "lucide-react";
+import { Boxes, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, ClipboardList, Layers, Search, Activity, History, Hash, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 import InwardTab from "@/components/Inventory/InwardTab";
 import OutwardTab from "@/components/Inventory/OutwardTab";
@@ -14,6 +14,7 @@ import ProductMasterTab from "@/components/Inventory/ProductMasterTab";
 import BalanceTab from "@/components/Inventory/BalanceTab";
 import HistoryTab from "@/components/Inventory/HistoryTab";
 import SerialTrackingTab from "@/components/Inventory/SerialTrackingTab";
+import InventoryIntelligenceTab from "@/components/Inventory/InventoryIntelligenceTab";
 import PageHeader from "@/components/PageHeader";
 import useEntitlements from "@/hooks/useEntitlements";
 import LockedFeatureCard from "@/components/LockedFeatureCard";
@@ -128,23 +129,99 @@ export default function Inventory() {
             <TabsTrigger value="history" data-testid="tab-history" className="shrink-0 whitespace-nowrap"><History className="w-3.5 h-3.5 mr-1.5" /> History</TabsTrigger>
             <TabsTrigger value="high-value-goods" data-testid="tab-high-value-goods" className="shrink-0 whitespace-nowrap"><ClipboardList className="w-3.5 h-3.5 mr-1.5" /> High Value Goods</TabsTrigger>
             <TabsTrigger value="serial-tracking" data-testid="tab-serial-tracking" className="shrink-0 whitespace-nowrap"><Hash className="w-3.5 h-3.5 mr-1.5" /> Serial No. Tracking</TabsTrigger>
+            <TabsTrigger value="intelligence" data-testid="tab-intelligence" className="shrink-0 whitespace-nowrap"><TrendingUp className="w-3.5 h-3.5 mr-1.5 text-amber-500" /> Inventory Intelligence</TabsTrigger>
           </TabsList>
         </div>
 
         <div style={{ display: tab === "inward" ? "block" : "none" }}>
-          {visitedTabs.has("inward") && <InwardTab products={products} onChanged={bump} globalSearch={search} />}
+          {visitedTabs.has("inward") && (
+            !hasFeature("inward") ? (
+              <LockedFeatureCard
+                featureName="Inward Stock Entry"
+                requiredPlan="Starter / Growth"
+                description="Receive materials from suppliers and vendors into warehouse inventory."
+                benefits={[
+                  "Record supplier receipts with book/challan references",
+                  "Auto-update stock balances on inward movement",
+                  "Maintain complete audit log of material receipts"
+                ]}
+              />
+            ) : (
+              <InwardTab products={products} onChanged={bump} globalSearch={search} />
+            )
+          )}
         </div>
         <div style={{ display: tab === "outward" ? "block" : "none" }}>
-          {visitedTabs.has("outward") && <OutwardTab products={products} onChanged={bump} globalSearch={search} />}
+          {visitedTabs.has("outward") && (
+            !hasFeature("outward") ? (
+              <LockedFeatureCard
+                featureName="Outward Dispatch Entry"
+                requiredPlan="Starter / Growth"
+                description="Dispatch inventory items against customer projects and site orders."
+                benefits={[
+                  "Dispatch materials against client projects",
+                  "Real-time stock deduction",
+                  "Delivery challan number integration"
+                ]}
+              />
+            ) : (
+              <OutwardTab products={products} onChanged={bump} globalSearch={search} />
+            )
+          )}
         </div>
         <div style={{ display: tab === "products" ? "block" : "none" }}>
-          {visitedTabs.has("products") && <ProductMasterTab products={products} onChanged={bump} globalSearch={search} />}
+          {visitedTabs.has("products") && (
+            !hasFeature("product_master") ? (
+              <LockedFeatureCard
+                featureName="Product Master & Catalog"
+                requiredPlan="Starter / Growth"
+                description="Manage solar product SKUs, units, categories, and technical specifications."
+                benefits={[
+                  "Centralized SKU & catalog management",
+                  "Minimum reorder level threshold alerts",
+                  "Standard unit & category categorization"
+                ]}
+              />
+            ) : (
+              <ProductMasterTab products={products} onChanged={bump} globalSearch={search} />
+            )
+          )}
         </div>
         <div style={{ display: tab === "balance" ? "block" : "none" }}>
-          {visitedTabs.has("balance") && <BalanceTab products={products} globalSearch={search} />}
+          {visitedTabs.has("balance") && (
+            !hasFeature("balance_report") ? (
+              <LockedFeatureCard
+                featureName="Stock Balance Report"
+                requiredPlan="Starter / Growth"
+                description="View real-time stock balances, inventory valuations, and minimum reorder alerts."
+                benefits={[
+                  "Real-time available stock on hand",
+                  "Low stock alerts and warning badges",
+                  "Inventory valuation overview"
+                ]}
+              />
+            ) : (
+              <BalanceTab products={products} globalSearch={search} />
+            )
+          )}
         </div>
         <div style={{ display: tab === "history" ? "block" : "none" }}>
-          {visitedTabs.has("history") && <HistoryTab globalSearch={search} products={products} onChanged={bump} />}
+          {visitedTabs.has("history") && (
+            !hasFeature("history") ? (
+              <LockedFeatureCard
+                featureName="Transaction History"
+                requiredPlan="Starter / Growth"
+                description="Comprehensive audit trail and log of all inward and outward material movements."
+                benefits={[
+                  "Chronological timeline of all material movements",
+                  "Search by challan, reference number, or product",
+                  "Filter inward and outward activities"
+                ]}
+              />
+            ) : (
+              <HistoryTab globalSearch={search} products={products} onChanged={bump} />
+            )
+          )}
         </div>
         <div style={{ display: tab === "high-value-goods" ? "block" : "none" }}>
           {visitedTabs.has("high-value-goods") && (
@@ -181,6 +258,25 @@ export default function Inventory() {
               />
             ) : (
               <SerialTrackingTab globalSearch={search} />
+            )
+          )}
+        </div>
+        <div style={{ display: tab === "intelligence" ? "block" : "none" }}>
+          {visitedTabs.has("intelligence") && (
+            !hasFeature("inventory_intelligence") ? (
+              <LockedFeatureCard
+                featureName="Inventory Intelligence & Asset Analytics"
+                requiredPlan="Pro"
+                description="Unlock detailed inventory, asset and project performance analytics."
+                benefits={[
+                  "Material utilization & project consumption intelligence",
+                  "Asset & serialized equipment status distributions",
+                  "Inventory movement trends, stock health & slow-moving alerts",
+                  "Comprehensive site & client material utilization rankings",
+                ]}
+              />
+            ) : (
+              <InventoryIntelligenceTab globalSearch={search} />
             )
           )}
         </div>

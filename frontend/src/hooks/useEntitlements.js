@@ -31,7 +31,8 @@ export function useEntitlements() {
       return res.data;
     },
     enabled: Boolean(user && user.company_id),
-    staleTime: 30 * 1000,
+    staleTime: 3000,
+    refetchInterval: 5000,
     refetchOnWindowFocus: true,
   });
 
@@ -41,14 +42,22 @@ export function useEntitlements() {
       queryClient.invalidateQueries({ queryKey: queryKeys.subscription.current() });
     };
 
+    const handleStorage = (e) => {
+      if (e.key === "solarix:plan-config-updated" || e.key === "solarix:subscription-updated" || e.key === "solarix:auth-refresh") {
+        queryClient.invalidateQueries({ queryKey: queryKeys.subscription.current() });
+      }
+    };
+
     window.addEventListener("solarix:subscription-updated", handleInvalidate);
     window.addEventListener("solarix:plan-config-updated", handleInvalidate);
     window.addEventListener("solarix:auth-refresh", handleInvalidate);
+    window.addEventListener("storage", handleStorage);
 
     return () => {
       window.removeEventListener("solarix:subscription-updated", handleInvalidate);
       window.removeEventListener("solarix:plan-config-updated", handleInvalidate);
       window.removeEventListener("solarix:auth-refresh", handleInvalidate);
+      window.removeEventListener("storage", handleStorage);
     };
   }, [queryClient]);
 
@@ -64,8 +73,11 @@ export function useEntitlements() {
   const daysRemaining = Number(subData?.days_remaining ?? (isTrial ? 15 : 0));
 
   const resolvedFeatures = useMemo(() => {
-    return subData?.features || defaultPlanConfig.features || {};
-  }, [subData?.features, defaultPlanConfig.features]);
+    if (subData?.features && typeof subData.features === "object" && !Array.isArray(subData.features)) {
+      return subData.features;
+    }
+    return defaultPlanConfig.featureMap || defaultPlanConfig.features || {};
+  }, [subData?.features, defaultPlanConfig.featureMap, defaultPlanConfig.features]);
 
   const resolvedLimits = useMemo(() => {
     return subData?.limits || {
@@ -76,6 +88,7 @@ export function useEntitlements() {
       monthly_pdf_docx: defaultPlanConfig.monthly_pdf_docx || 200,
       monthly_material_requests: defaultPlanConfig.monthly_material_requests || 1000,
       monthly_inventory_transactions: defaultPlanConfig.monthly_inventory_transactions || 2500,
+      monthly_manual_imports: defaultPlanConfig.monthly_manual_imports || 100,
       monthly_exports: defaultPlanConfig.monthly_exports || 50,
       monthly_api_requests: defaultPlanConfig.monthly_api_requests || 0,
     };

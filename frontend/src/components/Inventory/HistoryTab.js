@@ -16,10 +16,11 @@ import dayjs from "dayjs";
 import { toast } from "sonner";
 import { ConfirmDialog } from "./_shared";
 import EditTransactionDialog from "./EditTransactionDialog";
-import TransactionSerialsModal from "./TransactionSerialsModal";
 import { Hash } from "lucide-react";
+import { useEntitlements } from "@/hooks/useEntitlements";
 
 export default function HistoryTab({ globalSearch, products, onChanged }) {
+  const { hasFeature } = useEntitlements();
   const queryClient = useQueryClient();
   const [deleting, setDeleting] = useState(false);
   const [filters, setFilters] = useState({
@@ -83,6 +84,10 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
   }, [filters, globalSearch]);
 
   const exportCsv = async () => {
+    if (!hasFeature("export")) {
+      toast.error("Export is not included in your current plan.");
+      return;
+    }
     try {
       const params = activeParams;
       const { data: blob } = await api.get("/inventory/history.csv", { params, responseType: "blob" });
@@ -94,6 +99,10 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
   };
 
   const exportSelectedCsv = () => {
+    if (!hasFeature("export")) {
+      toast.error("Export is not included in your current plan.");
+      return;
+    }
     if (selected.size === 0) return;
     const sel = (data?.rows || []).filter((r) => selected.has(`${r.type}:${r.id}`));
     const headers = ["Date", "Type", "Product", "Size", "Quantity", "Unit", "Reference / Challan", "Bill / Outward No", "Vendor / Client", "Project", "Status", "Remarks", "Created By"];
@@ -272,7 +281,7 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
             <Button variant="outline" size="sm" onClick={selectAllRecords} data-testid="select-all-records">Select all matching ({data.total})</Button>
             <Button variant="outline" size="sm" onClick={clearSelection} data-testid="clear-selection">Clear</Button>
             <div className="flex-1" />
-            <Button variant="outline" size="sm" onClick={exportSelectedCsv} data-testid="export-selected"><Download className="w-3.5 h-3.5 mr-1" /> Export Selected CSV</Button>
+            <Button variant="outline" size="sm" onClick={exportSelectedCsv} disabled={!hasFeature("export")} data-testid="export-selected"><Download className="w-3.5 h-3.5 mr-1" /> Export Selected CSV</Button>
             <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={() => setConfirmBulk(true)} data-testid="bulk-delete-btn" disabled={deleting}>
               <Trash2 className="w-3.5 h-3.5 mr-1" /> {deleting ? "Deleting…" : `Delete Selected (${selected.size})`}
             </Button>
@@ -288,7 +297,7 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
               <div className="text-base font-semibold text-slate-900" style={{ fontFamily: "Outfit" }}>Transaction History</div>
               <div className="text-xs text-slate-500">{data.total} transactions {loading && "· loading…"}</div>
             </div>
-            <Button variant="outline" onClick={exportCsv} data-testid="export-history-btn"><Download className="w-4 h-4 mr-1.5" /> Export All CSV</Button>
+            <Button variant="outline" onClick={exportCsv} disabled={!hasFeature("export")} data-testid="export-history-btn"><Download className="w-4 h-4 mr-1.5" /> Export All CSV</Button>
           </div>
           <div className="overflow-x-auto max-h-[60vh]">
             <table className="w-full text-sm" data-testid="history-table">

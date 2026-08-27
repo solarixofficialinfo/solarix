@@ -21,6 +21,7 @@ import dayjs from "dayjs";
 import ManualBulkImport from "@/components/ManualBulkImport";
 import { usePermission } from "@/lib/permissions";
 import { useAuth } from "@/context/AuthContext";
+import { useEntitlements } from "@/hooks/useEntitlements";
 
 const SOURCE_TYPE_OPTIONS = ["Supplier", "Vendor / Supplier", "Client / Customer", "Return From Client", "Other"];
 
@@ -65,6 +66,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
   const canCreate = usePermission("data_management", "create");
   const canEdit = usePermission("data_management", "edit");
   const canDelete = usePermission("data_management", "delete");
+  const { hasFeature } = useEntitlements();
 
   const [form, setForm] = useState(EMPTY_FORM());
   const [editing, setEditing] = useState(null);
@@ -741,8 +743,16 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setManualOpen(true)}
+                onClick={() => {
+                  if (!hasFeature("manual_import")) {
+                    toast.error("Manual Bulk Import is not included in your current plan.");
+                    return;
+                  }
+                  setManualOpen(true);
+                }}
+                disabled={!hasFeature("manual_import")}
                 className="h-10 text-xs gap-2 text-slate-700 border-slate-200 rounded-xl w-full sm:w-auto"
+                data-testid="manual-import-inward-btn"
               >
                 <FileSpreadsheet className="w-4 h-4 text-slate-600" />
                 Manual Bulk Import

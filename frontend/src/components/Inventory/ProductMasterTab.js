@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { Field, SelectField, ConfirmDialog, UNIT_OPTIONS, CATEGORY_OPTIONS, normalizeSizeForMatching } from "./_shared";
 import ProductDrawer from "./ProductDrawer";
 import ProductImportModal from "./ProductImportModal";
+import { useEntitlements } from "@/hooks/useEntitlements";
 
 const STATUS_STYLES = {
   "Normal": "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -20,6 +21,7 @@ const STATUS_STYLES = {
 const EMPTY = () => ({ name: "", size: "", category: "Solar Panel", unit: "Nos", min_stock: 0, rate: "", status: "Active", high_value_goods: false, serial_number_required: false, brand: "", sku: "" });
 
 export default function ProductMasterTab({ products, onChanged, globalSearch }) {
+  const { hasFeature } = useEntitlements();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY());
   const [editing, setEditing] = useState(null);
@@ -107,6 +109,10 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
   }, [products, localSearch, globalSearch]);
 
   const handleExportExcel = async () => {
+    if (!hasFeature("export")) {
+      toast.error("Export is not included in your current plan.");
+      return;
+    }
     if (!filtered || filtered.length === 0) {
       toast.error("No product data to export");
       return;
@@ -131,6 +137,10 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
   };
 
   const handleExportPDF = async () => {
+    if (!hasFeature("export")) {
+      toast.error("Export is not included in your current plan.");
+      return;
+    }
     if (!filtered || filtered.length === 0) {
       toast.error("No product data to export");
       return;
@@ -189,11 +199,11 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
                 />
               </div>
 
-              <Button variant="outline" className="border-slate-300 text-slate-700 hover:bg-slate-50 text-xs" onClick={handleExportExcel} data-testid="export-excel-btn">
+              <Button variant="outline" className="border-slate-300 text-slate-700 hover:bg-slate-50 text-xs" onClick={handleExportExcel} disabled={!hasFeature("export")} data-testid="export-excel-btn">
                 <FileSpreadsheet className="w-3.5 h-3.5 mr-1 text-emerald-600" /> Export Excel
               </Button>
 
-              <Button variant="outline" className="border-slate-300 text-slate-700 hover:bg-slate-50 text-xs" onClick={handleExportPDF} disabled={exportingPdf} data-testid="export-pdf-btn">
+              <Button variant="outline" className="border-slate-300 text-slate-700 hover:bg-slate-50 text-xs" onClick={handleExportPDF} disabled={!hasFeature("export") || exportingPdf} data-testid="export-pdf-btn">
                 <FileText className="w-3.5 h-3.5 mr-1 text-red-600" /> {exportingPdf ? "Exporting PDF…" : "Export PDF"}
               </Button>
 

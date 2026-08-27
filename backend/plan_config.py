@@ -55,6 +55,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "monthly_documents": 500,
         "monthly_pdf_docx": 200,
         "monthly_exports": 50,
+        "monthly_manual_imports": 100,
         "monthly_material_requests": 1000,
         "monthly_inventory_transactions": 2500,
         "monthly_api_requests": 0,
@@ -88,6 +89,9 @@ PLANS: Dict[str, Dict[str, Any]] = {
             "history": True,
             "high_value_goods": False,
             "serial_tracking": False,
+            "manual_import": True,
+            "export": True,
+            "inventory_intelligence": False,
             "material_requests": True,
             "invoices": False,
             "payments": False,
@@ -133,6 +137,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "monthly_documents": 2000,
         "monthly_pdf_docx": 1000,
         "monthly_exports": 250,
+        "monthly_manual_imports": 500,
         "monthly_material_requests": 5000,
         "monthly_inventory_transactions": 10000,
         "monthly_api_requests": 5000,
@@ -166,6 +171,9 @@ PLANS: Dict[str, Dict[str, Any]] = {
             "history": True,
             "high_value_goods": True,
             "serial_tracking": True,
+            "manual_import": True,
+            "export": True,
+            "inventory_intelligence": False,
             "material_requests": True,
             "invoices": True,
             "payments": True,
@@ -211,6 +219,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "monthly_documents": 10000,
         "monthly_pdf_docx": 5000,
         "monthly_exports": 1000,
+        "monthly_manual_imports": 2500,
         "monthly_material_requests": 20000,
         "monthly_inventory_transactions": 50000,
         "monthly_api_requests": 50000,
@@ -244,6 +253,9 @@ PLANS: Dict[str, Dict[str, Any]] = {
             "history": True,
             "high_value_goods": True,
             "serial_tracking": True,
+            "manual_import": True,
+            "export": True,
+            "inventory_intelligence": True,
             "material_requests": True,
             "invoices": True,
             "payments": True,
@@ -339,6 +351,24 @@ def generate_plan_feature_bullets(plan: Dict[str, Any]) -> List[str]:
             
     return bullets
 
+_PLANS_CONFIG_CACHE: Dict[str, Dict[str, Any]] = {}
+
+def set_cached_plan_config(plan_id: str, config: Dict[str, Any]) -> None:
+    if plan_id and isinstance(config, dict):
+        _PLANS_CONFIG_CACHE[plan_id.lower()] = dict(config)
+
+def get_cached_plan_config(plan_id: str) -> Optional[Dict[str, Any]]:
+    return _PLANS_CONFIG_CACHE.get(plan_id.lower()) if plan_id else None
+
+def set_all_cached_plan_configs(configs: List[Dict[str, Any]]) -> None:
+    if configs and isinstance(configs, list):
+        for c in configs:
+            if isinstance(c, dict) and c.get("id"):
+                _PLANS_CONFIG_CACHE[c["id"].lower()] = dict(c)
+
+def invalidate_plans_config_cache() -> None:
+    _PLANS_CONFIG_CACHE.clear()
+
 def get_plan_details(plan_id: str, db_override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Get plan metadata or fallback to Starter, merging optional database overrides."""
     pid = (plan_id or "starter").lower()
@@ -346,20 +376,23 @@ def get_plan_details(plan_id: str, db_override: Optional[Dict[str, Any]] = None)
         pid = "starter"
     plan = PLANS[pid].copy()
     
-    if db_override and isinstance(db_override, dict):
+    effective_override = db_override if (db_override and isinstance(db_override, dict)) else _PLANS_CONFIG_CACHE.get(pid)
+    
+    if effective_override and isinstance(effective_override, dict):
         for k in [
             "name", "tagline", "target_turnover", "monthly_price", "yearly_price",
             "max_users", "max_clients", "max_products", "storage_gb",
             "monthly_documents", "monthly_pdf_docx", "monthly_exports",
+            "monthly_manual_imports",
             "monthly_material_requests", "monthly_inventory_transactions",
             "monthly_api_requests", "badge"
         ]:
-            if k in db_override and db_override[k] is not None:
-                plan[k] = db_override[k]
-        if "pages" in db_override and isinstance(db_override["pages"], dict):
-            plan["pages"] = {**plan.get("pages", {}), **db_override["pages"]}
-        if "features" in db_override and isinstance(db_override["features"], dict):
-            plan["features"] = {**plan.get("features", {}), **db_override["features"]}
+            if k in effective_override and effective_override[k] is not None:
+                plan[k] = effective_override[k]
+        if "pages" in effective_override and isinstance(effective_override["pages"], dict):
+            plan["pages"] = {**plan.get("pages", {}), **effective_override["pages"]}
+        if "features" in effective_override and isinstance(effective_override["features"], dict):
+            plan["features"] = {**plan.get("features", {}), **effective_override["features"]}
     
     # Dynamic annual calculation
     normal_annual_equivalent = plan["monthly_price"] * 12
@@ -376,27 +409,36 @@ def get_all_plans(db_plans_list: Optional[List[Dict[str, Any]]] = None) -> Dict[
     """Return dictionary of all plans with calculated savings and database overrides."""
     db_map = {}
     if db_plans_list and isinstance(db_plans_list, list):
-        db_map = {p["id"]: p for p in db_plans_list if isinstance(p, dict) and "id" in p}
+        db_map = {p["id"].lower(): p for p in db_plans_list if isinstance(p, dict) and "id" in p}
+        set_all_cached_plan_configs(db_plans_list)
     return {pid: get_plan_details(pid, db_override=db_map.get(pid)) for pid in PLANS}
 
 def check_page_access(target: Any, page_key: str, db_override: Optional[Dict[str, Any]] = None) -> bool:
     """
     Check if a real application page is accessible for a company or plan.
-    Supports passing a company_doc dict or plan_id string.
+    Supports passing a company_doc dict or plan_id string or company_id string.
     Order of Evaluation:
     1. Explicit company-level page override in company_doc.get("page_access") or company_doc.get("pages")
     2. Assigned plan's pages configuration (Trial accounts use assigned plan, default 'starter')
     """
     company_doc = target if isinstance(target, dict) else {}
-    
+    if not company_doc and isinstance(target, str) and target.lower() not in ("starter", "growth", "pro"):
+        try:
+            from server import _cache_get_company
+            cached_c = _cache_get_company(target)
+            if cached_c and isinstance(cached_c, dict):
+                company_doc = cached_c
+        except Exception:
+            pass
+
     # 1. Company level page access override
     custom_pages = company_doc.get("page_access") or company_doc.get("pages")
     if isinstance(custom_pages, dict) and page_key in custom_pages:
         return bool(custom_pages[page_key])
         
     # 2. Plan definition
-    plan_id = target if isinstance(target, str) else (company_doc.get("plan_id") or company_doc.get("plan") or "starter")
-    plan_id = str(plan_id).lower()
+    plan_id = (company_doc.get("plan_id") or company_doc.get("plan")) if company_doc else target
+    plan_id = str(plan_id or "starter").lower()
     if plan_id not in ("starter", "growth", "pro"):
         plan_id = "starter"
 
@@ -406,13 +448,21 @@ def check_page_access(target: Any, page_key: str, db_override: Optional[Dict[str
 def check_feature_access(target: Any, feature_key: str, is_trial: bool = False, db_override: Optional[Dict[str, Any]] = None) -> bool:
     """
     Check if a feature is accessible for a company or plan.
-    Supports passing a company_doc dict or plan_id string.
+    Supports passing a company_doc dict or plan_id string or company_id string.
     Order of Evaluation:
     1. Temporary feature entitlement with expiry date
     2. Explicit workspace feature entitlement overrides
     3. Plan definition features matrix for the company's assigned plan (Trial uses assigned plan, default 'starter')
     """
     company_doc = target if isinstance(target, dict) else {}
+    if not company_doc and isinstance(target, str) and target.lower() not in ("starter", "growth", "pro"):
+        try:
+            from server import _cache_get_company
+            cached_c = _cache_get_company(target)
+            if cached_c and isinstance(cached_c, dict):
+                company_doc = cached_c
+        except Exception:
+            pass
 
     # 1. Temporary feature entitlement with expiry date check
     temp_features = company_doc.get("temporary_features")
@@ -434,8 +484,8 @@ def check_feature_access(target: Any, feature_key: str, is_trial: bool = False, 
         return bool(entitlements[feature_key])
 
     # 3. Fallback to assigned plan definition (Trial accounts use assigned plan, default 'starter')
-    plan_id = target if isinstance(target, str) else (company_doc.get("plan_id") or company_doc.get("plan") or "starter")
-    plan_id = str(plan_id).lower()
+    plan_id = (company_doc.get("plan_id") or company_doc.get("plan")) if company_doc else target
+    plan_id = str(plan_id or "starter").lower()
     if plan_id not in ("starter", "growth", "pro"):
         plan_id = "starter"
 
@@ -457,6 +507,7 @@ def get_plan_limits(plan_id: str, is_trial: bool = False, db_override: Optional[
         "monthly_documents": int(plan.get("monthly_documents", 500)),
         "monthly_pdf_docx": int(plan.get("monthly_pdf_docx", 200)),
         "monthly_exports": int(plan.get("monthly_exports", 50)),
+        "monthly_manual_imports": int(plan.get("monthly_manual_imports", 100)),
         "monthly_material_requests": int(plan.get("monthly_material_requests", 1000)),
         "monthly_inventory_transactions": int(plan.get("monthly_inventory_transactions", 2500)),
         "monthly_api_requests": int(plan.get("monthly_api_requests", 0)),
@@ -508,6 +559,7 @@ async def get_company_usage(company_id: str, db=None) -> Dict[str, Any]:
     monthly_documents = int(counter_doc.get("uploaded_documents") or 0)
     monthly_pdf_docx = int(counter_doc.get("document_generations") or 0)
     monthly_exports = int(counter_doc.get("exports") or 0)
+    monthly_manual_imports = int(counter_doc.get("manual_imports") or counter_doc.get("monthly_manual_imports") or 0)
     monthly_material_requests = int(counter_doc.get("material_requests") or 0)
     monthly_inventory_transactions = int(counter_doc.get("inventory_transactions") or 0)
     monthly_api_requests = int(counter_doc.get("api_requests") or 0)
@@ -523,6 +575,7 @@ async def get_company_usage(company_id: str, db=None) -> Dict[str, Any]:
         "monthly_documents": monthly_documents,
         "monthly_pdf_docx": monthly_pdf_docx,
         "monthly_exports": monthly_exports,
+        "monthly_manual_imports": monthly_manual_imports,
         "monthly_material_requests": monthly_material_requests,
         "monthly_inventory_transactions": monthly_inventory_transactions,
         "monthly_api_requests": monthly_api_requests,
@@ -567,6 +620,9 @@ async def check_plan_limit(company_id: str, resource_key: str, increment: int = 
         "document_generations": ("monthly_pdf_docx", "PDF/DOCX generations this month", usage.get("monthly_pdf_docx", 0)),
         "pdf_docx": ("monthly_pdf_docx", "PDF/DOCX generations this month", usage.get("monthly_pdf_docx", 0)),
         "exports": ("monthly_exports", "report/data exports this month", usage.get("monthly_exports", 0)),
+        "export": ("monthly_exports", "report/data exports this month", usage.get("monthly_exports", 0)),
+        "manual_imports": ("monthly_manual_imports", "manual bulk imports this month", usage.get("monthly_manual_imports", 0)),
+        "monthly_manual_imports": ("monthly_manual_imports", "manual bulk imports this month", usage.get("monthly_manual_imports", 0)),
         "material_requests": ("monthly_material_requests", "material requests this month", usage.get("monthly_material_requests", 0)),
         "inventory_transactions": ("monthly_inventory_transactions", "inventory transactions this month", usage.get("monthly_inventory_transactions", 0)),
         "api_requests": ("monthly_api_requests", "API requests this month", usage.get("monthly_api_requests", 0)),
@@ -645,6 +701,9 @@ async def increment_usage(company_id: str, resource_key: str, amount: int = 1, d
         "document_generations": "document_generations",
         "pdf_docx": "document_generations",
         "exports": "exports",
+        "export": "exports",
+        "manual_imports": "manual_imports",
+        "monthly_manual_imports": "manual_imports",
         "material_requests": "material_requests",
         "inventory_transactions": "inventory_transactions",
         "api_requests": "api_requests",

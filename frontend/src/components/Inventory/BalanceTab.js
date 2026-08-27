@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Search, Activity, Download } from "lucide-react";
 import { toast } from "sonner";
 import { CATEGORY_OPTIONS, normalizeSizeForMatching } from "./_shared";
+import { useEntitlements } from "@/hooks/useEntitlements";
 
 const STATUS_STYLES = {
   "Normal": "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -15,6 +16,7 @@ const STATUS_STYLES = {
 };
 
 export default function BalanceTab({ products, globalSearch }) {
+  const { hasFeature } = useEntitlements();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -47,6 +49,10 @@ export default function BalanceTab({ products, globalSearch }) {
   }, [products, search, statusFilter, categoryFilter, globalSearch]);
 
   const handleDownloadCSV = () => {
+    if (!hasFeature("export")) {
+      toast.error("Export is not included in your current plan.");
+      return;
+    }
     if (!filtered || filtered.length === 0) {
       toast.error("No balance data to export");
       return;
@@ -123,7 +129,7 @@ export default function BalanceTab({ products, globalSearch }) {
               <div className="text-base font-semibold text-slate-900" style={{ fontFamily: "Outfit" }}>Balance Report</div>
               <div className="text-xs text-slate-500">{(filtered?.length ?? 0)} products · {totals.low} low · {totals.out_stock} out of stock</div>
             </div>
-            <Button variant="outline" size="sm" className="border-slate-300 text-slate-700 hover:bg-slate-50 h-8" onClick={handleDownloadCSV} data-testid="balance-download-btn">
+            <Button variant="outline" size="sm" className="border-slate-300 text-slate-700 hover:bg-slate-50 h-8" onClick={handleDownloadCSV} disabled={!hasFeature("export")} data-testid="balance-download-btn">
               <Download className="w-4 h-4 mr-1.5 text-emerald-600" /> Download
             </Button>
           </div>

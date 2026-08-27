@@ -2324,6 +2324,15 @@ async def run_one_time_size_standardization_migration():
 async def _deferred_startup_tasks():
     """Non-critical startup tasks deferred so they don't block the first request."""
     try:
+        from plan_config import set_all_cached_plan_configs
+        db_plans = await db.plans_config.find({}, {"_id": 0}).to_list(100)
+        if db_plans:
+            set_all_cached_plan_configs(db_plans)
+            logger.info(f"Loaded {len(db_plans)} plan configuration overrides into memory cache")
+    except Exception as e:
+        logger.warning(f"Plan config cache warmup error: {e}")
+
+    try:
         await recover_and_sync_financial_data()
     except Exception as e:
         logger.warning(f"Financial recovery startup task error: {e}")
@@ -8710,8 +8719,10 @@ async def create_product(data: ProductIn, user=Depends(require_active_subscripti
     if not has_perm(user, "data_management", "create"):
         raise HTTPException(status_code=403, detail="Missing permission: data_management.create")
 
-    # Check product master limit
-    from plan_config import check_plan_limit
+    # Check product master feature entitlement and limit
+    from plan_config import check_plan_limit, check_feature_access
+    if not check_feature_access(user["company_id"], "product_master"):
+        raise HTTPException(status_code=403, detail="FEATURE_NOT_ENTITLED: Product Master & Catalog is not included in your current plan.")
     chk = await check_plan_limit(user["company_id"], "products", increment=1, db=db)
     if not chk["allowed"]:
         raise HTTPException(status_code=403, detail=chk["message"])
@@ -9480,8 +9491,10 @@ async def add_inward(data: InwardIn, user=Depends(require_active_subscription())
     uid = user.get("id") or user.get("sub") or "user"
     uname = user.get("name") or user.get("full_name") or "User"
 
-    # Enforce inventory transactions monthly quota
-    from plan_config import check_plan_limit, increment_usage
+    # Enforce feature entitlement and inventory transactions monthly quota
+    from plan_config import check_plan_limit, increment_usage, check_feature_access
+    if not check_feature_access(cid, "inward"):
+        raise HTTPException(status_code=403, detail="FEATURE_NOT_ENTITLED: Inward Stock Entry is not included in your current plan.")
     chk_inv = await check_plan_limit(cid, "inventory_transactions", increment=1, db=db)
     if not chk_inv["allowed"]:
         raise HTTPException(status_code=403, detail=chk_inv["message"])
@@ -9641,8 +9654,10 @@ async def add_outward(data: OutwardIn, user=Depends(require_active_subscription(
     cid = user.get("company_id") or "COMP-001"
     user_name = user.get("name") or user.get("full_name") or "User"
 
-    # Enforce inventory transactions monthly quota
-    from plan_config import check_plan_limit, increment_usage
+    # Enforce feature entitlement and inventory transactions monthly quota
+    from plan_config import check_plan_limit, increment_usage, check_feature_access
+    if not check_feature_access(cid, "outward"):
+        raise HTTPException(status_code=403, detail="FEATURE_NOT_ENTITLED: Outward Dispatch Entry is not included in your current plan.")
     chk_inv = await check_plan_limit(cid, "inventory_transactions", increment=1, db=db)
     if not chk_inv["allowed"]:
         raise HTTPException(status_code=403, detail=chk_inv["message"])
@@ -10727,6 +10742,14 @@ async def export_serial_tracking_csv(
     to_date: Optional[str] = None,
     search: Optional[str] = None,
 ):
+    cid = user.get("company_id")
+    from plan_config import check_plan_limit, increment_usage, check_feature_access
+    if not check_feature_access(cid, "export"):
+        raise HTTPException(status_code=403, detail="FEATURE_NOT_ENTITLED: Export is not included in your current plan.")
+    chk_exp = await check_plan_limit(cid, "exports", increment=1, db=db)
+    if not chk_exp["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_exp["message"])
+
     result = await list_serial_tracking(
         request=request,
         user=user,
@@ -10758,6 +10781,7 @@ async def export_serial_tracking_csv(
             r.get("status") or "",
             "; ".join(r.get("serial_numbers") or [])
         ])
+    await increment_usage(cid, "exports", 1, db=db)
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
@@ -10844,6 +10868,916 @@ async def edit_serial_number(
 
     await log_activity(cid, user["id"], user["name"], f"Updated Serial Number ({entry_type.title()})", f"{old_sn} → {new_sn}")
     return {"ok": True, "message": "Serial number updated successfully", "old_serial": old_sn, "new_serial": new_sn}
+
+
+# ==============================================================================
+# PRO-ONLY INVENTORY INTELLIGENCE & ASSET ANALYTICS ENGINE
+# ==============================================================================
+
+async def _compute_inventory_intelligence(
+    cid: str,
+    time_range: Optional[str] = "all",
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    product: Optional[str] = None,
+    category: Optional[str] = None,
+    brand: Optional[str] = None,
+    client: Optional[str] = None,
+    project: Optional[str] = None,
+    vendor: Optional[str] = None,
+    status: Optional[str] = None,
+    serial_number: Optional[str] = None,
+) -> Dict[str, Any]:
+    now_utc = datetime.now(timezone.utc)
+    today_str = now_utc.strftime("%Y-%m-%d")
+
+    # Determine date range boundaries
+    start_date = None
+    end_date = None
+    if time_range == "today":
+        start_date = today_str
+        end_date = today_str
+    elif time_range == "this_week":
+        start_date = (now_utc - timedelta(days=now_utc.weekday())).strftime("%Y-%m-%d")
+        end_date = today_str
+    elif time_range == "this_month":
+        start_date = now_utc.strftime("%Y-%m-01")
+        end_date = today_str
+    elif time_range == "last_3_months":
+        start_date = (now_utc - timedelta(days=90)).strftime("%Y-%m-%d")
+        end_date = today_str
+    elif time_range == "this_year":
+        start_date = now_utc.strftime("%Y-01-01")
+        end_date = today_str
+    elif time_range == "custom" or from_date or to_date:
+        start_date = from_date
+        end_date = to_date
+
+    # 1. Fetch single source of truth from authoritative balance compute engine
+    items, in_map, out_map, ret_map = await _compute_inventory_balances(cid)
+    all_inward = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).sort("date", -1).to_list(50000)
+    all_outward = await db.outward_entries.find({"company_id": cid}, {"_id": 0}).sort("date", -1).to_list(50000)
+    local_assets = [a for a in _load_local_assets() if a.get("company_id") == cid]
+
+    # Build Product ID / Name maps
+    prod_by_id = {p.get("id"): p for p in items if p.get("id")}
+    prod_by_key = {(norm_product_name(p.get("name")), norm_str(p.get("size"))): p for p in items}
+
+    # Distinct Filter Dropdown Options
+    categories_set = set()
+    brands_set = set()
+    products_list = []
+    clients_set = set()
+    projects_set = set()
+    vendors_set = set()
+
+    for p in items:
+        p_name = p.get("name") or ""
+        p_cat = p.get("category") or "General"
+        p_brand = p.get("brand") or ""
+        if p_cat: categories_set.add(p_cat)
+        if p_brand: brands_set.add(p_brand)
+        products_list.append({"id": p.get("id", p_name), "name": p_name, "size": p.get("size", ""), "category": p_cat, "brand": p_brand})
+
+    for ie in all_inward:
+        v = ie.get("source_name") or ie.get("source") or ""
+        if v and v not in ["high-value-manual-import", "bulk-inward", "bulk-inward-high-value"]:
+            vendors_set.add(v)
+
+    for oe in all_outward:
+        c = oe.get("client_name") or ""
+        pr = oe.get("project_name") or ""
+        if c: clients_set.add(c)
+        if pr: projects_set.add(pr)
+
+    # Asset serials build & status mapping
+    outwarded_sn_set = set()
+    sn_outward_record = {}
+    for oe in all_outward:
+        oe_sns = oe.get("serial_numbers") or []
+        for s in oe_sns:
+            s_clean = str(s).strip().upper()
+            if s_clean:
+                outwarded_sn_set.add(s_clean)
+                sn_outward_record[s_clean] = oe
+
+    sn_inward_record = {}
+    for ie in all_inward:
+        ie_sns = ie.get("serial_numbers") or []
+        for s in ie_sns:
+            s_clean = str(s).strip().upper()
+            if s_clean:
+                sn_inward_record[s_clean] = ie
+
+    local_asset_map = {str(a.get("serial_number", "")).strip().upper(): a for a in local_assets if a.get("serial_number")}
+
+    all_serials_dict: Dict[str, Dict[str, Any]] = {}
+    all_raw_serials = set(sn_inward_record.keys()) | set(sn_outward_record.keys()) | set(local_asset_map.keys())
+
+    for sn_u in all_raw_serials:
+        if not sn_u:
+            continue
+        la = local_asset_map.get(sn_u) or {}
+        ie = sn_inward_record.get(sn_u) or {}
+        oe = sn_outward_record.get(sn_u) or {}
+
+        p_name = la.get("product_name") or oe.get("product") or ie.get("product") or "Solar Equipment"
+        p_brand = la.get("brand") or ie.get("brand") or "—"
+        p_model = la.get("model") or ie.get("model") or "—"
+        c_name = la.get("client_name") or oe.get("client_name") or "—"
+        pr_name = la.get("project_name") or oe.get("project_name") or "—"
+        loc = la.get("location") or la.get("site_location") or (f"Site: {pr_name}" if pr_name != "—" else ("Client Site" if c_name != "—" else "Warehouse Stock"))
+        
+        la_status = str(la.get("status") or "").strip()
+        if la_status in ("Installed", "Damaged", "Under Service", "Returned", "Missing"):
+            curr_status = la_status
+        elif sn_u in outwarded_sn_set:
+            curr_status = "Issued / Outward"
+        else:
+            curr_status = "In Stock"
+
+        in_d = (ie.get("date") or ie.get("created_at") or "")[:10]
+        out_d = (oe.get("date") or oe.get("created_at") or la.get("installation_date") or "")[:10]
+        last_mov = f"Issued on {out_d}" if out_d else (f"Received on {in_d}" if in_d else "In Stock")
+        ref = oe.get("reference_number") or oe.get("outward_challan_no") or ie.get("reference_number") or ie.get("bill_number") or "—"
+
+        all_serials_dict[sn_u] = {
+            "serial_number": sn_u,
+            "product": p_name,
+            "brand": p_brand,
+            "model": p_model,
+            "status": curr_status,
+            "location": loc,
+            "client_name": c_name,
+            "client_id": oe.get("client_id") or la.get("client_id"),
+            "project_name": pr_name,
+            "project_id": oe.get("project_id") or la.get("project_id"),
+            "inward_date": in_d,
+            "outward_date": out_d,
+            "last_movement": last_mov,
+            "reference": ref,
+        }
+
+    # Filter evaluation helpers
+    def matches_product_filter(p_doc: Dict[str, Any]) -> bool:
+        if product and product != "all":
+            if product.lower() not in (p_doc.get("id") or "").lower() and product.lower() not in (p_doc.get("name") or "").lower():
+                return False
+        if category and category != "all":
+            if (p_doc.get("category") or "").strip().lower() != category.strip().lower():
+                return False
+        if brand and brand != "all":
+            if (p_doc.get("brand") or "").strip().lower() != brand.strip().lower():
+                return False
+        return True
+
+    def matches_date_filter(d_str: Optional[str]) -> bool:
+        if not d_str:
+            return True
+        d = d_str[:10]
+        if start_date and d < start_date:
+            return False
+        if end_date and d > end_date:
+            return False
+        return True
+
+    # Filtered products
+    filtered_items = [p for p in items if matches_product_filter(p)]
+    filtered_prod_keys = {(norm_product_name(p["name"]), norm_str(p.get("size"))): p for p in filtered_items}
+
+    # Filtered Inward Transactions
+    filtered_inward = []
+    for ie in all_inward:
+        st = str(ie.get("status") or "").lower()
+        if st in ("cancelled", "draft_cancelled"):
+            continue
+        d = (ie.get("date") or ie.get("created_at") or "")[:10]
+        if not matches_date_filter(d):
+            continue
+        p_name_n = norm_product_name(ie.get("product"))
+        p_size_n = norm_str(ie.get("size"))
+        if (p_name_n, p_size_n) not in filtered_prod_keys:
+            continue
+        if vendor and vendor != "all":
+            v = ie.get("source_name") or ie.get("source") or ""
+            if vendor.lower() not in v.lower():
+                continue
+        filtered_inward.append(ie)
+
+    # Filtered Outward Transactions
+    filtered_outward = []
+    for oe in all_outward:
+        st = str(oe.get("status") or "").lower()
+        if st in ("cancelled", "draft_cancelled", "pending"):
+            continue
+        d = (oe.get("date") or oe.get("created_at") or "")[:10]
+        if not matches_date_filter(d):
+            continue
+        p_name_n = norm_product_name(oe.get("product"))
+        p_size_n = norm_str(oe.get("size"))
+        if (p_name_n, p_size_n) not in filtered_prod_keys:
+            continue
+        if client and client != "all":
+            c = oe.get("client_name") or ""
+            c_id = oe.get("client_id") or ""
+            if client.lower() not in c.lower() and client.lower() != c_id.lower():
+                continue
+        if project and project != "all":
+            pr = oe.get("project_name") or ""
+            pr_id = oe.get("project_id") or ""
+            if project.lower() not in pr.lower() and project.lower() != pr_id.lower():
+                continue
+        filtered_outward.append(oe)
+
+    # Filtered Serials
+    filtered_serials = []
+    for s_obj in all_serials_dict.values():
+        if serial_number:
+            if serial_number.strip().upper() not in s_obj["serial_number"].upper():
+                continue
+        if status and status != "all":
+            if status.lower() not in s_obj["status"].lower():
+                continue
+        if client and client != "all":
+            if client.lower() not in s_obj["client_name"].lower():
+                continue
+        if project and project != "all":
+            if project.lower() not in s_obj["project_name"].lower():
+                continue
+        if product and product != "all":
+            if product.lower() not in s_obj["product"].lower():
+                continue
+        if brand and brand != "all":
+            if brand.lower() not in s_obj["brand"].lower():
+                continue
+        filtered_serials.append(s_obj)
+
+    # Transaction mappings for filtered sets
+    filt_in_map: Dict[Tuple[str, str], float] = {}
+    for ie in filtered_inward:
+        k = (norm_product_name(ie.get("product")), norm_str(ie.get("size")))
+        filt_in_map[k] = filt_in_map.get(k, 0.0) + float(ie.get("quantity") or 0.0)
+
+    filt_out_map: Dict[Tuple[str, str], float] = {}
+    filt_out_projects: Dict[Tuple[str, str], Set[str]] = {}
+    filt_out_clients: Dict[Tuple[str, str], Set[str]] = {}
+    filt_last_in_date: Dict[Tuple[str, str], str] = {}
+    filt_last_out_date: Dict[Tuple[str, str], str] = {}
+
+    for ie in all_inward:
+        k = (norm_product_name(ie.get("product")), norm_str(ie.get("size")))
+        d = (ie.get("date") or ie.get("created_at") or "")[:10]
+        if d and (k not in filt_last_in_date or d > filt_last_in_date[k]):
+            filt_last_in_date[k] = d
+
+    for oe in all_outward:
+        k = (norm_product_name(oe.get("product")), norm_str(oe.get("size")))
+        d = (oe.get("date") or oe.get("created_at") or "")[:10]
+        if d and (k not in filt_last_out_date or d > filt_last_out_date[k]):
+            filt_last_out_date[k] = d
+
+    for oe in filtered_outward:
+        k = (norm_product_name(oe.get("product")), norm_str(oe.get("size")))
+        qty = float(oe.get("quantity") or 0.0)
+        filt_out_map[k] = filt_out_map.get(k, 0.0) + qty
+        if oe.get("project_name"):
+            filt_out_projects.setdefault(k, set()).add(oe["project_name"])
+        if oe.get("client_name"):
+            filt_out_clients.setdefault(k, set()).add(oe["client_name"])
+
+    # 1. Executive Summary KPIs
+    tot_prods = len(filtered_items)
+    tot_units = sum(float(p.get("balance") or 0.0) for p in filtered_items)
+    tot_received = sum(float(ie.get("quantity") or 0.0) for ie in filtered_inward)
+    tot_issued = sum(float(oe.get("quantity") or 0.0) for oe in filtered_outward)
+    tot_opening = sum(float(p.get("opening_stock") or 0.0) for p in filtered_items)
+    denom = (tot_opening + tot_received) if (tot_opening + tot_received) > 0 else (tot_issued + tot_units)
+    utilization_pct = round((tot_issued / denom * 100), 1) if denom > 0 else 0.0
+
+    serials_in_stock = sum(1 for s in filtered_serials if s["status"] in ("In Stock", "Available"))
+    serials_issued = sum(1 for s in filtered_serials if s["status"] in ("Issued / Outward", "Issued"))
+    serials_installed = sum(1 for s in filtered_serials if s["status"] == "Installed")
+    serials_returned = sum(1 for s in filtered_serials if s["status"] == "Returned")
+    serials_damaged = sum(1 for s in filtered_serials if s["status"] == "Damaged")
+    serials_service = sum(1 for s in filtered_serials if s["status"] == "Under Service")
+    serials_missing = sum(1 for s in filtered_serials if s["status"] == "Missing")
+
+    low_stock_count = sum(1 for p in filtered_items if 0 < float(p.get("balance") or 0.0) <= float(p.get("min_stock") or 0.0))
+    out_of_stock_count = sum(1 for p in filtered_items if float(p.get("balance") or 0.0) <= 0.0)
+
+    # Slow moving calculation (Available stock > 0, no outward movement in 60+ days)
+    slow_moving_count = 0
+    slow_moving_items = []
+    today_dt = datetime.strptime(today_str, "%Y-%m-%d")
+
+    for p in filtered_items:
+        k = (norm_product_name(p["name"]), norm_str(p.get("size")))
+        bal = float(p.get("balance") or 0.0)
+        last_out = filt_last_out_date.get(k)
+        last_in = filt_last_in_date.get(k)
+        
+        days_since_out = 999
+        if last_out:
+            try:
+                days_since_out = (today_dt - datetime.strptime(last_out, "%Y-%m-%d")).days
+            except Exception:
+                days_since_out = 999
+
+        days_since_in = 999
+        if last_in:
+            try:
+                days_since_in = (today_dt - datetime.strptime(last_in, "%Y-%m-%d")).days
+            except Exception:
+                days_since_in = 999
+
+        days_since_mov = min(days_since_out, days_since_in)
+
+        if bal > 0 and (not last_out or days_since_out >= 45):
+            slow_moving_count += 1
+            slow_moving_items.append({
+                "id": p.get("id"),
+                "product": p["name"],
+                "size": p.get("size", "—"),
+                "category": p.get("category", "General"),
+                "available_qty": bal,
+                "unit": p.get("unit", "Nos"),
+                "last_inward": last_in or "—",
+                "last_outward": last_out or "Never",
+                "days_since_movement": days_since_mov if days_since_mov != 999 else "—",
+                "status": "Stagnant Stock" if days_since_out > 90 else "Slow Moving",
+            })
+
+    slow_moving_items.sort(key=lambda x: (x["available_qty"]), reverse=True)
+
+    # Total material value (sum of balance * rate for products with valid positive rate)
+    total_mat_value = sum(
+        round(float(p.get("balance") or 0.0) * float(p.get("rate") or 0.0), 2)
+        for p in filtered_items if float(p.get("rate") or 0.0) > 0 and float(p.get("balance") or 0.0) > 0
+    )
+
+    summary = {
+        "total_products": tot_prods,
+        "total_units": round(tot_units, 2),
+        "total_received": round(tot_received, 2),
+        "total_issued": round(tot_issued, 2),
+        "utilization_pct": utilization_pct,
+        "total_serialized_assets": len(filtered_serials),
+        "serials_in_stock": serials_in_stock,
+        "serials_issued": serials_issued,
+        "serials_installed": serials_installed,
+        "serials_returned": serials_returned,
+        "serials_damaged": serials_damaged,
+        "serials_under_service": serials_service,
+        "serials_missing": serials_missing,
+        "low_stock_count": low_stock_count,
+        "out_of_stock_count": out_of_stock_count,
+        "slow_moving_count": slow_moving_count,
+        "total_material_value": round(total_mat_value, 2),
+    }
+
+    # 2. Material Utilization Analysis (Category-level aggregation)
+    cat_util_map: Dict[str, Dict[str, Any]] = {}
+    for p in filtered_items:
+        c_name = (p.get("category") or "Other").strip()
+        k = (norm_product_name(p["name"]), norm_str(p.get("size")))
+        
+        if c_name not in cat_util_map:
+            cat_util_map[c_name] = {
+                "material": c_name,
+                "category": c_name,
+                "unit": p.get("unit") or "Units",
+                "received": 0.0,
+                "issued": 0.0,
+                "available": 0.0,
+                "opening": 0.0,
+            }
+        cat_util_map[c_name]["received"] += filt_in_map.get(k, 0.0)
+        cat_util_map[c_name]["issued"] += filt_out_map.get(k, 0.0)
+        cat_util_map[c_name]["available"] += max(float(p.get("balance") or 0.0), 0.0)
+        cat_util_map[c_name]["opening"] += float(p.get("opening_stock") or 0.0)
+
+    material_utilization = []
+    for c_name, d in cat_util_map.items():
+        rec = round(d["received"], 2)
+        iss = round(d["issued"], 2)
+        av = round(d["available"], 2)
+        op = round(d["opening"], 2)
+        base = (rec + op) if (rec + op) > 0 else (iss + av)
+        u_pct = round((iss / base * 100), 1) if base > 0 else 0.0
+        
+        if u_pct >= 75:
+            stat_lbl = "High Utilization"
+        elif u_pct >= 35:
+            stat_lbl = "Optimal"
+        elif iss == 0 and av > 0:
+            stat_lbl = "Excess Stock"
+        else:
+            stat_lbl = "Low Movement"
+
+        material_utilization.append({
+            "material": c_name,
+            "category": c_name,
+            "unit": d["unit"],
+            "received": rec,
+            "issued": iss,
+            "available": av,
+            "utilization_pct": u_pct,
+            "status": stat_lbl,
+        })
+    material_utilization.sort(key=lambda x: x["issued"], reverse=True)
+
+    # 3. Product Performance Analysis
+    product_performance = []
+    for p in filtered_items:
+        p_name = p["name"]
+        p_size = p.get("size", "")
+        k = (norm_product_name(p_name), norm_str(p_size))
+        
+        rec = round(filt_in_map.get(k, float(p.get("total_in") or 0.0)), 2)
+        iss = round(filt_out_map.get(k, float(p.get("total_out") or 0.0)), 2)
+        av = float(p.get("balance") or 0.0)
+        op = float(p.get("opening_stock") or 0.0)
+        base = (rec + op) if (rec + op) > 0 else (iss + av)
+        u_pct = round((iss / base * 100), 1) if base > 0 else 0.0
+
+        p_serials = [s for s in filtered_serials if s["product"].lower() == p_name.lower()]
+        p_ser_breakdown = {
+            "available": sum(1 for s in p_serials if s["status"] in ("In Stock", "Available")),
+            "issued": sum(1 for s in p_serials if s["status"] in ("Issued / Outward", "Issued")),
+            "installed": sum(1 for s in p_serials if s["status"] == "Installed"),
+            "damaged": sum(1 for s in p_serials if s["status"] == "Damaged"),
+            "returned": sum(1 for s in p_serials if s["status"] == "Returned"),
+            "under_service": sum(1 for s in p_serials if s["status"] == "Under Service"),
+        }
+
+        last_in = filt_last_in_date.get(k, "—")
+        last_out = filt_last_out_date.get(k, "—")
+        
+        product_performance.append({
+            "id": p.get("id"),
+            "product": p_name,
+            "size": p_size,
+            "brand": p.get("brand") or "—",
+            "sku": p.get("sku") or "—",
+            "category": p.get("category") or "General",
+            "unit": p.get("unit") or "Nos",
+            "opening_stock": op,
+            "total_received": rec,
+            "total_issued": iss,
+            "available": av,
+            "utilization_pct": u_pct,
+            "projects_count": len(filt_out_projects.get(k, set())),
+            "clients_count": len(filt_out_clients.get(k, set())),
+            "is_serialized": bool(p.get("high_value_goods") or len(p_serials) > 0),
+            "total_serials": len(p_serials),
+            "serials_breakdown": p_ser_breakdown,
+            "min_stock": float(p.get("min_stock") or 0.0),
+            "rate": float(p.get("rate") or 0.0),
+            "stock_status": p.get("stock_status") or "Normal",
+            "last_inward_date": last_in,
+            "last_outward_date": last_out,
+        })
+    product_performance.sort(key=lambda x: x["total_issued"], reverse=True)
+
+    # 4. Serial Status Distribution Breakdown
+    tot_sn_count = len(filtered_serials)
+    serial_status_distribution = [
+        {"status": "In Stock / Available", "count": serials_in_stock, "pct": round(serials_in_stock / tot_sn_count * 100, 1) if tot_sn_count else 0.0, "color": "#10b981"},
+        {"status": "Issued / Outward", "count": serials_issued, "pct": round(serials_issued / tot_sn_count * 100, 1) if tot_sn_count else 0.0, "color": "#3b82f6"},
+        {"status": "Installed", "count": serials_installed, "pct": round(serials_installed / tot_sn_count * 100, 1) if tot_sn_count else 0.0, "color": "#6366f1"},
+        {"status": "Returned", "count": serials_returned, "pct": round(serials_returned / tot_sn_count * 100, 1) if tot_sn_count else 0.0, "color": "#f59e0b"},
+        {"status": "Damaged", "count": serials_damaged, "pct": round(serials_damaged / tot_sn_count * 100, 1) if tot_sn_count else 0.0, "color": "#ef4444"},
+        {"status": "Under Service", "count": serials_service, "pct": round(serials_service / tot_sn_count * 100, 1) if tot_sn_count else 0.0, "color": "#8b5cf6"},
+    ]
+
+    # 5. Site / Project Performance & Material Consumption
+    site_consumption_map: Dict[str, Dict[str, Any]] = {}
+    for oe in filtered_outward:
+        pr_name = (oe.get("project_name") or "").strip()
+        cl_name = (oe.get("client_name") or "").strip()
+        site_key = pr_name if pr_name else (cl_name if cl_name else "Direct Warehouse Dispatch")
+        
+        if site_key not in site_consumption_map:
+            site_consumption_map[site_key] = {
+                "site_name": site_key,
+                "client_name": cl_name or "—",
+                "client_id": oe.get("client_id"),
+                "materials_issued_qty": 0.0,
+                "material_value": 0.0,
+                "products_set": set(),
+                "serials_count": 0,
+                "last_activity_date": "",
+            }
+        qty = float(oe.get("quantity") or 0.0)
+        p_name = oe.get("product") or ""
+        rate = float(oe.get("rate") or 0.0)
+        
+        site_consumption_map[site_key]["materials_issued_qty"] += qty
+        site_consumption_map[site_key]["material_value"] += (qty * rate)
+        if p_name:
+            site_consumption_map[site_key]["products_set"].add(p_name)
+        sns = oe.get("serial_numbers") or []
+        site_consumption_map[site_key]["serials_count"] += len(sns)
+        d = (oe.get("date") or oe.get("created_at") or "")[:10]
+        if d > site_consumption_map[site_key]["last_activity_date"]:
+            site_consumption_map[site_key]["last_activity_date"] = d
+
+    site_performance = []
+    for s_key, s_data in site_consumption_map.items():
+        site_performance.append({
+            "site_name": s_data["site_name"],
+            "client_name": s_data["client_name"],
+            "client_id": s_data["client_id"],
+            "materials_issued_qty": round(s_data["materials_issued_qty"], 2),
+            "material_value": round(s_data["material_value"], 2),
+            "products_used_count": len(s_data["products_set"]),
+            "serials_count": s_data["serials_count"],
+            "last_activity_date": s_data["last_activity_date"] or "—",
+        })
+    site_performance.sort(key=lambda x: x["materials_issued_qty"], reverse=True)
+
+    # 6. Product / Category Share Usage %
+    tot_out_qty = sum(float(oe.get("quantity") or 0.0) for oe in filtered_outward)
+    tot_tx_count = len(filtered_outward)
+    cat_usage_map: Dict[str, Dict[str, Any]] = {}
+    for oe in filtered_outward:
+        p_name_n = norm_product_name(oe.get("product"))
+        p_size_n = norm_str(oe.get("size"))
+        p_doc = prod_by_key.get((p_name_n, p_size_n)) or {}
+        c_name = p_doc.get("category") or "General Equipment"
+        
+        if c_name not in cat_usage_map:
+            cat_usage_map[c_name] = {"category": c_name, "quantity": 0.0, "tx_count": 0}
+        cat_usage_map[c_name]["quantity"] += float(oe.get("quantity") or 0.0)
+        cat_usage_map[c_name]["tx_count"] += 1
+
+    category_usage = []
+    for c_name, c_data in cat_usage_map.items():
+        category_usage.append({
+            "category": c_name,
+            "quantity": round(c_data["quantity"], 2),
+            "tx_count": c_data["tx_count"],
+            "share_pct": round(c_data["quantity"] / tot_out_qty * 100, 1) if tot_out_qty > 0 else 0.0,
+            "tx_share_pct": round(c_data["tx_count"] / tot_tx_count * 100, 1) if tot_tx_count > 0 else 0.0,
+        })
+    category_usage.sort(key=lambda x: x["quantity"], reverse=True)
+
+    # 7. Inventory Movement Trends (Daily, Weekly, Monthly)
+    daily_map: Dict[str, Dict[str, float]] = {}
+    for i in range(30, -1, -1):
+        d_key = (now_utc - timedelta(days=i)).strftime("%Y-%m-%d")
+        daily_map[d_key] = {"period": d_key, "received": 0.0, "issued": 0.0, "net_movement": 0.0}
+
+    for ie in all_inward:
+        d = (ie.get("date") or ie.get("created_at") or "")[:10]
+        if d in daily_map:
+            daily_map[d]["received"] += float(ie.get("quantity") or 0.0)
+
+    for oe in all_outward:
+        d = (oe.get("date") or oe.get("created_at") or "")[:10]
+        if d in daily_map:
+            daily_map[d]["issued"] += float(oe.get("quantity") or 0.0)
+
+    daily_trend = []
+    for d_key, t_data in sorted(daily_map.items()):
+        rec = round(t_data["received"], 2)
+        iss = round(t_data["issued"], 2)
+        daily_trend.append({
+            "period": d_key,
+            "label": datetime.strptime(d_key, "%Y-%m-%d").strftime("%d %b"),
+            "received": rec,
+            "issued": iss,
+            "net_movement": round(rec - iss, 2)
+        })
+
+    # Monthly Trend (Past 6 months)
+    monthly_map: Dict[str, Dict[str, float]] = {}
+    for i in range(5, -1, -1):
+        m_dt = now_utc - timedelta(days=i * 30)
+        m_key = m_dt.strftime("%Y-%m")
+        monthly_map[m_key] = {"period": m_key, "label": m_dt.strftime("%b %Y"), "received": 0.0, "issued": 0.0, "net_movement": 0.0}
+
+    for ie in all_inward:
+        m = (ie.get("date") or ie.get("created_at") or "")[:7]
+        if m in monthly_map:
+            monthly_map[m]["received"] += float(ie.get("quantity") or 0.0)
+
+    for oe in all_outward:
+        m = (oe.get("date") or oe.get("created_at") or "")[:7]
+        if m in monthly_map:
+            monthly_map[m]["issued"] += float(oe.get("quantity") or 0.0)
+
+    monthly_trend = []
+    for m_key, m_data in sorted(monthly_map.items()):
+        rec = round(m_data["received"], 2)
+        iss = round(m_data["issued"], 2)
+        monthly_trend.append({
+            "period": m_key,
+            "label": m_data["label"],
+            "received": rec,
+            "issued": iss,
+            "net_movement": round(rec - iss, 2)
+        })
+
+    # 8. Stock Health Distribution
+    healthy_count = sum(1 for p in filtered_items if float(p.get("balance") or 0.0) > float(p.get("min_stock") or 0.0))
+    stock_health = {
+        "healthy_count": healthy_count,
+        "low_stock_count": low_stock_count,
+        "out_of_stock_count": out_of_stock_count,
+        "total_items": len(filtered_items),
+        "distribution": [
+            {"name": "Healthy Stock", "value": healthy_count, "color": "#10b981"},
+            {"name": "Low Stock", "value": low_stock_count, "color": "#f59e0b"},
+            {"name": "Out of Stock", "value": out_of_stock_count, "color": "#ef4444"},
+        ]
+    }
+
+    # 9. Top / Best Performing Rankings
+    top_issued_products = sorted(
+        [p for p in product_performance if p["total_issued"] > 0],
+        key=lambda x: x["total_issued"], reverse=True
+    )[:10]
+
+    fastest_moving = sorted(
+        [p for p in product_performance if p["projects_count"] > 0],
+        key=lambda x: (x["projects_count"], x["total_issued"]), reverse=True
+    )[:10]
+
+    top_sites = site_performance[:10]
+
+    client_consumption_map: Dict[str, float] = {}
+    for oe in filtered_outward:
+        cl = oe.get("client_name") or ""
+        if cl:
+            client_consumption_map[cl] = client_consumption_map.get(cl, 0.0) + float(oe.get("quantity") or 0.0)
+    top_clients = [
+        {"client_name": cl, "quantity": round(qty, 2)}
+        for cl, qty in sorted(client_consumption_map.items(), key=lambda x: x[1], reverse=True)[:10]
+    ]
+
+    brand_consumption_map: Dict[str, float] = {}
+    for p in filtered_items:
+        br = p.get("brand") or ""
+        k = (norm_product_name(p["name"]), norm_str(p.get("size")))
+        if br and br != "—":
+            brand_consumption_map[br] = brand_consumption_map.get(br, 0.0) + filt_out_map.get(k, 0.0)
+    top_brands = [
+        {"brand": br, "issued_qty": round(qty, 2)}
+        for br, qty in sorted(brand_consumption_map.items(), key=lambda x: x[1], reverse=True)[:10]
+    ]
+
+    # 10. Attention Required & Calculated Anomaly Alerts
+    anomalies_alerts = []
+    for p in filtered_items:
+        bal = float(p.get("balance") or 0.0)
+        mn = float(p.get("min_stock") or 0.0)
+        if 0 < bal <= mn:
+            anomalies_alerts.append({
+                "type": "warning",
+                "title": f"Low Stock Threshold: {p['name']}",
+                "message": f"Stock is at {bal} {p.get('unit', 'Nos')} (Minimum configured: {mn}). Reorder recommended.",
+                "item_id": p.get("id"),
+                "category": "Stock",
+            })
+        elif bal <= 0:
+            anomalies_alerts.append({
+                "type": "danger",
+                "title": f"Out of Stock: {p['name']}",
+                "message": f"Zero balance on hand. Pending dispatches may be delayed.",
+                "item_id": p.get("id"),
+                "category": "Stock",
+            })
+
+    if serials_damaged > 0:
+        anomalies_alerts.append({
+            "type": "danger",
+            "title": f"{serials_damaged} Damaged Serialized Asset(s)",
+            "message": "Serialized panels or inverters reported damaged requiring warranty replacement/RMA.",
+            "category": "Asset",
+        })
+
+    if serials_returned > 0:
+        anomalies_alerts.append({
+            "type": "info",
+            "title": f"{serials_returned} Returned Serialized Equipment",
+            "message": "Equipment returned from field sites in transit or awaiting inspection.",
+            "category": "Asset",
+        })
+
+    for s_item in slow_moving_items[:5]:
+        anomalies_alerts.append({
+            "type": "warning",
+            "title": f"Stagnant Material: {s_item['product']}",
+            "message": f"{s_item['available_qty']} {s_item['unit']} idle with no dispatch for {s_item['days_since_movement']} days.",
+            "category": "Slow Moving",
+        })
+
+    return {
+        "summary": summary,
+        "material_utilization": material_utilization,
+        "product_performance": product_performance,
+        "serial_status_distribution": serial_status_distribution,
+        "serial_items": filtered_serials[:100],  # Return first 100 matching serials
+        "total_filtered_serials": len(filtered_serials),
+        "site_performance": site_performance,
+        "top_consuming_sites": site_performance[:5],
+        "lowest_consuming_sites": list(reversed(site_performance))[:5] if len(site_performance) > 5 else [],
+        "category_usage": category_usage,
+        "movement_trend_daily": daily_trend,
+        "movement_trend_monthly": monthly_trend,
+        "stock_health": stock_health,
+        "top_rankings": {
+            "top_issued_products": top_issued_products,
+            "fastest_moving_products": fastest_moving,
+            "top_sites": top_sites,
+            "top_clients": top_clients,
+            "top_brands": top_brands,
+        },
+        "slow_moving_items": slow_moving_items[:20],
+        "anomalies_alerts": anomalies_alerts[:15],
+        "filter_options": {
+            "categories": sorted(list(categories_set)),
+            "brands": sorted(list(brands_set)),
+            "products": products_list,
+            "clients": sorted(list(clients_set)),
+            "projects": sorted(list(projects_set)),
+            "vendors": sorted(list(vendors_set)),
+            "statuses": ["In Stock", "Issued / Outward", "Installed", "Returned", "Damaged", "Under Service"],
+        }
+    }
+
+
+@api_router.get("/inventory/intelligence")
+async def get_inventory_intelligence(
+    time_range: Optional[str] = "all",
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    product: Optional[str] = None,
+    category: Optional[str] = None,
+    brand: Optional[str] = None,
+    client: Optional[str] = None,
+    project: Optional[str] = None,
+    vendor: Optional[str] = None,
+    status: Optional[str] = None,
+    serial_number: Optional[str] = None,
+    user=Depends(require_feature_entitlement("inventory_intelligence"))
+):
+    """Pro-only comprehensive inventory & serial analytics endpoint."""
+    cid = user["company_id"]
+    if not (has_team_permission(user, "data_management", "view") or is_super_admin(user)):
+        raise HTTPException(status_code=403, detail="Missing permission: data_management.view")
+
+    data = await _compute_inventory_intelligence(
+        cid=cid,
+        time_range=time_range,
+        from_date=from_date,
+        to_date=to_date,
+        product=product,
+        category=category,
+        brand=brand,
+        client=client,
+        project=project,
+        vendor=vendor,
+        status=status,
+        serial_number=serial_number,
+    )
+    return data
+
+
+@api_router.get("/inventory/intelligence/export-csv")
+async def export_inventory_intelligence_csv(
+    time_range: Optional[str] = "all",
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    product: Optional[str] = None,
+    category: Optional[str] = None,
+    brand: Optional[str] = None,
+    client: Optional[str] = None,
+    project: Optional[str] = None,
+    vendor: Optional[str] = None,
+    status: Optional[str] = None,
+    serial_number: Optional[str] = None,
+    user=Depends(require_feature_entitlement("inventory_intelligence"))
+):
+    """Export comprehensive filtered inventory intelligence report as CSV (Pro-only)."""
+    cid = user["company_id"]
+    if not (has_team_permission(user, "data_management", "view") or is_super_admin(user)):
+        raise HTTPException(status_code=403, detail="Missing permission: data_management.view")
+
+    # Check export entitlement and quota
+    chk_exp = await check_plan_limit(cid, "exports", 1, db=db)
+    if not chk_exp["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_exp["message"])
+
+    data = await _compute_inventory_intelligence(
+        cid=cid,
+        time_range=time_range,
+        from_date=from_date,
+        to_date=to_date,
+        product=product,
+        category=category,
+        brand=brand,
+        client=client,
+        project=project,
+        vendor=vendor,
+        status=status,
+        serial_number=serial_number,
+    )
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+
+    # 1. Header & Summary
+    w.writerow(["SOLARIX INVENTORY INTELLIGENCE & ASSET ANALYTICS REPORT"])
+    w.writerow(["Generated At", now_iso(), "Generated By", user.get("name", "User")])
+    w.writerow(["Filter Range", time_range, "From", from_date or "—", "To", to_date or "—"])
+    w.writerow([])
+
+    s = data.get("summary", {})
+    w.writerow(["=== EXECUTIVE SUMMARY KPIS ==="])
+    w.writerow(["Total Master Products", s.get("total_products", 0)])
+    w.writerow(["Total Available Stock (Units)", s.get("total_units", 0)])
+    w.writerow(["Total Received in Period", s.get("total_received", 0)])
+    w.writerow(["Total Issued in Period", s.get("total_issued", 0)])
+    w.writerow(["Material Utilization %", f"{s.get('utilization_pct', 0)}%"])
+    w.writerow(["Total Serialized Assets", s.get("total_serialized_assets", 0)])
+    w.writerow(["Serials in Stock", s.get("serials_in_stock", 0)])
+    w.writerow(["Serials Issued", s.get("serials_issued", 0)])
+    w.writerow(["Serials Installed", s.get("serials_installed", 0)])
+    w.writerow(["Serials Damaged", s.get("serials_damaged", 0)])
+    w.writerow(["Serials Returned", s.get("serials_returned", 0)])
+    w.writerow(["Low Stock Items", s.get("low_stock_count", 0)])
+    w.writerow(["Out of Stock Items", s.get("out_of_stock_count", 0)])
+    w.writerow(["Slow Moving Items", s.get("slow_moving_count", 0)])
+    w.writerow([])
+
+    # 2. Material Utilization by Category
+    w.writerow(["=== MATERIAL UTILIZATION BY CATEGORY ==="])
+    w.writerow(["Category", "Received", "Issued", "Available", "Utilization %", "Status"])
+    for mu in data.get("material_utilization", []):
+        w.writerow([mu.get("category"), mu.get("received"), mu.get("issued"), mu.get("available"), f"{mu.get('utilization_pct')}%", mu.get("status")])
+    w.writerow([])
+
+    # 3. Product Performance
+    w.writerow(["=== PRODUCT PERFORMANCE MATRIX ==="])
+    w.writerow(["Product Name", "Size / Spec", "Brand", "SKU", "Category", "Opening Stock", "Received", "Issued", "Available", "Utilization %", "Projects Count", "Clients Count", "Stock Status"])
+    for pp in data.get("product_performance", []):
+        w.writerow([
+            pp.get("product"),
+            pp.get("size"),
+            pp.get("brand"),
+            pp.get("sku"),
+            pp.get("category"),
+            pp.get("opening_stock"),
+            pp.get("total_received"),
+            pp.get("total_issued"),
+            pp.get("available"),
+            f"{pp.get('utilization_pct')}%",
+            pp.get("projects_count"),
+            pp.get("clients_count"),
+            pp.get("stock_status"),
+        ])
+    w.writerow([])
+
+    # 4. Site / Project Consumption
+    w.writerow(["=== SITE & PROJECT MATERIAL CONSUMPTION ==="])
+    w.writerow(["Site / Project", "Client Name", "Materials Issued (Units)", "Products Used Count", "Serials Assigned", "Last Activity Date"])
+    for sp in data.get("site_performance", []):
+        w.writerow([
+            sp.get("site_name"),
+            sp.get("client_name"),
+            sp.get("materials_issued_qty"),
+            sp.get("products_used_count"),
+            sp.get("serials_count"),
+            sp.get("last_activity_date"),
+        ])
+    w.writerow([])
+
+    # 5. Serial Assets Listing
+    w.writerow(["=== SERIALIZED ASSET TRACKING ==="])
+    w.writerow(["Serial Number", "Product", "Brand", "Model", "Current Status", "Location / Site", "Client", "Project", "Outward Date", "Last Movement", "Reference"])
+    for sa in data.get("serial_items", []):
+        w.writerow([
+            sa.get("serial_number"),
+            sa.get("product"),
+            sa.get("brand"),
+            sa.get("model"),
+            sa.get("status"),
+            sa.get("location"),
+            sa.get("client_name"),
+            sa.get("project_name"),
+            sa.get("outward_date"),
+            sa.get("last_movement"),
+            sa.get("reference"),
+        ])
+
+    await increment_usage(cid, "exports", 1, db=db)
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=solarix-inventory-intelligence-{today_str}.csv"}
+    )
 
 
 @api_router.get("/inventory/next-challan")
@@ -10992,6 +11926,12 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
     if not data.rows:
         raise HTTPException(status_code=400, detail="No rows provided")
     cid = user["company_id"]
+    from plan_config import check_feature_access, check_plan_limit, increment_usage
+    if not check_feature_access(cid, "manual_import"):
+        raise HTTPException(status_code=403, detail="FEATURE_NOT_ENTITLED: Manual Import is not included in your current plan.")
+    chk_imp = await check_plan_limit(cid, "manual_imports", increment=1, db=db)
+    if not chk_imp["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_imp["message"])
     inserted_ids: List[str] = []
     gd = data.global_defaults or {}  # v2 global defaults
     prod_cache: Dict[Tuple[str, str, str, str], Any] = {}
@@ -11162,6 +12102,8 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
             all_assets.extend(new_assets)
             _save_local_assets(all_assets)
         invalidate_products_cache(cid)
+        await increment_usage(cid, "manual_imports", amount=1, db=db)
+        await increment_usage(cid, "inventory_transactions", amount=len(docs_to_insert), db=db)
         asyncio.create_task(log_activity(cid, user["id"], user["name"], "Bulk Inward Import", f"{len(docs_to_insert)} entries"))
         asyncio.create_task(push_notification(cid, "admin", "Bulk Inventory Import", f"{user['name']} imported {len(docs_to_insert)} inward entries via AI"))
         if new_prods_to_insert:
@@ -11178,6 +12120,14 @@ async def bulk_inward_high_value(data: BulkInwardIn, user=Depends(get_current_us
         raise HTTPException(status_code=400, detail="No rows provided")
     
     cid = user["company_id"]
+    from plan_config import check_feature_access, check_plan_limit, increment_usage
+    if not check_feature_access(cid, "manual_import"):
+        raise HTTPException(status_code=403, detail="FEATURE_NOT_ENTITLED: Manual Import is not included in your current plan.")
+    if not check_feature_access(cid, "high_value_goods"):
+        raise HTTPException(status_code=403, detail="FEATURE_NOT_ENTITLED: High Value Goods is not included in your current plan.")
+    chk_imp = await check_plan_limit(cid, "manual_imports", increment=1, db=db)
+    if not chk_imp["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_imp["message"])
     inserted_ids: List[str] = []
     gd = data.global_defaults or {}
     docs_to_insert = []
@@ -11328,6 +12278,8 @@ async def bulk_inward_high_value(data: BulkInwardIn, user=Depends(get_current_us
             all_assets.extend(new_assets)
             _save_local_assets(all_assets)
         invalidate_products_cache(cid)
+        await increment_usage(cid, "manual_imports", amount=1, db=db)
+        await increment_usage(cid, "inventory_transactions", amount=len(docs_to_insert), db=db)
         await log_activity(cid, user["id"], user["name"], "High Value Manual Import", f"{len(docs_to_insert)} high value entries")
         await push_notification(cid, "admin", "High Value Manual Import", f"{user['name']} imported {len(docs_to_insert)} high value goods entries")
         asyncio.create_task(sync_inventory_master(cid))
@@ -11375,6 +12327,12 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
     if not data.rows:
         raise HTTPException(status_code=400, detail="No rows provided")
     cid = user["company_id"]
+    from plan_config import check_feature_access, check_plan_limit, increment_usage
+    if not check_feature_access(cid, "manual_import"):
+        raise HTTPException(status_code=403, detail="FEATURE_NOT_ENTITLED: Manual Import is not included in your current plan.")
+    chk_imp = await check_plan_limit(cid, "manual_imports", increment=1, db=db)
+    if not chk_imp["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_imp["message"])
     inserted_ids: List[str] = []
     gd = data.global_defaults or {}  # v2 global defaults
     g_client_id = gd.get("client_id", "")
@@ -11495,6 +12453,8 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
     if docs_to_insert:
         await db.outward_entries.insert_many(docs_to_insert)
         invalidate_products_cache(cid)
+        await increment_usage(cid, "manual_imports", amount=1, db=db)
+        await increment_usage(cid, "inventory_transactions", amount=len(docs_to_insert), db=db)
         asyncio.create_task(log_activity(cid, user["id"], user["name"], "Bulk Outward Import", f"{len(docs_to_insert)} entries"))
         asyncio.create_task(push_notification(cid, "admin", "Bulk Outward Import", f"{user['name']} imported {len(docs_to_insert)} outward entries via AI"))
         if new_prods_to_insert:
@@ -13377,7 +14337,9 @@ async def get_client_ledger(client_id: str, user=Depends(require_perm("reports",
 @api_router.get("/inventory/ledger/{client_id}/export")
 async def export_client_ledger(client_id: str, format: str = "csv", user=Depends(require_perm("reports", "view"))):
     cid = user["company_id"]
-    from plan_config import check_plan_limit, increment_usage
+    from plan_config import check_plan_limit, increment_usage, check_feature_access
+    if not check_feature_access(cid, "export"):
+        raise HTTPException(status_code=403, detail="FEATURE_NOT_ENTITLED: Export is not included in your current plan.")
     chk_exp = await check_plan_limit(cid, "exports", increment=1, db=db)
     if not chk_exp["allowed"]:
         raise HTTPException(status_code=403, detail=chk_exp["message"])
@@ -13613,8 +14575,11 @@ async def parse_pdf_products(file: UploadFile = File(...), user=Depends(get_curr
 @api_router.post("/inventory/products/export-pdf")
 async def export_product_master_pdf_endpoint(request: Request, user=Depends(require_active_subscription())):
     """Generates an A4 Landscape PDF export for the Product Master view."""
-    from plan_config import check_plan_limit, increment_usage
-    chk_exp = await check_plan_limit(user["company_id"], "exports", increment=1, db=db)
+    cid = user["company_id"]
+    from plan_config import check_plan_limit, increment_usage, check_feature_access
+    if not check_feature_access(cid, "export"):
+        raise HTTPException(status_code=403, detail="FEATURE_NOT_ENTITLED: Export is not included in your current plan.")
+    chk_exp = await check_plan_limit(cid, "exports", increment=1, db=db)
     if not chk_exp["allowed"]:
         raise HTTPException(status_code=403, detail=chk_exp["message"])
 
@@ -17463,6 +18428,7 @@ class PlatformPlanUpdateIn(BaseModel):
     monthly_documents: Optional[int] = 500
     monthly_pdf_docx: Optional[int] = 200
     monthly_exports: Optional[int] = 50
+    monthly_manual_imports: Optional[int] = 100
     monthly_material_requests: Optional[int] = 1000
     monthly_inventory_transactions: Optional[int] = 2500
     monthly_api_requests: Optional[int] = 0
@@ -17502,6 +18468,7 @@ async def update_platform_plan(plan_id: str, data: PlatformPlanUpdateIn, user=De
     default_docs = 10000 if pid == "pro" else 2000 if pid == "growth" else 500
     default_pdf = 5000 if pid == "pro" else 1000 if pid == "growth" else 200
     default_exports = 1000 if pid == "pro" else 250 if pid == "growth" else 50
+    default_imports = 2500 if pid == "pro" else 500 if pid == "growth" else 100
     default_mr = 20000 if pid == "pro" else 5000 if pid == "growth" else 1000
     default_inv = 50000 if pid == "pro" else 10000 if pid == "growth" else 2500
     default_api = 50000 if pid == "pro" else 5000 if pid == "growth" else 0
@@ -17519,6 +18486,7 @@ async def update_platform_plan(plan_id: str, data: PlatformPlanUpdateIn, user=De
         "monthly_documents": int(data.monthly_documents) if data.monthly_documents is not None else default_docs,
         "monthly_pdf_docx": int(data.monthly_pdf_docx) if data.monthly_pdf_docx is not None else default_pdf,
         "monthly_exports": int(data.monthly_exports) if data.monthly_exports is not None else default_exports,
+        "monthly_manual_imports": int(data.monthly_manual_imports) if data.monthly_manual_imports is not None else default_imports,
         "monthly_material_requests": int(data.monthly_material_requests) if data.monthly_material_requests is not None else default_mr,
         "monthly_inventory_transactions": int(data.monthly_inventory_transactions) if data.monthly_inventory_transactions is not None else default_inv,
         "monthly_api_requests": int(data.monthly_api_requests) if data.monthly_api_requests is not None else default_api,

@@ -21,8 +21,10 @@ import {
 } from "lucide-react";
 import dayjs from "dayjs";
 import { toast } from "sonner";
+import { useEntitlements } from "@/hooks/useEntitlements";
 
 export default function SerialTrackingTab({ globalSearch = "" }) {
+  const { hasFeature } = useEntitlements();
   const [data, setData] = useState({ rows: [], total: 0, page: 1, pages: 1, page_size: 50 });
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState("all");
@@ -62,6 +64,10 @@ export default function SerialTrackingTab({ globalSearch = "" }) {
   }, [fetchSerials]);
 
   const handleExportCsv = async () => {
+    if (!hasFeature("export")) {
+      toast.error("Export is not included in your current plan.");
+      return;
+    }
     try {
       const params = {
         type: typeFilter !== "all" ? typeFilter : undefined,
@@ -175,6 +181,7 @@ export default function SerialTrackingTab({ globalSearch = "" }) {
               variant="outline"
               size="sm"
               onClick={handleExportCsv}
+              disabled={!hasFeature("export")}
               className="h-9 text-xs border-slate-200 hover:bg-slate-50"
               data-testid="serial-export-csv-btn"
             >
