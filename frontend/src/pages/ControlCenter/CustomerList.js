@@ -18,31 +18,34 @@ export default function CustomerList() {
   const [planFilter, setPlanFilter] = useState("all");
   const navigate = useNavigate();
 
+  const hasLoadedRef = React.useRef(false);
+
   const fetchCustomers = useCallback(async (isManual = false) => {
     if (isManual) setRefreshing(true);
-    else if (customers.length === 0) setLoading(true);
+    else if (!hasLoadedRef.current) setLoading(true);
     try {
       const res = await api.get("/platform-owner/customers", {
         params: { search, status: statusFilter, plan: planFilter }
       });
       setCustomers(res.data || []);
+      hasLoadedRef.current = true;
     } catch (err) {
       console.error("Failed to fetch customers:", err);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [search, statusFilter, planFilter, customers.length]);
+  }, [search, statusFilter, planFilter]);
 
   useEffect(() => {
     fetchCustomers(false);
   }, [statusFilter, planFilter, fetchCustomers]);
 
   useEffect(() => {
-    // Auto-refresh every 12 seconds
+    // Auto-refresh every 5 seconds for real-time customer updates
     const interval = setInterval(() => {
       fetchCustomers(false);
-    }, 12000);
+    }, 5000);
 
     const handleFocus = () => fetchCustomers(false);
     window.addEventListener("focus", handleFocus);

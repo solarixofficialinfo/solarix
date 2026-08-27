@@ -523,6 +523,19 @@ class CursorAdapter:
             for lr in local_records:
                 if str(lr.get("id")) not in existing_ids:
                     data.append(lr)
+            if self.sort_fields and data:
+                for k, dir in reversed(self.sort_fields):
+                    desc = (dir == -1)
+                    def _safe_sort_key(x):
+                        val = x.get(k) if isinstance(x, dict) else None
+                        if val is None:
+                            return (0, 0, "")
+                        if isinstance(val, (int, float)):
+                            return (1, val, "")
+                        if isinstance(val, str):
+                            return (2, 0, val)
+                        return (3, 0, str(val))
+                    data.sort(key=_safe_sort_key, reverse=desc)
 
         deserialized_data = []
         for doc in data:
@@ -873,6 +886,11 @@ def _prepare_company_supabase_payload(payload: dict) -> dict:
     if plan_val is not None:
         cleaned["plan"] = str(plan_val).lower()
 
+    # Map status / subscription_status to Supabase 'status' column
+    status_val = payload.get("subscription_status") or payload.get("status")
+    if status_val is not None:
+        cleaned["status"] = str(status_val).lower()
+
     # Map trial dates
     t_start = payload.get("trial_start") or payload.get("trial_started_at")
     if t_start is not None:
@@ -899,9 +917,10 @@ def _enrich_company_doc(doc: dict) -> dict:
     enriched["plan_id"] = raw_plan
     enriched["plan"] = raw_plan
     
-    # Normalize subscription_status
-    if not enriched.get("subscription_status"):
-        enriched["subscription_status"] = "trialing"
+    # Normalize subscription_status and status
+    raw_status = str(enriched.get("subscription_status") or enriched.get("status") or "trialing").lower()
+    enriched["subscription_status"] = raw_status
+    enriched["status"] = raw_status
             
     # Normalize trial dates
     t_start = enriched.get("trial_started_at") or enriched.get("trial_start")
@@ -1097,6 +1116,8 @@ class CollectionAdapter:
             doc = _enrich_outward_doc(doc)
         elif self.table_name == "clients":
             doc = _enrich_client_doc(doc)
+        elif self.table_name == "companies":
+            doc = _enrich_company_doc(doc)
         return doc
 
     def _matches_filter(self, doc, extracted_filters):
@@ -1129,6 +1150,15 @@ class CollectionAdapter:
                 continue
             if self.table_name in ("inward_entries", "outward_entries") and k == "product_id":
                 continue
+            if self.table_name == "companies":
+                if k == "subscription_status":
+                    k = "status"
+                elif k == "plan_id":
+                    k = "plan"
+                elif k == "trial_started_at":
+                    k = "trial_start"
+                elif k == "trial_ends_at":
+                    k = "trial_end"
             if k == "$or":
                 parts = []
                 for cond in v:
@@ -2034,10 +2064,14 @@ class LocalCursor:
             for k, dir in reversed(self.sort_fields):
                 desc = (dir == -1)
                 def sort_key(x):
-                    val = x.get(k)
+                    val = x.get(k) if isinstance(x, dict) else None
                     if val is None:
-                        return "" if isinstance(val, str) else 0
-                    return val
+                        return (0, 0, "")
+                    if isinstance(val, (int, float)):
+                        return (1, val, "")
+                    if isinstance(val, str):
+                        return (2, 0, val)
+                    return (3, 0, str(val))
                 filtered.sort(key=sort_key, reverse=desc)
 
         skip = self.skip_val or 0
@@ -2325,11 +2359,11 @@ async def supabase_client_middleware(request: Request, call_next):
     
     token = None
     if not is_public_route:
-        token = request.cookies.get("access_token")
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:].strip()
         if not token:
-            auth = request.headers.get("Authorization", "")
-            if auth.startswith("Bearer "):
-                token = auth[7:]
+            token = request.cookies.get("access_token")
     
     if token:
         try:
@@ -2489,11 +2523,12 @@ def verify_password(p: str, h: str) -> bool:
         return False
 
 async def get_current_user(request: Request) -> dict:
-    token = request.cookies.get("access_token")
+    token = None
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:].strip()
     if not token:
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            token = auth[7:]
+        token = request.cookies.get("access_token")
     if not token:
         token = request.query_params.get("auth")
     if not token:
@@ -17102,17 +17137,21 @@ async def list_platform_customers(
     companies = await db.companies.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
     s_term = (search or "").strip().lower()
-    results = []
-    for c in companies:
-        cid = c["id"]
+
+    async def _process_company(c):
+        cid = c.get("id")
+        if not cid:
+            return None
+
+        # Fetch owner user if available, fallback to company record
         owner = await db.users.find_one({"company_id": cid, "user_type": "owner"}, {"_id": 0, "password_hash": 0})
         if not owner:
             owner = await db.users.find_one({"company_id": cid}, {"_id": 0, "password_hash": 0}) or {}
 
-        company_name = c.get("company_name", "")
-        owner_name = owner.get("name", "")
-        owner_email = owner.get("email", "")
-        owner_mobile = owner.get("mobile", "")
+        company_name = c.get("company_name") or c.get("name") or "Solar EPC Company"
+        owner_name = owner.get("name") or c.get("owner_name", "")
+        owner_email = owner.get("email") or c.get("email", "")
+        owner_mobile = owner.get("mobile") or c.get("mobile", "")
 
         if s_term:
             match = (
@@ -17123,25 +17162,34 @@ async def list_platform_customers(
                 s_term in cid.lower()
             )
             if not match:
-                continue
+                return None
 
-        user_count = await db.users.count_documents({"company_id": cid})
-        project_count = await db.projects.count_documents({"company_id": cid})
-        client_count = await db.clients.count_documents({"company_id": cid})
+        # Concurrently compute metrics for this company
+        u_task = db.users.count_documents({"company_id": cid})
+        p_task = db.projects.count_documents({"company_id": cid})
+        cl_task = db.clients.count_documents({"company_id": cid})
+        user_count, project_count, client_count = await asyncio.gather(u_task, p_task, cl_task)
 
-        results.append({
+        # Ensure user_count is at least 1 if owner exists
+        if user_count == 0 and (owner.get("id") or owner_name):
+            user_count = 1
+
+        sub_status = str(c.get("subscription_status") or c.get("status") or "trialing").lower()
+        plan_id = str(c.get("plan_id") or c.get("plan") or "starter").lower()
+
+        return {
             "id": cid,
             "company_name": company_name,
             "owner_name": owner_name,
             "email": owner_email,
             "mobile": owner_mobile,
-            "plan_id": c.get("plan_id", "starter"),
+            "plan_id": plan_id,
             "billing_cycle": c.get("billing_cycle", "monthly"),
-            "subscription_status": c.get("subscription_status", "trialing"),
+            "subscription_status": sub_status,
             "is_free": bool(c.get("is_free", False)),
             "extra_days": int(c.get("extra_days", 0) or 0),
-            "access_type": "free_grant" if c.get("is_free") else ("trial" if c.get("subscription_status") == "trialing" else "paid"),
-            "trial_ends_at": c.get("trial_ends_at"),
+            "access_type": "free_grant" if c.get("is_free") else ("trial" if sub_status == "trialing" else "paid"),
+            "trial_ends_at": c.get("trial_ends_at") or c.get("trial_end"),
             "subscription_expires_at": c.get("subscription_expires_at"),
             "user_count": user_count,
             "project_count": project_count,
@@ -17149,7 +17197,15 @@ async def list_platform_customers(
             "created_at": c.get("created_at"),
             "city": c.get("city", ""),
             "state": c.get("state", "")
-        })
+        }
+
+    sem = asyncio.Semaphore(15)
+    async def _sem_worker(c):
+        async with sem:
+            return await _process_company(c)
+
+    processed = await asyncio.gather(*[_sem_worker(c) for c in companies])
+    results = [r for r in processed if r is not None]
 
     return results
 
@@ -17161,6 +17217,14 @@ async def get_platform_customer_detail(company_id: str, user=Depends(require_sup
         raise HTTPException(status_code=404, detail="Customer workspace not found")
 
     owner = await db.users.find_one({"company_id": company_id, "user_type": "owner"}, {"_id": 0, "password_hash": 0})
+    if not owner:
+        owner = await db.users.find_one({"company_id": company_id}, {"_id": 0, "password_hash": 0})
+    if not owner:
+        owner = {
+            "name": company.get("owner_name", ""),
+            "email": company.get("email", ""),
+            "mobile": company.get("mobile", "")
+        }
     raw_team = await db.users.find({"company_id": company_id}, {"_id": 0, "password_hash": 0}).to_list(500)
     team_users = [u for u in raw_team if is_internal_team_user(u)]
 
