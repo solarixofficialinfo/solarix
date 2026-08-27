@@ -405,6 +405,7 @@ async def run_realtime_verification():
 
     # Verify created_by and lead_no preserved on Lead 1
     lead_1_reassigned = await db.leads.find_one({"id": "lead_001"})
+    assert lead_1_reassigned is not None, "lead_1_reassigned must exist"
     assert lead_1_reassigned["created_by"] == user_a["id"], "created_by must be preserved on reassignment"
     assert lead_1_reassigned["lead_no"] == "LEAD-2026-0001", "lead_no must be preserved on reassignment"
     assert lead_1_reassigned["assigned_to"] == user_b["id"], "assigned_to must update to User B"
@@ -427,6 +428,7 @@ async def run_realtime_verification():
         }}
     )
     confirmed_lead = await db.leads.find_one({"id": "lead_001"})
+    assert confirmed_lead is not None, "confirmed_lead must exist"
     assert confirmed_lead["stage"] == "Confirmed", "Lead stage must be Confirmed"
     assert confirmed_lead["assigned_to"] == user_b["id"], "Assignment must be preserved on confirmation"
     assert confirmed_lead["created_by"] == user_a["id"], "created_by must be preserved on confirmation"
@@ -445,6 +447,7 @@ async def run_realtime_verification():
         }}
     )
     linked_lead = await db.leads.find_one({"id": "lead_001"})
+    assert linked_lead is not None, "linked_lead must exist"
     assert linked_lead["converted_client_id"] == client_id, "Lead must link to client"
     assert linked_lead["converted_sol_id"] == sol_id, "Lead must link to client SOL ID"
     print("✓ Test 7 PASSED: Confirm Lead workflow updates state, preserves assignment, and links client idempotently")

@@ -6,7 +6,7 @@ def parse_iso(dt_str: Optional[str]) -> Optional[datetime]:
     if not dt_str:
         return None
     try:
-        dt = datetime.fromisoformat(str(dt_str).replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
@@ -494,7 +494,7 @@ def check_feature_access(target: Any, feature_key: str, is_trial: bool = False, 
 
 def get_plan_limits(plan_id: str, is_trial: bool = False, db_override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Return complete EPC resource limits dictionary for the assigned plan (Trial accounts strictly use their plan's limits)."""
-    pid = str(plan_id or "starter").lower()
+    pid = (plan_id or "starter").lower()
     if pid not in ("starter", "growth", "pro"):
         pid = "starter"
     plan = get_plan_details(pid, db_override=db_override)

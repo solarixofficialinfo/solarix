@@ -19,7 +19,7 @@ import time
 import threading
 import asyncio
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any, Tuple, Union
+from typing import List, Optional, Dict, Any, Tuple, Union, Set
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, UploadFile, File, Form, Query
 from fastapi.responses import Response as FastAPIResponse, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -947,10 +947,10 @@ async def _sync_client_financial_record(cid: str, client_id: str, record_type: s
         return
     try:
         supa = get_supabase_client(use_service_key=True)
-        c_id_clean = str(client_id).strip()
+        c_id_clean = client_id.strip()
         res = supa.table("clients").select("id, stages").eq("company_id", cid).or_(f"id.eq.{c_id_clean},sol_id.eq.{c_id_clean}").limit(1).execute()
-        client_row = res.data[0] if res.data else None
-        target_client_uuid = client_row["id"] if client_row else (c_id_clean if not c_id_clean.startswith("SOL-") else None)
+        client_row: Optional[Dict[str, Any]] = res.data[0] if (res.data and isinstance(res.data, list) and len(res.data) > 0 and isinstance(res.data[0], dict)) else None
+        target_client_uuid = client_row.get("id") if client_row else (c_id_clean if not c_id_clean.startswith("SOL-") else None)
         
         stages = dict((client_row.get("stages") if client_row else None) or {})
         ob = dict(stages.get("onboarding_data") or {})
@@ -3444,7 +3444,7 @@ async def register_company(data: RegisterCompanyIn, response: Response):
                 raise HTTPException(status_code=400, detail="Registration could not be completed. Please try again.")
 
     # Create or update Company document (Idempotent)
-    company_id = existing_company.get("id") if existing_company else (existing_user.get("company_id") if existing_user else str(uuid.uuid4()))
+    company_id: str = str(existing_company.get("id") if (existing_company and existing_company.get("id")) else (existing_user.get("company_id") if (existing_user and existing_user.get("company_id")) else uuid.uuid4()))
     company_doc = {
         "id": company_id,
         "company_name": data.company_name,
@@ -3484,7 +3484,7 @@ async def register_company(data: RegisterCompanyIn, response: Response):
         raise HTTPException(status_code=400, detail="Registration could not be completed. Please try again.")
 
     # Create or update User document (Idempotent)
-    user_id = auth_user_id or (existing_user.get("id") if existing_user else str(uuid.uuid4()))
+    user_id: str = str(auth_user_id or (existing_user.get("id") if (existing_user and existing_user.get("id")) else uuid.uuid4()))
     user_doc = {
         "id": user_id,
         "company_id": company_id,
@@ -3557,7 +3557,7 @@ def _fetch_company_sync(company_id: str):
     try:
         company_rpc = get_rpc_client().rpc("get_company_by_id", {"p_company_id": company_id}).execute()
         raw = company_rpc.data[0] if isinstance(company_rpc.data, list) and company_rpc.data else None
-        if raw:
+        if raw and isinstance(raw, dict):
             return _enrich_company_doc(raw)
     except Exception:
         pass
@@ -3578,7 +3578,7 @@ def _fetch_company_with_token_sync(company_id: str, token: str):
     try:
         rpc_res = user_client.rpc("get_company_by_id", {"p_company_id": company_id}).execute()
         raw = rpc_res.data[0] if isinstance(rpc_res.data, list) and rpc_res.data else None
-        if raw:
+        if raw and isinstance(raw, dict):
             return _enrich_company_doc(raw)
     except Exception:
         pass
@@ -3752,7 +3752,7 @@ async def login(data: LoginIn, response: Response):
             company = None
 
     if not company:
-        user_email = (user.get("email") or "").lower().strip()
+        user_email = str(user.get("email") or "").lower().strip()
         if user_email:
             try:
                 company = await db.companies.find_one({"email": user_email}, {"_id": 0})
@@ -3769,7 +3769,7 @@ async def login(data: LoginIn, response: Response):
         company = _enrich_company_doc(company)
         _cache_put_company(company.get("id") or cid, company)
 
-    if (user.get("email") or "").strip().lower() in SUPER_ADMIN_EMAILS:
+    if str(user.get("email") or "").strip().lower() in SUPER_ADMIN_EMAILS:
         user["is_super_admin"] = True
         user["is_platform_owner"] = True
         user["user_type"] = "super_admin"
@@ -5016,7 +5016,7 @@ async def get_client(client_id: str, user=Depends(get_current_user)):
     target_id = client_id.strip()
     logger.info(f"[CLIENT-GET DIAG] GET /clients/{target_id} | company_id={cid} user_id={user.get('id')}")
     
-    or_conds = [{"id": target_id}, {"sol_id": target_id}]
+    or_conds: List[Dict[str, Any]] = [{"id": target_id}, {"sol_id": target_id}]
     if len(target_id) == 24:
         try:
             from bson import ObjectId
@@ -8939,10 +8939,10 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
         pn_raw = (data.product or "").strip().upper()
         challan_raw = (data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None) or "").strip()
         source_raw = (data.source_name or "").strip().upper()
-        sns_raw = [str(sn).strip().upper() for sn in (data.serial_numbers or []) if str(sn).strip()]
+        sns_raw = [sn.strip().upper() for sn in (data.serial_numbers or []) if sn and sn.strip()]
 
         # Immediate in-memory deduplication for rapid multi-clicks
-        inw_tx_key = f"{company_id}:{pn_raw}:{float(data.quantity or 0)}:{challan_raw}:{source_raw}:{','.join(sorted(sns_raw))}"
+        inw_tx_key = f"{company_id}:{pn_raw}:{data.quantity or 0.0}:{challan_raw}:{source_raw}:{','.join(sorted(sns_raw))}"
         now_ts = time.time()
         if inw_tx_key in _recent_inward_txs:
             prev_ts, prev_doc = _recent_inward_txs[inw_tx_key]
@@ -8989,7 +8989,7 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
                             "updated_at": now_iso()
                         }}
                     )
-            elif raw_bill_num or float(data.total_amount or 0.0) > 0 or challan_val:
+            elif raw_bill_num or (data.total_amount or 0.0) > 0 or challan_val:
                 pbill_id = f"pbill_{uuid.uuid4().hex[:12]}"
                 pbill_doc = {
                     "id": pbill_id,
@@ -9003,9 +9003,9 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
                     "bill_date": (data.date or now_iso())[:10],
                     "due_date": "",
                     "items": [],
-                    "subtotal": float(data.total_amount or 0.0),
+                    "subtotal": data.total_amount or 0.0,
                     "gst_total": 0.0,
-                    "grand_total": float(data.total_amount or 0.0),
+                    "grand_total": data.total_amount or 0.0,
                     "payment_status": data.payment_status or "Unpaid",
                     "status": data.payment_status or "Unpaid",
                     "inward_status": "Received",
@@ -9014,7 +9014,7 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
                     "remarks": data.remarks or "",
                     "attachment_file_id": data.attachment_file_id or "",
                     "attachment_filename": data.attachment_filename or "",
-                    "paid_amount": float(data.total_amount or 0.0) if data.payment_status == "Paid" else 0.0,
+                    "paid_amount": (data.total_amount or 0.0) if data.payment_status == "Paid" else 0.0,
                     "created_by": user_name,
                     "created_at": now_iso(),
                     "updated_at": now_iso()
@@ -9051,7 +9051,7 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
         if source_type_val == "Return From Client" and client_id_val:
             remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
             
-        sns = [str(sn).strip() for sn in (data.serial_numbers or []) if str(sn).strip()]
+        sns = [sn.strip() for sn in (data.serial_numbers or []) if sn and sn.strip()]
 
         # Fast in-memory idempotency check (protects against rapid multi-clicks within 5s)
         tx_key = f"{company_id}:{pn}:{data.quantity}:{challan_val}:{source_name_val}:{','.join(sorted(sns))}"
@@ -9118,9 +9118,9 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
             "attachment_file_id": data.attachment_file_id or "",
             "attachment_filename": data.attachment_filename or "",
             "source": source,
-            "unit_price": float(data.unit_price or 0.0) if data.bill_type != "Amount Bill" else 0.0,
-            "line_total": float(data.line_total or (data.quantity * float(data.unit_price or 0.0))) if data.bill_type != "Amount Bill" else 0.0,
-            "total_amount": float(data.total_amount or 0.0),
+            "unit_price": (data.unit_price or 0.0) if data.bill_type != "Amount Bill" else 0.0,
+            "line_total": (data.line_total or (data.quantity * (data.unit_price or 0.0))) if data.bill_type != "Amount Bill" else 0.0,
+            "total_amount": data.total_amount or 0.0,
             "payment_status": data.payment_status or "Unpaid",
             "vendor_id": vendor_id_val,
             "bill_type": data.bill_type or "Product Bill",
@@ -9202,9 +9202,9 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
         pn_raw = (data.product or "").strip().upper()
         challan_raw = (data.outward_challan_no or data.reference_number or "").strip()
         client_raw = (data.client_name or "").strip().upper()
-        sns_raw = [str(sn).strip().upper() for sn in (data.serial_numbers or []) if str(sn).strip()]
+        sns_raw = [sn.strip().upper() for sn in (data.serial_numbers or []) if sn and sn.strip()]
 
-        out_tx_key = f"{company_id}:{pn_raw}:{float(data.quantity or 0)}:{challan_raw}:{client_raw}:{','.join(sorted(sns_raw))}"
+        out_tx_key = f"{company_id}:{pn_raw}:{data.quantity or 0.0}:{challan_raw}:{client_raw}:{','.join(sorted(sns_raw))}"
         now_ts = time.time()
         if out_tx_key in _recent_outward_txs:
             prev_ts, prev_doc = _recent_outward_txs[out_tx_key]
@@ -9241,7 +9241,7 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
                 project_name_val = client_name_val
 
         challan_val = (data.outward_challan_no or data.reference_number or "").strip()
-        sns = [str(sn).strip() for sn in (data.serial_numbers or []) if str(sn).strip()]
+        sns = [sn.strip() for sn in (data.serial_numbers or []) if sn and sn.strip()]
 
         # Idempotency check: if identical outward created in last 4 seconds, return existing
         existing_recent = await db.outward_entries.find_one({
@@ -10664,7 +10664,7 @@ async def list_serial_tracking(
             d_str = (entry.get("date") or entry.get("created_at") or "")[:10]
             ref = entry.get("reference_number") or entry.get("outward_challan_no") or ""
             
-            v_names = list(dict.fromkeys([sn_to_vendor.get(s) for s in sns if sn_to_vendor.get(s)]))
+            v_names = list(dict.fromkeys([str(sn_to_vendor[s]) for s in sns if sn_to_vendor.get(s)]))
             v_display = ", ".join(v_names) if v_names else "—"
 
             detailed_serials = [
@@ -11423,7 +11423,7 @@ async def _compute_inventory_intelligence(
     category_usage.sort(key=lambda x: x["quantity"], reverse=True)
 
     # 7. Inventory Movement Trends (Daily, Weekly, Monthly)
-    daily_map: Dict[str, Dict[str, float]] = {}
+    daily_map: Dict[str, Dict[str, Any]] = {}
     for i in range(30, -1, -1):
         d_key = (now_utc - timedelta(days=i)).strftime("%Y-%m-%d")
         daily_map[d_key] = {"period": d_key, "received": 0.0, "issued": 0.0, "net_movement": 0.0}
@@ -11451,7 +11451,7 @@ async def _compute_inventory_intelligence(
         })
 
     # Monthly Trend (Past 6 months)
-    monthly_map: Dict[str, Dict[str, float]] = {}
+    monthly_map: Dict[str, Dict[str, Any]] = {}
     for i in range(5, -1, -1):
         m_dt = now_utc - timedelta(days=i * 30)
         m_key = m_dt.strftime("%Y-%m")
@@ -11625,7 +11625,7 @@ async def get_inventory_intelligence(
 ):
     """Pro-only comprehensive inventory & serial analytics endpoint."""
     cid = user["company_id"]
-    if not (has_team_permission(user, "data_management", "view") or is_super_admin(user)):
+    if not (has_team_permission(user, "data_management", "view") or is_super_admin_user(user)):
         raise HTTPException(status_code=403, detail="Missing permission: data_management.view")
 
     data = await _compute_inventory_intelligence(
@@ -11661,8 +11661,11 @@ async def export_inventory_intelligence_csv(
     user=Depends(require_feature_entitlement("inventory_intelligence"))
 ):
     """Export comprehensive filtered inventory intelligence report as CSV (Pro-only)."""
+    import csv
+    from plan_config import check_plan_limit, increment_usage
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     cid = user["company_id"]
-    if not (has_team_permission(user, "data_management", "view") or is_super_admin(user)):
+    if not (has_team_permission(user, "data_management", "view") or is_super_admin_user(user)):
         raise HTTPException(status_code=403, detail="Missing permission: data_management.view")
 
     # Check export entitlement and quota
@@ -12788,7 +12791,7 @@ async def client_data_stats(user=Depends(get_current_user)):
         db.service_tickets.count_documents({"company_id": cid, "status": "Closed"}),
     )
 
-    total_kw    = float(kw_agg[0]["total_kw"]) if kw_agg else 0
+    total_kw = float(kw_agg[0]["total_kw"]) if (isinstance(kw_agg, list) and kw_agg and isinstance(kw_agg[0], dict) and "total_kw" in kw_agg[0]) else 0.0
 
     return {
         "total_clients": total_clients,
@@ -14504,7 +14507,7 @@ async def parse_pdf_products(file: UploadFile = File(...), user=Depends(get_curr
         
     extracted_text = ""
     try:
-        from pypdf import PdfReader
+        from pypdf import PdfReader  # type: ignore
         from io import BytesIO
         reader = PdfReader(BytesIO(contents))
         for page in reader.pages:
@@ -14857,8 +14860,8 @@ async def create_lead(data: LeadIn, user=Depends(require_perm("leads", "create")
     lead_id = str(uuid.uuid4())
     lead_no = await next_lead_id(cid)
 
-    sys_kw = float(data.system_kw or data.estimated_kw or 0.0)
-    p_price = float(data.proposed_price or data.offer_price or 0.0)
+    sys_kw = data.system_kw or data.estimated_kw or 0.0
+    p_price = data.proposed_price or data.offer_price or 0.0
     stg = data.stage or "New Lead"
     f_date = data.followup_date or (data.next_followup_at[:10] if data.next_followup_at else None)
 
@@ -14982,7 +14985,7 @@ async def update_lead(lead_id: str, data: LeadIn, user=Depends(require_perm("lea
     sys_kw = float(data.system_kw or data.estimated_kw or lead.get("system_kw") or lead.get("estimated_kw") or 0.0)
     p_price = float(data.proposed_price or data.offer_price or lead.get("proposed_price") or lead.get("offer_price") or 0.0)
     stg = data.stage or lead.get("stage", "New Lead")
-    if "followup_date" in data.__fields_set__:
+    if "followup_date" in data.model_fields_set:
         f_date = data.followup_date if data.followup_date not in ("", "none", "None", None) else None
     else:
         f_date = lead.get("followup_date")
@@ -15674,11 +15677,14 @@ async def get_receivables_dashboard(
             c_cost += p_cost
 
             # Milestones evaluated based on linked actual received payments
-            proj_plan = p.get("payment_plan") or c.get("payment_plan") or []
+            proj_plan_raw = p.get("payment_plan") or c.get("payment_plan") or []
+            proj_plan = proj_plan_raw if isinstance(proj_plan_raw, list) else []
             processed_proj_plan = []
             for idx, m in enumerate(proj_plan):
+                if not isinstance(m, dict):
+                    continue
                 m_id = str(m.get("id") or f"ms_{idx+1}")
-                m_name = (m.get("name") or m.get("milestone_name") or f"Milestone {idx+1}").strip()
+                m_name = str(m.get("name") or m.get("milestone_name") or f"Milestone {idx+1}").strip()
                 m_amt = float(m.get("amount") or 0)
                 m_name_lower = m_name.lower()
                 linked_pays = [
@@ -15764,7 +15770,7 @@ async def create_project(data: ProjectCreatePayload, user=Depends(get_current_us
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    payment_plan_data = [item.dict() for item in data.payment_plan] if data.payment_plan else []
+    payment_plan_data = [item.model_dump() for item in data.payment_plan] if data.payment_plan else []
 
     proj_doc = {
         "id": f"proj_{uuid.uuid4().hex[:12]}",
@@ -16075,11 +16081,14 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
         processed_loans.append(l_copy)
 
     # Process project payment plan milestones strictly by linked received payments
-    raw_plan = project.get("payment_plan") or client.get("payment_plan") or []
+    raw_plan_data = project.get("payment_plan") or client.get("payment_plan") or []
+    raw_plan = raw_plan_data if isinstance(raw_plan_data, list) else []
     processed_plan = []
     for idx, m in enumerate(raw_plan):
+        if not isinstance(m, dict):
+            continue
         m_id = str(m.get("id") or f"ms_{idx+1}")
-        m_name = (m.get("name") or m.get("milestone_name") or f"Milestone {idx+1}").strip()
+        m_name = str(m.get("name") or m.get("milestone_name") or f"Milestone {idx+1}").strip()
         m_amt = float(m.get("amount") or 0)
         m_name_lower = m_name.lower()
         linked_pays = [
@@ -16205,7 +16214,7 @@ async def update_payment(payment_id: str, data: PaymentUpdatePayload, user=Depen
     if not existing:
         raise HTTPException(status_code=404, detail="Payment not found")
 
-    update_fields = {"updated_at": now_iso()}
+    update_fields: Dict[str, Any] = {"updated_at": now_iso()}
     if data.milestone_name is not None: update_fields["milestone_name"] = data.milestone_name
     if data.payment_type is not None: update_fields["payment_type"] = data.payment_type
     if data.amount is not None: update_fields["amount"] = data.amount
@@ -16222,7 +16231,7 @@ async def update_payment(payment_id: str, data: PaymentUpdatePayload, user=Depen
     if existing.get("loan_id") and data.amount is not None:
         await db.loans.update_one(
             {"id": existing["loan_id"], "company_id": cid},
-            {"$set": {"disbursed_amount": float(data.amount), "updated_at": now_iso()}}
+            {"$set": {"disbursed_amount": data.amount, "updated_at": now_iso()}}
         )
     return {"message": "Payment updated successfully"}
 
@@ -16341,7 +16350,7 @@ async def update_project_loan(loan_id: str, data: LoanUpdatePayload, user=Depend
     if not existing:
         raise HTTPException(status_code=404, detail="Loan record not found")
 
-    update_fields = {"updated_at": now_iso()}
+    update_fields: Dict[str, Any] = {"updated_at": now_iso()}
     if data.provider is not None: update_fields["provider"] = data.provider
     if data.loan_amount is not None: update_fields["loan_amount"] = data.loan_amount
     if data.approved_amount is not None: update_fields["approved_amount"] = data.approved_amount
@@ -16456,7 +16465,7 @@ async def update_expense(expense_id: str, data: ExpenseUpdatePayload, user=Depen
     if not existing:
         raise HTTPException(status_code=404, detail="Expense not found")
 
-    update_fields = {"updated_at": now_iso()}
+    update_fields: Dict[str, Any] = {"updated_at": now_iso()}
     if data.category is not None: update_fields["category"] = data.category
     if data.amount is not None: update_fields["amount"] = data.amount
     if data.expense_date is not None: update_fields["expense_date"] = data.expense_date
@@ -16600,8 +16609,8 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
         qty = float(item.quantity or 0)
         rate = float(item.rate if item.rate is not None else item.unit_price or 0)
         disc = float(item.discount or 0)
-        amt = float(item.amount or max(0.0, qty * rate - disc))
-        gst_r = float(item.gst_rate or 18.0)
+        amt = item.amount or max(0.0, qty * rate - disc)
+        gst_r = item.gst_rate or 18.0
         formatted_items.append({
             "product_name": item.product_name,
             "product": item.product_name,
@@ -16669,7 +16678,7 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
         company_doc = await _enrich_company_doc_with_logo(company_doc)
 
         payments = await db.payments.find({"company_id": cid}, {"_id": 0}).to_list(10000)
-        inv_total = float(invoice_doc.get("grand_total") or 0)
+        inv_total = float(data.grand_total or 0.0)
         inv_payments = [
             p for p in payments 
             if (p.get("status") or "Received").lower() == "received" and (
@@ -17507,9 +17516,9 @@ async def create_purchase_bill(vendor_id: str, data: PurchaseBillPayload, user=D
             "product_name": item.product_name.strip(),
             "quantity": qty,
             "unit": item.unit or "Nos",
-            "rate": float(item.rate or 0),
-            "gst_rate": float(item.gst_rate or 12.0),
-            "amount": float(item.amount or (qty * float(item.rate or 0))),
+            "rate": item.rate or 0.0,
+            "gst_rate": item.gst_rate or 12.0,
+            "amount": item.amount or (qty * (item.rate or 0.0)),
             "received_qty": 0.0,
             "remaining_qty": qty
         })
@@ -17575,9 +17584,9 @@ async def create_material_inward(bill_id: str, data: MaterialInwardPayload, user
         rec_now = float(item_input.received_now or 0)
         inward_items_doc.append({
             "product_name": item_input.product_name,
-            "bill_qty": float(item_input.bill_qty or 0),
+            "bill_qty": item_input.bill_qty or 0.0,
             "received_now": rec_now,
-            "remaining_qty": float(item_input.remaining_qty or 0),
+            "remaining_qty": item_input.remaining_qty or 0.0,
             "destination": item_input.destination or data.warehouse_id or "Main Warehouse",
             "project_id": item_input.project_id or data.project_id or "",
             "unit": item_input.unit or "Nos"

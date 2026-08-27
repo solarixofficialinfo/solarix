@@ -145,7 +145,8 @@ async def run_inventory_intelligence_tests():
 
     import server
     db = MockDB()
-    server.db = db
+    server.db = db  # type: ignore
+    _save_local_assets([])
 
     cid_pro = "comp_pro_intelligence_001"
     cid_starter = "comp_starter_intelligence_002"
