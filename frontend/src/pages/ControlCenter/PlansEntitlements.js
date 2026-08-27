@@ -23,7 +23,8 @@ import {
   Lock,
   CheckCircle2,
   Sliders,
-  AlertCircle
+  AlertCircle,
+  UserPlus
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -44,6 +45,15 @@ const REAL_APP_PAGE_DEFINITIONS = [
         route: "/dashboard",
         icon: LayoutDashboard,
         desc: "High-level metrics, active client pipeline, revenue cards, and recent activities.",
+        features: [],
+        limits: []
+      },
+      {
+        key: "leads",
+        name: "Leads Management",
+        route: "/leads",
+        icon: UserPlus,
+        desc: "Solar sales leads, call logging, follow-up scheduling, and client onboarding conversion.",
         features: [],
         limits: []
       },

@@ -20,6 +20,7 @@ def get_current_period() -> str:
 # Verified Real Solarix Application Pages
 REAL_APPLICATION_PAGES = [
     {"key": "dashboard", "name": "Dashboard", "route": "/dashboard", "section": "WORKSPACE"},
+    {"key": "leads", "name": "Leads", "route": "/leads", "section": "WORKSPACE"},
     {"key": "clients", "name": "Clients", "route": "/clients", "section": "WORKSPACE"},
     {"key": "project_execution", "name": "Project Execution", "route": "/projects", "section": "WORKSPACE"},
     {"key": "task_portal", "name": "Task Portal", "route": "/tasks", "section": "WORKSPACE"},
@@ -60,6 +61,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "badge": None,
         "pages": {
             "dashboard": True,
+            "leads": True,
             "clients": True,
             "project_execution": True,
             "task_portal": True,
@@ -137,6 +139,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "badge": "MOST POPULAR",
         "pages": {
             "dashboard": True,
+            "leads": True,
             "clients": True,
             "project_execution": True,
             "task_portal": True,
@@ -214,6 +217,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "badge": "FULL POWER",
         "pages": {
             "dashboard": True,
+            "leads": True,
             "clients": True,
             "project_execution": True,
             "task_portal": True,
@@ -696,7 +700,8 @@ async def get_company_entitlement(company_id: str, db=None) -> Dict[str, Any]:
     trial_start = parse_iso(trial_start_str) or now
     trial_end = parse_iso(company.get("trial_ends_at"))
     if not trial_end:
-        trial_end = trial_start + timedelta(days=15)
+        extra_d = int(company.get("extra_days", 0) or 0)
+        trial_end = trial_start + timedelta(days=15 + extra_d)
 
     # Subscription dates
     sub_start = parse_iso(company.get("subscription_started_at"))

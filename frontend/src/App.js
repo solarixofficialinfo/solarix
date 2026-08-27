@@ -40,6 +40,7 @@ const Reports = lazy(() => import("@/pages/Reports"));
 const Receivables = lazy(() => import("@/pages/Receivables"));
 const Vendors = lazy(() => import("@/pages/Vendors"));
 const PurchaseOrders = lazy(() => import("@/pages/PurchaseOrders"));
+const Leads = lazy(() => import("@/pages/Leads"));
 const Pricing = lazy(() => import("@/pages/Pricing"));
 const MaterialRequests = lazy(() => import("@/pages/MaterialRequests"));
 
@@ -142,6 +143,7 @@ function PermissionRoute({ page, children }) {
   if (!hasPerm) {
     const pages = [
       { key: "dashboard", path: "/dashboard" },
+      { key: "leads", path: "/leads" },
       { key: "clients", path: "/clients" },
       { key: "project_execution", path: "/projects" },
       { key: "task_portal", path: "/tasks" },
@@ -159,7 +161,11 @@ function PermissionRoute({ page, children }) {
       { key: "activity_log", path: "/activity" },
       { key: "complaints", path: "/complaints" },
     ];
-    const allowed = pages.find((p) => p.key === "complaints" || isSuperOrAdmin || (user?.permissions?.[p.key]?.view === true));
+    const allowed = pages.find(
+      (p) =>
+        (isSuperAdmin || isPageAllowed(p.key)) &&
+        (p.key === "complaints" || isSuperOrAdmin || user?.permissions?.[p.key]?.view === true)
+    );
     return <Navigate to={allowed ? allowed.path : "/login"} replace />;
   }
   return children;
@@ -264,6 +270,7 @@ function App() {
             <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
             <Route path="/reset-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
             <Route path="/dashboard" element={<Protected><PermissionRoute page="dashboard"><MainTabShell activeTab="dashboard" /></PermissionRoute></Protected>} />
+            <Route path="/leads" element={<Protected><PermissionRoute page="leads"><Leads /></PermissionRoute></Protected>} />
             <Route path="/clients" element={<Protected><PermissionRoute page="clients"><MainTabShell activeTab="clients" /></PermissionRoute></Protected>} />
             <Route path="/clients/new" element={<Protected><PermissionRoute page="clients"><ClientNew /></PermissionRoute></Protected>} />
             <Route path="/clients/:id" element={<Protected><PermissionRoute page="clients"><ClientDetail /></PermissionRoute></Protected>} />

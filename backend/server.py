@@ -2705,6 +2705,9 @@ class ClientIn(BaseModel):
     initial_payments: Optional[List[Dict[str, Any]]] = None
     loan_setup: Optional[Dict[str, Any]] = None
     payment_plan: Optional[List[Dict[str, Any]]] = None
+    lead_id: Optional[str] = None
+    solar_meter_required: Optional[str] = None
+    remarks: Optional[str] = None
 
 class StageUpdate(BaseModel):
     stages: Dict[str, Any]
@@ -2731,15 +2734,26 @@ class LeadIn(BaseModel):
     alt_mobile: Optional[str] = ""
     city: Optional[str] = ""
     address: Optional[str] = ""
-    estimated_kw: Optional[float] = 0
+    system_kw: Optional[float] = 0.0
+    estimated_kw: Optional[float] = 0.0
+    proposed_price: Optional[float] = 0.0
+    offer_price: Optional[float] = 0.0
     consumer_type: Optional[str] = ""
     source: Optional[str] = "Other"
     assigned_to: Optional[str] = ""
     assigned_to_name: Optional[str] = ""
-    stage: Optional[str] = "NEW"
+    stage: Optional[str] = "New Lead"
     status: Optional[str] = "New Lead"
-    next_followup_at: Optional[str] = ""
+    quotation_no: Optional[str] = ""
+    quotation_status: Optional[str] = "Not Sent"
+    solar_meter_required: Optional[str] = "No"
+    other_requirement: Optional[str] = ""
     remarks: Optional[str] = ""
+    followup_date: Optional[str] = None
+    followup_time: Optional[str] = ""
+    followup_type: Optional[str] = "Call"
+    other_note: Optional[str] = ""
+    next_followup_at: Optional[str] = ""
 
 class LeadCallIn(BaseModel):
     outcome: str
@@ -2979,57 +2993,6 @@ def is_internal_team_user(user: Dict[str, Any]) -> bool:
         return False
     return not is_external_user(user)
 
-def is_owner(user: Dict[str, Any]) -> bool:
-    """Return True if user is verified Company Owner or Platform Super Admin. External accounts are NEVER owners."""
-    if not isinstance(user, dict) or is_external_user(user):
-        return False
-    user_email = (user.get("email") or "").strip().lower()
-    if user_email in SUPER_ADMIN_EMAILS:
-        return True
-    return (
-        user.get("user_type") in ("owner", "platform_owner", "super_admin") or
-        user.get("role") in ("Super Admin", "Owner", "Platform Owner") or
-        user.get("is_super_admin") is True or
-        user.get("is_platform_owner") is True or
-        user.get("is_owner") is True or
-        (user.get("role") == "Admin" and user.get("user_type") in ("owner", "", None))
-    )
-
-def has_perm(user: Dict[str, Any], page: str, action: str) -> bool:
-    """Single source of truth for permission checks. Company Owner always has full access. External users cannot access internal admin pages."""
-    if not isinstance(user, dict):
-        return False
-    if is_external_user(user):
-        if page in ("team", "settings", "activity_log", "billing"):
-            return False
-        return False
-    if is_owner(user):
-        return True
-    perms = user.get("permissions")
-    if not isinstance(perms, dict):
-        perms = default_perms_for_role(user.get("role", ""))
-    page_perms = perms.get(page) or {}
-    if isinstance(page_perms, list):
-        return action in page_perms
-    if not isinstance(page_perms, dict):
-        return False
-    val = page_perms.get(action)
-    if val is None and page == "project_execution" and action in PROJ_EXEC_TABS:
-        return page_perms.get("view") is True
-    if val is None and page == "data_management" and action == "view":
-        return any(isinstance(perms.get(k), dict) and perms.get(k, {}).get("view") is True for k in perms if k.startswith("dm_"))
-    return val is True
-
-
-def require_perm(page: str, action: str):
-    """FastAPI dependency factory — returns 403 if the user lacks the permission."""
-    async def _checker(user=Depends(get_current_user)):
-        if not has_perm(user, page, action):
-            raise HTTPException(status_code=403, detail=f"Missing permission: {page}.{action}")
-        return user
-    return _checker
-
-
 SUPER_ADMIN_EMAILS = {
     os.environ.get("SUPER_ADMIN_EMAIL", "solarixoffcial.info@gmail.com").strip().lower(),
     "solarixoffcial.info@gmail.com",
@@ -3037,7 +3000,7 @@ SUPER_ADMIN_EMAILS = {
 }
 
 def is_super_admin_user(user: Dict[str, Any]) -> bool:
-    """Return True ONLY if user is verified Super Admin for solarixoffcial.info@gmail.com."""
+    """Return True ONLY if user is verified Super Admin for solarixoffcial.info@gmail.com / solarixofficial.info@gmail.com."""
     if not isinstance(user, dict):
         return False
     user_email = (user.get("email") or "").strip().lower()
@@ -3055,6 +3018,155 @@ def require_super_admin():
     async def _checker(user=Depends(get_current_user)):
         if not is_super_admin_user(user):
             raise HTTPException(status_code=403, detail="Access denied.")
+        return user
+    return _checker
+
+is_platform_owner_user = is_super_admin_user
+require_platform_owner = require_super_admin
+
+def is_owner(user: Dict[str, Any]) -> bool:
+    """Return True if user is verified Company Owner or Platform Super Admin. External accounts are NEVER owners."""
+    if not isinstance(user, dict) or is_external_user(user):
+        return False
+    if is_super_admin_user(user):
+        return True
+    return (
+        user.get("user_type") in ("owner", "platform_owner", "super_admin") or
+        user.get("role") in ("Super Admin", "Owner", "Platform Owner") or
+        user.get("is_super_admin") is True or
+        user.get("is_platform_owner") is True or
+        user.get("is_owner") is True or
+        (user.get("role") == "Admin" and user.get("user_type") in ("owner", "", None))
+    )
+
+def has_team_permission(user: Dict[str, Any], page: str, action: str) -> bool:
+    """
+    Checks whether the team member's role or individual permissions grant the requested action.
+    Company Owner / Admin role grants team permission, but does NOT bypass account plan entitlement.
+    """
+    if not isinstance(user, dict):
+        return False
+    if is_external_user(user):
+        if page in ("team", "settings", "activity_log", "billing"):
+            return False
+        return False
+    if is_super_admin_user(user):
+        return True
+    if is_owner(user) or user.get("role") in ("Super Admin", "Admin", "Owner"):
+        return True
+    perms = user.get("permissions")
+    if not isinstance(perms, dict):
+        perms = default_perms_for_role(user.get("role", ""))
+    page_perms = perms.get(page) or {}
+    if isinstance(page_perms, list):
+        return action in page_perms
+    if not isinstance(page_perms, dict):
+        return False
+    val = page_perms.get(action)
+    if val is None and page == "project_execution" and action in PROJ_EXEC_TABS:
+        return page_perms.get("view") is True
+    if val is None and page == "data_management" and action == "view":
+        return any(isinstance(perms.get(k), dict) and perms.get(k, {}).get("view") is True for k in perms if k.startswith("dm_"))
+    return val is True
+
+async def check_user_access(user: Dict[str, Any], page: str, action: str = "view", db = None) -> Tuple[bool, str, int]:
+    """
+    Centralized 5-tier authoritative access validation:
+    1. Super Admin bypass (Platform Owner)
+    2. Company Subscription status & expiration (write operations blocked if expired/cancelled)
+    3. Plan Feature & Page Entitlement (Company plan must allow the module/feature)
+    4. Team Member Permission (Team member must have permission)
+    Returns: (allowed: bool, detail_message: str, status_code: int)
+    """
+    if not isinstance(user, dict):
+        return False, "Not authenticated", 401
+    
+    # 1. Super Admin Bypass (Platform Owner)
+    if is_super_admin_user(user):
+        return True, "", 200
+        
+    if is_external_user(user):
+        if page in ("team", "settings", "activity_log", "billing"):
+            return False, "External users cannot access internal administration", 403
+            
+    cid = user.get("company_id")
+    if not cid:
+        return False, "SUBSCRIPTION_REQUIRED: No company workspace found", 403
+
+    from plan_config import get_company_entitlement, check_page_access, check_feature_access, REAL_APPLICATION_PAGES
+
+    # 2. Company Subscription Expiration & Status
+    entitlement = await get_company_entitlement(cid, db=db)
+    is_write = action in ("create", "edit", "delete", "approve")
+    
+    # Write actions require active subscription / valid trial
+    if is_write and not entitlement.get("can_write", True):
+        return False, "SUBSCRIPTION_EXPIRED: Your trial/subscription has expired. Upgrade your plan to continue using this feature.", 403
+        
+    # 3. Plan Page & Feature Entitlement
+    clean_page = page.replace("dm_", "")
+    
+    # Feature-specific modules
+    if clean_page in ("high_value_goods", "serial_tracking"):
+        if not entitlement.get("features", {}).get(clean_page, False):
+            plan_name = entitlement.get("plan_name", "Starter")
+            return False, f"FEATURE_NOT_ENTITLED: '{clean_page.replace('_', ' ').title()}' is not available on your {plan_name} plan. Upgrade to Growth or Pro to unlock this feature.", 403
+    elif clean_page in [p["key"] for p in REAL_APPLICATION_PAGES]:
+        if not entitlement.get("pages", {}).get(clean_page, True):
+            plan_name = entitlement.get("plan_name", "Starter")
+            return False, f"PAGE_NOT_ENTITLED: Page '{clean_page.replace('_', ' ').title()}' is not available on your {plan_name} plan. Upgrade to Growth or Pro to unlock this page.", 403
+            
+    # 4. Team Member Permission (Team permissions restrict access within the plan)
+    if not has_team_permission(user, page, action):
+        return False, f"Missing permission: {page}.{action}", 403
+        
+    return True, "", 200
+
+def has_perm(user: Dict[str, Any], page: str, action: str) -> bool:
+    """
+    Synchronous permission check enforcing team permissions and plan entitlement.
+    Team permissions can restrict access, but MUST NOT bypass account plan entitlement.
+    """
+    if not isinstance(user, dict):
+        return False
+    if is_super_admin_user(user):
+        return True
+    if is_external_user(user):
+        return False
+        
+    # 1. Check Team Permission first
+    if not has_team_permission(user, page, action):
+        return False
+        
+    # 2. Check Plan Entitlement & Expiration from cached company if available
+    cid = user.get("company_id")
+    if cid:
+        company = _cache_get_company(cid)
+        if company:
+            from plan_config import check_page_access, check_feature_access, REAL_APPLICATION_PAGES
+            clean_page = page.replace("dm_", "")
+            
+            # Check write operations against subscription status
+            is_write = action in ("create", "edit", "delete", "approve")
+            status = (company.get("subscription_status") or "trialing").lower()
+            if is_write and status in ("expired", "cancelled", "past_due", "suspended"):
+                return False
+                
+            if clean_page in ("high_value_goods", "serial_tracking"):
+                if not check_feature_access(company, clean_page):
+                    return False
+            elif clean_page in [p["key"] for p in REAL_APPLICATION_PAGES]:
+                if not check_page_access(company, clean_page):
+                    return False
+
+    return True
+
+def require_perm(page: str, action: str = "view"):
+    """FastAPI dependency requiring plan entitlement, subscription validity, and team permission."""
+    async def _checker(user=Depends(get_current_user)):
+        ok, msg, code = await check_user_access(user, page, action, db=db)
+        if not ok:
+            raise HTTPException(status_code=code, detail=msg)
         return user
     return _checker
 
@@ -4651,6 +4763,30 @@ async def create_client(data: ClientIn, user=Depends(require_active_subscription
     # Insert the clean doc into Supabase
     await db.clients.insert_one(supabase_doc)
 
+    # ── Lead Conversion Linkage ──────────────────────────────────────────────
+    lid = data.lead_id or payload.get("lead_id")
+    if lid:
+        try:
+            await db.leads.update_one(
+                {"id": lid, "company_id": user["company_id"]},
+                {"$set": {
+                    "converted_client_id": client_id,
+                    "converted_sol_id": sol_id,
+                    "client_id": client_id,
+                    "sol_id": sol_id,
+                    "stage": "Confirmed",
+                    "status": "Confirmed / Onboarding",
+                    "converted_at": now_iso(),
+                    "confirmed_at": now_iso(),
+                    "confirmed_by": user["id"],
+                    "confirmed_by_name": user["name"],
+                    "updated_at": now_iso()
+                }}
+            )
+            logger.info(f"[LEAD-LINK] Linked lead {lid} to client {client_id} ({sol_id})")
+        except Exception as e:
+            logger.warning(f"[LEAD-LINK] Failed to update lead {lid}: {e}")
+
     # ── Financial Setup Processing on Client Onboarding ──────────────────────
     c_val = float(data.contract_value or data.quotation_value or 0)
     proj_id = f"proj_{client_id}"
@@ -4927,7 +5063,7 @@ def _verify_client_db_write(original_payload: dict, read_back_doc: dict):
         raise HTTPException(status_code=500, detail=err_msg)
 
 @api_router.put("/clients/{client_id}")
-async def update_client(client_id: str, data: ClientIn, user=Depends(get_current_user)):
+async def update_client(client_id: str, data: ClientIn, user=Depends(require_active_subscription())):
     if not has_perm(user, "clients", "edit"):
         raise HTTPException(status_code=403, detail="Missing permission: clients.edit")
     existing = await db.clients.find_one({"id": client_id, "company_id": user["company_id"]}, {"_id": 0})
@@ -5524,7 +5660,7 @@ async def add_note(client_id: str, data: NoteIn, user=Depends(get_current_user))
     return note
 
 @api_router.delete("/clients/{client_id}")
-async def delete_client(client_id: str, user=Depends(get_current_user)):
+async def delete_client(client_id: str, user=Depends(require_active_subscription())):
     import re
     if not has_perm(user, "clients", "delete"):
         raise HTTPException(status_code=403, detail="Missing permission: clients.delete")
@@ -6751,6 +6887,8 @@ async def update_task(task_id: str, data: TaskUpdate, user=Depends(get_current_u
 # Material Requests
 @api_router.post("/material-requests")
 async def create_material_request(data: MaterialRequestIn, user=Depends(require_active_subscription())):
+    if not (has_perm(user, "material_requests", "create") or has_perm(user, "data_management", "create")):
+        raise HTTPException(status_code=403, detail="Missing permission: material_requests.create")
     client = await db.clients.find_one({"id": data.client_id, "company_id": user["company_id"]}, {"_id": 0})
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -8228,6 +8366,8 @@ async def list_products(user=Depends(get_current_user)):
 
 @api_router.get("/inventory/high-value-ledger")
 async def get_high_value_ledger(search: Optional[str] = None, user=Depends(require_feature_entitlement("high_value_goods"))):
+    if not (has_team_permission(user, "data_management", "view") and has_team_permission(user, "dm_high_value_goods", "view")):
+        raise HTTPException(status_code=403, detail="Missing permission: dm_high_value_goods.view")
     cid = user["company_id"]
     search_term = (search or "").strip().lower()
     
@@ -8572,7 +8712,7 @@ async def create_product(data: ProductIn, user=Depends(require_active_subscripti
     return doc
 
 @api_router.patch("/inventory/products/{product_id}")
-async def update_product(product_id: str, data: ProductIn, user=Depends(get_current_user)):
+async def update_product(product_id: str, data: ProductIn, user=Depends(require_active_subscription())):
     if not has_perm(user, "data_management", "edit"):
         raise HTTPException(status_code=403, detail="Missing permission: data_management.edit")
     cid = user["company_id"]
@@ -8619,7 +8759,7 @@ async def update_product(product_id: str, data: ProductIn, user=Depends(get_curr
     return res
 
 @api_router.delete("/inventory/products/{product_id}")
-async def delete_product(product_id: str, user=Depends(get_current_user)):
+async def delete_product(product_id: str, user=Depends(require_active_subscription())):
     if not has_perm(user, "data_management", "delete"):
         raise HTTPException(status_code=403, detail="Missing permission: data_management.delete")
     cid = user["company_id"]
@@ -13485,7 +13625,7 @@ async def list_leads(
     search: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
-    user=Depends(get_current_user)
+    user=Depends(require_perm("leads", "view"))
 ):
     cid = user["company_id"]
     query = {"company_id": cid}
@@ -13496,7 +13636,7 @@ async def list_leads(
         query["assigned_to"] = assigned_to
 
     if stage and stage != "all":
-        query["stage"] = stage.upper()
+        query["stage"] = {"$regex": f"^{re.escape(stage)}$", "$options": "i"}
 
     if source and source != "all":
         query["source"] = source
@@ -13504,14 +13644,33 @@ async def list_leads(
     if call_status and call_status != "all":
         query["call_status"] = call_status
 
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now_utc = datetime.now(timezone.utc)
+    today_str = now_utc.strftime("%Y-%m-%d")
+    tomorrow_str = (now_utc + timedelta(days=1)).strftime("%Y-%m-%d")
 
     if followup_filter == "today":
-        query["next_followup_at"] = {"$regex": f"^{today_str}"}
+        query["$or"] = [
+            {"followup_date": today_str},
+            {"next_followup_at": {"$regex": f"^{today_str}"}}
+        ]
+    elif followup_filter == "tomorrow":
+        query["$or"] = [
+            {"followup_date": tomorrow_str},
+            {"next_followup_at": {"$regex": f"^{tomorrow_str}"}}
+        ]
     elif followup_filter == "overdue":
-        query["next_followup_at"] = {"$lt": today_str, "$ne": ""}
+        query["$or"] = [
+            {"followup_date": {"$lt": today_str, "$ne": None, "$ne": ""}},
+            {"next_followup_at": {"$lt": today_str, "$ne": None, "$ne": ""}}
+        ]
     elif followup_filter == "upcoming":
-        query["next_followup_at"] = {"$gt": f"{today_str}T23:59:59"}
+        query["$or"] = [
+            {"followup_date": {"$gt": today_str}},
+            {"next_followup_at": {"$gt": f"{today_str}T23:59:59"}}
+        ]
+    elif followup_filter in ("none", "no_followup"):
+        query["followup_date"] = {"$in": [None, ""]}
+        query["next_followup_at"] = {"$in": [None, ""]}
 
     if search:
         s = search.strip()
@@ -13531,37 +13690,48 @@ async def list_leads(
 
 
 @api_router.get("/leads/stats")
-async def get_lead_stats(scope: Optional[str] = None, user=Depends(get_current_user)):
+async def get_lead_stats(scope: Optional[str] = None, user=Depends(require_perm("leads", "view"))):
     cid = user["company_id"]
     query = {"company_id": cid}
     if scope == "mine":
         query["assigned_to"] = user["id"]
 
-    all_leads = await db.leads.find(query, {"_id": 0, "stage": 1, "next_followup_at": 1, "last_contact_at": 1}).to_list(100000)
+    all_leads = await db.leads.find(
+        query,
+        {"_id": 0, "stage": 1, "followup_date": 1, "next_followup_at": 1, "last_contact_at": 1}
+    ).to_list(100000)
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     total_leads = len(all_leads)
-    new_leads = sum(1 for l in all_leads if (l.get("stage") or "").upper() == "NEW")
-    interested = sum(1 for l in all_leads if (l.get("stage") or "").upper() in ("INTERESTED", "SITE VISIT", "QUOTATION", "NEGOTIATION"))
-    final_won = sum(1 for l in all_leads if (l.get("stage") or "").upper() in ("FINAL", "ONBOARDING", "CONVERTED"))
-    lost = sum(1 for l in all_leads if (l.get("stage") or "").upper() in ("LOST", "NOT INTERESTED"))
+    new_leads = sum(1 for l in all_leads if (l.get("stage") or "").lower() in ("new lead", "new"))
+    contacted = sum(1 for l in all_leads if (l.get("stage") or "").lower() in ("contacted", "interested", "follow-up", "followup", "site visit", "quotation pending", "quotation sent", "negotiation", "quotation"))
+    confirmed = sum(1 for l in all_leads if (l.get("stage") or "").lower() in ("confirmed", "onboarding", "converted", "final"))
+    lost = sum(1 for l in all_leads if (l.get("stage") or "").lower() in ("lost", "not interested", "not reachable", "duplicate"))
 
-    followups_due = sum(1 for l in all_leads if l.get("next_followup_at") and str(l.get("next_followup_at"))[:10] <= today_str)
-    todays_calls = sum(1 for l in all_leads if l.get("last_contact_at") and str(l.get("last_contact_at"))[:10] == today_str)
+    followups_due = sum(
+        1 for l in all_leads
+        if (l.get("followup_date") and str(l.get("followup_date")) == today_str) or
+           (l.get("next_followup_at") and str(l.get("next_followup_at"))[:10] == today_str)
+    )
+    overdue_followups = sum(
+        1 for l in all_leads
+        if (l.get("followup_date") and str(l.get("followup_date")) < today_str and l.get("followup_date") != "") or
+           (l.get("next_followup_at") and str(l.get("next_followup_at"))[:10] < today_str and l.get("next_followup_at") != "")
+    )
 
     return {
         "total_leads": total_leads,
         "new_leads": new_leads,
-        "followups_due": followups_due,
-        "todays_calls": todays_calls,
-        "interested": interested,
-        "final_won": final_won,
+        "in_followup": contacted,
+        "confirmed": confirmed,
         "lost": lost,
+        "followups_due": followups_due,
+        "overdue_followups": overdue_followups,
     }
 
 
 @api_router.get("/leads/followups/list")
-async def list_followups(filter_type: Optional[str] = "today", scope: Optional[str] = "mine", user=Depends(get_current_user)):
+async def list_followups(filter_type: Optional[str] = "today", scope: Optional[str] = "mine", user=Depends(require_perm("leads", "view"))):
     cid = user["company_id"]
     query = {"company_id": cid, "status": "pending"}
 
@@ -13593,7 +13763,7 @@ async def list_followups(filter_type: Optional[str] = "today", scope: Optional[s
             "lead_name": l.get("name") or "—",
             "mobile": l.get("mobile") or "—",
             "city": l.get("city") or "—",
-            "stage": l.get("stage") or "NEW",
+            "stage": l.get("stage") or "New Lead",
             "last_contact_at": l.get("last_contact_at") or "",
             "call_status": l.get("call_status") or "",
         })
@@ -13602,8 +13772,13 @@ async def list_followups(filter_type: Optional[str] = "today", scope: Optional[s
 
 
 @api_router.post("/leads/followups/{followup_id}/complete")
-async def complete_followup(followup_id: str, data: LeadFollowupUpdate, user=Depends(get_current_user)):
+async def complete_followup(followup_id: str, data: LeadFollowupUpdate, user=Depends(require_perm("leads", "edit"))):
     cid = user["company_id"]
+    from plan_config import get_company_entitlement
+    ent = await get_company_entitlement(cid, db=db)
+    if not ent.get("can_write", True) and not is_super_admin_user(user):
+        raise HTTPException(status_code=403, detail="SUBSCRIPTION_EXPIRED: Upgrade plan to update follow-ups.")
+
     f_doc = await db.lead_followups.find_one({"id": followup_id, "company_id": cid}, {"_id": 0})
     if not f_doc:
         raise HTTPException(status_code=404, detail="Followup not found")
@@ -13629,10 +13804,20 @@ async def complete_followup(followup_id: str, data: LeadFollowupUpdate, user=Dep
 
 
 @api_router.post("/leads")
-async def create_lead(data: LeadIn, user=Depends(get_current_user)):
+async def create_lead(data: LeadIn, user=Depends(require_perm("leads", "create"))):
     cid = user["company_id"]
+    from plan_config import get_company_entitlement
+    ent = await get_company_entitlement(cid, db=db)
+    if not ent.get("can_write", True) and not is_super_admin_user(user):
+        raise HTTPException(status_code=403, detail="SUBSCRIPTION_EXPIRED: Upgrade plan to add leads.")
+
     lead_id = str(uuid.uuid4())
     lead_no = await next_lead_id(cid)
+
+    sys_kw = float(data.system_kw or data.estimated_kw or 0.0)
+    p_price = float(data.proposed_price or data.offer_price or 0.0)
+    stg = data.stage or "New Lead"
+    f_date = data.followup_date or (data.next_followup_at[:10] if data.next_followup_at else None)
 
     doc = {
         "id": lead_id,
@@ -13645,33 +13830,48 @@ async def create_lead(data: LeadIn, user=Depends(get_current_user)):
         "alt_mobile": (data.alt_mobile or "").strip(),
         "city": (data.city or "").strip(),
         "address": (data.address or "").strip(),
-        "estimated_kw": float(data.estimated_kw or 0),
+        "system_kw": sys_kw,
+        "estimated_kw": sys_kw,
+        "proposed_price": p_price,
+        "offer_price": p_price,
         "consumer_type": (data.consumer_type or "").strip(),
         "source": data.source or "Other",
         "assigned_to": data.assigned_to or user["id"],
         "assigned_to_name": data.assigned_to_name or user["name"],
-        "stage": (data.stage or "NEW").upper(),
-        "status": data.status or "New Lead",
+        "stage": stg,
+        "status": data.status or ("Confirmed / Onboarding" if stg == "Confirmed" else "New Lead"),
+        "quotation_no": (data.quotation_no or "").strip(),
+        "quotation_status": data.quotation_status or "Not Sent",
+        "solar_meter_required": data.solar_meter_required or "No",
+        "other_requirement": (data.other_requirement or "").strip(),
+        "remarks": (data.remarks or "").strip(),
+        "followup_date": f_date,
+        "followup_time": (data.followup_time or "").strip(),
+        "followup_type": data.followup_type or "Call",
+        "other_note": (data.other_note or "").strip(),
+        "next_followup_at": data.next_followup_at or (f"{f_date}T{data.followup_time or '10:00'}:00" if f_date else ""),
         "call_status": "Not Called",
         "last_contact_at": "",
-        "next_followup_at": data.next_followup_at or "",
-        "remarks": (data.remarks or "").strip(),
         "converted_client_id": "",
+        "converted_sol_id": "",
         "converted_at": "",
+        "confirmed_at": now_iso() if stg == "Confirmed" else "",
+        "confirmed_by": user["id"] if stg == "Confirmed" else "",
+        "confirmed_by_name": user["name"] if stg == "Confirmed" else "",
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
 
     await db.leads.insert_one(doc)
 
-    if data.next_followup_at:
+    if doc["next_followup_at"] or f_date:
         await db.lead_followups.insert_one({
             "id": str(uuid.uuid4()),
             "lead_id": lead_id,
             "company_id": cid,
             "assigned_to": doc["assigned_to"],
             "assigned_to_name": doc["assigned_to_name"],
-            "followup_at": data.next_followup_at,
+            "followup_at": doc["next_followup_at"] or f"{f_date}T10:00:00",
             "status": "pending",
             "notes": "Initial follow-up set on lead creation",
             "created_at": now_iso(),
@@ -13683,7 +13883,7 @@ async def create_lead(data: LeadIn, user=Depends(get_current_user)):
 
 
 @api_router.get("/leads/{lead_id}")
-async def get_lead_detail(lead_id: str, user=Depends(get_current_user)):
+async def get_lead_detail(lead_id: str, user=Depends(require_perm("leads", "view"))):
     cid = user["company_id"]
     lead = await db.leads.find_one({"id": lead_id, "company_id": cid}, {"_id": 0})
     if not lead:
@@ -13700,11 +13900,24 @@ async def get_lead_detail(lead_id: str, user=Depends(get_current_user)):
 
 
 @api_router.put("/leads/{lead_id}")
-async def update_lead(lead_id: str, data: LeadIn, user=Depends(get_current_user)):
+async def update_lead(lead_id: str, data: LeadIn, user=Depends(require_perm("leads", "edit"))):
     cid = user["company_id"]
+    from plan_config import get_company_entitlement
+    ent = await get_company_entitlement(cid, db=db)
+    if not ent.get("can_write", True) and not is_super_admin_user(user):
+        raise HTTPException(status_code=403, detail="SUBSCRIPTION_EXPIRED: Upgrade plan to edit leads.")
+
     lead = await db.leads.find_one({"id": lead_id, "company_id": cid}, {"_id": 0})
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+
+    sys_kw = float(data.system_kw or data.estimated_kw or lead.get("system_kw") or lead.get("estimated_kw") or 0.0)
+    p_price = float(data.proposed_price or data.offer_price or lead.get("proposed_price") or lead.get("offer_price") or 0.0)
+    stg = data.stage or lead.get("stage", "New Lead")
+    if "followup_date" in data.__fields_set__:
+        f_date = data.followup_date if data.followup_date not in ("", "none", "None", None) else None
+    else:
+        f_date = lead.get("followup_date")
 
     patch = {
         "name": data.name.strip(),
@@ -13712,19 +13925,33 @@ async def update_lead(lead_id: str, data: LeadIn, user=Depends(get_current_user)
         "alt_mobile": (data.alt_mobile or "").strip(),
         "city": (data.city or "").strip(),
         "address": (data.address or "").strip(),
-        "estimated_kw": float(data.estimated_kw or 0),
+        "system_kw": sys_kw,
+        "estimated_kw": sys_kw,
+        "proposed_price": p_price,
+        "offer_price": p_price,
         "consumer_type": (data.consumer_type or "").strip(),
         "source": data.source or lead.get("source", "Other"),
         "assigned_to": data.assigned_to or lead.get("assigned_to", user["id"]),
         "assigned_to_name": data.assigned_to_name or lead.get("assigned_to_name", user["name"]),
-        "stage": (data.stage or lead.get("stage", "NEW")).upper(),
-        "status": data.status or lead.get("status", "Active"),
+        "stage": stg,
+        "status": data.status or ("Confirmed / Onboarding" if stg == "Confirmed" else lead.get("status", "Active")),
+        "quotation_no": (data.quotation_no or "").strip(),
+        "quotation_status": data.quotation_status or lead.get("quotation_status", "Not Sent"),
+        "solar_meter_required": data.solar_meter_required or lead.get("solar_meter_required", "No"),
+        "other_requirement": (data.other_requirement or "").strip(),
         "remarks": (data.remarks or "").strip(),
+        "followup_date": f_date,
+        "followup_time": (data.followup_time or "").strip(),
+        "followup_type": data.followup_type or lead.get("followup_type", "Call"),
+        "other_note": (data.other_note or "").strip(),
         "updated_at": now_iso(),
     }
-
     if data.next_followup_at:
         patch["next_followup_at"] = data.next_followup_at
+    elif f_date:
+        patch["next_followup_at"] = f"{f_date}T{data.followup_time or '10:00'}:00"
+    else:
+        patch["next_followup_at"] = ""
 
     await db.leads.update_one({"id": lead_id, "company_id": cid}, {"$set": patch})
     updated = await db.leads.find_one({"id": lead_id, "company_id": cid}, {"_id": 0})
@@ -13732,8 +13959,13 @@ async def update_lead(lead_id: str, data: LeadIn, user=Depends(get_current_user)
 
 
 @api_router.delete("/leads/{lead_id}")
-async def delete_lead(lead_id: str, user=Depends(get_current_user)):
+async def delete_lead(lead_id: str, user=Depends(require_perm("leads", "delete"))):
     cid = user["company_id"]
+    from plan_config import get_company_entitlement
+    ent = await get_company_entitlement(cid, db=db)
+    if not ent.get("can_write", True) and not is_super_admin_user(user):
+        raise HTTPException(status_code=403, detail="SUBSCRIPTION_EXPIRED: Upgrade plan to delete leads.")
+
     await db.leads.delete_one({"id": lead_id, "company_id": cid})
     await db.lead_call_activities.delete_many({"lead_id": lead_id, "company_id": cid})
     await db.lead_followups.delete_many({"lead_id": lead_id, "company_id": cid})
@@ -13741,8 +13973,13 @@ async def delete_lead(lead_id: str, user=Depends(get_current_user)):
 
 
 @api_router.post("/leads/{lead_id}/calls")
-async def add_lead_call(lead_id: str, data: LeadCallIn, user=Depends(get_current_user)):
+async def add_lead_call(lead_id: str, data: LeadCallIn, user=Depends(require_perm("leads", "edit"))):
     cid = user["company_id"]
+    from plan_config import get_company_entitlement
+    ent = await get_company_entitlement(cid, db=db)
+    if not ent.get("can_write", True) and not is_super_admin_user(user):
+        raise HTTPException(status_code=403, detail="SUBSCRIPTION_EXPIRED: Upgrade plan to log calls.")
+
     lead = await db.leads.find_one({"id": lead_id, "company_id": cid}, {"_id": 0})
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -13773,7 +14010,7 @@ async def add_lead_call(lead_id: str, data: LeadCallIn, user=Depends(get_current
         lead_patch["assigned_to_name"] = data.assigned_to_name or ""
 
     if data.stage:
-        lead_patch["stage"] = data.stage.upper()
+        lead_patch["stage"] = data.stage
 
     if data.next_followup_at:
         lead_patch["next_followup_at"] = data.next_followup_at
@@ -13804,7 +14041,7 @@ async def add_lead_call(lead_id: str, data: LeadCallIn, user=Depends(get_current
 
 
 @api_router.post("/leads/{lead_id}/convert-check")
-async def convert_check_lead(lead_id: str, user=Depends(get_current_user)):
+async def convert_check_lead(lead_id: str, user=Depends(require_perm("leads", "view"))):
     cid = user["company_id"]
     lead = await db.leads.find_one({"id": lead_id, "company_id": cid}, {"_id": 0})
     if not lead:
@@ -13822,25 +14059,88 @@ async def convert_check_lead(lead_id: str, user=Depends(get_current_user)):
     }
 
 
-@api_router.post("/leads/{lead_id}/link-client")
-async def link_client_to_lead(lead_id: str, payload: Dict[str, Any], user=Depends(get_current_user)):
+@api_router.post("/leads/{lead_id}/confirm")
+async def confirm_lead(lead_id: str, user=Depends(require_perm("leads", "approve"))):
+    """
+    Validates and marks a lead as Confirmed.
+    Idempotent: if already linked to a client, returns the existing client rather than re-confirming.
+    """
     cid = user["company_id"]
+    from plan_config import get_company_entitlement
+    ent = await get_company_entitlement(cid, db=db)
+    if not ent.get("can_write", True) and not is_super_admin_user(user):
+        raise HTTPException(status_code=403, detail="SUBSCRIPTION_EXPIRED: Upgrade plan to confirm leads.")
+
+    lead = await db.leads.find_one({"id": lead_id, "company_id": cid}, {"_id": 0})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    # Idempotency check
+    converted_client_id = lead.get("converted_client_id") or lead.get("client_id")
+    if converted_client_id:
+        existing_client = await db.clients.find_one({"id": converted_client_id, "company_id": cid}, {"_id": 0})
+        if existing_client:
+            return {
+                "ok": True,
+                "already_converted": True,
+                "client_id": converted_client_id,
+                "sol_id": existing_client.get("sol_id") or lead.get("converted_sol_id"),
+                "lead": lead,
+                "message": f"Lead is already confirmed and linked to Client {existing_client.get('sol_id')}."
+            }
+
+    now_str = now_iso()
+    patch = {
+        "stage": "Confirmed",
+        "status": "Confirmed / Onboarding",
+        "confirmed_at": now_str,
+        "confirmed_by": user["id"],
+        "confirmed_by_name": user["name"],
+        "updated_at": now_str
+    }
+    await db.leads.update_one({"id": lead_id, "company_id": cid}, {"$set": patch})
+    updated_lead = await db.leads.find_one({"id": lead_id, "company_id": cid}, {"_id": 0})
+    await log_activity(cid, user["id"], user["name"], "Confirmed Solar Lead", f"{lead.get('name')} ({lead.get('lead_no')})")
+
+    return {
+        "ok": True,
+        "already_converted": False,
+        "lead": updated_lead,
+        "message": "Lead confirmed successfully. Opening Client Onboarding."
+    }
+
+
+@api_router.post("/leads/{lead_id}/link-client")
+async def link_client_to_lead(lead_id: str, payload: Dict[str, Any], user=Depends(require_perm("leads", "edit"))):
+    cid = user["company_id"]
+    from plan_config import get_company_entitlement
+    ent = await get_company_entitlement(cid, db=db)
+    if not ent.get("can_write", True) and not is_super_admin_user(user):
+        raise HTTPException(status_code=403, detail="SUBSCRIPTION_EXPIRED: Upgrade plan to link leads.")
+
     client_id = payload.get("client_id")
     sol_id = payload.get("sol_id") or ""
     if not client_id:
         raise HTTPException(status_code=400, detail="client_id is required")
 
+    now_str = now_iso()
     await db.leads.update_one(
         {"id": lead_id, "company_id": cid},
         {"$set": {
             "converted_client_id": client_id,
             "converted_sol_id": sol_id,
-            "converted_at": now_iso(),
-            "stage": "CONVERTED",
-            "status": "Converted to Client",
-            "updated_at": now_iso(),
+            "client_id": client_id,
+            "sol_id": sol_id,
+            "converted_at": now_str,
+            "confirmed_at": now_str,
+            "confirmed_by": user["id"],
+            "confirmed_by_name": user["name"],
+            "stage": "Confirmed",
+            "status": "Confirmed / Onboarding",
+            "updated_at": now_str,
         }}
     )
+    return {"ok": True, "message": "Lead successfully linked to client"}
 
 # ─── EPC OPERATING SYSTEM ENHANCEMENTS (FINANCE, VENDORS, WARRANTIES, SERVICE, SEARCH) ───
 
@@ -14131,7 +14431,7 @@ async def get_receivables_dashboard(
     client_id: Optional[str] = None,
     search: Optional[str] = None,
     status: Optional[str] = None,
-    user=Depends(get_current_user)
+    user=Depends(require_perm("receivables", "view"))
 ):
     cid = user["company_id"]
     query = {"company_id": cid}
@@ -15933,13 +16233,13 @@ async def _process_po_payload(payload: Dict[str, Any], cid: str, user: Dict[str,
     return po_doc
 
 @api_router.get("/purchase-orders")
-async def get_purchase_orders(user=Depends(get_current_user)):
+async def get_purchase_orders(user=Depends(require_perm("purchase_orders", "view"))):
     cid = user["company_id"]
     pos = await db.purchase_orders.find({"company_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(2000)
     return {"purchase_orders": pos}
 
 @api_router.post("/purchase-orders")
-async def create_purchase_order(payload: Dict[str, Any], user=Depends(get_current_user)):
+async def create_purchase_order(payload: Dict[str, Any], user=Depends(require_perm("purchase_orders", "create"))):
     cid = user["company_id"]
     po_doc = await _process_po_payload(payload, cid, user, existing_po=None)
     
@@ -15984,7 +16284,7 @@ async def create_purchase_order(payload: Dict[str, Any], user=Depends(get_curren
     return {"message": "Purchase Order saved successfully", "purchase_order": po_doc}
 
 @api_router.get("/purchase-orders/{po_id}")
-async def get_purchase_order(po_id: str, user=Depends(get_current_user)):
+async def get_purchase_order(po_id: str, user=Depends(require_perm("purchase_orders", "view"))):
     cid = user["company_id"]
     po = await db.purchase_orders.find_one({"id": po_id, "company_id": cid}, {"_id": 0})
     if not po:
@@ -15992,7 +16292,7 @@ async def get_purchase_order(po_id: str, user=Depends(get_current_user)):
     return po
 
 @api_router.patch("/purchase-orders/{po_id}")
-async def update_purchase_order(po_id: str, payload: Dict[str, Any], user=Depends(get_current_user)):
+async def update_purchase_order(po_id: str, payload: Dict[str, Any], user=Depends(require_perm("purchase_orders", "edit"))):
     cid = user["company_id"]
     po = await db.purchase_orders.find_one({"id": po_id, "company_id": cid})
     if not po:
@@ -16006,7 +16306,7 @@ async def update_purchase_order(po_id: str, payload: Dict[str, Any], user=Depend
     return {"message": "Purchase Order updated successfully", "purchase_order": po_doc}
 
 @api_router.delete("/purchase-orders/{po_id}")
-async def delete_purchase_order(po_id: str, user=Depends(get_current_user)):
+async def delete_purchase_order(po_id: str, user=Depends(require_perm("purchase_orders", "delete"))):
     cid = user["company_id"]
     res = await db.purchase_orders.delete_one({"id": po_id, "company_id": cid})
     if res.deleted_count == 0:

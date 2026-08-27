@@ -16,6 +16,7 @@ import {
   Info, Check, UserCheck, AlertTriangle
 } from "lucide-react";
 import { useEmployeeList, useInvalidateTeam } from "@/hooks/useTeam";
+import { useEntitlements } from "@/hooks/useEntitlements";
 import PageHeader from "@/components/PageHeader";
 
 const ROLES = ["Admin", "Manager", "Staff", "Installer", "Viewer"];
@@ -25,6 +26,7 @@ const MODULE_GROUPS = [
     group: "WORKSPACE",
     modules: [
       { key: "dashboard", label: "Dashboard", actions: ["view"] },
+      { key: "leads", label: "Leads Management", actions: ["view", "create", "edit", "delete", "approve"] },
       { key: "clients", label: "Clients", actions: ["view", "create", "edit", "delete"] },
       { key: "project_execution", label: "Project Execution", actions: ["view", "create", "edit", "delete", "approve"] },
       { key: "task_portal", label: "Task Portal", actions: ["view", "create", "edit", "delete", "approve"] },
@@ -115,14 +117,14 @@ const getPresetPermissions = (role) => {
   };
 
   if (role === "Manager") {
-    ["dashboard", "clients", "project_execution", "task_portal", "receivables", "data_management", "client_data", "reports", "sales_documents", "purchase_orders", "documents"].forEach((k) => {
+    ["dashboard", "leads", "clients", "project_execution", "task_portal", "receivables", "data_management", "client_data", "reports", "sales_documents", "purchase_orders", "documents"].forEach((k) => {
       grant(k, ["view", "create", "edit", "approve"]);
     });
     ["inward", "outward", "product_master", "balance_report", "history", "high_value_goods", "material_requests"].forEach((sm) => {
       grant(`dm_${sm}`, ["view", "create", "edit", "approve"]);
     });
   } else if (role === "Staff") {
-    ["dashboard", "clients", "task_portal", "data_management", "sales_documents", "documents"].forEach((k) => {
+    ["dashboard", "leads", "clients", "task_portal", "data_management", "sales_documents", "documents"].forEach((k) => {
       grant(k, ["view", "create", "edit"]);
     });
     ["inward", "outward", "product_master", "balance_report", "history"].forEach((sm) => {
@@ -133,7 +135,7 @@ const getPresetPermissions = (role) => {
     grant("clients", ["view"]);
     grant("client_data", ["view"]);
   } else if (role === "Viewer") {
-    ["dashboard", "clients", "task_portal", "project_execution", "data_management", "client_data", "reports", "sales_documents"].forEach((k) => {
+    ["dashboard", "leads", "clients", "task_portal", "project_execution", "data_management", "client_data", "reports", "sales_documents"].forEach((k) => {
       grant(k, ["view"]);
     });
   }
@@ -144,6 +146,7 @@ const getPresetPermissions = (role) => {
 export default function Team() {
   const { data: list = [], isLoading } = useEmployeeList();
   const invalidateTeam = useInvalidateTeam();
+  const { isPageAllowed, hasFeature, planName } = useEntitlements();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [activeTab, setActiveTab] = useState("permissions");
@@ -489,13 +492,24 @@ export default function Team() {
                   </div>
                 </div>
 
+                {/* HIERARCHY CLARITY CALLOUT */}
+                <div className="text-[11px] text-slate-600 bg-blue-50/70 px-3 py-2 rounded-xl border border-blue-200/80 flex items-center justify-between gap-2 shrink-0">
+                  <div className="flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span>
+                      <strong>Access Hierarchy:</strong> Modules marked <span className="text-emerald-700 font-semibold">Included</span> are active in your <strong>{planName}</strong> plan. Assigned permissions grant employee access strictly within the plan's capabilities.
+                    </span>
+                  </div>
+                </div>
+
                 {/* PERMISSION MATRIX TABLE */}
                 <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs bg-white flex-1 min-h-0 flex flex-col">
                   <div className="overflow-y-auto overflow-x-auto flex-1 max-h-[52vh]">
-                    <table className="w-full text-xs text-left min-w-[540px]">
+                    <table className="w-full text-xs text-left min-w-[580px]">
                       <thead className="bg-slate-100/90 text-slate-700 font-semibold border-b border-slate-200 sticky top-0 z-10 backdrop-blur-xs">
                         <tr>
-                          <th className="py-2 px-3 min-w-[200px]">Module / Page</th>
+                          <th className="py-2 px-3 min-w-[180px]">Module / Page</th>
+                          <th className="py-2 px-2 text-center w-28">Plan Status</th>
                           {["view", "create", "edit", "delete", "approve"].map((action) => (
                             <th key={action} className="py-2 px-2 text-center capitalize w-16">
                               <button
@@ -514,63 +528,49 @@ export default function Team() {
                         {MODULE_GROUPS.map((grp) => (
                           <React.Fragment key={grp.group}>
                             <tr className="bg-slate-50/80">
-                              <td colSpan={6} className="px-3 py-1 font-bold text-[10px] text-slate-500 tracking-wider uppercase">
+                              <td colSpan={7} className="px-3 py-1 font-bold text-[10px] text-slate-500 tracking-wider uppercase">
                                 {grp.group}
                               </td>
                             </tr>
-                            {grp.modules.map((m) => (
-                              <React.Fragment key={m.key}>
-                                <tr className="hover:bg-slate-50/70 transition-colors">
-                                  <td className="py-2 px-3 font-semibold text-slate-900 flex items-center justify-between">
-                                    <span className="truncate pr-2">{m.label}</span>
-                                    {m.hasSubModules && (
-                                      <button
-                                        type="button"
-                                        onClick={() => setExpandedGroups((prev) => ({ ...prev, [m.key]: !prev[m.key] }))}
-                                        className="text-blue-600 text-[11px] font-medium flex items-center gap-0.5 hover:underline shrink-0"
-                                      >
-                                        {expandedGroups[m.key] ? "Hide Detail" : "Granular"}
-                                        {expandedGroups[m.key] ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                                      </button>
-                                    )}
-                                  </td>
-                                  {["view", "create", "edit", "delete", "approve"].map((action) => {
-                                    const isApplicable = m.actions.includes(action);
-                                    const isChecked = !!form.permissions?.[m.key]?.[action];
-                                    return (
-                                      <td key={action} className="py-1.5 px-2 text-center">
-                                        {isApplicable ? (
-                                          <div className="flex items-center justify-center">
-                                            <Checkbox
-                                              checked={isChecked}
-                                              onCheckedChange={() => togglePermission(m.key, action)}
-                                              className="data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
-                                            />
-                                          </div>
-                                        ) : (
-                                          <span className="text-slate-300 select-none">—</span>
-                                        )}
-                                      </td>
-                                    );
-                                  })}
-                                </tr>
-
-                                {/* GRANULAR SUB-MODULES FOR DATA MANAGEMENT */}
-                                {m.hasSubModules && expandedGroups[m.key] && m.subModules.map((sm) => (
-                                  <tr key={sm.key} className="bg-slate-50/40 border-t border-slate-100 hover:bg-slate-50 transition-colors">
-                                    <td className="py-1.5 pl-7 pr-3 text-slate-700 font-mono text-[11px]">
-                                      ↳ {sm.label}
+                            {grp.modules.map((m) => {
+                              const isModuleEntitled = isPageAllowed(m.key);
+                              return (
+                                <React.Fragment key={m.key}>
+                                  <tr className="hover:bg-slate-50/70 transition-colors">
+                                    <td className="py-2 px-3 font-semibold text-slate-900 flex items-center justify-between">
+                                      <span className="truncate pr-2">{m.label}</span>
+                                      {m.hasSubModules && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setExpandedGroups((prev) => ({ ...prev, [m.key]: !prev[m.key] }))}
+                                          className="text-blue-600 text-[11px] font-medium flex items-center gap-0.5 hover:underline shrink-0"
+                                        >
+                                          {expandedGroups[m.key] ? "Hide Detail" : "Granular"}
+                                          {expandedGroups[m.key] ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                        </button>
+                                      )}
+                                    </td>
+                                    <td className="py-2 px-2 text-center">
+                                      {isModuleEntitled ? (
+                                        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-semibold py-0.5 px-1.5 gap-1 shrink-0 inline-flex items-center">
+                                          <Check className="w-2.5 h-2.5 text-emerald-600" /> Included
+                                        </Badge>
+                                      ) : (
+                                        <Badge variant="outline" className="bg-slate-100 text-slate-500 border-slate-200 text-[10px] font-medium py-0.5 px-1.5 gap-1 shrink-0 inline-flex items-center" title={`Not included in ${planName} plan`}>
+                                          <Lock className="w-2.5 h-2.5 text-slate-400" /> Not in {planName}
+                                        </Badge>
+                                      )}
                                     </td>
                                     {["view", "create", "edit", "delete", "approve"].map((action) => {
-                                      const isApp = sm.actions.includes(action);
-                                      const isChecked = !!form.permissions?.[`dm_${sm.key}`]?.[action];
+                                      const isApplicable = m.actions.includes(action);
+                                      const isChecked = !!form.permissions?.[m.key]?.[action];
                                       return (
                                         <td key={action} className="py-1.5 px-2 text-center">
-                                          {isApp ? (
+                                          {isApplicable ? (
                                             <div className="flex items-center justify-center">
                                               <Checkbox
                                                 checked={isChecked}
-                                                onCheckedChange={() => togglePermission(`dm_${sm.key}`, action)}
+                                                onCheckedChange={() => togglePermission(m.key, action)}
                                                 className="data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
                                               />
                                             </div>
@@ -581,9 +581,51 @@ export default function Team() {
                                       );
                                     })}
                                   </tr>
-                                ))}
-                              </React.Fragment>
-                            ))}
+
+                                  {/* GRANULAR SUB-MODULES FOR DATA MANAGEMENT */}
+                                  {m.hasSubModules && expandedGroups[m.key] && m.subModules.map((sm) => {
+                                    const isSubEntitled = sm.key === "high_value_goods" ? hasFeature("high_value_goods") : isPageAllowed("data_management");
+                                    return (
+                                      <tr key={sm.key} className="bg-slate-50/40 border-t border-slate-100 hover:bg-slate-50 transition-colors">
+                                        <td className="py-1.5 pl-7 pr-3 text-slate-700 font-mono text-[11px]">
+                                          ↳ {sm.label}
+                                        </td>
+                                        <td className="py-1.5 px-2 text-center">
+                                          {isSubEntitled ? (
+                                            <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-semibold py-0.5 px-1.5 gap-1 shrink-0 inline-flex items-center">
+                                              <Check className="w-2.5 h-2.5 text-emerald-600" /> Included
+                                            </Badge>
+                                          ) : (
+                                            <Badge variant="outline" className="bg-slate-100 text-slate-500 border-slate-200 text-[10px] font-medium py-0.5 px-1.5 gap-1 shrink-0 inline-flex items-center" title={`Not included in ${planName} plan`}>
+                                              <Lock className="w-2.5 h-2.5 text-slate-400" /> Not in {planName}
+                                            </Badge>
+                                          )}
+                                        </td>
+                                        {["view", "create", "edit", "delete", "approve"].map((action) => {
+                                          const isApp = sm.actions.includes(action);
+                                          const isChecked = !!form.permissions?.[`dm_${sm.key}`]?.[action];
+                                          return (
+                                            <td key={action} className="py-1.5 px-2 text-center">
+                                              {isApp ? (
+                                                <div className="flex items-center justify-center">
+                                                  <Checkbox
+                                                    checked={isChecked}
+                                                    onCheckedChange={() => togglePermission(`dm_${sm.key}`, action)}
+                                                    className="data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
+                                                  />
+                                                </div>
+                                              ) : (
+                                                <span className="text-slate-300 select-none">—</span>
+                                              )}
+                                            </td>
+                                          );
+                                        })}
+                                      </tr>
+                                    );
+                                  })}
+                                </React.Fragment>
+                              );
+                            })}
                           </React.Fragment>
                         ))}
                       </tbody>

@@ -22,6 +22,7 @@ export default function ClientNew() {
   const [tab, setTab] = useState("client");
   const [form, setForm] = useState(() => {
     const base = {
+      lead_id: fromLead?.id || "",
       full_name: fromLead?.name || "",
       mobile: fromLead?.mobile || "",
       alt_mobile: fromLead?.alt_mobile || "",
@@ -34,7 +35,11 @@ export default function ClientNew() {
       latitude: null,
       longitude: null,
       aadhaar: "",
-      system_kw: Number(fromLead?.estimated_kw) || 0,
+      system_kw: Number(fromLead?.system_kw || fromLead?.estimated_kw || 0) || "",
+      solar_meter_required: fromLead?.solar_meter_required || "No",
+      remarks: fromLead?.other_requirement
+        ? `${fromLead.other_requirement}${fromLead.remarks ? ` — ${fromLead.remarks}` : ""}`
+        : (fromLead?.remarks || ""),
       panel_make: "",
       panel_brand: "",
       panel_technology: "",
@@ -53,7 +58,9 @@ export default function ClientNew() {
       status: fromLead ? "Approved" : "Lead",
       documents: [],
       // ── Financial Setup Initial State ──
-      contract_value: "",
+      contract_value: (fromLead?.proposed_price || fromLead?.offer_price)
+        ? String(fromLead.proposed_price || fromLead.offer_price)
+        : "",
       initial_payments: [
         { description: "Advance Payment", amount: "", payment_source: "Bank Transfer", status: "Received", ref_number: "", remarks: "" }
       ],
@@ -244,6 +251,7 @@ export default function ClientNew() {
 
     const payload = {
       ...form,
+      lead_id: fromLead?.id || form.lead_id || undefined,
       system_kw: Number(form.system_kw) || 0,
       panel_wattage: Number(form.panel_wattage) || 0,
       num_panels: Number(form.num_panels) || 0,
@@ -280,8 +288,8 @@ export default function ClientNew() {
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <button onClick={() => nav("/clients")} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-900 mb-2">
-            <ArrowLeft className="w-4 h-4" /> Back to Clients
+          <button onClick={() => nav(fromLead ? "/leads" : "/clients")} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-900 mb-2">
+            <ArrowLeft className="w-4 h-4" /> {fromLead ? "Back to Leads" : "Back to Clients"}
           </button>
           <h1 className="text-3xl font-semibold tracking-tight text-slate-900" style={{ fontFamily: "Outfit" }}>New Client Onboarding</h1>
         </div>
@@ -289,6 +297,33 @@ export default function ClientNew() {
           {saving ? "Saving…" : "Save Client & Financial Setup"}
         </Button>
       </div>
+
+      {fromLead && (
+        <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-4 flex items-center justify-between shadow-2xs">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
+              ✓
+            </div>
+            <div>
+              <div className="text-sm font-bold text-emerald-950 flex items-center gap-2 flex-wrap">
+                <span>Onboarding from Confirmed Lead:</span>
+                <span className="text-emerald-700 font-semibold">{fromLead.name}</span>
+                {fromLead.lead_no && (
+                  <span className="bg-white text-emerald-800 border border-emerald-300 font-mono text-[11px] px-2 py-0.5 rounded-md font-semibold">
+                    {fromLead.lead_no}
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-emerald-700 mt-0.5">
+                Lead name, mobile ({fromLead.mobile}), address, system size ({fromLead.system_kw || fromLead.estimated_kw || 0} kW), and proposed financials have been pre-filled. Complete any remaining technical & document details to finish onboarding.
+              </div>
+            </div>
+          </div>
+          <span className="bg-emerald-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0">
+            Confirmed Lead
+          </span>
+        </div>
+      )}
 
       <Tabs value={tab} onValueChange={setTab} data-testid="new-client-form">
         <TabsList className="bg-white border border-slate-200">

@@ -4,6 +4,13 @@
  * useQuery calls and queryClient.invalidateQueries calls.
  */
 export const queryKeys = {
+  leads: {
+    all: () => ["leads"],
+    list: (filters = {}) => ["leads", "list", filters],
+    detail: (id) => ["leads", id],
+    stats: () => ["leads", "stats"],
+    followups: (filters = {}) => ["leads", "followups", filters],
+  },
   clients: {
     all: () => ["clients"],
     list: (filters = {}) => ["clients", "list", filters],
@@ -82,6 +89,7 @@ export const invalidateAllClientQueries = (queryClient, clientId) => {
       const keyStr = JSON.stringify(query.queryKey || []).toLowerCase();
       return (
         keyStr.includes("client") ||
+        keyStr.includes("lead") ||
         keyStr.includes("document") ||
         keyStr.includes("onboarding") ||
         keyStr.includes("project") ||
