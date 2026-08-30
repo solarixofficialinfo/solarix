@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { useLocation } from "react-router-dom";
 import api, { formatApiError, fileUrl, downloadFile } from "@/lib/api";
 import { useClientList, useCompany } from "@/hooks/useClients";
 import { useSalesDocuments, useDeleteSalesDocument } from "@/hooks/useSalesDocuments";
@@ -37,6 +38,7 @@ const clampNumber = (value) => {
 };
 
 export default function Quotation() {
+  const location = useLocation();
   const [clientSource, setClientSource] = useState("existing");
   const [selectedClientId, setSelectedClientId] = useState("");
   const [clientForm, setClientForm] = useState({
@@ -88,6 +90,71 @@ export default function Quotation() {
   const products = useMemo(() => productsData || [], [productsData]);
   const { data: companyData } = useCompany();
   const company = companyData || null;
+
+  // Handle transfer from 3D Solar Designer
+  useEffect(() => {
+    if (location.state?.transferFromSolarDesigner) {
+      const { client_id, client_name, system_kw, panel_make, panel_wattage, panel_count, structure_type, mounting_height_m } = location.state;
+      if (client_id) {
+        setSelectedClientId(client_id);
+      } else if (client_name) {
+        setClientSource("manual");
+        setClientForm((prev) => ({ ...prev, full_name: client_name, project_capacity: system_kw ? `${system_kw} kW` : prev.project_capacity }));
+      }
+      if (system_kw) {
+        setClientForm((prev) => ({ ...prev, project_capacity: `${system_kw} kW` }));
+      }
+
+      // Pre-fill BOM items
+      const pCount = Number(panel_count || 1);
+      const transferredItems = [
+        {
+          id: newId(),
+          product_id: "",
+          product: panel_make || "Solar PV Modules",
+          size: `${panel_wattage || 550}W High Efficiency Mono PERC`,
+          unit: "Nos",
+          quantity: String(pCount),
+          rate: "",
+          discount: "",
+          gst: "18",
+          isCustomGst: false,
+          serial_numbers: "",
+          custom: {}
+        },
+        {
+          id: newId(),
+          product_id: "",
+          product: `Mounting Framework (${structure_type === "flush" ? "Flush Mount" : "Elevated Super Structure"})`,
+          size: structure_type === "flush" ? "Roof Base Bracket" : `Clearance: ${mounting_height_m || 1.8}m`,
+          unit: "Sets",
+          quantity: String(Math.max(1, Math.ceil(pCount / 4))),
+          rate: "",
+          discount: "",
+          gst: "18",
+          isCustomGst: false,
+          serial_numbers: "",
+          custom: {}
+        },
+        {
+          id: newId(),
+          product_id: "",
+          product: "Aluminium Mounting Rails / Purlins",
+          size: "Anodized Al 6063-T6",
+          unit: "Mtrs",
+          quantity: String(Math.round(pCount * 2.35)),
+          rate: "",
+          discount: "",
+          gst: "18",
+          isCustomGst: false,
+          serial_numbers: "",
+          custom: {}
+        },
+      ];
+      setItems(transferredItems);
+      toast.success(`Imported ${system_kw} kWp system specifications from 3D Solar Designer!`);
+    }
+  }, [location.state]);
 
   // Sync preparedBy from company when it first loads — runs only when companyData changes.
   // IMPORTANT: preparedBy must NOT be in the deps array or setState → dep change → re-run = infinite loop.

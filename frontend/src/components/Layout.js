@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
-import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp, ShieldAlert, Sparkles, PackageSearch, UserPlus } from "lucide-react";
+import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp, ShieldAlert, Sparkles, PackageSearch, UserPlus, Layers } from "lucide-react";
 import NotificationBell from "@/components/NotificationBell";
 import ProfileMenu from "@/components/ProfileMenu";
 import TrialBanner from "@/components/TrialBanner";
@@ -179,6 +179,7 @@ export default function Layout({ children }) {
       title: "WORKSPACE",
       items: [
         { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, key: "dashboard" },
+        { to: "/solar-designer", label: "3D Solar Designer", icon: Layers, key: "solar_designer" },
         { to: "/leads", label: "Leads", icon: UserPlus, key: "leads" },
         { to: "/clients", label: "Clients", icon: Users2, key: "clients" },
         { to: "/projects", label: "Project Execution", icon: Briefcase, key: "project_execution" },

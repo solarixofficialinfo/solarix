@@ -19,6 +19,7 @@ def get_current_period() -> str:
 
 # Verified Real Solarix Application Pages
 REAL_APPLICATION_PAGES = [
+    {"key": "solar_designer", "name": "3D Solar Designer", "route": "/solar-designer", "section": "WORKSPACE"},
     {"key": "dashboard", "name": "Dashboard", "route": "/dashboard", "section": "WORKSPACE"},
     {"key": "leads", "name": "Leads", "route": "/leads", "section": "WORKSPACE"},
     {"key": "clients", "name": "Clients", "route": "/clients", "section": "WORKSPACE"},
@@ -61,6 +62,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "monthly_api_requests": 0,
         "badge": None,
         "pages": {
+            "solar_designer": True,
             "dashboard": True,
             "leads": True,
             "clients": True,
@@ -81,6 +83,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
             "billing": True,
         },
         "features": {
+            "solar_designer": True,
             "client_onboarding": True,
             "inward": True,
             "outward": True,
@@ -143,6 +146,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "monthly_api_requests": 5000,
         "badge": "MOST POPULAR",
         "pages": {
+            "solar_designer": True,
             "dashboard": True,
             "leads": True,
             "clients": True,
@@ -163,6 +167,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
             "billing": True,
         },
         "features": {
+            "solar_designer": True,
             "client_onboarding": True,
             "inward": True,
             "outward": True,
@@ -225,6 +230,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
         "monthly_api_requests": 50000,
         "badge": "FULL POWER",
         "pages": {
+            "solar_designer": True,
             "dashboard": True,
             "leads": True,
             "clients": True,
@@ -245,6 +251,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
             "billing": True,
         },
         "features": {
+            "solar_designer": True,
             "client_onboarding": True,
             "inward": True,
             "outward": True,

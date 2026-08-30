@@ -43,6 +43,8 @@ const PurchaseOrders = lazy(() => import("@/pages/PurchaseOrders"));
 const Leads = lazy(() => import("@/pages/Leads"));
 const Pricing = lazy(() => import("@/pages/Pricing"));
 const MaterialRequests = lazy(() => import("@/pages/MaterialRequests"));
+const SolarDesigner = lazy(() => import("@/pages/SolarDesigner"));
+const SolarStudio = lazy(() => import("@/pages/SolarDesigner/SolarStudio"));
 
 const ControlCenterLayout = lazy(() => import("@/pages/ControlCenter/ControlCenterLayout"));
 const ControlCenterDashboard = lazy(() => import("@/pages/ControlCenter/ControlCenterDashboard"));
@@ -143,6 +145,7 @@ function PermissionRoute({ page, children }) {
   if (!hasPerm) {
     const pages = [
       { key: "dashboard", path: "/dashboard" },
+      { key: "solar_designer", path: "/solar-designer" },
       { key: "leads", path: "/leads" },
       { key: "clients", path: "/clients" },
       { key: "project_execution", path: "/projects" },
@@ -270,6 +273,9 @@ function App() {
             <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
             <Route path="/reset-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
             <Route path="/dashboard" element={<Protected><PermissionRoute page="dashboard"><MainTabShell activeTab="dashboard" /></PermissionRoute></Protected>} />
+            <Route path="/solar-designer" element={<Protected><PermissionRoute page="solar_designer"><SolarDesigner /></PermissionRoute></Protected>} />
+            <Route path="/solar-designer/new" element={<Protected><PermissionRoute page="solar_designer"><SolarStudio /></PermissionRoute></Protected>} />
+            <Route path="/solar-designer/:id" element={<Protected><PermissionRoute page="solar_designer"><SolarStudio /></PermissionRoute></Protected>} />
             <Route path="/leads" element={<Protected><PermissionRoute page="leads"><Leads /></PermissionRoute></Protected>} />
             <Route path="/clients" element={<Protected><PermissionRoute page="clients"><MainTabShell activeTab="clients" /></PermissionRoute></Protected>} />
             <Route path="/clients/new" element={<Protected><PermissionRoute page="clients"><ClientNew /></PermissionRoute></Protected>} />

@@ -26,6 +26,7 @@ const MODULE_GROUPS = [
     group: "WORKSPACE",
     modules: [
       { key: "dashboard", label: "Dashboard", actions: ["view"] },
+      { key: "solar_designer", label: "3D Solar Designer", actions: ["view", "create", "edit", "delete", "approve"] },
       { key: "leads", label: "Leads Management", actions: ["view", "create", "edit", "delete", "approve"] },
       { key: "clients", label: "Clients", actions: ["view", "create", "edit", "delete"] },
       { key: "project_execution", label: "Project Execution", actions: ["view", "create", "edit", "delete", "approve"] },
@@ -117,25 +118,26 @@ const getPresetPermissions = (role) => {
   };
 
   if (role === "Manager") {
-    ["dashboard", "leads", "clients", "project_execution", "task_portal", "receivables", "data_management", "client_data", "reports", "sales_documents", "purchase_orders", "documents"].forEach((k) => {
+    ["dashboard", "solar_designer", "leads", "clients", "project_execution", "task_portal", "receivables", "data_management", "client_data", "reports", "sales_documents", "purchase_orders", "documents"].forEach((k) => {
       grant(k, ["view", "create", "edit", "approve"]);
     });
     ["inward", "outward", "product_master", "balance_report", "history", "high_value_goods", "material_requests"].forEach((sm) => {
       grant(`dm_${sm}`, ["view", "create", "edit", "approve"]);
     });
   } else if (role === "Staff") {
-    ["dashboard", "leads", "clients", "task_portal", "data_management", "sales_documents", "documents"].forEach((k) => {
+    ["dashboard", "solar_designer", "leads", "clients", "task_portal", "data_management", "sales_documents", "documents"].forEach((k) => {
       grant(k, ["view", "create", "edit"]);
     });
     ["inward", "outward", "product_master", "balance_report", "history"].forEach((sm) => {
       grant(`dm_${sm}`, ["view", "create", "edit"]);
     });
   } else if (role === "Installer") {
+    grant("solar_designer", ["view"]);
     grant("task_portal", ["view", "edit"]);
     grant("clients", ["view"]);
     grant("client_data", ["view"]);
   } else if (role === "Viewer") {
-    ["dashboard", "leads", "clients", "task_portal", "project_execution", "data_management", "client_data", "reports", "sales_documents"].forEach((k) => {
+    ["dashboard", "solar_designer", "leads", "clients", "task_portal", "project_execution", "data_management", "client_data", "reports", "sales_documents"].forEach((k) => {
       grant(k, ["view"]);
     });
   }

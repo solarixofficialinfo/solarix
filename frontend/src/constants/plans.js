@@ -1,5 +1,6 @@
 export const DEFAULT_FEATURE_MAPS = {
   starter: {
+    solar_designer: true,
     client_onboarding: true,
     inward: true,
     outward: true,
@@ -27,6 +28,7 @@ export const DEFAULT_FEATURE_MAPS = {
     inventory_intelligence: false,
   },
   growth: {
+    solar_designer: true,
     client_onboarding: true,
     inward: true,
     outward: true,
@@ -54,6 +56,7 @@ export const DEFAULT_FEATURE_MAPS = {
     role_permissions: true,
   },
   pro: {
+    solar_designer: true,
     client_onboarding: true,
     inward: true,
     outward: true,
@@ -102,6 +105,7 @@ export const PLANS = {
     badge: null,
     featureMap: DEFAULT_FEATURE_MAPS.starter,
     pages: {
+      solar_designer: true,
       dashboard: true,
       leads: true,
       clients: true,
@@ -156,6 +160,7 @@ export const PLANS = {
     badge: "MOST POPULAR",
     featureMap: DEFAULT_FEATURE_MAPS.growth,
     pages: {
+      solar_designer: true,
       dashboard: true,
       leads: true,
       clients: true,
@@ -214,6 +219,7 @@ export const PLANS = {
     badge: "FULL POWER",
     featureMap: DEFAULT_FEATURE_MAPS.pro,
     pages: {
+      solar_designer: true,
       dashboard: true,
       leads: true,
       clients: true,

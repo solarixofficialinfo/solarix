@@ -18769,6 +18769,283 @@ async def list_platform_audit_logs(user=Depends(require_platform_owner())):
     return await db.platform_audit_logs.find({}, {"_id": 0}).sort("timestamp", -1).to_list(500)
 
 
+# ─── 3D SOLAR ROOFTOP DESIGNER ENDPOINTS ──────────────────────────────────────
+
+from solar_designer_report import generate_solar_design_pdf, generate_solar_design_docx
+
+@api_router.get("/solar-designer/designs")
+async def list_solar_designs(
+    search: Optional[str] = None,
+    client_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    limit: int = 100,
+    skip: int = 0,
+    user=Depends(require_perm("solar_designer", "view"))
+):
+    cid = user["company_id"]
+    query: Dict[str, Any] = {"company_id": cid}
+    if client_id:
+        query["client_id"] = client_id
+    if project_id:
+        query["project_id"] = project_id
+    if search and search.strip():
+        s = search.strip()
+        query["$or"] = [
+            {"site_name": {"$regex": s, "$options": "i"}},
+            {"client_name": {"$regex": s, "$options": "i"}},
+            {"address": {"$regex": s, "$options": "i"}},
+            {"formatted_address": {"$regex": s, "$options": "i"}},
+            {"design_number": {"$regex": s, "$options": "i"}},
+        ]
+    
+    designs = await db.solar_designs.find(query, {"_id": 0}).sort("updated_at", -1).skip(skip).limit(min(limit, 200)).to_list(limit)
+    total = await db.solar_designs.count_documents(query)
+    return {"designs": designs, "total": total}
+
+@api_router.post("/solar-designer/designs")
+async def create_solar_design(
+    payload: Dict[str, Any],
+    user=Depends(require_perm("solar_designer", "create"))
+):
+    await require_active_subscription()(user)
+    cid = user["company_id"]
+    
+    # Generate sequential design number
+    counter_doc = await db.counters.find_one_and_update(
+        {"company_id": cid, "type": "solar_design"},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True
+    )
+    seq = (counter_doc.get("seq") if counter_doc else 1) or 1
+    current_year = datetime.now(timezone.utc).year
+    design_number = f"SD-{current_year}-{seq:04d}"
+    
+    design_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+    
+    doc = {
+        "id": design_id,
+        "design_number": design_number,
+        "company_id": cid,
+        "client_id": payload.get("client_id") or "",
+        "client_name": payload.get("client_name") or "",
+        "project_id": payload.get("project_id") or "",
+        "lead_id": payload.get("lead_id") or "",
+        "site_name": payload.get("site_name") or "New Solar Rooftop Design",
+        "address": payload.get("address") or "",
+        "formatted_address": payload.get("formatted_address") or "",
+        "latitude": payload.get("latitude"),
+        "longitude": payload.get("longitude"),
+        "place_id": payload.get("place_id") or "",
+        "zoom": payload.get("zoom") or 19,
+        "roof_polygon": payload.get("roof_polygon") or [],
+        "roof_area_sqm": float(payload.get("roof_area_sqm") or payload.get("roof_area") or 0),
+        "roof_perimeter_m": float(payload.get("roof_perimeter_m") or 0),
+        "roof_dimensions": payload.get("roof_dimensions") or {},
+        "calibration": payload.get("calibration") or {},
+        "setback_m": float(payload.get("setback_m") or 0.5),
+        "edge_clearance_m": float(payload.get("edge_clearance_m") or 0.5),
+        "walkway_m": float(payload.get("walkway_m") or 0.6),
+        "walkways": payload.get("walkways") or [],
+        "usable_area_sqm": float(payload.get("usable_area_sqm") or 0),
+        "coverage_pct": float(payload.get("coverage_pct") or 0),
+        "obstacles": payload.get("obstacles") or [],
+        "panel_product_id": payload.get("panel_product_id") or "",
+        "panel_make": payload.get("panel_make") or "Solar PV Module",
+        "panel_model": payload.get("panel_model") or "",
+        "panel_wattage": float(payload.get("panel_wattage") or 550),
+        "panel_dimensions": payload.get("panel_dimensions") or {"length_m": 2.278, "width_m": 1.134, "weight_kg": 28.5},
+        "orientation": payload.get("orientation") or "portrait",
+        "tilt_angle": float(payload.get("tilt_angle") or 15),
+        "azimuth_angle": float(payload.get("azimuth_angle") or 180),
+        "row_spacing_m": float(payload.get("row_spacing_m") or 0.4),
+        "panel_spacing_m": float(payload.get("panel_spacing_m") or 0.02),
+        "panel_count": int(payload.get("panel_count") or len(payload.get("panels") or [])),
+        "system_kw": float(payload.get("system_kw") or 0),
+        "panels": payload.get("panels") or [],
+        "structure_type": payload.get("structure_type") or "elevated",
+        "mounting_height_m": float(payload.get("mounting_height_m") or 1.8),
+        "material_estimates": payload.get("material_estimates") or {},
+        "camera_state": payload.get("camera_state") or {},
+        "layout_snapshot_2d": payload.get("layout_snapshot_2d") or "",
+        "layout_snapshot_3d": payload.get("layout_snapshot_3d") or "",
+        "satellite_snapshot": payload.get("satellite_snapshot") or "",
+        "version": 1,
+        "status": payload.get("status") or "Draft",
+        "notes": payload.get("notes") or "",
+        "created_by": user["id"],
+        "created_by_name": user.get("name") or user.get("full_name") or "User",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    
+    await db.solar_designs.insert_one(doc)
+    doc_ret = {k: v for k, v in doc.items() if k != "_id"}
+    return doc_ret
+
+@api_router.get("/solar-designer/designs/{design_id}")
+async def get_solar_design(
+    design_id: str,
+    user=Depends(require_perm("solar_designer", "view"))
+):
+    cid = user["company_id"]
+    doc = await db.solar_designs.find_one({"id": design_id, "company_id": cid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Solar design not found")
+    return doc
+
+@api_router.put("/solar-designer/designs/{design_id}")
+async def update_solar_design(
+    design_id: str,
+    payload: Dict[str, Any],
+    user=Depends(require_perm("solar_designer", "edit"))
+):
+    await require_active_subscription()(user)
+    cid = user["company_id"]
+    existing = await db.solar_designs.find_one({"id": design_id, "company_id": cid}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Solar design not found")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    current_version = int(existing.get("version") or 1)
+    
+    # Check if saving as a new version
+    if payload.get("save_as_new_version"):
+        version_doc = {
+            "id": str(uuid.uuid4()),
+            "design_id": design_id,
+            "company_id": cid,
+            "version": current_version,
+            "snapshot": existing,
+            "created_by": user["id"],
+            "created_at": now_iso
+        }
+        await db.solar_design_versions.insert_one(version_doc)
+        current_version += 1
+
+    update_fields: Dict[str, Any] = {
+        "updated_at": now_iso,
+        "updated_by": user["id"],
+        "version": current_version
+    }
+    
+    allowed_fields = [
+        "client_id", "client_name", "project_id", "lead_id", "site_name",
+        "address", "formatted_address", "latitude", "longitude", "place_id", "zoom",
+        "roof_polygon", "roof_area_sqm", "roof_perimeter_m", "roof_dimensions",
+        "calibration", "setback_m", "edge_clearance_m", "walkway_m", "walkways",
+        "usable_area_sqm", "coverage_pct", "obstacles", "panel_product_id",
+        "panel_make", "panel_model", "panel_wattage", "panel_dimensions",
+        "orientation", "tilt_angle", "azimuth_angle", "row_spacing_m", "panel_spacing_m",
+        "panel_count", "system_kw", "panels", "structure_type", "mounting_height_m",
+        "material_estimates", "camera_state", "layout_snapshot_2d", "layout_snapshot_3d",
+        "satellite_snapshot", "status", "notes"
+    ]
+    
+    for f in allowed_fields:
+        if f in payload:
+            update_fields[f] = payload[f]
+            
+    await db.solar_designs.update_one({"id": design_id, "company_id": cid}, {"$set": update_fields})
+    updated = await db.solar_designs.find_one({"id": design_id, "company_id": cid}, {"_id": 0})
+    return updated
+
+@api_router.delete("/solar-designer/designs/{design_id}")
+async def delete_solar_design(
+    design_id: str,
+    user=Depends(require_perm("solar_designer", "delete"))
+):
+    cid = user["company_id"]
+    res = await db.solar_designs.delete_one({"id": design_id, "company_id": cid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Solar design not found")
+    await db.solar_design_versions.delete_many({"design_id": design_id, "company_id": cid})
+    return {"ok": True, "message": "Solar design deleted successfully"}
+
+@api_router.get("/solar-designer/designs/{design_id}/versions")
+async def list_solar_design_versions(
+    design_id: str,
+    user=Depends(require_perm("solar_designer", "view"))
+):
+    cid = user["company_id"]
+    versions = await db.solar_design_versions.find(
+        {"design_id": design_id, "company_id": cid},
+        {"_id": 0, "id": 1, "version": 1, "created_at": 1}
+    ).sort("version", -1).to_list(50)
+    return {"versions": versions}
+
+@api_router.post("/solar-designer/designs/{design_id}/export-pdf")
+@api_router.post("/solar-designer/export-pdf")
+async def export_solar_design_pdf_endpoint(
+    payload: Optional[Dict[str, Any]] = None,
+    design_id: Optional[str] = None,
+    user=Depends(require_perm("solar_designer", "view"))
+):
+    cid = user["company_id"]
+    design_doc = payload or {}
+    
+    if design_id and not payload:
+        design_doc = await db.solar_designs.find_one({"id": design_id, "company_id": cid}, {"_id": 0}) or {}
+    elif design_id and payload and not payload.get("site_name"):
+        existing = await db.solar_designs.find_one({"id": design_id, "company_id": cid}, {"_id": 0}) or {}
+        design_doc = {**existing, **payload}
+        
+    if not design_doc:
+        raise HTTPException(status_code=400, detail="No design payload provided for PDF export")
+        
+    company = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
+    
+    try:
+        pdf_bytes = generate_solar_design_pdf(design_doc, company)
+        await increment_usage(cid, "document_generations", 1, db=db)
+    except Exception as e:
+        logger.exception("solar_design: PDF export failed")
+        raise HTTPException(status_code=500, detail=f"Failed to generate Solar Design PDF: {e}")
+        
+    safe_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', (design_doc.get("site_name") or "Solar_Design")[:30])
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=Solar_Design_{safe_title}.pdf"}
+    )
+
+@api_router.post("/solar-designer/designs/{design_id}/export-docx")
+@api_router.post("/solar-designer/export-docx")
+async def export_solar_design_docx_endpoint(
+    payload: Optional[Dict[str, Any]] = None,
+    design_id: Optional[str] = None,
+    user=Depends(require_perm("solar_designer", "view"))
+):
+    cid = user["company_id"]
+    design_doc = payload or {}
+    
+    if design_id and not payload:
+        design_doc = await db.solar_designs.find_one({"id": design_id, "company_id": cid}, {"_id": 0}) or {}
+    elif design_id and payload and not payload.get("site_name"):
+        existing = await db.solar_designs.find_one({"id": design_id, "company_id": cid}, {"_id": 0}) or {}
+        design_doc = {**existing, **payload}
+        
+    if not design_doc:
+        raise HTTPException(status_code=400, detail="No design payload provided for Word export")
+        
+    company = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
+    
+    try:
+        docx_bytes = generate_solar_design_docx(design_doc, company)
+        await increment_usage(cid, "document_generations", 1, db=db)
+    except Exception as e:
+        logger.exception("solar_design: DOCX export failed")
+        raise HTTPException(status_code=500, detail=f"Failed to generate Solar Design DOCX: {e}")
+        
+    safe_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', (design_doc.get("site_name") or "Solar_Design")[:30])
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename=Solar_Design_{safe_title}.docx"}
+    )
+
+
 from billing_router import billing_router
 app.include_router(billing_router)
 app.include_router(api_router)
