@@ -382,3 +382,72 @@ export function rotatedRectanglesIntersect(rectA, rectB) {
 
   return true;
 }
+
+/**
+ * Calculates 3D Roof Surface Elevation (Y in Three.js coordinates) at any (x, z) location
+ * taking into account building elevation, roof slope/pitch, and slope azimuth.
+ * 
+ * @param {number} x - Local Cartesian X (East-West in meters)
+ * @param {number} y - Local Cartesian Y (North-South in meters)
+ * @param {Object} roofParams - { type, pitch_deg, azimuth_deg, elevation_m }
+ */
+export function calculateRoofElevationAtPoint(x, y, { type = "flat", pitch_deg = 0, azimuth_deg = 180, elevation_m = 3.0 } = {}) {
+  const baseElevation = Number(elevation_m || 3.0);
+  const pitchRad = toRad(Number(pitch_deg || 0));
+  const azRad = toRad(Number(azimuth_deg || 180) - 180); // Relative to South
+
+  if (pitch_deg <= 0 || type === "flat") {
+    return baseElevation;
+  }
+
+  if (type === "single_slope") {
+    // Height increases along the azimuth direction
+    const projectedDistance = x * Math.sin(azRad) + y * Math.cos(azRad);
+    return baseElevation + projectedDistance * Math.tan(pitchRad);
+  }
+
+  if (type === "gable") {
+    // Symmetrical slope from center ridge along the azimuth
+    const projectedDistance = Math.abs(x * Math.sin(azRad) + y * Math.cos(azRad));
+    return baseElevation - projectedDistance * Math.tan(pitchRad);
+  }
+
+  if (type === "hip") {
+    const dist = Math.max(Math.abs(x), Math.abs(y));
+    return baseElevation - dist * Math.tan(pitchRad);
+  }
+
+  return baseElevation;
+}
+
+/**
+ * Calculates 3D mounting transform (position & rotation) for a panel sitting ON the roof
+ */
+export function calculatePanel3DPosition({
+  panel,
+  roof = { type: "flat", pitch_deg: 0, azimuth_deg: 180, elevation_m: 3.0 },
+  structure = { type: "elevated", tilt_deg: 15, height_m: 1.8 },
+}) {
+  const px = Number(panel.x || 0);
+  const py = Number(panel.y || 0);
+  const roofH = calculateRoofElevationAtPoint(px, py, roof);
+
+  const isFlush = (structure.type || "").toLowerCase() === "flush";
+  const structClearance = isFlush ? 0.12 : Number(structure.height_m || 1.8);
+  const tiltDeg = isFlush ? Number(roof.pitch_deg || 0) : Number(structure.tilt_deg || 15);
+  const tiltRad = toRad(tiltDeg);
+
+  // Position: centered on roof surface + clearance + tilt vertical offset
+  const panelLength = Number(panel.height || 2.278);
+  const verticalOffset = (panelLength / 2) * Math.sin(tiltRad);
+
+  return {
+    x: px,
+    y: roofH + structClearance + verticalOffset + 0.03,
+    z: -py, // Invert Y for 3D Three.js Z-axis
+    tiltRad,
+    structClearance,
+    roofSurfaceY: roofH,
+  };
+}
+

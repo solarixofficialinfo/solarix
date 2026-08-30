@@ -12,7 +12,7 @@ import {
   Sun, MapPin, PenTool, Box, Sparkles, Layers, ArrowLeft, ArrowRight,
   Save, FileDown, Plus, Trash2, RotateCw, RefreshCw, Check, CheckCircle2,
   AlertTriangle, ShieldCheck, Download, Sliders, Ruler, Maximize2, Minimize2,
-  Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, Eye
+  Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, Eye, Focus
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -41,13 +41,13 @@ import { useProductList } from "@/hooks/useInventory";
 export default function SolarStudio() {
   const { id: designId } = useParams();
   const nav = useNavigate();
-  const location = useLocation();
 
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState("2d"); // '2d' | '3d' | 'split'
   const [activeTool, setActiveTool] = useState("select"); // 'select' | 'draw_roof' | 'calibrate'
   const [selectedPanelId, setSelectedPanelId] = useState(null);
+  const [isCalibrated, setIsCalibrated] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -78,11 +78,11 @@ export default function SolarStudio() {
     height: 1.6,
   });
 
-  // Visual Viewport Refs for PDF/Word snapshot capture
+  // Viewport Refs
   const liveMapRef = useRef(null);
   const viewer3dRef = useRef(null);
 
-  // Canonical Solar Design State (Shared between 2D satellite map and 3D WebGL viewer)
+  // Canonical Solar Design State (Strictly synchronized between 2D Map and 3D WebGL)
   const [designData, setDesignData] = useState({
     id: "",
     design_number: "",
@@ -97,6 +97,15 @@ export default function SolarStudio() {
     longitude: 72.8777,
     place_id: "",
     zoom: 19,
+    // 1. Roof Geometry Object
+    roof: {
+      type: "flat", // 'flat' | 'single_slope' | 'gable' | 'hip'
+      pitch_deg: 0, // Roof slope in degrees (0 - 45)
+      azimuth_deg: 180, // Slope orientation (180 = South)
+      elevation_m: 3.0, // Building wall height (m)
+      surface_material: "concrete",
+      setback_m: 0.5,
+    },
     roof_polygon: [
       { x: -7, y: -5, lat: 19.076045, lng: 72.877635 },
       { x: 7, y: -5, lat: 19.076045, lng: 72.877765 },
@@ -113,9 +122,11 @@ export default function SolarStudio() {
     walkways: [],
     usable_area_sqm: 117,
     coverage_pct: 0,
+    // 2. Obstacles Array
     obstacles: [
       { id: "obs-1", name: "Water Tank", type: "water_tank", x: 4.5, y: 2.5, length: 1.8, width: 1.8, height: 1.6, rotation: 0 },
     ],
+    // 3. Panel Specification & Layout
     panel_product_id: "",
     panel_make: "Tier-1 High Efficiency Mono PERC",
     panel_model: "550W High-Efficiency PV Module",
@@ -129,6 +140,14 @@ export default function SolarStudio() {
     panel_count: 0,
     system_kw: 0,
     panels: [],
+    // 4. Mounting Structure Object
+    structure: {
+      type: "elevated", // 'elevated' | 'flush' | 'fixed_tilt' | 'ballasted'
+      tilt_deg: 15,
+      height_m: 1.8,
+      show_structure: true,
+      rail_type: "aluminium_6063",
+    },
     structure_type: "elevated",
     mounting_height_m: 1.8,
     material_estimates: {},
@@ -145,8 +164,27 @@ export default function SolarStudio() {
       try {
         const res = await api.get(`/solar-designer/designs/${designId}`);
         if (res.data && isMounted) {
-          setDesignData(res.data);
-          if (res.data.address) setSearchQuery(res.data.address);
+          const doc = res.data;
+          // Ensure roof and structure objects are populated
+          if (!doc.roof) {
+            doc.roof = {
+              type: doc.roof_type || "flat",
+              pitch_deg: doc.roof_pitch || 0,
+              azimuth_deg: doc.azimuth_angle || 180,
+              elevation_m: doc.building_elevation_m || 3.0,
+              setback_m: doc.setback_m || 0.5,
+            };
+          }
+          if (!doc.structure) {
+            doc.structure = {
+              type: doc.structure_type || "elevated",
+              tilt_deg: doc.tilt_angle || 15,
+              height_m: doc.mounting_height_m || 1.8,
+              show_structure: true,
+            };
+          }
+          setDesignData(doc);
+          if (doc.address) setSearchQuery(doc.address);
         }
       } catch (err) {
         toast.error("Failed to load design: " + formatApiError(err));
@@ -185,7 +223,7 @@ export default function SolarStudio() {
   const handleAutoLayout = useCallback((customStrategy = "auto") => {
     const result = generateAutoPanelLayout({
       roofPolygon: designData.roof_polygon,
-      setbackMeters: Number(designData.setback_m || 0.5),
+      setbackMeters: Number(designData.roof?.setback_m || designData.setback_m || 0.5),
       obstacles: designData.obstacles || [],
       walkways: designData.walkways || [],
       panelSpecs: {
@@ -304,7 +342,7 @@ export default function SolarStudio() {
     const check = canFitAdditionalPanel({
       panels: designData.panels,
       roofPolygon: designData.roof_polygon,
-      setbackMeters: Number(designData.setback_m || 0.5),
+      setbackMeters: Number(designData.roof?.setback_m || designData.setback_m || 0.5),
       obstacles: designData.obstacles,
       walkways: designData.walkways,
       panelSpecs: {
@@ -379,9 +417,9 @@ export default function SolarStudio() {
       type: newObstacleForm.type || "water_tank",
       x: 0,
       y: 0,
-      length: Number(newObstacleForm.length || 1.5),
-      width: Number(newObstacleForm.width || 1.5),
-      height: Number(newObstacleForm.height || 1.0),
+      length: Number(newObstacleForm.length || 1.8),
+      width: Number(newObstacleForm.width || 1.8),
+      height: Number(newObstacleForm.height || 1.6),
       rotation: 0,
     };
     setDesignData((prev) => ({
@@ -392,7 +430,7 @@ export default function SolarStudio() {
     toast.success(`Added ${newObs.name} exclusion zone.`);
   };
 
-  // Save Design
+  // Save Design to Backend
   const handleSaveDesign = async (saveAsNewVersion = false) => {
     setSaving(true);
     try {
@@ -424,7 +462,7 @@ export default function SolarStudio() {
     }
   };
 
-  // Export PDF
+  // Export PDF Report
   const handleExportPdf = async () => {
     setExporting(true);
     try {
@@ -458,7 +496,7 @@ export default function SolarStudio() {
     }
   };
 
-  // Export DOCX
+  // Export DOCX Report
   const handleExportDocx = async () => {
     setExporting(true);
     try {
@@ -497,8 +535,8 @@ export default function SolarStudio() {
         panel_make: designData.panel_make,
         panel_wattage: pWatt,
         panel_count: pCount,
-        structure_type: designData.structure_type,
-        mounting_height_m: designData.mounting_height_m,
+        structure_type: designData.structure?.type || designData.structure_type,
+        mounting_height_m: designData.structure?.height_m || designData.mounting_height_m,
       },
     });
   };
@@ -573,7 +611,7 @@ export default function SolarStudio() {
       {/* 2. THREE-COLUMN DESKTOP ENGINEERING WORKSPACE */}
       <div className={`grid grid-cols-1 lg:grid-cols-12 gap-3.5 ${isFullscreen ? "flex-1 min-h-0" : ""}`}>
         {/* LEFT COLUMN: DESIGN TOOLS (3 cols) */}
-        <div className={`lg:col-span-3 space-y-3 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-sm overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[820px]"}`}>
+        <div className={`lg:col-span-3 space-y-3 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-sm overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[840px]"}`}>
           {/* Section 1: Location & Search */}
           <div className="space-y-2">
             <div className="text-[10.5px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
@@ -647,10 +685,10 @@ export default function SolarStudio() {
 
           <div className="w-full h-[1px] bg-slate-100" />
 
-          {/* Section 2: Roof Geometry & Drawing */}
+          {/* Section 2: Roof Geometry, Pitch & Elevation */}
           <div className="space-y-2">
             <div className="text-[10.5px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-              <PenTool className="w-3 h-3 text-emerald-600" /> 2. Roof Geometry
+              <PenTool className="w-3 h-3 text-emerald-600" /> 2. Roof Geometry & Pitch
             </div>
 
             <Button
@@ -662,22 +700,91 @@ export default function SolarStudio() {
               }`}
             >
               <PenTool className="w-3.5 h-3.5" />
-              <span>{activeTool === "draw_roof" ? "Drawing Roof Mode (Active)" : "Draw Roof on Map"}</span>
+              <span>{activeTool === "draw_roof" ? "Drawing Roof on Map (Active)" : "Draw Roof on Map"}</span>
             </Button>
 
-            <div className="space-y-1 bg-slate-50 p-2.5 rounded-xl border border-slate-200/80 text-[11px]">
-              <div className="flex items-center justify-between text-slate-600">
-                <span>Setback Clearance</span>
-                <span className="font-bold text-slate-800">{designData.setback_m}m</span>
+            <div className="grid grid-cols-2 gap-1.5">
+              <div className="space-y-1">
+                <Label className="text-[10.5px] font-semibold text-slate-600">Roof Type</Label>
+                <Select
+                  value={designData.roof?.type || "flat"}
+                  onValueChange={(val) => {
+                    setDesignData((prev) => ({
+                      ...prev,
+                      roof: { ...prev.roof, type: val },
+                    }));
+                  }}
+                >
+                  <SelectTrigger className="h-7 text-[10.5px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="flat">Flat Roof (0°)</SelectItem>
+                    <SelectItem value="single_slope">Single Slope (Pitched)</SelectItem>
+                    <SelectItem value="gable">Gable Roof (Dual Pitch)</SelectItem>
+                    <SelectItem value="hip">Hip Roof (4-Sided)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-              <Slider
-                value={[Number(designData.setback_m || 0.5)]}
-                min={0.1}
-                max={2.0}
-                step={0.1}
-                onValueChange={(val) => updateDesignData({ setback_m: val[0] })}
-                className="py-1"
-              />
+
+              <div className="space-y-1">
+                <Label className="text-[10.5px] font-semibold text-slate-600">Roof Pitch (°)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  max="50"
+                  value={designData.roof?.pitch_deg ?? 0}
+                  onChange={(e) => {
+                    const pitch = parseFloat(e.target.value) || 0;
+                    setDesignData((prev) => ({
+                      ...prev,
+                      roof: { ...prev.roof, pitch_deg: pitch },
+                    }));
+                  }}
+                  className="h-7 text-xs font-bold"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5">
+              <div className="space-y-1">
+                <Label className="text-[10.5px] font-semibold text-slate-600">Building Height (m)</Label>
+                <Input
+                  type="number"
+                  step="0.5"
+                  min="1"
+                  max="30"
+                  value={designData.roof?.elevation_m ?? 3.0}
+                  onChange={(e) => {
+                    const elev = parseFloat(e.target.value) || 3.0;
+                    setDesignData((prev) => ({
+                      ...prev,
+                      roof: { ...prev.roof, elevation_m: elev },
+                    }));
+                  }}
+                  className="h-7 text-xs font-bold"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-[10.5px] font-semibold text-slate-600">Setback (m)</Label>
+                <Input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="2.0"
+                  value={designData.roof?.setback_m ?? designData.setback_m ?? 0.5}
+                  onChange={(e) => {
+                    const sb = parseFloat(e.target.value) || 0.5;
+                    setDesignData((prev) => ({
+                      ...prev,
+                      setback_m: sb,
+                      roof: { ...prev.roof, setback_m: sb },
+                    }));
+                  }}
+                  className="h-7 text-xs font-bold"
+                />
+              </div>
             </div>
           </div>
 
@@ -722,10 +829,10 @@ export default function SolarStudio() {
 
           <div className="w-full h-[1px] bg-slate-100" />
 
-          {/* Section 4: Solar Module Selection & Auto Layout */}
+          {/* Section 4: Solar Module & Mounting Structure */}
           <div className="space-y-2">
             <div className="text-[10.5px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-              <Sun className="w-3 h-3 text-amber-500" /> 4. PV Module & Layout
+              <Sun className="w-3 h-3 text-amber-500" /> 4. PV Module & Mounting System
             </div>
 
             <Button
@@ -739,45 +846,105 @@ export default function SolarStudio() {
             </Button>
 
             <div className="grid grid-cols-2 gap-1.5">
-              <Select
-                value={designData.orientation || "portrait"}
-                onValueChange={(val) => updateDesignData({ orientation: val })}
-              >
-                <SelectTrigger className="h-7 text-[10.5px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="portrait">Portrait</SelectItem>
-                  <SelectItem value="landscape">Landscape</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="space-y-1">
+                <Label className="text-[10.5px] font-semibold text-slate-600">Mounting Structure</Label>
+                <Select
+                  value={designData.structure?.type || designData.structure_type || "elevated"}
+                  onValueChange={(val) => {
+                    const isFlush = val === "flush";
+                    setDesignData((prev) => ({
+                      ...prev,
+                      structure_type: val,
+                      mounting_height_m: isFlush ? 0.12 : prev.mounting_height_m || 1.8,
+                      structure: {
+                        ...prev.structure,
+                        type: val,
+                        height_m: isFlush ? 0.12 : prev.structure?.height_m || 1.8,
+                      },
+                    }));
+                  }}
+                >
+                  <SelectTrigger className="h-7 text-[10.5px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="elevated">Elevated Super Structure (1.8m)</SelectItem>
+                    <SelectItem value="flush">Flush Flat Roof Mount</SelectItem>
+                    <SelectItem value="fixed_tilt">Fixed Tilt Ground/Roof</SelectItem>
+                    <SelectItem value="ballasted">Ballasted Non-Penetrating</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-              <Select
-                value={designData.structure_type || "elevated"}
-                onValueChange={(val) => updateDesignData({ structure_type: val })}
-              >
-                <SelectTrigger className="h-7 text-[10.5px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="elevated">Elevated (1.8m)</SelectItem>
-                  <SelectItem value="flush">Flush Mount</SelectItem>
-                  <SelectItem value="ballasted">Ballasted</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="space-y-1">
+                <Label className="text-[10.5px] font-semibold text-slate-600">Module Tilt Angle (°)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  max="45"
+                  value={designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15}
+                  onChange={(e) => {
+                    const tilt = parseFloat(e.target.value) || 15;
+                    setDesignData((prev) => ({
+                      ...prev,
+                      tilt_angle: tilt,
+                      structure: { ...prev.structure, tilt_deg: tilt },
+                    }));
+                  }}
+                  className="h-7 text-xs font-bold"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5">
+              <div className="space-y-1">
+                <Label className="text-[10.5px] font-semibold text-slate-600">Orientation</Label>
+                <Select
+                  value={designData.orientation || "portrait"}
+                  onValueChange={(val) => updateDesignData({ orientation: val })}
+                >
+                  <SelectTrigger className="h-7 text-[10.5px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="portrait">Portrait (Vertical)</SelectItem>
+                    <SelectItem value="landscape">Landscape (Horizontal)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-[10.5px] font-semibold text-slate-600">Clearance (m)</Label>
+                <Input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="6.0"
+                  value={designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8}
+                  onChange={(e) => {
+                    const h = parseFloat(e.target.value) || 1.8;
+                    setDesignData((prev) => ({
+                      ...prev,
+                      mounting_height_m: h,
+                      structure: { ...prev.structure, height_m: h },
+                    }));
+                  }}
+                  className="h-7 text-xs font-bold"
+                />
+              </div>
             </div>
 
             {/* Primary Auto Layout Button */}
             <Button
               size="sm"
               onClick={() => handleAutoLayout("auto")}
-              className="w-full h-8 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs gap-1.5"
+              className="w-full h-8 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs gap-1.5 mt-1"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Auto Layout Panels</span>
+              <span>Auto Layout Panels on Roof</span>
             </Button>
 
-            {/* Manual Panel Quantity Adjuster */}
+            {/* Manual Panel Quantity Fine-Tuning */}
             <div className="flex items-center justify-between bg-slate-50 p-1.5 rounded-xl border border-slate-200 text-xs">
               <span className="text-slate-500 font-medium text-[11px] px-1">Fine-tune Panels:</span>
               <div className="flex items-center gap-1">
@@ -822,7 +989,7 @@ export default function SolarStudio() {
 
             <div className="text-[11px] text-slate-400 pr-2 flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Real-Time Engine Active</span>
+              <span>Real-Time Model Synchronized</span>
             </div>
           </div>
 
@@ -860,7 +1027,7 @@ export default function SolarStudio() {
                   const newWalks = typeof walksOrFn === "function" ? walksOrFn(designData.walkways) : walksOrFn;
                   setDesignData((prev) => ({ ...prev, walkways: newWalks }));
                 }}
-                setbackMeters={Number(designData.setback_m || 0.5)}
+                setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
                 activeTool={activeTool}
                 setActiveTool={setActiveTool}
                 selectedPanelId={selectedPanelId}
@@ -871,6 +1038,8 @@ export default function SolarStudio() {
                   width_m: designData.panel_dimensions?.width_m || 1.134,
                   wattage: designData.panel_wattage || 550,
                 }}
+                isCalibrated={isCalibrated}
+                onCalibrationComplete={() => setIsCalibrated(true)}
               />
             )}
 
@@ -878,13 +1047,21 @@ export default function SolarStudio() {
               <Rooftop3DViewer
                 ref={viewer3dRef}
                 roofPolygon={designData.roof_polygon}
+                roof={designData.roof || {
+                  type: "flat",
+                  pitch_deg: designData.roof_pitch || 0,
+                  azimuth_deg: 180,
+                  elevation_m: 3.0,
+                }}
                 panels={designData.panels}
                 obstacles={designData.obstacles}
                 walkways={designData.walkways}
-                structureType={designData.structure_type || "elevated"}
-                tiltAngle={designData.tilt_angle || 15}
-                azimuthAngle={designData.azimuth_angle || 180}
-                mountingHeightM={designData.mounting_height_m || 1.8}
+                structure={designData.structure || {
+                  type: designData.structure_type || "elevated",
+                  tilt_deg: designData.tilt_angle || 15,
+                  height_m: designData.mounting_height_m || 1.8,
+                  show_structure: true,
+                }}
                 panelSpecs={{
                   length_m: designData.panel_dimensions?.length_m || 2.278,
                   width_m: designData.panel_dimensions?.width_m || 1.134,
@@ -903,18 +1080,18 @@ export default function SolarStudio() {
                   setRoofPolygon={handleSetRoofPolygon}
                   panels={designData.panels}
                   obstacles={designData.obstacles}
-                  setbackMeters={Number(designData.setback_m || 0.5)}
+                  setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
                   activeTool={activeTool}
                   setActiveTool={setActiveTool}
+                  isCalibrated={isCalibrated}
                 />
                 <Rooftop3DViewer
                   ref={viewer3dRef}
                   roofPolygon={designData.roof_polygon}
+                  roof={designData.roof}
                   panels={designData.panels}
                   obstacles={designData.obstacles}
-                  structureType={designData.structure_type || "elevated"}
-                  tiltAngle={designData.tilt_angle || 15}
-                  azimuthAngle={designData.azimuth_angle || 180}
+                  structure={designData.structure}
                 />
               </div>
             )}
@@ -922,7 +1099,7 @@ export default function SolarStudio() {
         </div>
 
         {/* RIGHT COLUMN: LIVE DATA & DESIGN SUMMARY (3 cols) */}
-        <div className={`lg:col-span-3 overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[820px]"}`}>
+        <div className={`lg:col-span-3 overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[840px]"}`}>
           <DesignSummaryPanel
             designData={designData}
             onSave={() => handleSaveDesign(false)}
@@ -1003,9 +1180,9 @@ export default function SolarStudio() {
                     ...newObstacleForm,
                     type: val,
                     name: preset ? preset.label : val,
-                    length: preset ? preset.length : 1.5,
-                    width: preset ? preset.width : 1.5,
-                    height: preset ? preset.height : 1.0,
+                    length: preset ? preset.length : 1.8,
+                    width: preset ? preset.width : 1.8,
+                    height: preset ? preset.height : 1.6,
                   });
                 }}
               >
