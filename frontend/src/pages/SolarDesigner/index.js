@@ -97,13 +97,23 @@ export default function SolarDesignerIndex() {
           </div>
         </div>
 
-        <Button
-          onClick={() => nav("/solar-designer/new")}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-10 rounded-xl shadow-xs gap-2 px-4 shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          <span>+ New 3D Design</span>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => nav("/solar-designer/new")}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-10 rounded-xl shadow-xs gap-2 px-4 shrink-0"
+          >
+            <Sparkles className="w-4 h-4 text-blue-200" />
+            <span>Open Full Screen Designer</span>
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => nav("/solar-designer/new")}
+            className="border-slate-300 font-semibold text-xs h-10 rounded-xl gap-2 px-3.5 shrink-0 hidden sm:inline-flex"
+          >
+            <Plus className="w-4 h-4" />
+            <span>+ New 3D Design</span>
+          </Button>
+        </div>
       </div>
 
       {/* KPI Overview Cards */}
