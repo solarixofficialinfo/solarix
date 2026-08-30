@@ -162,16 +162,97 @@ export async function searchLocations(query) {
       }
     }
   } catch (e) {
-    // Google Maps SDK not available, use fallback
+    // Google Maps SDK not available, use OSM Nominatim / Open-Meteo
   }
 
-  // 3. Fallback: Search via backend postal API
+  // 3. OpenStreetMap Nominatim Geocoding (Global & India high-precision place search with exact coordinates)
+  try {
+    const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+      term
+    )}&format=json&addressdetails=1&countrycodes=in&limit=8`;
+    const res = await fetch(nominatimUrl, {
+      headers: { "Accept-Language": "en" },
+    }).then((r) => r.json());
+
+    if (Array.isArray(res) && res.length > 0) {
+      const osmResults = res.map((item) => {
+        const addr = item.address || {};
+        const cityName =
+          addr.city ||
+          addr.town ||
+          addr.municipality ||
+          addr.village ||
+          addr.suburb ||
+          item.name ||
+          term;
+        const districtName = addr.state_district || addr.county || addr.district || "";
+        const stateName = addr.state || "";
+        const secondaryParts = [districtName, stateName, "India"].filter(Boolean);
+
+        return {
+          place_id: `osm-${item.place_id}`,
+          name: cityName,
+          city: cityName,
+          district: districtName,
+          state: stateName,
+          pincode: addr.postcode || "",
+          secondary: secondaryParts.join(", "),
+          description: item.display_name,
+          latitude: parseFloat(item.lat),
+          longitude: parseFloat(item.lon),
+          type: item.type === "city" || item.type === "town" ? "City/Town" : "Locality",
+          source: "nominatim",
+        };
+      });
+
+      const finalResults = [...stateMatches, ...osmResults];
+      locationSearchCache.set(term.toLowerCase(), finalResults);
+      return finalResults;
+    }
+  } catch (e) {
+    console.warn("Nominatim search failed, trying Open-Meteo", e);
+  }
+
+  // 4. Open-Meteo Geocoding Fallback (High-speed place search with exact coordinates)
+  try {
+    const meteoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
+      term
+    )}&count=8&language=en&format=json`;
+    const res = await fetch(meteoUrl).then((r) => r.json());
+
+    if (res?.results && res.results.length > 0) {
+      const meteoResults = res.results.map((item) => {
+        const secondary = [item.admin2, item.admin1, item.country].filter(Boolean).join(", ");
+        return {
+          place_id: `meteo-${item.id}`,
+          name: item.name,
+          city: item.name,
+          district: item.admin2 || "",
+          state: item.admin1 || "",
+          secondary: secondary,
+          description: `${item.name}, ${secondary}`,
+          latitude: item.latitude,
+          longitude: item.longitude,
+          type: item.feature_code === "PPLA" || item.feature_code === "PPL" ? "City/Town" : "Place",
+          source: "open-meteo",
+        };
+      });
+
+      const finalResults = [...stateMatches, ...meteoResults];
+      locationSearchCache.set(term.toLowerCase(), finalResults);
+      return finalResults;
+    }
+  } catch (e) {
+    console.warn("Open-Meteo geocoding search failed", e);
+  }
+
+  // 5. Fallback: Search via backend postal API
   try {
     const res = await api.get(`/location/city/${encodeURIComponent(term)}`);
     if (res.data && res.data.results && res.data.results.length > 0) {
       const postalResults = res.data.results.map((r) => ({
         name: r.name,
-        city: r.name || r.city, // locality/post office name as city
+        city: r.name || r.city,
         district: r.district,
         state: r.state,
         state_code: (resolveState(r.state) || {}).code || "",
@@ -185,33 +266,8 @@ export async function searchLocations(query) {
       return finalResults;
     }
   } catch (err) {
-    console.warn("Backend postal lookup failed, using direct fallback", err);
+    console.warn("Backend postal lookup failed", err);
   }
-
-  // 4. Direct Postal API Fallback
-  try {
-    const fallbackRes = await fetch(`https://api.postalpincode.in/postoffice/${encodeURIComponent(term)}`)
-      .then((r) => r.json())
-      .catch(() => null);
-    if (fallbackRes && fallbackRes[0]?.Status === "Success") {
-      const mapped = (fallbackRes[0].PostOffice || []).map((po) => {
-        const stateObj = resolveState(po.State) || { name: po.State, code: "" };
-        return {
-          name: po.Name,
-          city: po.Name,
-          district: po.District,
-          state: stateObj.name,
-          state_code: stateObj.code,
-          pincode: po.Pincode,
-          type: po.BranchType === "Sub Post Office" || po.BranchType === "Branch Post Office" ? "Village/Locality" : "Town",
-          source: "postal",
-        };
-      });
-      const finalResults = [...stateMatches, ...mapped];
-      locationSearchCache.set(term.toLowerCase(), finalResults);
-      return finalResults;
-    }
-  } catch (e) {}
 
   locationSearchCache.set(term.toLowerCase(), stateMatches);
   return stateMatches;
@@ -432,17 +488,42 @@ export async function getPlaceDetails(item) {
   }
 
   if (!result) {
-    // Fallback for postal items
     const st = resolveState(item.state);
+    let lat = item.latitude != null ? Number(item.latitude) : null;
+    let lng = item.longitude != null ? Number(item.longitude) : null;
+
+    // If coordinates are missing (e.g. postal item), forward geocode via Nominatim
+    if (lat == null || lng == null) {
+      try {
+        const queryTerm = [item.name || item.city, item.district, item.state, item.pincode, "India"]
+          .filter(Boolean)
+          .join(", ");
+        const geoUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+          queryTerm
+        )}&format=json&limit=1`;
+        const geoRes = await fetch(geoUrl, {
+          headers: { "Accept-Language": "en" },
+        }).then((r) => r.json());
+
+        if (Array.isArray(geoRes) && geoRes.length > 0) {
+          lat = parseFloat(geoRes[0].lat);
+          lng = parseFloat(geoRes[0].lon);
+        }
+      } catch (e) {
+        console.warn("Forward geocoding fallback failed for", item.name, e);
+      }
+    }
+
     result = {
       name: item.name || item.city,
       city: item.city || item.name,
       district: item.district || "",
-      state: st ? st.name : (item.state || ""),
+      state: st ? st.name : item.state || "",
       state_code: st ? st.code : "",
       pincode: item.pincode || "",
-      latitude: item.latitude || null,
-      longitude: item.longitude || null,
+      formatted_address: item.description || [item.name, item.district, item.state, "India"].filter(Boolean).join(", "),
+      latitude: lat,
+      longitude: lng,
     };
   }
 
