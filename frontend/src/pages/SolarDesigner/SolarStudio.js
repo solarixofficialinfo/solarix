@@ -12,7 +12,8 @@ import {
   Sun, MapPin, PenTool, Box, Sparkles, Layers, ArrowLeft, ArrowRight,
   Save, FileDown, Plus, Trash2, RotateCw, RefreshCw, Check, CheckCircle2,
   AlertTriangle, ShieldCheck, Download, Sliders, Ruler, Maximize2, Minimize2,
-  Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, ChevronUp, Eye, Focus
+  Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, ChevronUp, Eye, Focus,
+  PlusCircle, Undo2
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -45,7 +46,7 @@ export default function SolarStudio() {
   // Fullscreen state & View mode
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState("2d"); // '2d' | '3d' | 'split'
-  const [activeTool, setActiveTool] = useState("select"); // 'select' | 'draw_roof' | 'calibrate'
+  const [activeTool, setActiveTool] = useState("select"); // 'select' | 'draw_roof' | 'add_panel' | 'calibrate'
   const [selectedPanelId, setSelectedPanelId] = useState(null);
   const [isCalibrated, setIsCalibrated] = useState(false);
 
@@ -87,7 +88,7 @@ export default function SolarStudio() {
   const liveMapRef = useRef(null);
   const viewer3dRef = useRef(null);
 
-  // Canonical Solar Design State (Strict 0-default for brand new designs)
+  // Canonical Solar Design State (0-default for brand new designs)
   const [designData, setDesignData] = useState({
     id: "",
     design_number: "",
@@ -102,7 +103,7 @@ export default function SolarStudio() {
     longitude: 72.8777,
     place_id: "",
     zoom: 19,
-    // 1. Roof Geometry: EMPTY for brand new design
+    // 1. Roof Geometry
     roof: {
       type: "flat", // 'flat' | 'single_slope' | 'gable' | 'hip'
       pitch_deg: 0,
@@ -111,7 +112,7 @@ export default function SolarStudio() {
       surface_material: "concrete",
       setback_m: 0.5,
     },
-    roof_polygon: [], // 0 vertices initially
+    roof_polygon: [],
     roof_area_sqm: 0,
     roof_perimeter_m: 0,
     roof_dimensions: { length_m: 0, width_m: 0 },
@@ -122,9 +123,9 @@ export default function SolarStudio() {
     walkways: [],
     usable_area_sqm: 0,
     coverage_pct: 0,
-    // 2. Obstacles Array: EMPTY by default
+    // 2. Obstacles Array
     obstacles: [],
-    // 3. Panel Specification & Layout: 0 panels initially
+    // 3. Panel Specification & Layout
     panel_product_id: "",
     panel_make: "Tier-1 High Efficiency Mono PERC",
     panel_model: "550W High-Efficiency PV Module",
@@ -132,7 +133,7 @@ export default function SolarStudio() {
     panel_dimensions: { length_m: 2.278, width_m: 1.134, weight_kg: 28.5 },
     orientation: "portrait",
     tilt_angle: 15,
-    azimuth_angle: 180,
+    azimuth_angle: 180, // Default South
     row_spacing_m: 0.35,
     panel_spacing_m: 0.02,
     panel_count: 0,
@@ -143,6 +144,7 @@ export default function SolarStudio() {
       type: "elevated", // 'elevated' | 'flush' | 'fixed_tilt' | 'ballasted'
       tilt_deg: 15,
       height_m: 1.8,
+      azimuth: 180,
       show_structure: true,
       cross_bracing: true,
       base_plates: true,
@@ -180,6 +182,7 @@ export default function SolarStudio() {
               type: doc.structure_type || "elevated",
               tilt_deg: doc.tilt_angle || 15,
               height_m: doc.mounting_height_m || 1.8,
+              azimuth: doc.azimuth_angle || 180,
               show_structure: true,
               cross_bracing: true,
               base_plates: true,
@@ -373,6 +376,7 @@ export default function SolarStudio() {
         width_m: designData.panel_dimensions?.width_m || 1.134,
       },
       orientation: designData.orientation,
+      azimuthDegrees: Number(designData.azimuth_angle || 180),
     });
 
     if (!check.canFit || !check.newPanel) {
@@ -555,8 +559,12 @@ export default function SolarStudio() {
         client_name: designData.client_name,
         system_kw: systemKw,
         panel_make: designData.panel_make,
+        panel_model: designData.panel_model,
         panel_wattage: pWatt,
         panel_count: pCount,
+        orientation: designData.orientation || "portrait",
+        azimuth: designData.azimuth_angle || 180,
+        tilt_angle: designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15,
         structure_type: designData.structure?.type || designData.structure_type,
         mounting_height_m: designData.structure?.height_m || designData.mounting_height_m,
       },
@@ -1013,24 +1021,54 @@ export default function SolarStudio() {
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <Label className="text-[10px] font-semibold text-slate-600">Clearance Height (m)</Label>
-                  <Input
-                    type="number"
-                    step="0.1"
-                    min="0.1"
-                    max="6.0"
-                    value={designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8}
-                    onChange={(e) => {
-                      const h = parseFloat(e.target.value) || 1.8;
-                      setDesignData((prev) => ({
-                        ...prev,
-                        mounting_height_m: h,
-                        structure: { ...prev.structure, height_m: h },
-                      }));
-                    }}
-                    className="h-7 text-xs font-bold"
-                  />
+                <div className="grid grid-cols-2 gap-1.5">
+                  <div className="space-y-1">
+                    <Label className="text-[10px] font-semibold text-slate-600">Azimuth Direction</Label>
+                    <Select
+                      value={String(designData.azimuth_angle ?? 180)}
+                      onValueChange={(val) => {
+                        const az = parseFloat(val) || 180;
+                        setDesignData((prev) => ({
+                          ...prev,
+                          azimuth_angle: az,
+                          structure: { ...prev.structure, azimuth: az },
+                          panels: (prev.panels || []).map((p) => ({ ...p, azimuth: az })),
+                        }));
+                      }}
+                    >
+                      <SelectTrigger className="h-7 text-[10.5px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="180">South (180° - Optimal)</SelectItem>
+                        <SelectItem value="135">South-East (135°)</SelectItem>
+                        <SelectItem value="225">South-West (225°)</SelectItem>
+                        <SelectItem value="90">East (90°)</SelectItem>
+                        <SelectItem value="270">West (270°)</SelectItem>
+                        <SelectItem value="0">North (0°)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-[10px] font-semibold text-slate-600">Clearance Height (m)</Label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      min="0.1"
+                      max="6.0"
+                      value={designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8}
+                      onChange={(e) => {
+                        const h = parseFloat(e.target.value) || 1.8;
+                        setDesignData((prev) => ({
+                          ...prev,
+                          mounting_height_m: h,
+                          structure: { ...prev.structure, height_m: h },
+                        }));
+                      }}
+                      className="h-7 text-xs font-bold"
+                    />
+                  </div>
                 </div>
               </div>
             )}
@@ -1059,6 +1097,37 @@ export default function SolarStudio() {
                   <Sparkles className="w-3.5 h-3.5" />
                   <span>Auto Layout Panels on Roof</span>
                 </Button>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  <Button
+                    size="sm"
+                    variant={activeTool === "add_panel" ? "default" : "outline"}
+                    onClick={() => setActiveTool(activeTool === "add_panel" ? "select" : "add_panel")}
+                    className={`h-7 text-[11px] font-semibold rounded-lg ${
+                      activeTool === "add_panel" ? "bg-amber-600 hover:bg-amber-700 text-white" : "border-amber-300 text-amber-700 bg-amber-50/50"
+                    }`}
+                  >
+                    <PlusCircle className="w-3 h-3 mr-1" /> + Add Panel
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setDesignData((prev) => ({
+                        ...prev,
+                        panels: [],
+                        panel_count: 0,
+                        system_kw: 0,
+                        coverage_pct: 0,
+                      }));
+                      toast.success("Reset panel layout");
+                    }}
+                    className="h-7 text-[11px] text-slate-600 hover:text-red-600 border-slate-200 rounded-lg"
+                  >
+                    <Undo2 className="w-3 h-3 mr-1" /> Reset Layout
+                  </Button>
+                </div>
 
                 <div className="flex items-center justify-between bg-slate-50 p-2 rounded-xl border border-slate-200 text-xs">
                   <span className="text-slate-600 font-semibold text-[11px]">Fine-tune Count:</span>
@@ -1127,11 +1196,14 @@ export default function SolarStudio() {
                   const pCount = newPanels.filter((p) => !p.hidden).length;
                   const pWatt = Number(designData.panel_wattage || 550);
                   const totalKw = (pCount * pWatt) / 1000.0;
+                  const singleArea = (designData.panel_dimensions?.width_m || 1.134) * (designData.panel_dimensions?.length_m || 2.278);
+                  const coveragePct = designData.usable_area_sqm > 0 ? ((pCount * singleArea) / designData.usable_area_sqm) * 100 : 0;
                   setDesignData((prev) => ({
                     ...prev,
                     panels: newPanels,
                     panel_count: pCount,
                     system_kw: Math.round(totalKw * 100) / 100,
+                    coverage_pct: Math.min(100, Math.round(coveragePct * 10) / 10),
                   }));
                 }}
                 obstacles={designData.obstacles}
@@ -1150,6 +1222,7 @@ export default function SolarStudio() {
                 selectedPanelId={selectedPanelId}
                 setSelectedPanelId={setSelectedPanelId}
                 orientation={designData.orientation}
+                azimuthDegrees={Number(designData.azimuth_angle || 180)}
                 panelSpecs={{
                   length_m: designData.panel_dimensions?.length_m || 2.278,
                   width_m: designData.panel_dimensions?.width_m || 1.134,
@@ -1168,7 +1241,12 @@ export default function SolarStudio() {
                 panels={designData.panels}
                 obstacles={designData.obstacles}
                 walkways={designData.walkways}
-                structure={designData.structure}
+                structure={{
+                  ...designData.structure,
+                  azimuth: Number(designData.azimuth_angle || 180),
+                  tilt_deg: Number(designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15),
+                  height_m: Number(designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8),
+                }}
                 panelSpecs={{
                   length_m: designData.panel_dimensions?.length_m || 2.278,
                   width_m: designData.panel_dimensions?.width_m || 1.134,
@@ -1198,7 +1276,10 @@ export default function SolarStudio() {
                   roof={designData.roof}
                   panels={designData.panels}
                   obstacles={designData.obstacles}
-                  structure={designData.structure}
+                  structure={{
+                    ...designData.structure,
+                    azimuth: Number(designData.azimuth_angle || 180),
+                  }}
                 />
               </div>
             )}

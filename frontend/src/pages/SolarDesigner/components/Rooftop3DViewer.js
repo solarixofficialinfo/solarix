@@ -17,16 +17,15 @@ import {
  * Engineering-Grade 3D Rooftop WebGL Visualizer
  * 
  * Features:
- * - Real extruded 3D Roof Slab directly matching the drawn 2D polygon boundary
+ * - Extruded 3D Roof Slab matching drawn 2D polygon boundary
  * - Building elevation / ground-to-roof structure walls (3.0m - 30m)
  * - Roof Slope / Pitch support (Flat, Single Slope, Gable, Hip)
  * - Realistic Monocrystalline PV Panels sitting physically ON mounting rails & roof
- * - Complete Engineering-Grade 3D Mounting Structure:
- *   Roof -> Base Footing / Anchor Plate -> Vertical Posts -> Diagonal Cross-Bracing -> Dual Longitudinal Rails -> PV Modules
- * - Accurate Obstacle Rendering (rendered strictly from canonical obstacle state, 0 default obstacles)
+ * - Believable 3D Mounting Structure:
+ *   Roof Slab -> Base Anchor Plates -> Support Columns -> Diagonal Braces -> Longitudinal Rails -> PV Modules
+ * - Structure strictly follows panel orientation, tilt, and Azimuth direction (South, East, West, etc.)
+ * - 0 default obstacles (only rendered when added)
  * - Orbit, Pan, and Zoom controls with "Fit Design" bounding-box framing
- * - Camera Presets (Top, Front, Side, Isometric, Fit Design, Reset)
- * - Visual Layer Toggles (Roof, Building, Rails, Posts, Panels, Obstacles)
  */
 const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   {
@@ -39,12 +38,13 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       surface_material: "concrete",
     },
     panels = [],
-    obstacles = [], // Empty by default!
+    obstacles = [],
     walkways = [],
     structure = {
       type: "elevated", // 'elevated' | 'flush' | 'fixed_tilt' | 'ballasted'
       tilt_deg: 15,
       height_m: 1.8,
+      azimuth: 180,
       show_structure: true,
       cross_bracing: true,
       base_plates: true,
@@ -137,10 +137,10 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       setActivePreset(preset);
       const ctr = controlsRef.current;
       if (preset === "top") {
-        ctr.spherical.phi = 0.05; // plan view directly overhead
+        ctr.spherical.phi = 0.05; // plan view overhead
         ctr.spherical.theta = 0;
       } else if (preset === "front") {
-        ctr.spherical.phi = Math.PI / 2.15; // south facing elevation
+        ctr.spherical.phi = Math.PI / 2.15; // south facing
         ctr.spherical.theta = 0;
       } else if (preset === "side") {
         ctr.spherical.phi = Math.PI / 2.15; // east profile
@@ -170,9 +170,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const width = container.clientWidth || 600;
     const height = container.clientHeight || 450;
 
-    // 1. Scene & WebGL Renderer
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0f1d); // Clean dark navy
+    scene.background = new THREE.Color(0x0a0f1d);
     sceneRef.current = scene;
 
     const renderer = new THREE.WebGLRenderer({
@@ -189,12 +188,11 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     container.innerHTML = "";
     container.appendChild(renderer.domElement);
 
-    // 2. Perspective Camera
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 800);
     cameraRef.current = camera;
     updateCameraPosition();
 
-    // 3. Realistic Sunlight & Sky Lighting
+    // Lighting
     const hemiLight = new THREE.HemisphereLight(0xffffff, 0x1e293b, 0.85);
     scene.add(hemiLight);
 
@@ -216,7 +214,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
     scene.add(ambientLight);
 
-    // 4. Ground Terrain Plane (y = 0)
+    // Ground Plane
     const groundGeom = new THREE.PlaneGeometry(140, 140);
     const groundMat = new THREE.MeshStandardMaterial({
       color: 0x131d2e,
@@ -229,12 +227,11 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     groundMesh.receiveShadow = true;
     scene.add(groundMesh);
 
-    // Ground Metric Grid Helper
     const gridHelper = new THREE.GridHelper(120, 60, 0x3b82f6, 0x1e293b);
     gridHelper.position.y = 0.01;
     scene.add(gridHelper);
 
-    // 5. Mouse Orbit / Pan Event Listeners
+    // Mouse Listeners
     const dom = renderer.domElement;
 
     const onMouseDown = (e) => {
@@ -292,7 +289,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     dom.addEventListener("wheel", onWheel, { passive: false });
     dom.addEventListener("contextmenu", onContextMenu);
 
-    // 6. Resize Handler
     const handleResize = () => {
       if (!container || !renderer || !camera) return;
       const w = container.clientWidth;
@@ -303,7 +299,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     };
     window.addEventListener("resize", handleResize);
 
-    // 7. Animation Loop
     let animId;
     const animate = () => {
       animId = requestAnimationFrame(animate);
@@ -328,7 +323,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const scene = sceneRef.current;
     if (!scene) return;
 
-    // Remove previous dynamic objects
     if (rootGroupRef.current) {
       scene.remove(rootGroupRef.current);
     }
@@ -352,18 +346,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       });
       shape.closePath();
 
-      // A. Building Base Walls (Ground y=0 to y=buildingElevationM)
+      // Building Base Walls
       if (showBuilding && buildingElevationM > 0) {
-        const wallExtrudeSettings = {
-          steps: 1,
-          depth: buildingElevationM,
-          bevelEnabled: false,
-        };
+        const wallExtrudeSettings = { steps: 1, depth: buildingElevationM, bevelEnabled: false };
         const wallGeom = new THREE.ExtrudeGeometry(shape, wallExtrudeSettings);
         wallGeom.rotateX(Math.PI / 2);
 
         const wallMat = new THREE.MeshStandardMaterial({
-          color: 0x94a3b8, // Architecture concrete wall
+          color: 0x94a3b8,
           roughness: 0.9,
           metalness: 0.05,
         });
@@ -375,9 +365,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         rootGroup.add(wallMesh);
       }
 
-      // B. 3D Solid Roof Slab with Parapet Border
+      // 3D Solid Roof Slab
       if (showRoof) {
-        const roofSlabThickness = 0.35; // 35cm RCC slab
+        const roofSlabThickness = 0.35;
         const roofExtrudeSettings = {
           steps: 1,
           depth: roofSlabThickness,
@@ -391,7 +381,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         roofGeom.rotateX(Math.PI / 2);
 
         const roofMat = new THREE.MeshStandardMaterial({
-          color: 0xe2e8f0, // Clean light concrete slab
+          color: 0xe2e8f0,
           roughness: 0.8,
           metalness: 0.1,
         });
@@ -407,7 +397,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
         rootGroup.add(roofMesh);
 
-        // Parapet Wall Edges
         const edgeGeom = new THREE.EdgesGeometry(roofGeom);
         const edgeMat = new THREE.LineBasicMaterial({ color: 0x64748b, linewidth: 1.5 });
         const edgeLines = new THREE.LineSegments(edgeGeom, edgeMat);
@@ -415,65 +404,42 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       }
     }
 
-    // 2. Build 3D Solar PV Modules & Engineering Mounting Structure (ONLY if panels exist)
+    // 2. Build 3D Solar PV Modules & Engineering Mounting Structure
     if (showPanels && activePanels.length > 0) {
       const structType = (structure?.type || "elevated").toLowerCase();
       const isFlush = structType === "flush";
       const isElevated = structType === "elevated";
       const baseClearance = isFlush ? 0.12 : Number(structure?.height_m || 1.8);
       const panelTiltDeg = isFlush ? roofPitchDeg : Number(structure?.tilt_deg || 15);
+      const structAzimuth = Number(structure?.azimuth ?? 180);
 
-      // Shared Module Materials: Anti-Reflective Silicon Cell + Anodized Aluminium Frame
+      // Shared Module Materials
       const panelGeom = new THREE.BoxGeometry(1, 0.038, 1);
-
       const siliconCellMat = new THREE.MeshStandardMaterial({
-        color: 0x071b3b, // Deep Monocrystalline Blue/Black
+        color: 0x071b3b,
         roughness: 0.16,
         metalness: 0.75,
       });
-
       const frameMat = new THREE.MeshStandardMaterial({
-        color: 0xd1d5db, // Anodized Silver Frame
+        color: 0xd1d5db,
         roughness: 0.35,
         metalness: 0.85,
       });
+      const moduleMaterials = [frameMat, frameMat, siliconCellMat, frameMat, frameMat, frameMat];
 
-      const moduleMaterials = [
-        frameMat, frameMat, siliconCellMat, frameMat, frameMat, frameMat,
-      ];
-
-      // Engineering Structure Materials
-      const railMat = new THREE.MeshStandardMaterial({
-        color: 0x94a3b8, // Extruded Aluminium 6063-T6 Rail
-        roughness: 0.3,
-        metalness: 0.85,
-      });
-
-      const postMat = new THREE.MeshStandardMaterial({
-        color: 0x64748b, // Heavy Galvanized Structural Steel Column
-        roughness: 0.4,
-        metalness: 0.8,
-      });
-
-      const braceMat = new THREE.MeshStandardMaterial({
-        color: 0x475569, // Diagonal Sway Bracing Strut
-        roughness: 0.45,
-        metalness: 0.8,
-      });
-
-      const footingMat = new THREE.MeshStandardMaterial({
-        color: 0x334155, // Base Anchor Footing Plate
-        roughness: 0.6,
-        metalness: 0.9,
-      });
+      // Structure Materials
+      const railMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.3, metalness: 0.85 });
+      const postMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.4, metalness: 0.8 });
+      const braceMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.45, metalness: 0.8 });
+      const footingMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.6, metalness: 0.9 });
 
       activePanels.forEach((p) => {
         const pw = Number(p.width || 1.134);
         const pl = Number(p.height || 2.278);
+        const panelAzimuth = Number(p.azimuth ?? structAzimuth);
 
-        // Calculate exact 3D transform relative to the roof surface
         const transform = calculatePanel3DPosition({
-          panel: p,
+          panel: { ...p, azimuth: panelAzimuth },
           roof: {
             type: roofType,
             pitch_deg: roofPitchDeg,
@@ -484,77 +450,80 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             type: structType,
             tilt_deg: panelTiltDeg,
             height_m: baseClearance,
+            azimuth: panelAzimuth,
           },
         });
 
-        // A. 3D Solar PV Module
+        // Create unified panel mounting unit group
+        const panelUnitGroup = new THREE.Group();
+        panelUnitGroup.position.set(transform.x, transform.y, transform.z);
+        panelUnitGroup.rotation.y = transform.yawRad; // Rotate with Azimuth!
+
+        // A. 3D Solar PV Module Mesh
         const panelMesh = new THREE.Mesh(panelGeom, moduleMaterials);
         panelMesh.scale.set(pw, 1, pl);
-        panelMesh.position.set(transform.x, transform.y, transform.z);
         panelMesh.rotation.x = -transform.tiltRad;
         panelMesh.castShadow = true;
         panelMesh.receiveShadow = true;
-        rootGroup.add(panelMesh);
+        panelUnitGroup.add(panelMesh);
 
-        // B. Engineering Mounting Structure (Rails + Vertical Columns + Diagonal Braces + Base Footings)
+        // B. Mounting Structure underneath the panel
         if (showStructures) {
           // 1. Dual Continuous Longitudinal Rails
           const railLength = pl * 1.04;
           const railGeom = new THREE.BoxGeometry(0.045, 0.055, railLength);
 
           const rail1 = new THREE.Mesh(railGeom, railMat);
-          rail1.position.set(transform.x - pw * 0.28, transform.y - 0.038, transform.z);
+          rail1.position.set(-pw * 0.28, -0.038, 0);
           rail1.rotation.x = -transform.tiltRad;
           rail1.castShadow = true;
-          rootGroup.add(rail1);
+          panelUnitGroup.add(rail1);
 
           const rail2 = new THREE.Mesh(railGeom, railMat);
-          rail2.position.set(transform.x + pw * 0.28, transform.y - 0.038, transform.z);
+          rail2.position.set(pw * 0.28, -0.038, 0);
           rail2.rotation.x = -transform.tiltRad;
           rail2.castShadow = true;
-          rootGroup.add(rail2);
+          panelUnitGroup.add(rail2);
 
-          // 2. Vertical Posts & Footings (connecting rails down to roof slab)
+          // 2. Support Columns (Posts) & Footings
           const roofSurfaceY = transform.roofSurfaceY;
+          const frontZ = (pl / 2) * Math.cos(transform.tiltRad) * 0.75;
+          const backZ = -(pl / 2) * Math.cos(transform.tiltRad) * 0.75;
+
           const frontLegHeight = Math.max(0.1, transform.y - 0.038 - (pl / 2) * Math.sin(transform.tiltRad) - roofSurfaceY);
           const backLegHeight = Math.max(0.1, transform.y - 0.038 + (pl / 2) * Math.sin(transform.tiltRad) - roofSurfaceY);
 
-          const frontZ = transform.z + (pl / 2) * Math.cos(transform.tiltRad) * 0.78;
-          const backZ = transform.z - (pl / 2) * Math.cos(transform.tiltRad) * 0.78;
-
           if (showPosts && !isFlush) {
-            // Front Vertical Column (Left & Right)
+            // Front Posts & Base Plates
             [-pw * 0.28, pw * 0.28].forEach((xOff) => {
               const frontPostGeom = new THREE.CylinderGeometry(0.024, 0.024, frontLegHeight, 8);
               const frontPost = new THREE.Mesh(frontPostGeom, postMat);
-              frontPost.position.set(transform.x + xOff, roofSurfaceY + frontLegHeight / 2, frontZ);
+              frontPost.position.set(xOff, -transform.y + roofSurfaceY + frontLegHeight / 2, frontZ);
               frontPost.castShadow = true;
-              rootGroup.add(frontPost);
+              panelUnitGroup.add(frontPost);
 
-              // Base Anchor Plate
               const baseGeom = new THREE.BoxGeometry(0.14, 0.018, 0.14);
               const basePlate = new THREE.Mesh(baseGeom, footingMat);
-              basePlate.position.set(transform.x + xOff, roofSurfaceY + 0.009, frontZ);
-              rootGroup.add(basePlate);
+              basePlate.position.set(xOff, -transform.y + roofSurfaceY + 0.009, frontZ);
+              panelUnitGroup.add(basePlate);
             });
 
-            // Back Vertical Column (Left & Right)
+            // Back Posts & Base Plates
             [-pw * 0.28, pw * 0.28].forEach((xOff) => {
               const backPostGeom = new THREE.CylinderGeometry(0.024, 0.024, backLegHeight, 8);
               const backPost = new THREE.Mesh(backPostGeom, postMat);
-              backPost.position.set(transform.x + xOff, roofSurfaceY + backLegHeight / 2, backZ);
+              backPost.position.set(xOff, -transform.y + roofSurfaceY + backLegHeight / 2, backZ);
               backPost.castShadow = true;
-              rootGroup.add(backPost);
+              panelUnitGroup.add(backPost);
 
-              // Base Anchor Plate
               const baseGeom = new THREE.BoxGeometry(0.14, 0.018, 0.14);
               const basePlate = new THREE.Mesh(baseGeom, footingMat);
-              basePlate.position.set(transform.x + xOff, roofSurfaceY + 0.009, backZ);
-              rootGroup.add(basePlate);
+              basePlate.position.set(xOff, -transform.y + roofSurfaceY + 0.009, backZ);
+              panelUnitGroup.add(basePlate);
             });
           }
 
-          // 3. Diagonal Cross-Bracing Struts for Elevated Super Structures
+          // 3. Diagonal Sway Bracing for Elevated Super Structures
           if (isElevated && baseClearance >= 1.2) {
             const braceLen = Math.hypot(backLegHeight - frontLegHeight, frontZ - backZ);
             const braceGeom = new THREE.CylinderGeometry(0.014, 0.014, braceLen, 6);
@@ -562,20 +531,22 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             [-pw * 0.28, pw * 0.28].forEach((xOff) => {
               const brace = new THREE.Mesh(braceGeom, braceMat);
               brace.position.set(
-                transform.x + xOff,
-                roofSurfaceY + (frontLegHeight + backLegHeight) / 2,
+                xOff,
+                -transform.y + roofSurfaceY + (frontLegHeight + backLegHeight) / 2,
                 (frontZ + backZ) / 2
               );
               brace.rotation.x = Math.atan2(frontZ - backZ, backLegHeight - frontLegHeight);
               brace.castShadow = true;
-              rootGroup.add(brace);
+              panelUnitGroup.add(brace);
             });
           }
         }
+
+        rootGroup.add(panelUnitGroup);
       });
     }
 
-    // 3. Build 3D Obstacles (ONLY if explicitly added by user)
+    // 3. Build 3D Obstacles (ONLY if explicitly added)
     if (showObstacles && Array.isArray(obstacles) && obstacles.length > 0) {
       obstacles.forEach((obs) => {
         const ox = Number(obs.x || 0);
@@ -595,7 +566,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const tankRadius = Math.min(ol, ow) / 2;
           const tankGeom = new THREE.CylinderGeometry(tankRadius, tankRadius, oh, 24);
           const tankMat = new THREE.MeshStandardMaterial({
-            color: 0x1d4ed8, // Vibrant Blue
+            color: 0x1d4ed8,
             roughness: 0.35,
             metalness: 0.25,
           });
@@ -605,7 +576,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           tankMesh.receiveShadow = true;
           rootGroup.add(tankMesh);
 
-          // Top Lid
           const lidGeom = new THREE.CylinderGeometry(tankRadius * 0.45, tankRadius * 0.5, 0.12, 24);
           const lidMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.4 });
           const lidMesh = new THREE.Mesh(lidGeom, lidMat);
@@ -687,7 +657,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         isFullscreen ? "fixed inset-0 z-50 rounded-none h-screen" : ""
       }`}
     >
-      {/* Three.js WebGL Canvas Mount */}
       <div ref={mountRef} className="w-full h-full flex-1 cursor-grab active:cursor-grabbing block" />
 
       {/* Empty State Banner in 3D */}
@@ -705,7 +674,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
       {/* Top Floating Compact Camera Toolbar */}
       <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none gap-2 z-10">
-        {/* Camera View Presets */}
         <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
           <Button
             size="sm"
@@ -759,7 +727,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           </Button>
         </div>
 
-        {/* 3D Layer Visibility Toggles */}
         <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
           <Button
             size="sm"
@@ -807,12 +774,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           <span className="text-slate-700">|</span>
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-xs" />
-            <span>Pitch: <b>{roof?.pitch_deg || 0}°</b></span>
+            <span>Tilt: <b>{structure?.tilt_deg || 15}°</b></span>
           </div>
           <span className="text-slate-700">|</span>
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-amber-400 shadow-xs" />
-            <span>Structure: <b>{activePanels.length > 0 ? `${structure?.type?.toUpperCase() || "ELEVATED"} (${structure?.height_m || 1.8}m)` : "None"}</b></span>
+            <span>Azimuth: <b>{structure?.azimuth || 180}° ({structure?.azimuth === 180 ? "South" : structure?.azimuth === 90 ? "East" : structure?.azimuth === 270 ? "West" : structure?.azimuth === 135 ? "SE" : structure?.azimuth === 225 ? "SW" : "Custom"})</b></span>
           </div>
         </div>
 

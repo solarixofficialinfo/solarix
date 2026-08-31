@@ -1,107 +1,107 @@
 /**
- * Geospatial & 2D Geometry Calculation Engine for SOLARIX 3D Solar Designer
+ * Geodetic and 2D/3D Geometry Utility Library for Rooftop Solar Designer
  * 
  * Provides:
- * - Geodesic Haversine distance (meters)
- * - Spherical polygon area (m²)
- * - Real-world Latitude/Longitude <-> Local Cartesian (x, y in meters) projection
- * - Polygon bounding box, centroid, perimeter, azimuth orientation
- * - Inset / setback polygon calculation
- * - Point-in-polygon & Box-in-polygon containment tests
- * - Rotated Oriented Bounding Box (OBB) collision tests for obstacles
+ * - Local Cartesian <-> WGS84 Geodesic transformations (Haversine & Equirectangular)
+ * - 2D Polygon area (Shoelace) and perimeter calculations
+ * - Signed area and orientation detection (CCW vs CW)
+ * - Inward offset / Setback polygon calculation for arbitrary roofs
+ * - Point-in-polygon (Ray Casting) & Multi-point Rotated Rectangle Containment
+ * - Separating Axis Theorem (SAT) for rotated rectangle collision
+ * - Roof surface elevation calculation with pitch/slope & azimuth
+ * - 3D mounting structure transformation (tilt, azimuth, height)
  */
 
-const EARTH_RADIUS = 6378137; // WGS84 Earth equatorial radius in meters
+export const EARTH_RADIUS_METERS = 6378137.0;
 
 /**
- * Converts degrees to radians
+ * Degrees to Radians
  */
 export function toRad(deg) {
-  return (deg * Math.PI) / 180.0;
+  return (Number(deg || 0) * Math.PI) / 180.0;
 }
 
 /**
- * Converts radians to degrees
+ * Radians to Degrees
  */
 export function toDeg(rad) {
-  return (rad * 180.0) / Math.PI;
+  return (Number(rad || 0) * 180.0) / Math.PI;
 }
 
 /**
- * Calculates geodesic Haversine distance between two (lat, lng) points in meters
+ * Calculates geodesic distance between two (lat, lng) points using the Haversine formula
  */
 export function getHaversineDistance(lat1, lng1, lat2, lng2) {
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
+  const rLat1 = toRad(lat1);
+  const rLat2 = toRad(lat2);
+
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    Math.cos(rLat1) * Math.cos(rLat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return EARTH_RADIUS * c;
+  return EARTH_RADIUS_METERS * c;
 }
 
 /**
- * Computes polygon centroid in (lat, lng)
+ * Computes the geographic centroid of an array of {lat, lng} points
  */
-export function getPolygonCentroid(polygon) {
-  if (!polygon || polygon.length === 0) return { lat: 0, lng: 0 };
+export function getPolygonCentroid(points) {
+  if (!points || points.length === 0) return { lat: 0, lng: 0 };
   let sumLat = 0;
   let sumLng = 0;
-  for (const pt of polygon) {
+  for (const pt of points) {
     sumLat += Number(pt.lat);
     sumLng += Number(pt.lng);
   }
   return {
-    lat: sumLat / polygon.length,
-    lng: sumLng / polygon.length,
+    lat: sumLat / points.length,
+    lng: sumLng / points.length,
   };
 }
 
 /**
- * Projects (lat, lng) coordinate to local Cartesian (x, y) in meters
- * relative to an origin point (latOrigin, lngOrigin) using Equirectangular / Mercator approximation.
+ * Converts GPS Lat/Lng to local Cartesian (x: East, y: North) in meters relative to an origin
  */
 export function projectLatLngToMeters(lat, lng, origin) {
   const latRad = toRad(origin.lat);
-  const x = (toRad(lng) - toRad(origin.lng)) * Math.cos(latRad) * EARTH_RADIUS;
-  const y = (toRad(lat) - toRad(origin.lat)) * EARTH_RADIUS;
-  return { x, y };
+  const x = (toRad(lng) - toRad(origin.lng)) * Math.cos(latRad) * EARTH_RADIUS_METERS;
+  const y = (toRad(lat) - toRad(origin.lat)) * EARTH_RADIUS_METERS;
+  return { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 };
 }
 
 /**
- * Unprojects local Cartesian (x, y) in meters back to (lat, lng)
+ * Converts local Cartesian (x: East, y: North) in meters to GPS Lat/Lng relative to an origin
  */
-export function unprojectMetersToLatLng(x, y, origin) {
+export function projectMetersToLatLng(x, y, origin) {
   const latRad = toRad(origin.lat);
-  const dLngRad = x / (Math.cos(latRad) * EARTH_RADIUS);
-  const dLatRad = y / EARTH_RADIUS;
+  const dLngRad = x / (Math.cos(latRad) * EARTH_RADIUS_METERS);
+  const dLatRad = y / EARTH_RADIUS_METERS;
   const lat = origin.lat + toDeg(dLatRad);
   const lng = origin.lng + toDeg(dLngRad);
   return { lat, lng };
 }
 
 /**
- * Converts a polygon of {lat, lng} into local Cartesian {x, y} in meters
+ * Calculates signed 2D Cartesian polygon area in m²
+ * Positive = Counter-Clockwise (CCW), Negative = Clockwise (CW)
  */
-export function polygonLatLngToMeters(polygon, origin = null) {
-  if (!polygon || polygon.length === 0) return { localPoints: [], origin: { lat: 0, lng: 0 } };
-  const baseOrigin = origin || getPolygonCentroid(polygon);
-  const localPoints = polygon.map((pt) => projectLatLngToMeters(Number(pt.lat), Number(pt.lng), baseOrigin));
-  return { localPoints, origin: baseOrigin };
-}
-
-/**
- * Calculates 2D Cartesian polygon area in m² using the Shoelace formula
- */
-export function getCartesianPolygonArea(points) {
+export function getPolygonSignedArea(points) {
   if (!points || points.length < 3) return 0;
   let area = 0;
   for (let i = 0; i < points.length; i++) {
     const j = (i + 1) % points.length;
-    area += points[i].x * points[j].y;
-    area -= points[j].x * points[i].y;
+    area += points[i].x * points[j].y - points[j].x * points[i].y;
   }
-  return Math.abs(area) / 2.0;
+  return area / 2.0;
+}
+
+/**
+ * Calculates 2D Cartesian polygon absolute area in m² using Shoelace formula
+ */
+export function getCartesianPolygonArea(points) {
+  return Math.abs(getPolygonSignedArea(points));
 }
 
 /**
@@ -168,7 +168,6 @@ export function getPolygonPrimaryAzimuth(points) {
     const len = Math.sqrt(dx * dx + dy * dy);
     if (len > maxLen) {
       maxLen = len;
-      // Angle in degrees from North (+Y axis) clockwise
       let angle = (Math.atan2(dx, dy) * 180.0) / Math.PI;
       if (angle < 0) angle += 360;
       bestAngle = angle;
@@ -179,7 +178,7 @@ export function getPolygonPrimaryAzimuth(points) {
 }
 
 /**
- * Checks if a 2D point (px, py) is strictly inside a 2D polygon using Ray Casting
+ * Checks if a 2D point (px, py) is inside a 2D polygon using Ray Casting
  */
 export function isPointInPolygon(px, py, points) {
   if (!points || points.length < 3) return false;
@@ -230,16 +229,8 @@ export function computeSetbackPolygon(points, setbackMeters) {
   if (!points || points.length < 3 || setbackMeters <= 0) return points || [];
   
   // Ensure counter-clockwise vertex orientation
-  const isCCW = (pts) => {
-    let sum = 0;
-    for (let i = 0; i < pts.length; i++) {
-      const j = (i + 1) % pts.length;
-      sum += (pts[j].x - pts[i].x) * (pts[j].y + pts[i].y);
-    }
-    return sum < 0;
-  };
-
-  const pts = isCCW(points) ? [...points] : [...points].reverse();
+  const signedArea = getPolygonSignedArea(points);
+  const pts = signedArea > 0 ? [...points] : [...points].reverse();
   const n = pts.length;
   const offsetEdges = [];
 
@@ -269,7 +260,6 @@ export function computeSetbackPolygon(points, setbackMeters) {
     const prev = offsetEdges[(i - 1 + numEdges) % numEdges];
     const curr = offsetEdges[i];
 
-    // Intersection of line (prev.p1, prev.p2) and (curr.p1, curr.p2)
     const x1 = prev.p1.x, y1 = prev.p1.y, x2 = prev.p2.x, y2 = prev.p2.y;
     const x3 = curr.p1.x, y3 = curr.p1.y, x4 = curr.p2.x, y4 = curr.p2.y;
 
@@ -285,8 +275,8 @@ export function computeSetbackPolygon(points, setbackMeters) {
 
   // Validate that inset polygon has positive area and is contained
   const insetArea = getCartesianPolygonArea(insetPoints);
-  if (insetArea < 1.0) {
-    return []; // Roof too small for setback
+  if (insetArea < 0.5) {
+    return points; // Fallback to full polygon if roof is small
   }
 
   return insetPoints;
@@ -317,20 +307,33 @@ export function getRotatedRectCorners(cx, cy, width, height, rotationDeg = 0) {
 
 /**
  * Tests if a rectangle (with rotation) is completely inside the boundary polygon
- * and does not intersect any boundary edges.
+ * Uses 9-point sampling (4 corners + 4 edge midpoints + center) plus edge crossing check
  */
 export function isRectInsidePolygon(cx, cy, width, height, rotationDeg, polygon) {
   if (!polygon || polygon.length < 3) return false;
   const corners = getRotatedRectCorners(cx, cy, width, height, rotationDeg);
 
-  // 1. All 4 corners must be inside
+  // 1. Check center point
+  if (!isPointInPolygon(cx, cy, polygon)) return false;
+
+  // 2. Check all 4 corners
   for (const corner of corners) {
     if (!isPointInPolygon(corner.x, corner.y, polygon)) {
       return false;
     }
   }
 
-  // 2. Rectangle edges must not cross polygon edges
+  // 3. Check edge midpoints
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    const midX = (corners[i].x + corners[j].x) / 2;
+    const midY = (corners[i].y + corners[j].y) / 2;
+    if (!isPointInPolygon(midX, midY, polygon)) {
+      return false;
+    }
+  }
+
+  // 4. Rectangle edges must not cross polygon edges
   for (let i = 0; i < 4; i++) {
     const j = (i + 1) % 4;
     if (segmentIntersectsPolygon(corners[i], corners[j], polygon)) {
@@ -379,17 +382,12 @@ export function rotatedRectanglesIntersect(rectA, rectB) {
       return false; // Separating axis found
     }
   }
-
   return true;
 }
 
 /**
- * Calculates 3D Roof Surface Elevation (Y in Three.js coordinates) at any (x, z) location
+ * Calculates 3D Roof Surface Elevation (Y in Three.js coordinates) at any (x, y) location
  * taking into account building elevation, roof slope/pitch, and slope azimuth.
- * 
- * @param {number} x - Local Cartesian X (East-West in meters)
- * @param {number} y - Local Cartesian Y (North-South in meters)
- * @param {Object} roofParams - { type, pitch_deg, azimuth_deg, elevation_m }
  */
 export function calculateRoofElevationAtPoint(x, y, { type = "flat", pitch_deg = 0, azimuth_deg = 180, elevation_m = 3.0 } = {}) {
   const baseElevation = Number(elevation_m || 3.0);
@@ -401,13 +399,11 @@ export function calculateRoofElevationAtPoint(x, y, { type = "flat", pitch_deg =
   }
 
   if (type === "single_slope") {
-    // Height increases along the azimuth direction
     const projectedDistance = x * Math.sin(azRad) + y * Math.cos(azRad);
     return baseElevation + projectedDistance * Math.tan(pitchRad);
   }
 
   if (type === "gable") {
-    // Symmetrical slope from center ridge along the azimuth
     const projectedDistance = Math.abs(x * Math.sin(azRad) + y * Math.cos(azRad));
     return baseElevation - projectedDistance * Math.tan(pitchRad);
   }
@@ -436,18 +432,20 @@ export function calculatePanel3DPosition({
   const structClearance = isFlush ? 0.12 : Number(structure.height_m || 1.8);
   const tiltDeg = isFlush ? Number(roof.pitch_deg || 0) : Number(structure.tilt_deg || 15);
   const tiltRad = toRad(tiltDeg);
+  const azimuthDeg = Number(panel.azimuth ?? structure.azimuth ?? 180);
+  const yawRad = toRad(azimuthDeg - 180);
 
-  // Position: centered on roof surface + clearance + tilt vertical offset
   const panelLength = Number(panel.height || 2.278);
   const verticalOffset = (panelLength / 2) * Math.sin(tiltRad);
 
   return {
     x: px,
-    y: roofH + structClearance + verticalOffset + 0.03,
+    y: roofH + structClearance + verticalOffset + 0.035,
     z: -py, // Invert Y for 3D Three.js Z-axis
     tiltRad,
+    yawRad,
+    azimuthDeg,
     structClearance,
     roofSurfaceY: roofH,
   };
 }
-

@@ -8,8 +8,9 @@ import { Label } from "@/components/ui/label";
 import {
   MousePointer, PenTool, Ruler, Square, Trash2, RotateCw, Copy, Lock, Unlock,
   Layers, ZoomIn, ZoomOut, Maximize2, Minimize2, Compass, Move, Plus, Sparkles,
-  AlertTriangle, Navigation, CheckCircle2, ShieldCheck, Undo2, MapPin, Check, Info
+  AlertTriangle, Navigation, CheckCircle2, ShieldCheck, Undo2, MapPin, Check, Info, PlusCircle
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   toRad,
   toDeg,
@@ -20,6 +21,7 @@ import {
   computeSetbackPolygon,
   getRotatedRectCorners,
 } from "../utils/geoCalculations";
+import { validatePanelPlacement } from "../utils/layoutEngine";
 
 // Fix Leaflet marker icons
 delete L.Icon.Default.prototype._getIconUrl;
@@ -37,10 +39,9 @@ L.Icon.Default.mergeOptions({
  * - Point-and-click polygon roof boundary tracing directly on top of satellite imagery
  * - Draggable polygon vertices with real-time recalculation
  * - Real-time segment dimension labels (e.g. 12.4m) ONLY when roof polygon exists
+ * - Interactive "+ Add Panel" placement tool with boundary & obstacle validation
+ * - Move/Drag existing panels with collision avoidance
  * - Reference measurement calibration tool
- * - Obstacle placement & exclusion zones
- * - Visual solar panel overlays
- * - Clear satellite imagery attribution & accuracy notices
  */
 const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
   {
@@ -57,12 +58,13 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
     walkways = [],
     setWalkways,
     setbackMeters = 0.5,
-    activeTool = "select", // 'select' | 'draw_roof' | 'calibrate'
+    activeTool = "select", // 'select' | 'draw_roof' | 'add_panel' | 'calibrate'
     setActiveTool,
     selectedPanelId = null,
     setSelectedPanelId,
     onCalibrationComplete,
     orientation = "portrait",
+    azimuthDegrees = 180,
     panelSpecs = {},
     isCalibrated = false,
   },
@@ -97,6 +99,23 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
     walkways: true,
   });
 
+  const originLat = Number(latitude) || 19.076;
+  const originLng = Number(longitude) || 72.8777;
+  const latRad = toRad(originLat);
+
+  // Helper: Cartesian (meters) <-> LatLng
+  const cartesianToLatLng = useCallback((x, y) => {
+    const dLngRad = x / (Math.cos(latRad) * 6378137);
+    const dLatRad = y / 6378137;
+    return [originLat + toDeg(dLatRad), originLng + toDeg(dLngRad)];
+  }, [latRad, originLat, originLng]);
+
+  const latLngToCartesian = useCallback((lat, lng) => {
+    const x = (toRad(lng) - toRad(originLng)) * Math.cos(latRad) * 6378137;
+    const y = (toRad(lat) - toRad(originLat)) * 6378137;
+    return { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 };
+  }, [latRad, originLat, originLng]);
+
   // Expose snapshot export and panTo functions to parent
   useImperativeHandle(ref, () => ({
     getSnapshotDataUrl: () => {
@@ -125,6 +144,70 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
     },
   }));
 
+  // Handle Manual Click on Map to Add Panel
+  const handleMapClickForAddPanel = useCallback((lat, lng) => {
+    if (!roofPolygon || roofPolygon.length < 3) {
+      toast.warning("Please draw a roof boundary first before adding panels.");
+      return;
+    }
+
+    const { x, y } = latLngToCartesian(lat, lng);
+    const isPortrait = orientation.toLowerCase() === "portrait";
+    const pWidth = isPortrait ? (panelSpecs.width_m || 1.134) : (panelSpecs.length_m || 2.278);
+    const pLength = isPortrait ? (panelSpecs.length_m || 2.278) : (panelSpecs.width_m || 1.134);
+
+    const candidate = {
+      x,
+      y,
+      width: pWidth,
+      height: pLength,
+      rotation: 0,
+    };
+
+    const check = validatePanelPlacement({
+      candidate,
+      roofPolygon,
+      setbackMeters,
+      panels,
+      obstacles,
+      walkways,
+    });
+
+    if (!check.valid) {
+      toast.warning(check.reason || "Cannot place panel here: outside boundary or blocked.");
+      return;
+    }
+
+    const newPanel = {
+      id: `panel-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      x,
+      y,
+      width: pWidth,
+      height: pLength,
+      rotation: 0,
+      azimuth: azimuthDegrees || 180,
+      wattage: panelSpecs.wattage || 550,
+      locked: false,
+      hidden: false,
+    };
+
+    setPanels((prev) => [...prev, newPanel]);
+    setSelectedPanelId(newPanel.id);
+    toast.success(`Placed Panel #${panels.length + 1}`);
+  }, [
+    roofPolygon,
+    latLngToCartesian,
+    orientation,
+    panelSpecs,
+    setbackMeters,
+    panels,
+    obstacles,
+    walkways,
+    azimuthDegrees,
+    setPanels,
+    setSelectedPanelId,
+  ]);
+
   // Initialize Leaflet Map Instance
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -145,13 +228,11 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
 
       mapInstanceRef.current = map;
 
-      // Layer groups
       tileLayerGroupRef.current = L.layerGroup().addTo(map);
       roofLayerGroupRef.current = L.layerGroup().addTo(map);
       obstaclesLayerGroupRef.current = L.layerGroup().addTo(map);
       panelsLayerGroupRef.current = L.layerGroup().addTo(map);
 
-      // Site Location Center Marker
       const centerMarker = L.marker([initialLat, initialLng], {
         draggable: true,
         title: "Solar Rooftop Site Location",
@@ -166,17 +247,17 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
 
       markerRef.current = centerMarker;
 
-      // Mousemove listener for live coordinate display
       map.on("mousemove", (e) => {
         setCursorCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
       });
 
-      // Map Click Dispatcher
       map.on("click", (e) => {
         const { lat, lng } = e.latlng;
 
         if (window.__activeSolarTool === "draw_roof") {
           setActiveDrawPoints((prev) => [...prev, { lat, lng }]);
+        } else if (window.__activeSolarTool === "add_panel") {
+          window.__handleSolarMapClickAddPanel?.(lat, lng);
         } else if (window.__activeSolarTool === "calibrate") {
           setCalibratePoints((prev) => {
             const next = [...prev, { lat, lng }];
@@ -202,10 +283,10 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Keep window.__activeSolarTool updated
   useEffect(() => {
     window.__activeSolarTool = activeTool;
-  }, [activeTool]);
+    window.__handleSolarMapClickAddPanel = handleMapClickForAddPanel;
+  }, [activeTool, handleMapClickForAddPanel]);
 
   // Update Base Tile Layer on mapType change
   useEffect(() => {
@@ -215,18 +296,12 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
     tileGroup.clearLayers();
 
     if (mapType === "satellite") {
-      // High-Resolution Esri World Imagery (Global Aerial Satellite)
       const esriSatellite = L.tileLayer(
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        {
-          maxZoom: 21,
-          maxNativeZoom: 19,
-          subdomains: ["server", "services"],
-        }
+        { maxZoom: 21, maxNativeZoom: 19, subdomains: ["server", "services"] }
       );
       esriSatellite.addTo(tileGroup);
     } else if (mapType === "hybrid") {
-      // Esri Satellite + World Boundaries and Places Road Labels
       const esriSatellite = L.tileLayer(
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         { maxZoom: 21, maxNativeZoom: 19 }
@@ -238,7 +313,6 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
       esriSatellite.addTo(tileGroup);
       esriLabels.addTo(tileGroup);
     } else {
-      // Standard OpenStreetMap / Street View
       const osmStreet = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 20,
         subdomains: ["a", "b", "c"],
@@ -271,7 +345,6 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
       return;
     }
 
-    // Anchor origin to centroid of drawn points for balanced Cartesian coordinates
     let sumLat = 0;
     let sumLng = 0;
     activeDrawPoints.forEach((p) => {
@@ -279,10 +352,10 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
       sumLng += p.lng;
     });
     const origin = { lat: sumLat / activeDrawPoints.length, lng: sumLng / activeDrawPoints.length };
-    const latRad = toRad(origin.lat);
+    const baseLatRad = toRad(origin.lat);
 
     const cartesianPoints = activeDrawPoints.map((pt) => {
-      const x = (toRad(pt.lng) - toRad(origin.lng)) * Math.cos(latRad) * 6378137;
+      const x = (toRad(pt.lng) - toRad(origin.lng)) * Math.cos(baseLatRad) * 6378137;
       const y = (toRad(pt.lat) - toRad(origin.lat)) * 6378137;
       return {
         x: Math.round(x * 100) / 100,
@@ -318,11 +391,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
       setRoofPolygon(rescaledRoof);
 
       if (onCalibrationComplete) {
-        onCalibrationComplete({
-          measuredMeters: distGeodesic,
-          targetMeters,
-          scaleFactor,
-        });
+        onCalibrationComplete({ measuredMeters: distGeodesic, targetMeters, scaleFactor });
       }
     }
 
@@ -344,24 +413,11 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
     obsGroup.clearLayers();
     panelGroup.clearLayers();
 
-    const originLat = Number(latitude) || 19.076;
-    const originLng = Number(longitude) || 72.8777;
-    const latRad = toRad(originLat);
-
-    // Helper: Local Cartesian (x, y in meters) -> Leaflet LatLng
-    const cartesianToLatLng = (x, y) => {
-      const dLngRad = x / (Math.cos(latRad) * 6378137);
-      const dLatRad = y / 6378137;
-      const lat = originLat + toDeg(dLatRad);
-      const lng = originLng + toDeg(dLngRad);
-      return [lat, lng];
-    };
-
     // 1. Draw Active Drawing In-Progress Line & Vertices
     if (activeDrawPoints.length > 0) {
       const latLngs = activeDrawPoints.map((p) => [p.lat, p.lng]);
       L.polyline(latLngs, {
-        color: "#10b981", // Emerald Green
+        color: "#10b981",
         weight: 3,
         dashArray: "6, 6",
       }).addTo(roofGroup);
@@ -383,7 +439,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
       });
     }
 
-    // 2. Draw Committed Roof Boundary Polygon (ONLY if roofPolygon has >= 3 vertices)
+    // 2. Draw Committed Roof Boundary Polygon (ONLY if >= 3 vertices)
     if (layers.roofBoundary && roofPolygon && roofPolygon.length >= 3) {
       const polyLatLngs = roofPolygon.map((p) => {
         if (p.lat && p.lng) return [p.lat, p.lng];
@@ -391,7 +447,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
       });
 
       const roofPoly = L.polygon(polyLatLngs, {
-        color: "#2563eb", // Royal Blue
+        color: "#2563eb",
         weight: 3,
         fillColor: "#3b82f6",
         fillOpacity: 0.25,
@@ -443,7 +499,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
         if (setbackPoly && setbackPoly.length >= 3) {
           const setbackLatLngs = setbackPoly.map((p) => cartesianToLatLng(p.x, p.y));
           L.polygon(setbackLatLngs, {
-            color: "#dc2626", // Red dashed line
+            color: "#dc2626",
             weight: 1.5,
             dashArray: "4, 4",
             fillOpacity: 0,
@@ -480,7 +536,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
       });
     }
 
-    // 6. Draw Solar PV Modules (ONLY if panels array has items)
+    // 6. Draw Solar PV Modules with Drag & Click Support
     if (layers.panels && Array.isArray(panels) && panels.length > 0) {
       panels.forEach((p, idx) => {
         if (p.hidden) return;
@@ -494,6 +550,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
           p.rotation || 0
         );
         const pLatLngs = corners.map((c) => cartesianToLatLng(c.x, c.y));
+        const centerLatLng = cartesianToLatLng(p.x, p.y);
 
         const panelPoly = L.polygon(pLatLngs, {
           color: isSelected ? "#fbbf24" : "#93c5fd",
@@ -507,14 +564,52 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
           setSelectedPanelId(p.id);
         });
 
-        const centerLatLng = cartesianToLatLng(p.x, p.y);
-        const panelNumIcon = L.divIcon({
-          className: `text-[8px] font-bold text-center text-blue-200 select-none pointer-events-none`,
-          html: `${idx + 1}`,
-          iconSize: [16, 12],
-          iconAnchor: [8, 6],
-        });
-        L.marker(centerLatLng, { icon: panelNumIcon, interactive: false }).addTo(panelGroup);
+        // Draggable Handle for moving selected panel
+        if (isSelected) {
+          const moveHandle = L.marker(centerLatLng, {
+            draggable: true,
+            icon: L.divIcon({
+              className: "bg-amber-400 text-slate-950 font-bold px-1.5 py-0.5 rounded-full shadow-lg border border-white text-[9px] cursor-move",
+              html: "✛ Move",
+              iconSize: [44, 18],
+              iconAnchor: [22, 9],
+            }),
+          }).addTo(panelGroup);
+
+          moveHandle.on("dragend", (e) => {
+            const newPos = e.target.getLatLng();
+            const { x: newX, y: newY } = latLngToCartesian(newPos.lat, newPos.lng);
+
+            const validation = validatePanelPlacement({
+              candidate: { x: newX, y: newY, width: p.width, height: p.height, rotation: p.rotation || 0 },
+              roofPolygon,
+              setbackMeters,
+              panels,
+              obstacles,
+              walkways,
+              excludePanelId: p.id,
+            });
+
+            if (validation.valid) {
+              setPanels((prev) =>
+                prev.map((item) => (item.id === p.id ? { ...item, x: newX, y: newY } : item))
+              );
+              toast.success(`Moved Panel #${idx + 1}`);
+            } else {
+              toast.warning(validation.reason || "Invalid position: outside boundary or overlaps obstacle.");
+              // Force re-render to revert position
+              setPanels((prev) => [...prev]);
+            }
+          });
+        } else {
+          const panelNumIcon = L.divIcon({
+            className: "text-[8px] font-bold text-center text-blue-200 select-none pointer-events-none",
+            html: `${idx + 1}`,
+            iconSize: [16, 12],
+            iconAnchor: [8, 6],
+          });
+          L.marker(centerLatLng, { icon: panelNumIcon, interactive: false }).addTo(panelGroup);
+        }
       });
     }
   }, [
@@ -528,6 +623,9 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
     selectedPanelId,
     latitude,
     longitude,
+    cartesianToLatLng,
+    latLngToCartesian,
+    setPanels,
     setSelectedPanelId,
   ]);
 
@@ -546,10 +644,8 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
 
   return (
     <div className="relative w-full h-full min-h-[580px] rounded-2xl overflow-hidden bg-slate-900 border border-slate-700 shadow-xl select-none flex flex-col">
-      {/* Leaflet Map DOM Container */}
       <div ref={mapContainerRef} className="w-full h-full flex-1 z-0 cursor-crosshair" />
 
-      {/* Map Load Error State */}
       {mapError && (
         <div className="absolute inset-0 bg-slate-900/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center text-white z-50">
           <AlertTriangle className="w-12 h-12 text-amber-400 mb-3" />
@@ -559,7 +655,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
             onClick={() => setMapType("street")}
             className="bg-blue-600 hover:bg-blue-700 text-xs font-semibold px-4 py-2 mt-3 rounded-xl"
           >
-            Continue with Street Map / Manual Roof Design
+            Continue with Street Map
           </Button>
         </div>
       )}
@@ -584,7 +680,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
               setActiveDrawPoints([]);
             }}
             className="h-7 text-xs px-2.5 rounded-lg gap-1.5"
-            title="Select & Inspect Objects"
+            title="Select & Drag Objects"
           >
             <MousePointer className="w-3.5 h-3.5" /> Select
           </Button>
@@ -604,6 +700,23 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
             title="Click points directly on satellite imagery to trace roof"
           >
             <PenTool className="w-3.5 h-3.5" /> Draw Roof
+          </Button>
+
+          <Button
+            size="sm"
+            variant={activeTool === "add_panel" ? "default" : "ghost"}
+            onClick={() => {
+              setActiveTool("add_panel");
+              setActiveDrawPoints([]);
+            }}
+            className={`h-7 text-xs px-2.5 rounded-lg gap-1.5 ${
+              activeTool === "add_panel"
+                ? "bg-amber-600 hover:bg-amber-700 text-white"
+                : "text-amber-400 hover:text-white"
+            }`}
+            title="Click anywhere on the roof to manually add a panel"
+          >
+            <Plus className="w-3.5 h-3.5" /> + Add Panel
           </Button>
 
           <Button
@@ -678,7 +791,6 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
 
           <div className="w-[1px] h-3.5 bg-slate-700 mx-0.5" />
 
-          {/* Quick Zoom & Locate */}
           <Button
             size="sm"
             variant="ghost"
@@ -726,7 +838,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
             className="h-6 text-xs px-2 rounded-lg text-white hover:bg-blue-800"
             title="Rotate 90°"
           >
-            <RotateCw className="w-3 h-3" />
+            <RotateCw className="w-3 h-3 mr-1" /> Rotate
           </Button>
           <Button
             size="sm"
@@ -737,11 +849,12 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
               const dup = { ...target, id: `panel-${Date.now()}`, x: target.x + 1.2 };
               setPanels([...panels, dup]);
               setSelectedPanelId(dup.id);
+              toast.success("Duplicated panel");
             }}
             className="h-6 text-xs px-2 rounded-lg text-white hover:bg-blue-800"
             title="Duplicate"
           >
-            <Copy className="w-3 h-3" />
+            <Copy className="w-3 h-3 mr-1" /> Duplicate
           </Button>
           <Button
             size="sm"
@@ -749,12 +862,21 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
             onClick={() => {
               setPanels((prev) => prev.filter((p) => p.id !== selectedPanelId));
               setSelectedPanelId(null);
+              toast.success("Removed panel");
             }}
             className="h-6 text-xs px-2 rounded-lg text-red-300 hover:bg-red-900"
-            title="Delete"
+            title="Delete Panel"
           >
             <Trash2 className="w-3 h-3" />
           </Button>
+        </div>
+      )}
+
+      {/* Manual Add Panel Guidance */}
+      {activeTool === "add_panel" && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-amber-950/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-amber-600 shadow-xl text-xs text-amber-200 pointer-events-auto flex items-center gap-2">
+          <PlusCircle className="w-3.5 h-3.5 text-amber-400 animate-bounce shrink-0" />
+          <span>Click anywhere on the open roof space to place a solar panel</span>
         </div>
       )}
 
