@@ -10,22 +10,29 @@ import {
   toRad,
   calculateRoofElevationAtPoint,
   calculatePanel3DPosition,
+  clusterPanelsIntoRows,
   getPolygonBounds,
 } from "../utils/geoCalculations";
 
 /**
  * Engineering-Grade 3D Rooftop WebGL Visualizer
  * 
+ * Structural Hierarchy:
+ * ROOF SLAB -> BASE ANCHOR FOOTING -> VERTICAL SUPPORT POSTS -> INCLINED RAFTERS -> DUAL CONTINUOUS RAILS -> PV MODULES
+ * 
  * Features:
  * - Extruded 3D Roof Slab matching drawn 2D polygon boundary
  * - Building elevation / ground-to-roof structure walls (3.0m - 30m)
  * - Roof Slope / Pitch support (Flat, Single Slope, Gable, Hip)
- * - Realistic Monocrystalline PV Panels sitting physically ON mounting rails & roof
- * - Believable 3D Mounting Structure:
- *   Roof Slab -> Base Anchor Plates -> Support Columns -> Diagonal Braces -> Longitudinal Rails -> PV Modules
- * - Structure strictly follows panel orientation, tilt, and Azimuth direction (South, East, West, etc.)
- * - 0 default obstacles (only rendered when added)
- * - Orbit, Pan, and Zoom controls with "Fit Design" bounding-box framing
+ * - Row-based mounting table engineering:
+ *   - Continuous longitudinal aluminium rails under each panel row
+ *   - Strategic rafter support lines (e.g. 2-3 post pairs per row, NOT per panel)
+ *   - Distinct rectangular base anchor plates with bolts on the roof slab
+ *   - Elevated super structure with diagonal sway cross-braces on outer frames
+ *   - Concrete ballast blocks for ballasted mount
+ *   - Flush mini-rails for flush mount
+ * - Dynamic Azimuth & Tilt alignment
+ * - 0 default obstacles (only rendered when explicitly added)
  */
 const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   {
@@ -137,13 +144,13 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       setActivePreset(preset);
       const ctr = controlsRef.current;
       if (preset === "top") {
-        ctr.spherical.phi = 0.05; // plan view overhead
+        ctr.spherical.phi = 0.05;
         ctr.spherical.theta = 0;
       } else if (preset === "front") {
-        ctr.spherical.phi = Math.PI / 2.15; // south facing
+        ctr.spherical.phi = Math.PI / 2.15;
         ctr.spherical.theta = 0;
       } else if (preset === "side") {
-        ctr.spherical.phi = Math.PI / 2.15; // east profile
+        ctr.spherical.phi = Math.PI / 2.15;
         ctr.spherical.theta = Math.PI / 2;
       } else if (preset === "isometric") {
         ctr.spherical.phi = Math.PI / 3.2;
@@ -404,11 +411,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       }
     }
 
-    // 2. Build 3D Solar PV Modules & Engineering Mounting Structure
-    if (showPanels && activePanels.length > 0) {
+    // 2. Build 3D Solar PV Modules & Row-Based Engineering Mounting Structure
+    if (activePanels.length > 0) {
       const structType = (structure?.type || "elevated").toLowerCase();
       const isFlush = structType === "flush";
       const isElevated = structType === "elevated";
+      const isBallasted = structType === "ballasted";
       const baseClearance = isFlush ? 0.12 : Number(structure?.height_m || 1.8);
       const panelTiltDeg = isFlush ? roofPitchDeg : Number(structure?.tilt_deg || 15);
       const structAzimuth = Number(structure?.azimuth ?? 180);
@@ -427,123 +435,196 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       });
       const moduleMaterials = [frameMat, frameMat, siliconCellMat, frameMat, frameMat, frameMat];
 
-      // Structure Materials
-      const railMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.3, metalness: 0.85 });
-      const postMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.4, metalness: 0.8 });
-      const braceMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.45, metalness: 0.8 });
-      const footingMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.6, metalness: 0.9 });
+      // Realistic Structure Materials
+      const railMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.3, metalness: 0.85 }); // Anodized Aluminium
+      const rafterMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.4, metalness: 0.8 }); // Steel C-Channel
+      const postMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.35, metalness: 0.85 }); // Galvanized Steel
+      const basePlateMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5, metalness: 0.9 }); // Steel Base Anchor
+      const boltMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.2, metalness: 0.95 }); // SS304 Bolts
+      const braceMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4, metalness: 0.85 }); // Strut Brace
+      const ballastMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.95, metalness: 0.05 }); // Concrete Ballast
 
-      activePanels.forEach((p) => {
-        const pw = Number(p.width || 1.134);
-        const pl = Number(p.height || 2.278);
-        const panelAzimuth = Number(p.azimuth ?? structAzimuth);
+      // A. Render Individual Solar PV Panels
+      if (showPanels) {
+        activePanels.forEach((p) => {
+          const pw = Number(p.width || 1.134);
+          const pl = Number(p.height || 2.278);
+          const panelAzimuth = Number(p.azimuth ?? structAzimuth);
 
-        const transform = calculatePanel3DPosition({
-          panel: { ...p, azimuth: panelAzimuth },
-          roof: {
+          const transform = calculatePanel3DPosition({
+            panel: { ...p, azimuth: panelAzimuth },
+            roof: {
+              type: roofType,
+              pitch_deg: roofPitchDeg,
+              azimuth_deg: roofAzimuthDeg,
+              elevation_m: buildingElevationM,
+            },
+            structure: {
+              type: structType,
+              tilt_deg: panelTiltDeg,
+              height_m: baseClearance,
+              azimuth: panelAzimuth,
+            },
+          });
+
+          const panelGroup = new THREE.Group();
+          panelGroup.position.set(transform.x, transform.y, transform.z);
+          panelGroup.rotation.y = transform.yawRad;
+
+          const panelMesh = new THREE.Mesh(panelGeom, moduleMaterials);
+          panelMesh.scale.set(pw, 1, pl);
+          panelMesh.rotation.x = -transform.tiltRad;
+          panelMesh.castShadow = true;
+          panelMesh.receiveShadow = true;
+          panelGroup.add(panelMesh);
+
+          rootGroup.add(panelGroup);
+        });
+      }
+
+      // B. Render Row-Based Structural Mounting Framework
+      if (showStructures) {
+        const rows = clusterPanelsIntoRows(activePanels, structAzimuth);
+
+        rows.forEach((row) => {
+          const tiltRad = toRad(panelTiltDeg);
+          const azYawRad = toRad(structAzimuth - 180);
+          const rowRoofY = calculateRoofElevationAtPoint(row.centerX, row.centerY, {
             type: roofType,
             pitch_deg: roofPitchDeg,
             azimuth_deg: roofAzimuthDeg,
             elevation_m: buildingElevationM,
-          },
-          structure: {
-            type: structType,
-            tilt_deg: panelTiltDeg,
-            height_m: baseClearance,
-            azimuth: panelAzimuth,
-          },
-        });
+          });
 
-        // Create unified panel mounting unit group
-        const panelUnitGroup = new THREE.Group();
-        panelUnitGroup.position.set(transform.x, transform.y, transform.z);
-        panelUnitGroup.rotation.y = transform.yawRad; // Rotate with Azimuth!
+          const frameCenterY = rowRoofY + baseClearance + (row.pl / 2) * Math.sin(tiltRad);
 
-        // A. 3D Solar PV Module Mesh
-        const panelMesh = new THREE.Mesh(panelGeom, moduleMaterials);
-        panelMesh.scale.set(pw, 1, pl);
-        panelMesh.rotation.x = -transform.tiltRad;
-        panelMesh.castShadow = true;
-        panelMesh.receiveShadow = true;
-        panelUnitGroup.add(panelMesh);
+          const rowMountGroup = new THREE.Group();
+          rowMountGroup.position.set(row.centerX, frameCenterY, -row.centerY);
+          rowMountGroup.rotation.y = azYawRad;
 
-        // B. Mounting Structure underneath the panel
-        if (showStructures) {
           // 1. Dual Continuous Longitudinal Rails
-          const railLength = pl * 1.04;
-          const railGeom = new THREE.BoxGeometry(0.045, 0.055, railLength);
+          const railLength = row.totalRowLength + 0.12;
+          const railGeom = new THREE.BoxGeometry(railLength, 0.045, 0.055);
 
-          const rail1 = new THREE.Mesh(railGeom, railMat);
-          rail1.position.set(-pw * 0.28, -0.038, 0);
-          rail1.rotation.x = -transform.tiltRad;
-          rail1.castShadow = true;
-          panelUnitGroup.add(rail1);
+          // Upper rail
+          const topRail = new THREE.Mesh(railGeom, railMat);
+          topRail.position.set(0, -0.038, -row.pl * 0.28 * Math.cos(tiltRad));
+          topRail.rotation.x = -tiltRad;
+          topRail.castShadow = true;
+          rowMountGroup.add(topRail);
 
-          const rail2 = new THREE.Mesh(railGeom, railMat);
-          rail2.position.set(pw * 0.28, -0.038, 0);
-          rail2.rotation.x = -transform.tiltRad;
-          rail2.castShadow = true;
-          panelUnitGroup.add(rail2);
+          // Lower rail
+          const bottomRail = new THREE.Mesh(railGeom, railMat);
+          bottomRail.position.set(0, -0.038, +row.pl * 0.28 * Math.cos(tiltRad));
+          bottomRail.rotation.x = -tiltRad;
+          bottomRail.castShadow = true;
+          rowMountGroup.add(bottomRail);
 
-          // 2. Support Columns (Posts) & Footings
-          const roofSurfaceY = transform.roofSurfaceY;
-          const frontZ = (pl / 2) * Math.cos(transform.tiltRad) * 0.75;
-          const backZ = -(pl / 2) * Math.cos(transform.tiltRad) * 0.75;
-
-          const frontLegHeight = Math.max(0.1, transform.y - 0.038 - (pl / 2) * Math.sin(transform.tiltRad) - roofSurfaceY);
-          const backLegHeight = Math.max(0.1, transform.y - 0.038 + (pl / 2) * Math.sin(transform.tiltRad) - roofSurfaceY);
-
+          // 2. Structural Rafter Lines, Columns & Base Anchor Plates
           if (showPosts && !isFlush) {
-            // Front Posts & Base Plates
-            [-pw * 0.28, pw * 0.28].forEach((xOff) => {
-              const frontPostGeom = new THREE.CylinderGeometry(0.024, 0.024, frontLegHeight, 8);
-              const frontPost = new THREE.Mesh(frontPostGeom, postMat);
-              frontPost.position.set(xOff, -transform.y + roofSurfaceY + frontLegHeight / 2, frontZ);
+            const frontZ = +row.pl * 0.28 * Math.cos(tiltRad);
+            const rearZ = -row.pl * 0.28 * Math.cos(tiltRad);
+            const frontYOffset = -(row.pl * 0.28) * Math.sin(tiltRad) - 0.065;
+            const rearYOffset = +(row.pl * 0.28) * Math.sin(tiltRad) - 0.065;
+
+            const frontLegHeight = Math.max(0.1, frameCenterY + frontYOffset - rowRoofY);
+            const rearLegHeight = Math.max(0.1, frameCenterY + rearYOffset - rowRoofY);
+
+            const rafterLength = row.pl * 0.85;
+            const rafterGeom = new THREE.BoxGeometry(0.06, 0.08, rafterLength);
+            const postGeomFront = new THREE.CylinderGeometry(0.028, 0.028, frontLegHeight, 12);
+            const postGeomRear = new THREE.CylinderGeometry(0.028, 0.028, rearLegHeight, 12);
+            const basePlateGeom = new THREE.BoxGeometry(0.18, 0.02, 0.18);
+            const boltGeom = new THREE.CylinderGeometry(0.008, 0.008, 0.03, 8);
+            const ballastBlockGeom = new THREE.BoxGeometry(0.35, 0.18, 0.28);
+
+            row.rafterUOffsets.forEach((uOffset, idx) => {
+              const uRel = uOffset - row.centerU;
+              const isEndFrame = idx === 0 || idx === row.rafterUOffsets.length - 1;
+
+              // A. Inclined Structural Rafter Beam (connecting front to rear rail)
+              const rafterMesh = new THREE.Mesh(rafterGeom, rafterMat);
+              rafterMesh.position.set(uRel, -0.065, 0);
+              rafterMesh.rotation.x = -tiltRad;
+              rafterMesh.castShadow = true;
+              rowMountGroup.add(rafterMesh);
+
+              // B. Front Support Column (Post)
+              const frontPost = new THREE.Mesh(postGeomFront, postMat);
+              frontPost.position.set(uRel, frontYOffset - frontLegHeight / 2, frontZ);
               frontPost.castShadow = true;
-              panelUnitGroup.add(frontPost);
+              rowMountGroup.add(frontPost);
 
-              const baseGeom = new THREE.BoxGeometry(0.14, 0.018, 0.14);
-              const basePlate = new THREE.Mesh(baseGeom, footingMat);
-              basePlate.position.set(xOff, -transform.y + roofSurfaceY + 0.009, frontZ);
-              panelUnitGroup.add(basePlate);
-            });
+              // Front Base Anchor Plate / Ballast Block
+              if (isBallasted) {
+                const ballast = new THREE.Mesh(ballastBlockGeom, ballastMat);
+                ballast.position.set(uRel, frontYOffset - frontLegHeight + 0.09, frontZ);
+                ballast.castShadow = true;
+                ballast.receiveShadow = true;
+                rowMountGroup.add(ballast);
+              } else {
+                const basePlate = new THREE.Mesh(basePlateGeom, basePlateMat);
+                basePlate.position.set(uRel, frontYOffset - frontLegHeight + 0.01, frontZ);
+                basePlate.castShadow = true;
+                rowMountGroup.add(basePlate);
 
-            // Back Posts & Base Plates
-            [-pw * 0.28, pw * 0.28].forEach((xOff) => {
-              const backPostGeom = new THREE.CylinderGeometry(0.024, 0.024, backLegHeight, 8);
-              const backPost = new THREE.Mesh(backPostGeom, postMat);
-              backPost.position.set(xOff, -transform.y + roofSurfaceY + backLegHeight / 2, backZ);
-              backPost.castShadow = true;
-              panelUnitGroup.add(backPost);
+                // 4 Anchor Bolts
+                [[-0.06, -0.06], [-0.06, 0.06], [0.06, -0.06], [0.06, 0.06]].forEach(([bx, bz]) => {
+                  const bolt = new THREE.Mesh(boltGeom, boltMat);
+                  bolt.position.set(uRel + bx, frontYOffset - frontLegHeight + 0.025, frontZ + bz);
+                  rowMountGroup.add(bolt);
+                });
+              }
 
-              const baseGeom = new THREE.BoxGeometry(0.14, 0.018, 0.14);
-              const basePlate = new THREE.Mesh(baseGeom, footingMat);
-              basePlate.position.set(xOff, -transform.y + roofSurfaceY + 0.009, backZ);
-              panelUnitGroup.add(basePlate);
+              // C. Rear Support Column (Post)
+              const rearPost = new THREE.Mesh(postGeomRear, postMat);
+              rearPost.position.set(uRel, rearYOffset - rearLegHeight / 2, rearZ);
+              rearPost.castShadow = true;
+              rowMountGroup.add(rearPost);
+
+              // Rear Base Anchor Plate / Ballast Block
+              if (isBallasted) {
+                const ballast = new THREE.Mesh(ballastBlockGeom, ballastMat);
+                ballast.position.set(uRel, rearYOffset - rearLegHeight + 0.09, rearZ);
+                ballast.castShadow = true;
+                ballast.receiveShadow = true;
+                rowMountGroup.add(ballast);
+              } else {
+                const basePlate = new THREE.Mesh(basePlateGeom, basePlateMat);
+                basePlate.position.set(uRel, rearYOffset - rearLegHeight + 0.01, rearZ);
+                basePlate.castShadow = true;
+                rowMountGroup.add(basePlate);
+
+                [[-0.06, -0.06], [-0.06, 0.06], [0.06, -0.06], [0.06, 0.06]].forEach(([bx, bz]) => {
+                  const bolt = new THREE.Mesh(boltGeom, boltMat);
+                  bolt.position.set(uRel + bx, rearYOffset - rearLegHeight + 0.025, rearZ + bz);
+                  rowMountGroup.add(bolt);
+                });
+              }
+
+              // D. Diagonal Sway Cross-Bracing on End Frames
+              if (isElevated && baseClearance >= 1.2 && isEndFrame) {
+                const braceSpanZ = frontZ - rearZ;
+                const braceSpanY = (rearYOffset) - (frontYOffset - frontLegHeight);
+                const braceLength = Math.hypot(braceSpanZ, braceSpanY);
+                const braceGeom = new THREE.CylinderGeometry(0.018, 0.018, braceLength, 8);
+
+                const braceMesh = new THREE.Mesh(braceGeom, braceMat);
+                braceMesh.position.set(
+                  uRel,
+                  (frontYOffset - frontLegHeight + rearYOffset) / 2,
+                  (frontZ + rearZ) / 2
+                );
+                braceMesh.rotation.x = Math.atan2(braceSpanZ, braceSpanY);
+                braceMesh.castShadow = true;
+                rowMountGroup.add(braceMesh);
+              }
             });
           }
 
-          // 3. Diagonal Sway Bracing for Elevated Super Structures
-          if (isElevated && baseClearance >= 1.2) {
-            const braceLen = Math.hypot(backLegHeight - frontLegHeight, frontZ - backZ);
-            const braceGeom = new THREE.CylinderGeometry(0.014, 0.014, braceLen, 6);
-
-            [-pw * 0.28, pw * 0.28].forEach((xOff) => {
-              const brace = new THREE.Mesh(braceGeom, braceMat);
-              brace.position.set(
-                xOff,
-                -transform.y + roofSurfaceY + (frontLegHeight + backLegHeight) / 2,
-                (frontZ + backZ) / 2
-              );
-              brace.rotation.x = Math.atan2(frontZ - backZ, backLegHeight - frontLegHeight);
-              brace.castShadow = true;
-              panelUnitGroup.add(brace);
-            });
-          }
-        }
-
-        rootGroup.add(panelUnitGroup);
-      });
+          rootGroup.add(rowMountGroup);
+        });
+      }
     }
 
     // 3. Build 3D Obstacles (ONLY if explicitly added)

@@ -10,6 +10,7 @@
  * - Separating Axis Theorem (SAT) for rotated rectangle collision
  * - Roof surface elevation calculation with pitch/slope & azimuth
  * - 3D mounting structure transformation (tilt, azimuth, height)
+ * - Panel row and mounting table structural clustering engine
  */
 
 export const EARTH_RADIUS_METERS = 6378137.0;
@@ -228,13 +229,11 @@ export function segmentIntersectsPolygon(p1, p2, points) {
 export function computeSetbackPolygon(points, setbackMeters) {
   if (!points || points.length < 3 || setbackMeters <= 0) return points || [];
   
-  // Ensure counter-clockwise vertex orientation
   const signedArea = getPolygonSignedArea(points);
   const pts = signedArea > 0 ? [...points] : [...points].reverse();
   const n = pts.length;
   const offsetEdges = [];
 
-  // Compute offset parallel lines for each edge
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
     const dx = pts[j].x - pts[i].x;
@@ -242,7 +241,6 @@ export function computeSetbackPolygon(points, setbackMeters) {
     const len = Math.sqrt(dx * dx + dy * dy);
     if (len === 0) continue;
 
-    // Normal vector pointing inward (left of edge direction in CCW)
     const nx = -dy / len;
     const ny = dx / len;
 
@@ -252,7 +250,6 @@ export function computeSetbackPolygon(points, setbackMeters) {
     });
   }
 
-  // Intersect consecutive offset lines to get inset vertices
   const insetPoints = [];
   const numEdges = offsetEdges.length;
 
@@ -273,10 +270,9 @@ export function computeSetbackPolygon(points, setbackMeters) {
     }
   }
 
-  // Validate that inset polygon has positive area and is contained
   const insetArea = getCartesianPolygonArea(insetPoints);
   if (insetArea < 0.5) {
-    return points; // Fallback to full polygon if roof is small
+    return points;
   }
 
   return insetPoints;
@@ -313,17 +309,14 @@ export function isRectInsidePolygon(cx, cy, width, height, rotationDeg, polygon)
   if (!polygon || polygon.length < 3) return false;
   const corners = getRotatedRectCorners(cx, cy, width, height, rotationDeg);
 
-  // 1. Check center point
   if (!isPointInPolygon(cx, cy, polygon)) return false;
 
-  // 2. Check all 4 corners
   for (const corner of corners) {
     if (!isPointInPolygon(corner.x, corner.y, polygon)) {
       return false;
     }
   }
 
-  // 3. Check edge midpoints
   for (let i = 0; i < 4; i++) {
     const j = (i + 1) % 4;
     const midX = (corners[i].x + corners[j].x) / 2;
@@ -333,7 +326,6 @@ export function isRectInsidePolygon(cx, cy, width, height, rotationDeg, polygon)
     }
   }
 
-  // 4. Rectangle edges must not cross polygon edges
   for (let i = 0; i < 4; i++) {
     const j = (i + 1) % 4;
     if (segmentIntersectsPolygon(corners[i], corners[j], polygon)) {
@@ -379,7 +371,7 @@ export function rotatedRectanglesIntersect(rectA, rectB) {
     const projA = project(cornersA, axis);
     const projB = project(cornersB, axis);
     if (projA.max < projB.min || projB.max < projA.min) {
-      return false; // Separating axis found
+      return false;
     }
   }
   return true;
@@ -392,7 +384,7 @@ export function rotatedRectanglesIntersect(rectA, rectB) {
 export function calculateRoofElevationAtPoint(x, y, { type = "flat", pitch_deg = 0, azimuth_deg = 180, elevation_m = 3.0 } = {}) {
   const baseElevation = Number(elevation_m || 3.0);
   const pitchRad = toRad(Number(pitch_deg || 0));
-  const azRad = toRad(Number(azimuth_deg || 180) - 180); // Relative to South
+  const azRad = toRad(Number(azimuth_deg || 180) - 180);
 
   if (pitch_deg <= 0 || type === "flat") {
     return baseElevation;
@@ -441,11 +433,102 @@ export function calculatePanel3DPosition({
   return {
     x: px,
     y: roofH + structClearance + verticalOffset + 0.035,
-    z: -py, // Invert Y for 3D Three.js Z-axis
+    z: -py,
     tiltRad,
     yawRad,
     azimuthDeg,
     structClearance,
     roofSurfaceY: roofH,
   };
+}
+
+/**
+ * Clusters individual panels into continuous rows/tables along the orientation azimuth
+ * to generate realistic continuous rails, structural rafters, and evenly spaced support columns
+ */
+export function clusterPanelsIntoRows(panels, azimuthDeg = 180) {
+  if (!panels || panels.length === 0) return [];
+
+  const azRad = toRad(azimuthDeg - 180);
+  const cos = Math.cos(azRad);
+  const sin = Math.sin(azRad);
+
+  // Transform each panel center to local row coordinates (u: along row/X, v: across row/Y)
+  const transformed = panels.map((p) => {
+    const px = Number(p.x || 0);
+    const py = Number(p.y || 0);
+    const u = px * cos + py * sin;
+    const v = -px * sin + py * cos;
+    return {
+      panel: p,
+      u,
+      v,
+      pw: Number(p.width || 1.134),
+      pl: Number(p.height || 2.278),
+    };
+  });
+
+  const rows = [];
+  transformed.sort((a, b) => a.v - b.v);
+
+  transformed.forEach((item) => {
+    let matchedRow = rows.find((r) => Math.abs(r.v - item.v) < item.pl * 0.45);
+    if (!matchedRow) {
+      matchedRow = { v: item.v, items: [] };
+      rows.push(matchedRow);
+    }
+    matchedRow.items.push(item);
+  });
+
+  return rows.map((row, rIdx) => {
+    row.items.sort((a, b) => a.u - b.u);
+    const items = row.items;
+    const count = items.length;
+    const pl = items[0].pl;
+    const pw = items[0].pw;
+
+    const minU = items[0].u - pw / 2;
+    const maxU = items[count - 1].u + pw / 2;
+    const totalRowLength = Math.max(pw, maxU - minU);
+    const centerU = (minU + maxU) / 2;
+    const avgV = row.items.reduce((sum, it) => sum + it.v, 0) / count;
+
+    // Structural support column spacing (rafter lines)
+    let numRafters = 2;
+    if (count >= 4 && count <= 5) numRafters = 3;
+    else if (count >= 6 && count <= 8) numRafters = 4;
+    else if (count >= 9) numRafters = Math.max(3, Math.ceil(count / 2.2));
+
+    const rafterUOffsets = [];
+    if (numRafters === 2) {
+      rafterUOffsets.push(minU + totalRowLength * 0.22, maxU - totalRowLength * 0.22);
+    } else {
+      const step = (totalRowLength * 0.8) / (numRafters - 1);
+      const start = minU + totalRowLength * 0.1;
+      for (let i = 0; i < numRafters; i++) {
+        rafterUOffsets.push(start + i * step);
+      }
+    }
+
+    // Convert (centerU, avgV) back to Cartesian (centerX, centerY)
+    const centerX = centerU * cos - avgV * sin;
+    const centerY = centerU * sin + avgV * cos;
+
+    return {
+      rowIndex: rIdx,
+      count,
+      panels: items.map((it) => it.panel),
+      centerX,
+      centerY,
+      centerU,
+      avgV,
+      minU,
+      maxU,
+      totalRowLength,
+      pw,
+      pl,
+      rafterUOffsets,
+      azimuthDeg,
+    };
+  });
 }
