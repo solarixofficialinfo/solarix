@@ -87,7 +87,7 @@ export default function SolarStudio() {
   const liveMapRef = useRef(null);
   const viewer3dRef = useRef(null);
 
-  // Canonical Solar Design State (Single source of truth for 2D and 3D)
+  // Canonical Solar Design State (Strict 0-default for brand new designs)
   const [designData, setDesignData] = useState({
     id: "",
     design_number: "",
@@ -102,7 +102,7 @@ export default function SolarStudio() {
     longitude: 72.8777,
     place_id: "",
     zoom: 19,
-    // 1. Roof Geometry
+    // 1. Roof Geometry: EMPTY for brand new design
     roof: {
       type: "flat", // 'flat' | 'single_slope' | 'gable' | 'hip'
       pitch_deg: 0,
@@ -111,25 +111,20 @@ export default function SolarStudio() {
       surface_material: "concrete",
       setback_m: 0.5,
     },
-    roof_polygon: [
-      { x: -7, y: -5, lat: 19.076045, lng: 72.877635 },
-      { x: 7, y: -5, lat: 19.076045, lng: 72.877765 },
-      { x: 7, y: 5, lat: 19.075955, lng: 72.877765 },
-      { x: -7, y: 5, lat: 19.075955, lng: 72.877635 },
-    ],
-    roof_area_sqm: 140,
-    roof_perimeter_m: 48,
-    roof_dimensions: { length_m: 14, width_m: 10 },
+    roof_polygon: [], // 0 vertices initially
+    roof_area_sqm: 0,
+    roof_perimeter_m: 0,
+    roof_dimensions: { length_m: 0, width_m: 0 },
     calibration: {},
     setback_m: 0.5,
     edge_clearance_m: 0.5,
     walkway_m: 0.6,
     walkways: [],
-    usable_area_sqm: 117,
+    usable_area_sqm: 0,
     coverage_pct: 0,
-    // 2. Obstacles Array: EMPTY by default! (No hardcoded water tanks)
+    // 2. Obstacles Array: EMPTY by default
     obstacles: [],
-    // 3. Panel Specification & Layout
+    // 3. Panel Specification & Layout: 0 panels initially
     panel_product_id: "",
     panel_make: "Tier-1 High Efficiency Mono PERC",
     panel_model: "550W High-Efficiency PV Module",
@@ -191,8 +186,9 @@ export default function SolarStudio() {
               show_supports: true,
             };
           }
-          // Ensure obstacles is an array
           doc.obstacles = Array.isArray(doc.obstacles) ? doc.obstacles : [];
+          doc.panels = Array.isArray(doc.panels) ? doc.panels : [];
+          doc.roof_polygon = Array.isArray(doc.roof_polygon) ? doc.roof_polygon : [];
           setDesignData(doc);
           if (doc.formatted_address || doc.address) {
             setSearchQuery(doc.formatted_address || doc.address);
@@ -233,6 +229,13 @@ export default function SolarStudio() {
 
   // Trigger Automatic Panel Layout
   const handleAutoLayout = useCallback((customStrategy = "auto") => {
+    if (!designData.roof_polygon || designData.roof_polygon.length < 3) {
+      toast.warning("Please draw a roof boundary on the map first.");
+      setOpenSection("roof");
+      setActiveTool("draw_roof");
+      return;
+    }
+
     const result = generateAutoPanelLayout({
       roofPolygon: designData.roof_polygon,
       setbackMeters: Number(designData.roof?.setback_m || designData.setback_m || 0.5),
@@ -263,13 +266,6 @@ export default function SolarStudio() {
 
     toast.success(`Generated layout: ${result.panelCount} panels (${result.totalKw.toFixed(2)} kWp)`);
   }, [designData]);
-
-  // Initial layout if brand new design
-  useEffect(() => {
-    if (!designId && designData.panels.length === 0 && designData.roof_polygon.length >= 3) {
-      handleAutoLayout();
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Address Search Autocomplete with Debounce
   useEffect(() => {
@@ -327,7 +323,6 @@ export default function SolarStudio() {
     try {
       const details = await getPlaceDetails(item);
       if (details && details.latitude && details.longitude) {
-        // If user already drew a custom roof on another site, confirm before changing location
         if (designData.roof_polygon && designData.roof_polygon.length >= 3 && designData.latitude !== details.latitude) {
           setPendingLocation(details);
           setShowLocationChangeConfirm(true);
@@ -361,6 +356,11 @@ export default function SolarStudio() {
 
   // Manual Increase Panel Count with Physical Space Check
   const handleIncreasePanelCount = () => {
+    if (!designData.roof_polygon || designData.roof_polygon.length < 3) {
+      toast.warning("Please draw a roof boundary first.");
+      return;
+    }
+
     const check = canFitAdditionalPanel({
       panels: designData.panels,
       roofPolygon: designData.roof_polygon,
@@ -577,33 +577,33 @@ export default function SolarStudio() {
   };
 
   return (
-    <div className={`space-y-3 select-none ${isFullscreen ? "fixed inset-0 z-50 bg-slate-950 p-3 overflow-hidden flex flex-col h-screen" : "pb-12"}`}>
+    <div className={`space-y-2.5 select-none ${isFullscreen ? "fixed inset-0 z-50 bg-slate-950 p-2.5 overflow-hidden flex flex-col h-screen" : "pb-12"}`}>
       {/* 1. TOP HEADER BAR */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900 text-white p-3 rounded-2xl border border-slate-800 shadow-xl shrink-0">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-slate-900 text-white px-3.5 py-2.5 rounded-2xl border border-slate-800 shadow-xl shrink-0">
         <div className="flex items-center gap-3">
           <Button
             variant="ghost"
             size="sm"
             onClick={() => nav("/solar-designer")}
-            className="h-8 w-8 p-0 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800"
+            className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
           >
             <ArrowLeft className="w-4 h-4" />
           </Button>
 
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-xs">
-              <Sun className="w-4 h-4" />
+            <div className="w-6 h-6 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-xs">
+              <Sun className="w-3.5 h-3.5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-sm text-white tracking-tight" style={{ fontFamily: "Outfit" }}>
+                <span className="font-bold text-xs text-white tracking-tight" style={{ fontFamily: "Outfit" }}>
                   SOLARIX 3D SOLAR DESIGNER
                 </span>
-                <Badge variant="outline" className="text-[10px] bg-blue-900/60 text-blue-300 border-blue-700 font-semibold px-2 py-0">
+                <Badge variant="outline" className="text-[9px] bg-blue-900/60 text-blue-300 border-blue-700 font-semibold px-1.5 py-0">
                   {designData.design_number || `v${designData.version || 1}`}
                 </Badge>
               </div>
-              <div className="text-[11px] text-slate-400 flex items-center gap-2 truncate max-w-[340px]">
+              <div className="text-[10px] text-slate-400 flex items-center gap-1.5 truncate max-w-[340px]">
                 <MapPin className="w-3 h-3 text-red-400 shrink-0" />
                 <span className="truncate">{designData.formatted_address || "Set location on map"}</span>
               </div>
@@ -617,33 +617,33 @@ export default function SolarStudio() {
             size="sm"
             onClick={() => setIsFullscreen(!isFullscreen)}
             variant="outline"
-            className="h-8 text-xs font-semibold rounded-xl bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 gap-1.5"
+            className="h-7 text-[11px] font-semibold rounded-lg bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 gap-1.5"
           >
-            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-            <span>{isFullscreen ? "Exit Fullscreen" : "Open Full Screen Designer"}</span>
+            {isFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+            <span>{isFullscreen ? "Exit Fullscreen" : "Full Screen"}</span>
           </Button>
 
           <Button
             size="sm"
             onClick={() => handleSaveDesign(false)}
             disabled={saving}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs h-8 rounded-xl shadow-xs gap-1.5 px-3.5"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[11px] h-7 rounded-lg shadow-xs gap-1.5 px-3"
           >
-            <Save className="w-3.5 h-3.5" />
+            <Save className="w-3 h-3" />
             <span>{saving ? "Saving..." : "Save"}</span>
           </Button>
         </div>
       </div>
 
       {/* 2. THREE-COLUMN DESKTOP ENGINEERING WORKSPACE */}
-      <div className={`grid grid-cols-1 lg:grid-cols-12 gap-3 ${isFullscreen ? "flex-1 min-h-0" : ""}`}>
+      <div className={`grid grid-cols-1 lg:grid-cols-12 gap-2.5 ${isFullscreen ? "flex-1 min-h-0" : ""}`}>
         {/* LEFT COLUMN: DESIGN TOOLS ACCORDION (3 cols) */}
-        <div className={`lg:col-span-3 space-y-2 bg-white p-3 rounded-2xl border border-slate-200 shadow-sm overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[840px]"}`}>
+        <div className={`lg:col-span-3 space-y-1.5 bg-white p-2.5 rounded-2xl border border-slate-200 shadow-xs overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[860px]"}`}>
           {/* SECTION 1: Location & Search */}
           <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
             <button
               onClick={() => toggleSection("location")}
-              className="w-full flex items-center justify-between p-2.5 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
             >
               <div className="flex items-center gap-1.5">
                 <Globe className="w-3.5 h-3.5 text-blue-600" />
@@ -653,27 +653,27 @@ export default function SolarStudio() {
             </button>
 
             {openSection === "location" && (
-              <div className="p-3 space-y-2.5 bg-white border-t border-slate-200 text-xs">
-                {/* Search Input with Autocomplete Dropdown */}
+              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
+                {/* Search Input with Autocomplete */}
                 <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                  <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-2.5" />
                   <Input
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search city, town, PIN code..."
-                    className="h-8 pl-8 pr-3 text-xs"
+                    placeholder="Search city, town, PIN..."
+                    className="h-7 pl-7 pr-3 text-xs"
                   />
                   {searching && (
-                    <RefreshCw className="w-3 h-3 text-blue-600 animate-spin absolute right-2.5 top-2.5" />
+                    <RefreshCw className="w-3 h-3 text-blue-600 animate-spin absolute right-2.5 top-2" />
                   )}
 
                   {searchPredictions.length > 0 && (
-                    <div className="absolute top-9 left-0 right-0 z-50 bg-white rounded-xl border border-slate-200 shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-100">
+                    <div className="absolute top-8 left-0 right-0 z-50 bg-white rounded-xl border border-slate-200 shadow-2xl max-h-52 overflow-y-auto divide-y divide-slate-100">
                       {searchPredictions.map((p, idx) => (
                         <button
                           key={idx}
                           onClick={() => handleSelectPrediction(p)}
-                          className="w-full text-left p-2.5 hover:bg-blue-50 text-[11px] transition block"
+                          className="w-full text-left p-2 hover:bg-blue-50 text-[11px] transition block"
                         >
                           <div className="font-bold text-slate-900">{p.name}</div>
                           <div className="text-[10px] text-slate-500 truncate">{p.secondary || p.description}</div>
@@ -718,7 +718,7 @@ export default function SolarStudio() {
                   </Select>
                 </div>
 
-                {/* Selected Location Info Card */}
+                {/* Selected Location Info Box */}
                 <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 text-[10.5px] space-y-0.5 text-slate-600">
                   <div className="font-bold text-slate-800 truncate">{designData.formatted_address || "Mumbai, India"}</div>
                   <div className="text-[10px] text-slate-400">
@@ -733,7 +733,7 @@ export default function SolarStudio() {
           <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
             <button
               onClick={() => toggleSection("roof")}
-              className="w-full flex items-center justify-between p-2.5 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
             >
               <div className="flex items-center gap-1.5">
                 <PenTool className="w-3.5 h-3.5 text-emerald-600" />
@@ -743,12 +743,12 @@ export default function SolarStudio() {
             </button>
 
             {openSection === "roof" && (
-              <div className="p-3 space-y-2.5 bg-white border-t border-slate-200 text-xs">
+              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
                 <Button
                   size="sm"
                   variant={activeTool === "draw_roof" ? "default" : "outline"}
                   onClick={() => setActiveTool(activeTool === "draw_roof" ? "select" : "draw_roof")}
-                  className={`w-full h-8 text-xs font-semibold rounded-xl gap-1.5 ${
+                  className={`w-full h-7 text-xs font-semibold rounded-xl gap-1.5 ${
                     activeTool === "draw_roof" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "border-emerald-300 text-emerald-700 bg-emerald-50/40 hover:bg-emerald-100"
                   }`}
                 >
@@ -758,7 +758,7 @@ export default function SolarStudio() {
 
                 <div className="grid grid-cols-2 gap-1.5">
                   <div className="space-y-1">
-                    <Label className="text-[10.5px] font-semibold text-slate-600">Roof Type</Label>
+                    <Label className="text-[10px] font-semibold text-slate-600">Roof Type</Label>
                     <Select
                       value={designData.roof?.type || "flat"}
                       onValueChange={(val) => {
@@ -781,7 +781,7 @@ export default function SolarStudio() {
                   </div>
 
                   <div className="space-y-1">
-                    <Label className="text-[10.5px] font-semibold text-slate-600">Roof Pitch (°)</Label>
+                    <Label className="text-[10px] font-semibold text-slate-600">Roof Pitch (°)</Label>
                     <Input
                       type="number"
                       min="0"
@@ -801,7 +801,7 @@ export default function SolarStudio() {
 
                 <div className="grid grid-cols-2 gap-1.5">
                   <div className="space-y-1">
-                    <Label className="text-[10.5px] font-semibold text-slate-600">Building Height (m)</Label>
+                    <Label className="text-[10px] font-semibold text-slate-600">Building Height (m)</Label>
                     <Input
                       type="number"
                       step="0.5"
@@ -820,7 +820,7 @@ export default function SolarStudio() {
                   </div>
 
                   <div className="space-y-1">
-                    <Label className="text-[10.5px] font-semibold text-slate-600">Setback (m)</Label>
+                    <Label className="text-[10px] font-semibold text-slate-600">Setback (m)</Label>
                     <Input
                       type="number"
                       step="0.1"
@@ -847,7 +847,7 @@ export default function SolarStudio() {
           <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
             <button
               onClick={() => toggleSection("obstacles")}
-              className="w-full flex items-center justify-between p-2.5 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
             >
               <div className="flex items-center gap-1.5">
                 <Box className="w-3.5 h-3.5 text-red-500" />
@@ -857,7 +857,7 @@ export default function SolarStudio() {
             </button>
 
             {openSection === "obstacles" && (
-              <div className="p-3 space-y-2 bg-white border-t border-slate-200 text-xs">
+              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
                 <Button
                   size="sm"
                   variant="outline"
@@ -891,11 +891,11 @@ export default function SolarStudio() {
             )}
           </div>
 
-          {/* SECTION 4: PV Module Selection */}
+          {/* SECTION 4: PV Module Specification */}
           <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
             <button
               onClick={() => toggleSection("pv_module")}
-              className="w-full flex items-center justify-between p-2.5 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
             >
               <div className="flex items-center gap-1.5">
                 <Sun className="w-3.5 h-3.5 text-amber-500" />
@@ -905,12 +905,12 @@ export default function SolarStudio() {
             </button>
 
             {openSection === "pv_module" && (
-              <div className="p-3 space-y-2.5 bg-white border-t border-slate-200 text-xs">
+              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => setShowProductModal(true)}
-                  className="w-full h-8 text-xs font-semibold justify-between border-blue-200 bg-blue-50/40 text-blue-800 hover:bg-blue-100 rounded-xl"
+                  className="w-full h-7 text-xs font-semibold justify-between border-blue-200 bg-blue-50/40 text-blue-800 hover:bg-blue-100 rounded-lg"
                 >
                   <span className="truncate max-w-[160px]">{designData.panel_wattage}W ({designData.panel_make})</span>
                   <ChevronDown className="w-3.5 h-3.5 shrink-0" />
@@ -918,7 +918,7 @@ export default function SolarStudio() {
 
                 <div className="grid grid-cols-2 gap-1.5">
                   <div className="space-y-1">
-                    <Label className="text-[10.5px] font-semibold text-slate-600">Orientation</Label>
+                    <Label className="text-[10px] font-semibold text-slate-600">Orientation</Label>
                     <Select
                       value={designData.orientation || "portrait"}
                       onValueChange={(val) => updateDesignData({ orientation: val })}
@@ -934,7 +934,7 @@ export default function SolarStudio() {
                   </div>
 
                   <div className="space-y-1">
-                    <Label className="text-[10.5px] font-semibold text-slate-600">Module Wattage</Label>
+                    <Label className="text-[10px] font-semibold text-slate-600">Module Wattage</Label>
                     <Input
                       type="number"
                       value={designData.panel_wattage}
@@ -951,7 +951,7 @@ export default function SolarStudio() {
           <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
             <button
               onClick={() => toggleSection("structure")}
-              className="w-full flex items-center justify-between p-2.5 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
             >
               <div className="flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 text-blue-600" />
@@ -961,10 +961,10 @@ export default function SolarStudio() {
             </button>
 
             {openSection === "structure" && (
-              <div className="p-3 space-y-2.5 bg-white border-t border-slate-200 text-xs">
+              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
                 <div className="grid grid-cols-2 gap-1.5">
                   <div className="space-y-1">
-                    <Label className="text-[10.5px] font-semibold text-slate-600">Structure Type</Label>
+                    <Label className="text-[10px] font-semibold text-slate-600">Structure Type</Label>
                     <Select
                       value={designData.structure?.type || designData.structure_type || "elevated"}
                       onValueChange={(val) => {
@@ -994,7 +994,7 @@ export default function SolarStudio() {
                   </div>
 
                   <div className="space-y-1">
-                    <Label className="text-[10.5px] font-semibold text-slate-600">Tilt Angle (°)</Label>
+                    <Label className="text-[10px] font-semibold text-slate-600">Tilt Angle (°)</Label>
                     <Input
                       type="number"
                       min="0"
@@ -1014,7 +1014,7 @@ export default function SolarStudio() {
                 </div>
 
                 <div className="space-y-1">
-                  <Label className="text-[10.5px] font-semibold text-slate-600">Clearance Height (m)</Label>
+                  <Label className="text-[10px] font-semibold text-slate-600">Clearance Height (m)</Label>
                   <Input
                     type="number"
                     step="0.1"
@@ -1036,11 +1036,11 @@ export default function SolarStudio() {
             )}
           </div>
 
-          {/* SECTION 6: Layout Engine */}
+          {/* SECTION 6: Panel Layout Controls */}
           <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
             <button
               onClick={() => toggleSection("layout")}
-              className="w-full flex items-center justify-between p-2.5 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
             >
               <div className="flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-blue-600" />
@@ -1050,7 +1050,7 @@ export default function SolarStudio() {
             </button>
 
             {openSection === "layout" && (
-              <div className="p-3 space-y-2.5 bg-white border-t border-slate-200 text-xs">
+              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
                 <Button
                   size="sm"
                   onClick={() => handleAutoLayout("auto")}
@@ -1206,7 +1206,7 @@ export default function SolarStudio() {
         </div>
 
         {/* RIGHT COLUMN: LIVE DATA & DESIGN SUMMARY (3 cols) */}
-        <div className={`lg:col-span-3 overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[840px]"}`}>
+        <div className={`lg:col-span-3 overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[860px]"}`}>
           <DesignSummaryPanel
             designData={designData}
             onSave={() => handleSaveDesign(false)}

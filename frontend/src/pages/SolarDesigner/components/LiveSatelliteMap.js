@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import {
   MousePointer, PenTool, Ruler, Square, Trash2, RotateCw, Copy, Lock, Unlock,
   Layers, ZoomIn, ZoomOut, Maximize2, Minimize2, Compass, Move, Plus, Sparkles,
-  AlertTriangle, Navigation, CheckCircle2, ShieldCheck, Undo2, MapPin, Check
+  AlertTriangle, Navigation, CheckCircle2, ShieldCheck, Undo2, MapPin, Check, Info
 } from "lucide-react";
 import {
   toRad,
@@ -36,7 +36,7 @@ L.Icon.Default.mergeOptions({
  * - Real high-resolution satellite imagery (Esri World Imagery + Hybrid road labels + OSM)
  * - Point-and-click polygon roof boundary tracing directly on top of satellite imagery
  * - Draggable polygon vertices with real-time recalculation
- * - Real-time segment dimension labels (e.g. 12.4m)
+ * - Real-time segment dimension labels (e.g. 12.4m) ONLY when roof polygon exists
  * - Reference measurement calibration tool
  * - Obstacle placement & exclusion zones
  * - Visual solar panel overlays
@@ -57,7 +57,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
     walkways = [],
     setWalkways,
     setbackMeters = 0.5,
-    activeTool = "select", // 'select' | 'draw_roof' | 'calibrate' | 'add_obstacle'
+    activeTool = "select", // 'select' | 'draw_roof' | 'calibrate'
     setActiveTool,
     selectedPanelId = null,
     setSelectedPanelId,
@@ -81,7 +81,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
   const [activeDrawPoints, setActiveDrawPoints] = useState([]);
   const [cursorCoords, setCursorCoords] = useState({ lat: latitude, lng: longitude });
 
-  // Calibration tool modal
+  // Calibration tool state
   const [calibratePoints, setCalibratePoints] = useState([]);
   const [showCalibrateModal, setShowCalibrateModal] = useState(false);
   const [calibrateDistanceInput, setCalibrateDistanceInput] = useState("10");
@@ -118,6 +118,9 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
     panTo: (lat, lng) => {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.setView([lat, lng], 19, { animate: true });
+        if (markerRef.current) {
+          markerRef.current.setLatLng([lat, lng]);
+        }
       }
     },
   }));
@@ -268,7 +271,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
       return;
     }
 
-    // Anchor origin to centroid of polygon for balanced Cartesian coordinate system
+    // Anchor origin to centroid of drawn points for balanced Cartesian coordinates
     let sumLat = 0;
     let sumLng = 0;
     activeDrawPoints.forEach((p) => {
@@ -307,7 +310,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
 
     if (distGeodesic > 0 && targetMeters > 0) {
       const scaleFactor = targetMeters / distGeodesic;
-      const rescaledRoof = roofPolygon.map((p) => ({
+      const rescaledRoof = (roofPolygon || []).map((p) => ({
         ...p,
         x: Math.round(p.x * scaleFactor * 100) / 100,
         y: Math.round(p.y * scaleFactor * 100) / 100,
@@ -372,11 +375,15 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
           weight: 2,
         }).addTo(roofGroup);
 
-        circleMarker.bindTooltip(`P${idx + 1}`, { permanent: true, direction: "top", className: "px-1 py-0 text-[10px] font-bold" });
+        circleMarker.bindTooltip(`P${idx + 1}`, {
+          permanent: true,
+          direction: "top",
+          className: "px-1 py-0 text-[10px] font-bold",
+        });
       });
     }
 
-    // 2. Draw Committed Roof Boundary Polygon
+    // 2. Draw Committed Roof Boundary Polygon (ONLY if roofPolygon has >= 3 vertices)
     if (layers.roofBoundary && roofPolygon && roofPolygon.length >= 3) {
       const polyLatLngs = roofPolygon.map((p) => {
         if (p.lat && p.lng) return [p.lat, p.lng];
@@ -390,7 +397,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
         fillOpacity: 0.25,
       }).addTo(roofGroup);
 
-      // Vertex Markers (Draggable to edit roof geometry)
+      // Vertex Markers
       polyLatLngs.forEach((latlng, idx) => {
         const vertexMarker = L.circleMarker(latlng, {
           radius: 6,
@@ -413,15 +420,17 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
 
           const midX = (p1.x + p2.x) / 2;
           const midY = (p1.y + p2.y) / 2;
-          const midLatLng = (p1.lat && p2.lat)
-            ? [(p1.lat + p2.lat) / 2, (p1.lng + p2.lng) / 2]
-            : cartesianToLatLng(midX, midY);
+          const midLatLng =
+            p1.lat && p2.lat
+              ? [(p1.lat + p2.lat) / 2, (p1.lng + p2.lng) / 2]
+              : cartesianToLatLng(midX, midY);
 
           const dimIcon = L.divIcon({
-            className: "bg-white/95 px-1.5 py-0.5 rounded-md border border-blue-300 text-[10.5px] font-bold text-blue-900 shadow-sm text-center select-none pointer-events-none whitespace-nowrap",
+            className:
+              "bg-white/95 px-1.5 py-0.5 rounded-md border border-blue-300 text-[10px] font-bold text-blue-900 shadow-sm text-center select-none pointer-events-none whitespace-nowrap",
             html: `${lenM.toFixed(1)}m`,
-            iconSize: [45, 18],
-            iconAnchor: [22, 9],
+            iconSize: [42, 18],
+            iconAnchor: [21, 9],
           });
 
           L.marker(midLatLng, { icon: dimIcon, interactive: false }).addTo(roofGroup);
@@ -443,8 +452,8 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
       }
     }
 
-    // 5. Draw Obstacles (Exclusion Zones)
-    if (layers.obstacles && obstacles && obstacles.length > 0) {
+    // 5. Draw Obstacles (ONLY if explicitly added)
+    if (layers.obstacles && Array.isArray(obstacles) && obstacles.length > 0) {
       obstacles.forEach((obs) => {
         const ow = Number(obs.length || 1.8);
         const ol = Number(obs.width || 1.8);
@@ -460,7 +469,8 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
 
         const centerLatLng = cartesianToLatLng(obs.x, obs.y);
         const labelIcon = L.divIcon({
-          className: "bg-red-900/90 text-white px-1.5 py-0.5 rounded text-[9.5px] font-bold shadow-xs whitespace-nowrap",
+          className:
+            "bg-red-900/90 text-white px-1.5 py-0.5 rounded text-[9.5px] font-bold shadow-xs whitespace-nowrap",
           html: obs.name || obs.type || "Obstacle",
           iconSize: [60, 16],
           iconAnchor: [30, 8],
@@ -470,13 +480,19 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
       });
     }
 
-    // 6. Draw Solar PV Modules
-    if (layers.panels && panels && panels.length > 0) {
+    // 6. Draw Solar PV Modules (ONLY if panels array has items)
+    if (layers.panels && Array.isArray(panels) && panels.length > 0) {
       panels.forEach((p, idx) => {
         if (p.hidden) return;
 
         const isSelected = p.id === selectedPanelId;
-        const corners = getRotatedRectCorners(p.x, p.y, p.width || 1.134, p.height || 2.278, p.rotation || 0);
+        const corners = getRotatedRectCorners(
+          p.x,
+          p.y,
+          p.width || 1.134,
+          p.height || 2.278,
+          p.rotation || 0
+        );
         const pLatLngs = corners.map((c) => cartesianToLatLng(c.x, c.y));
 
         const panelPoly = L.polygon(pLatLngs, {
@@ -526,6 +542,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
 
   const roofArea = getCartesianPolygonArea(roofPolygon);
   const roofPerimeter = getCartesianPolygonPerimeter(roofPolygon);
+  const hasRoof = roofPolygon && roofPolygon.length >= 3;
 
   return (
     <div className="relative w-full h-full min-h-[580px] rounded-2xl overflow-hidden bg-slate-900 border border-slate-700 shadow-xl select-none flex flex-col">
@@ -547,10 +564,18 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
         </div>
       )}
 
-      {/* Top Floating Controls Bar */}
+      {/* Empty State Guidance Hint */}
+      {!hasRoof && activeDrawPoints.length === 0 && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-10 bg-slate-900/90 backdrop-blur-md px-4 py-2 rounded-xl border border-blue-500/60 shadow-xl text-xs text-blue-200 pointer-events-none flex items-center gap-2">
+          <Info className="w-4 h-4 text-blue-400 shrink-0" />
+          <span>Search site location, then click <b>'Draw Roof'</b> to trace the building perimeter.</span>
+        </div>
+      )}
+
+      {/* Top Floating Compact Toolbar Bar */}
       <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none gap-2 z-10">
         {/* Left Toolbar: Interaction Tools */}
-        <div className="flex items-center gap-1 bg-slate-900/90 backdrop-blur-md p-1.5 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
+        <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
           <Button
             size="sm"
             variant={activeTool === "select" ? "default" : "ghost"}
@@ -558,7 +583,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
               setActiveTool("select");
               setActiveDrawPoints([]);
             }}
-            className="h-8 text-xs px-2.5 rounded-lg gap-1.5"
+            className="h-7 text-xs px-2.5 rounded-lg gap-1.5"
             title="Select & Inspect Objects"
           >
             <MousePointer className="w-3.5 h-3.5" /> Select
@@ -571,12 +596,14 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
               setActiveTool("draw_roof");
               setActiveDrawPoints([]);
             }}
-            className={`h-8 text-xs px-2.5 rounded-lg gap-1.5 ${
-              activeTool === "draw_roof" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "text-emerald-400"
+            className={`h-7 text-xs px-2.5 rounded-lg gap-1.5 ${
+              activeTool === "draw_roof"
+                ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                : "text-emerald-400 hover:text-white"
             }`}
             title="Click points directly on satellite imagery to trace roof"
           >
-            <PenTool className="w-3.5 h-3.5" /> Draw Roof on Map
+            <PenTool className="w-3.5 h-3.5" /> Draw Roof
           </Button>
 
           <Button
@@ -586,7 +613,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
               setActiveTool("calibrate");
               setCalibratePoints([]);
             }}
-            className="h-8 text-xs px-2.5 rounded-lg gap-1.5 text-purple-400 hover:text-purple-300"
+            className="h-7 text-xs px-2 rounded-lg gap-1.5 text-purple-400 hover:text-purple-300"
             title="Calibrate measurement with known distance"
           >
             <Ruler className="w-3.5 h-3.5" /> Calibrate
@@ -596,35 +623,39 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
             <Button
               size="sm"
               onClick={handleFinishDrawingRoof}
-              className="h-8 text-xs px-3 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold animate-pulse shadow-sm"
+              className="h-7 text-xs px-3 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold animate-pulse shadow-sm"
             >
               <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Close Roof ({activeDrawPoints.length} pts)
             </Button>
           )}
 
-          <div className="w-[1px] h-5 bg-slate-700 mx-1" />
-
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              setRoofPolygon([]);
-              setActiveDrawPoints([]);
-            }}
-            className="h-8 px-2 rounded-lg text-slate-400 hover:text-red-400"
-            title="Clear Roof Polygon"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </Button>
+          {hasRoof && (
+            <>
+              <div className="w-[1px] h-4 bg-slate-700 mx-0.5" />
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setRoofPolygon([]);
+                  setActiveDrawPoints([]);
+                  setPanels([]);
+                }}
+                className="h-7 px-2 rounded-lg text-slate-400 hover:text-red-400"
+                title="Clear Roof & Panels"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+            </>
+          )}
         </div>
 
-        {/* Right Toolbar: Map Type Selector & Layer Toggles */}
-        <div className="flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md p-1.5 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
+        {/* Right Toolbar: Map Type Selector & Controls */}
+        <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
           <Button
             size="sm"
             variant={mapType === "satellite" ? "secondary" : "ghost"}
             onClick={() => setMapType("satellite")}
-            className="h-7 text-[11px] px-2.5 rounded-lg"
+            className="h-6 text-[11px] px-2 rounded-lg"
           >
             Satellite
           </Button>
@@ -632,7 +663,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
             size="sm"
             variant={mapType === "hybrid" ? "secondary" : "ghost"}
             onClick={() => setMapType("hybrid")}
-            className="h-7 text-[11px] px-2.5 rounded-lg"
+            className="h-6 text-[11px] px-2 rounded-lg"
           >
             Hybrid
           </Button>
@@ -640,19 +671,19 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
             size="sm"
             variant={mapType === "street" ? "secondary" : "ghost"}
             onClick={() => setMapType("street")}
-            className="h-7 text-[11px] px-2.5 rounded-lg"
+            className="h-6 text-[11px] px-2 rounded-lg"
           >
-            Street Map
+            Street
           </Button>
 
-          <div className="w-[1px] h-4 bg-slate-700 mx-1" />
+          <div className="w-[1px] h-3.5 bg-slate-700 mx-0.5" />
 
           {/* Quick Zoom & Locate */}
           <Button
             size="sm"
             variant="ghost"
             onClick={handleZoomIn}
-            className="h-7 w-7 p-0 rounded-lg text-slate-300 hover:text-white"
+            className="h-6 w-6 p-0 rounded-lg text-slate-300 hover:text-white"
             title="Zoom In"
           >
             <ZoomIn className="w-3.5 h-3.5" />
@@ -661,7 +692,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
             size="sm"
             variant="ghost"
             onClick={handleZoomOut}
-            className="h-7 w-7 p-0 rounded-lg text-slate-300 hover:text-white"
+            className="h-6 w-6 p-0 rounded-lg text-slate-300 hover:text-white"
             title="Zoom Out"
           >
             <ZoomOut className="w-3.5 h-3.5" />
@@ -670,7 +701,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
             size="sm"
             variant="ghost"
             onClick={handleLocateCenter}
-            className="h-7 w-7 p-0 rounded-lg text-blue-400 hover:text-blue-300"
+            className="h-6 w-6 p-0 rounded-lg text-blue-400 hover:text-blue-300"
             title="Center Site Marker"
           >
             <Navigation className="w-3.5 h-3.5" />
@@ -680,8 +711,10 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
 
       {/* Selected Panel Toolbar (Floating Contextual) */}
       {selectedPanelId && (
-        <div className="absolute top-16 left-3 z-10 flex items-center gap-1 bg-blue-900/95 backdrop-blur-md p-1.5 rounded-xl border border-blue-500 shadow-xl pointer-events-auto animate-in fade-in">
-          <span className="text-[11px] font-semibold text-blue-200 px-2">Panel #{panels.findIndex((p) => p.id === selectedPanelId) + 1}</span>
+        <div className="absolute top-14 left-3 z-10 flex items-center gap-1 bg-blue-900/95 backdrop-blur-md p-1.5 rounded-xl border border-blue-500 shadow-xl pointer-events-auto animate-in fade-in">
+          <span className="text-[11px] font-semibold text-blue-200 px-2">
+            Panel #{panels.findIndex((p) => p.id === selectedPanelId) + 1}
+          </span>
           <Button
             size="sm"
             variant="ghost"
@@ -690,7 +723,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
                 prev.map((p) => (p.id === selectedPanelId ? { ...p, rotation: (p.rotation || 0) + 90 } : p))
               );
             }}
-            className="h-7 text-xs px-2 rounded-lg text-white hover:bg-blue-800"
+            className="h-6 text-xs px-2 rounded-lg text-white hover:bg-blue-800"
             title="Rotate 90°"
           >
             <RotateCw className="w-3 h-3" />
@@ -705,7 +738,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
               setPanels([...panels, dup]);
               setSelectedPanelId(dup.id);
             }}
-            className="h-7 text-xs px-2 rounded-lg text-white hover:bg-blue-800"
+            className="h-6 text-xs px-2 rounded-lg text-white hover:bg-blue-800"
             title="Duplicate"
           >
             <Copy className="w-3 h-3" />
@@ -717,7 +750,7 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
               setPanels((prev) => prev.filter((p) => p.id !== selectedPanelId));
               setSelectedPanelId(null);
             }}
-            className="h-7 text-xs px-2 rounded-lg text-red-300 hover:bg-red-900"
+            className="h-6 text-xs px-2 rounded-lg text-red-300 hover:bg-red-900"
             title="Delete"
           >
             <Trash2 className="w-3 h-3" />
@@ -727,18 +760,18 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
 
       {/* Drawing Instructions Overlay */}
       {activeTool === "draw_roof" && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-10 bg-emerald-950/90 backdrop-blur-md px-4 py-2 rounded-xl border border-emerald-600 shadow-xl text-xs text-emerald-200 pointer-events-auto flex items-center gap-3">
-          <PenTool className="w-4 h-4 text-emerald-400 animate-pulse shrink-0" />
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-emerald-950/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-emerald-600 shadow-xl text-xs text-emerald-200 pointer-events-auto flex items-center gap-2.5">
+          <PenTool className="w-3.5 h-3.5 text-emerald-400 animate-pulse shrink-0" />
           <span>
-            Click corners of the rooftop on the satellite image. ({activeDrawPoints.length} points placed)
+            Click corners of the rooftop on the satellite map ({activeDrawPoints.length} points placed)
           </span>
           {activeDrawPoints.length >= 3 && (
             <Button
               size="sm"
               onClick={handleFinishDrawingRoof}
-              className="h-7 px-2.5 text-xs bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-lg ml-2"
+              className="h-6 px-2 text-xs bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-lg ml-1"
             >
-              Done / Close Polygon
+              Done / Close
             </Button>
           )}
         </div>
@@ -746,33 +779,36 @@ const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(
 
       {/* Bottom Live Metrics & Imagery Metadata HUD */}
       <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between pointer-events-none z-10 gap-2">
-        <div className="bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto flex items-center gap-4 text-xs text-slate-300">
+        <div className="bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto flex items-center gap-3 text-xs text-slate-300">
           <div>
-            <span className="text-[10px] text-slate-400 block font-medium">ROOF AREA</span>
+            <span className="text-[9px] text-slate-400 block font-medium">ROOF AREA</span>
             <span className="font-bold text-white">{roofArea > 0 ? `${roofArea.toFixed(1)} m²` : "0 m²"}</span>
-            <span className="text-[10px] text-slate-400 ml-1">({(roofArea * 10.764).toFixed(0)} sq.ft)</span>
           </div>
-          <div className="w-[1px] h-6 bg-slate-700" />
+          <div className="w-[1px] h-5 bg-slate-700" />
           <div>
-            <span className="text-[10px] text-slate-400 block font-medium">PERIMETER</span>
+            <span className="text-[9px] text-slate-400 block font-medium">PERIMETER</span>
             <span className="font-bold text-white">{roofPerimeter > 0 ? `${roofPerimeter.toFixed(1)} m` : "0 m"}</span>
           </div>
-          <div className="w-[1px] h-6 bg-slate-700" />
+          <div className="w-[1px] h-5 bg-slate-700" />
           <div>
-            <span className="text-[10px] text-slate-400 block font-medium">MODULES PLACED</span>
+            <span className="text-[9px] text-slate-400 block font-medium">PANELS</span>
             <span className="font-bold text-blue-400">{panels.filter((p) => !p.hidden).length} Nos</span>
           </div>
         </div>
 
-        <div className="bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/80 shadow-lg text-[10.5px] text-slate-300 pointer-events-auto flex items-center gap-2">
-          <Compass className="w-3.5 h-3.5 text-red-400" />
+        <div className="bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-xl border border-slate-700/80 shadow-lg text-[10px] text-slate-300 pointer-events-auto flex items-center gap-2">
+          <Compass className="w-3 h-3 text-red-400" />
           <span>Cursor: <b>{cursorCoords.lat.toFixed(5)}, {cursorCoords.lng.toFixed(5)}</b></span>
           <span className="text-slate-600">|</span>
-          <span className="text-slate-400">Satellite imagery (Imagery date unavailable)</span>
-          <span className="text-slate-600">|</span>
-          <Badge variant="outline" className="text-[9.5px] bg-slate-800 text-slate-300 border-slate-700">
-            {isCalibrated ? "Calibrated measurement" : "Estimated from map imagery"}
-          </Badge>
+          <span className="text-slate-400">Satellite imagery</span>
+          {isCalibrated && (
+            <>
+              <span className="text-slate-600">|</span>
+              <Badge variant="outline" className="text-[9px] bg-purple-950 text-purple-300 border-purple-800 py-0">
+                Calibrated
+              </Badge>
+            </>
+          )}
         </div>
       </div>
 

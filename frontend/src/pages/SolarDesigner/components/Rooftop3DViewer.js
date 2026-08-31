@@ -22,11 +22,11 @@ import {
  * - Roof Slope / Pitch support (Flat, Single Slope, Gable, Hip)
  * - Realistic Monocrystalline PV Panels sitting physically ON mounting rails & roof
  * - Complete Engineering-Grade 3D Mounting Structure:
- *   Roof -> Base Footing / Anchor Plate -> Vertical Posts -> Diagonal Cross-Bracing -> Rafters -> Dual Longitudinal Rails -> Mid/End Clamps -> PV Modules
+ *   Roof -> Base Footing / Anchor Plate -> Vertical Posts -> Diagonal Cross-Bracing -> Dual Longitudinal Rails -> PV Modules
  * - Accurate Obstacle Rendering (rendered strictly from canonical obstacle state, 0 default obstacles)
  * - Orbit, Pan, and Zoom controls with "Fit Design" bounding-box framing
  * - Camera Presets (Top, Front, Side, Isometric, Fit Design, Reset)
- * - Visual Layer Toggles (Roof, Building, Rails, Posts, Bracing, Panels, Obstacles)
+ * - Visual Layer Toggles (Roof, Building, Rails, Posts, Panels, Obstacles)
  */
 const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   {
@@ -39,7 +39,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       surface_material: "concrete",
     },
     panels = [],
-    obstacles = [], // Empty by default! Only renders if user explicitly added
+    obstacles = [], // Empty by default!
     walkways = [],
     structure = {
       type: "elevated", // 'elevated' | 'flush' | 'fixed_tilt' | 'ballasted'
@@ -74,12 +74,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const [showPanels, setShowPanels] = useState(true);
   const [showStructures, setShowStructures] = useState(structure?.show_structure !== false);
   const [showPosts, setShowPosts] = useState(true);
-  const [showBracing, setShowBracing] = useState(true);
   const [showRoof, setShowRoof] = useState(true);
   const [showBuilding, setShowBuilding] = useState(true);
   const [showObstacles, setShowObstacles] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const containerRef = useRef(null);
+
+  const hasRoof = roofPolygon && roofPolygon.length >= 3;
+  const activePanels = (panels || []).filter((p) => !p.hidden);
 
   // Expose snapshot export and fit-camera functions to parent
   useImperativeHandle(ref, () => ({
@@ -117,12 +119,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const size = new THREE.Vector3();
     box.getSize(size);
 
-    const maxDim = Math.max(size.x, size.y, size.z, 10);
+    const maxDim = Math.max(size.x, size.y, size.z, 8);
     const fov = cameraRef.current.fov * (Math.PI / 180);
     const distance = (maxDim / 2) / Math.tan(fov / 2) * 1.5;
 
     controlsRef.current.target.copy(center);
-    controlsRef.current.spherical.radius = Math.max(12, Math.min(140, distance));
+    controlsRef.current.spherical.radius = Math.max(10, Math.min(140, distance));
     controlsRef.current.spherical.phi = Math.PI / 3.2;
     controlsRef.current.spherical.theta = Math.PI / 4;
     setActivePreset("isometric");
@@ -170,7 +172,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
     // 1. Scene & WebGL Renderer
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0f1d); // Sleek dark slate
+    scene.background = new THREE.Color(0x0a0f1d); // Clean dark navy
     sceneRef.current = scene;
 
     const renderer = new THREE.WebGLRenderer({
@@ -193,7 +195,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     updateCameraPosition();
 
     // 3. Realistic Sunlight & Sky Lighting
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x1e293b, 0.8);
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x1e293b, 0.85);
     scene.add(hemiLight);
 
     const sunLight = new THREE.DirectionalLight(0xfffaed, 1.6);
@@ -341,7 +343,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const buildingElevationM = Number(roof?.elevation_m || 3.0);
     const roofPitchRad = toRad(roofPitchDeg);
 
-    // 1. Build 3D Building Walls & Extruded Solid Roof Slab
+    // 1. Build 3D Building Walls & Extruded Solid Roof Slab (ONLY if roofPolygon exists)
     if (roofPolygon && roofPolygon.length >= 3) {
       const shape = new THREE.Shape();
       roofPolygon.forEach((pt, idx) => {
@@ -413,8 +415,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       }
     }
 
-    // 2. Build 3D Solar PV Modules & Engineering Mounting Structure
-    if (showPanels && panels && panels.length > 0) {
+    // 2. Build 3D Solar PV Modules & Engineering Mounting Structure (ONLY if panels exist)
+    if (showPanels && activePanels.length > 0) {
       const structType = (structure?.type || "elevated").toLowerCase();
       const isFlush = structType === "flush";
       const isElevated = structType === "elevated";
@@ -465,9 +467,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         metalness: 0.9,
       });
 
-      panels.forEach((p) => {
-        if (p.hidden) return;
-
+      activePanels.forEach((p) => {
         const pw = Number(p.width || 1.134);
         const pl = Number(p.height || 2.278);
 
@@ -555,7 +555,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           }
 
           // 3. Diagonal Cross-Bracing Struts for Elevated Super Structures
-          if (showBracing && isElevated && baseClearance >= 1.2) {
+          if (isElevated && baseClearance >= 1.2) {
             const braceLen = Math.hypot(backLegHeight - frontLegHeight, frontZ - backZ);
             const braceGeom = new THREE.CylinderGeometry(0.014, 0.014, braceLen, 6);
 
@@ -575,7 +575,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       });
     }
 
-    // 3. Build 3D Obstacles (STRICTLY rendered from canonical obstacles array - 0 default obstacles)
+    // 3. Build 3D Obstacles (ONLY if explicitly added by user)
     if (showObstacles && Array.isArray(obstacles) && obstacles.length > 0) {
       obstacles.forEach((obs) => {
         const ox = Number(obs.x || 0);
@@ -592,7 +592,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         });
 
         if (type === "water_tank") {
-          // Cylindrical Water Tank with Stand
           const tankRadius = Math.min(ol, ow) / 2;
           const tankGeom = new THREE.CylinderGeometry(tankRadius, tankRadius, oh, 24);
           const tankMat = new THREE.MeshStandardMaterial({
@@ -613,7 +612,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           lidMesh.position.set(ox, roofElevation + oh + 0.06, oz);
           rootGroup.add(lidMesh);
         } else if (type === "staircase") {
-          // Staircase Tower Room (Headroom)
           const stairGeom = new THREE.BoxGeometry(ol, oh, ow);
           const stairMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.8 });
           const stairMesh = new THREE.Mesh(stairGeom, stairMat);
@@ -622,7 +620,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           stairMesh.receiveShadow = true;
           rootGroup.add(stairMesh);
         } else if (type === "ac_unit") {
-          // AC Outdoor Compressor Unit
           const acGeom = new THREE.BoxGeometry(ol, oh, ow);
           const acMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.4, metalness: 0.5 });
           const acMesh = new THREE.Mesh(acGeom, acMat);
@@ -630,7 +627,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           acMesh.castShadow = true;
           rootGroup.add(acMesh);
         } else {
-          // Generic Obstruction
           const boxGeom = new THREE.BoxGeometry(ol, oh, ow);
           const boxMat = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.7 });
           const boxMesh = new THREE.Mesh(boxGeom, boxMat);
@@ -641,7 +637,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       });
     }
 
-    // 4. 3D Compass Indicator in Viewport
+    // 4. 3D Compass Indicator
     const compassGroup = new THREE.Group();
     compassGroup.position.set(-18, 0.05, -18);
 
@@ -672,13 +668,13 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     roofPolygon,
     roof,
     panels,
+    activePanels,
     obstacles,
     walkways,
     structure,
     showPanels,
     showStructures,
     showPosts,
-    showBracing,
     showRoof,
     showBuilding,
     showObstacles,
@@ -691,18 +687,31 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         isFullscreen ? "fixed inset-0 z-50 rounded-none h-screen" : ""
       }`}
     >
-      {/* Three.js 3D WebGL Canvas Mount */}
+      {/* Three.js WebGL Canvas Mount */}
       <div ref={mountRef} className="w-full h-full flex-1 cursor-grab active:cursor-grabbing block" />
 
-      {/* Top Floating Camera Toolbar */}
+      {/* Empty State Banner in 3D */}
+      {!hasRoof && (
+        <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center text-white pointer-events-none z-10">
+          <div className="w-12 h-12 rounded-2xl bg-blue-900/60 border border-blue-700 flex items-center justify-center text-blue-400 mb-3 shadow-lg">
+            <Box className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-bold tracking-tight">3D Preview Awaiting Roof Geometry</h3>
+          <p className="text-xs text-slate-400 max-w-sm my-1.5 leading-relaxed">
+            3D rooftop simulation will appear after you draw the roof boundary in the <b>2D Satellite Plan</b> tab.
+          </p>
+        </div>
+      )}
+
+      {/* Top Floating Compact Camera Toolbar */}
       <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none gap-2 z-10">
         {/* Camera View Presets */}
-        <div className="flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md p-1.5 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
+        <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
           <Button
             size="sm"
             variant={activePreset === "isometric" ? "default" : "ghost"}
             onClick={() => setCameraPreset("isometric")}
-            className="h-7 text-[11px] px-2.5 rounded-lg"
+            className="h-6 text-[11px] px-2 rounded-lg"
           >
             <Box className="w-3.5 h-3.5 mr-1" /> 3D View
           </Button>
@@ -710,7 +719,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             size="sm"
             variant={activePreset === "top" ? "default" : "ghost"}
             onClick={() => setCameraPreset("top")}
-            className="h-7 text-[11px] px-2.5 rounded-lg"
+            className="h-6 text-[11px] px-2 rounded-lg"
           >
             Top
           </Button>
@@ -718,15 +727,15 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             size="sm"
             variant={activePreset === "front" ? "default" : "ghost"}
             onClick={() => setCameraPreset("front")}
-            className="h-7 text-[11px] px-2.5 rounded-lg"
+            className="h-6 text-[11px] px-2 rounded-lg"
           >
-            Front (South)
+            Front
           </Button>
           <Button
             size="sm"
             variant={activePreset === "side" ? "default" : "ghost"}
             onClick={() => setCameraPreset("side")}
-            className="h-7 text-[11px] px-2.5 rounded-lg"
+            className="h-6 text-[11px] px-2 rounded-lg"
           >
             Side
           </Button>
@@ -734,16 +743,16 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             size="sm"
             variant="ghost"
             onClick={fitDesignCamera}
-            className="h-7 text-[11px] px-2.5 rounded-lg text-blue-400 hover:text-white"
+            className="h-6 text-[11px] px-2 rounded-lg text-blue-400 hover:text-white"
             title="Fit Entire Installation in Viewport"
           >
-            <Focus className="w-3.5 h-3.5 mr-1" /> Fit Design
+            <Focus className="w-3 h-3 mr-1" /> Fit Design
           </Button>
           <Button
             size="sm"
             variant="ghost"
             onClick={() => setCameraPreset("reset")}
-            className="h-7 text-[11px] px-2 rounded-lg text-slate-400 hover:text-white"
+            className="h-6 w-6 p-0 rounded-lg text-slate-400 hover:text-white"
             title="Reset Camera"
           >
             <RotateCcw className="w-3 h-3" />
@@ -751,12 +760,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         </div>
 
         {/* 3D Layer Visibility Toggles */}
-        <div className="flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md p-1.5 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
+        <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
           <Button
             size="sm"
             variant={showRoof ? "secondary" : "ghost"}
             onClick={() => setShowRoof(!showRoof)}
-            className="h-7 text-[11px] px-2 rounded-lg"
+            className="h-6 text-[11px] px-2 rounded-lg"
           >
             Roof
           </Button>
@@ -764,31 +773,23 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             size="sm"
             variant={showStructures ? "secondary" : "ghost"}
             onClick={() => setShowStructures(!showStructures)}
-            className="h-7 text-[11px] px-2 rounded-lg"
+            className="h-6 text-[11px] px-2 rounded-lg"
           >
-            Rails
-          </Button>
-          <Button
-            size="sm"
-            variant={showPosts ? "secondary" : "ghost"}
-            onClick={() => setShowPosts(!showPosts)}
-            className="h-7 text-[11px] px-2 rounded-lg"
-          >
-            Posts
+            Structure
           </Button>
           <Button
             size="sm"
             variant={showPanels ? "secondary" : "ghost"}
             onClick={() => setShowPanels(!showPanels)}
-            className="h-7 text-[11px] px-2 rounded-lg"
+            className="h-6 text-[11px] px-2 rounded-lg"
           >
-            PV Modules ({panels.filter((p) => !p.hidden).length})
+            Panels ({activePanels.length})
           </Button>
           <Button
             size="sm"
             variant="ghost"
             onClick={() => setIsFullscreen(!isFullscreen)}
-            className="h-7 w-7 p-0 rounded-lg text-slate-300 hover:text-white"
+            className="h-6 w-6 p-0 rounded-lg text-slate-300 hover:text-white"
             title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
           >
             {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
@@ -798,26 +799,26 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
       {/* Bottom Live Engineering Spec HUD */}
       <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between pointer-events-none z-10 gap-2">
-        <div className="bg-slate-900/90 backdrop-blur-md px-3.5 py-2 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto flex items-center gap-3 text-xs text-slate-300">
+        <div className="bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto flex items-center gap-3 text-xs text-slate-300">
           <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-xs" />
-            <span>Roof: <b>{roof?.type?.toUpperCase() || "FLAT"} ({roof?.elevation_m || 3.0}m)</b></span>
+            <span className="w-2 h-2 rounded-full bg-blue-500 shadow-xs" />
+            <span>Roof: <b>{hasRoof ? `${roof?.type?.toUpperCase() || "FLAT"} (${roof?.elevation_m || 3.0}m)` : "None"}</b></span>
           </div>
           <span className="text-slate-700">|</span>
           <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-xs" />
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-xs" />
             <span>Pitch: <b>{roof?.pitch_deg || 0}°</b></span>
           </div>
           <span className="text-slate-700">|</span>
           <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-xs" />
-            <span>Structure: <b>{structure?.type?.toUpperCase() || "ELEVATED"} ({structure?.height_m || 1.8}m, {structure?.tilt_deg || 15}° Tilt)</b></span>
+            <span className="w-2 h-2 rounded-full bg-amber-400 shadow-xs" />
+            <span>Structure: <b>{activePanels.length > 0 ? `${structure?.type?.toUpperCase() || "ELEVATED"} (${structure?.height_m || 1.8}m)` : "None"}</b></span>
           </div>
         </div>
 
-        <div className="bg-amber-950/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-amber-800/60 shadow-lg text-[10.5px] text-amber-200 pointer-events-auto flex items-center gap-1.5">
-          <Info className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-          <span>Preliminary 3D Simulation — Subject to on-site civil survey</span>
+        <div className="bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-xl border border-slate-700/80 shadow-lg text-[10px] text-slate-300 pointer-events-auto flex items-center gap-1.5">
+          <Info className="w-3 h-3 text-blue-400 shrink-0" />
+          <span>3D Simulation</span>
         </div>
       </div>
     </div>
