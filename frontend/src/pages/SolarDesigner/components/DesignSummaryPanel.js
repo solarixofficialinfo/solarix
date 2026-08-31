@@ -44,7 +44,7 @@ export default function DesignSummaryPanel({
   const excludedArea = Math.max(0, roofArea - usableArea);
   const remainingArea = Math.max(0, usableArea - panelCount * 2.3);
 
-  const bom = calculateBillOfMaterials({
+  const bomData = calculateBillOfMaterials({
     panelCount,
     panelSpecs: {
       make: designData.panel_make,
@@ -55,6 +55,7 @@ export default function DesignSummaryPanel({
     structureType: designData.structure?.type || designData.structure_type || "elevated",
     mountingHeightM: designData.structure?.height_m || designData.mounting_height_m || 1.8,
   });
+  const bomItems = Array.isArray(bomData) ? bomData : (bomData?.items || []);
 
   return (
     <div className="space-y-3">
@@ -271,11 +272,14 @@ export default function DesignSummaryPanel({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {bom.map((item, idx) => (
+                {bomItems.map((item, idx) => (
                   <TableRow key={idx}>
-                    <TableCell className="font-medium text-slate-900">{item.item}</TableCell>
+                    <TableCell className="font-medium text-slate-900">
+                      <div>{item.name || item.item}</div>
+                      {item.spec && <div className="text-[10px] text-slate-500 font-normal">{item.spec}</div>}
+                    </TableCell>
                     <TableCell className="text-center text-slate-500">{item.category}</TableCell>
-                    <TableCell className="text-right font-bold text-blue-700">{item.quantity}</TableCell>
+                    <TableCell className="text-right font-bold text-blue-700">{item.qty ?? item.quantity}</TableCell>
                     <TableCell className="text-center text-slate-500">{item.unit}</TableCell>
                   </TableRow>
                 ))}
