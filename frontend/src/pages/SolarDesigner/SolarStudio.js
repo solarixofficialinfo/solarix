@@ -219,6 +219,16 @@ export default function SolarStudio() {
     setDesignData((prev) => ({ ...prev, ...updates }));
   }, []);
 
+  // FIX: Call map.invalidateSize() after accordion open/close or tab switch.
+  // Without this, Leaflet's internal pixel→latlng calculations use stale container
+  // dimensions, causing click coordinate offset whenever the sidebar layout shifts.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      liveMapRef.current?.invalidateSize?.();
+    }, 320); // slight delay to let CSS transitions complete
+    return () => clearTimeout(timer);
+  }, [openSection, activeTab, isFullscreen]);
+
   // Update Roof Polygon and recalculate geometric properties
   const handleSetRoofPolygon = useCallback((polygon) => {
     const area = getCartesianPolygonArea(polygon);
