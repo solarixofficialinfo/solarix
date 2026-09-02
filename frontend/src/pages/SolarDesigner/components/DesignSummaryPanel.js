@@ -27,6 +27,7 @@ export default function DesignSummaryPanel({
 }) {
   const [showBomModal, setShowBomModal] = useState(false);
   const [showTechSpecs, setShowTechSpecs] = useState(true);
+  const [showStructureDetails, setShowStructureDetails] = useState(false);
   const [showActions, setShowActions] = useState(true);
 
   const panelCount = Number(
@@ -56,6 +57,14 @@ export default function DesignSummaryPanel({
     mountingHeightM: designData.structure?.height_m || designData.mounting_height_m || 1.8,
   });
   const bomItems = Array.isArray(bomData) ? bomData : (bomData?.items || []);
+
+  // Interactive structure editor counts
+  const structNodes = Array.isArray(designData.structure_nodes) ? designData.structure_nodes : [];
+  const structMembers = Array.isArray(designData.structure_members) ? designData.structure_members : [];
+  const manualSupportCount = structNodes.filter((n) => n.type === "post_top" || n.type === "anchor").length;
+  const manualMemberCount = structMembers.filter((m) => m.type === "member" || m.type === "beam").length;
+  const manualBraceCount = structMembers.filter((m) => m.type === "brace").length;
+  const manualPostCount = structMembers.filter((m) => m.type === "post").length;
 
   return (
     <div className="space-y-3">
@@ -161,6 +170,72 @@ export default function DesignSummaryPanel({
                       <span className="font-semibold text-slate-800">{remainingArea.toFixed(1)} m²</span>
                     </div>
                   </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Section 2: Structure Details (collapsible) */}
+          <div className="rounded-xl border border-slate-200 overflow-hidden">
+            <button
+              onClick={() => setShowStructureDetails(!showStructureDetails)}
+              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-[11px] font-bold text-slate-700 transition"
+            >
+              <div className="flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-blue-600" />
+                <span>Structure Details</span>
+              </div>
+              {showStructureDetails ? <ChevronUp className="w-3.5 h-3.5 text-slate-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
+            </button>
+            {showStructureDetails && (
+              <div className="p-2.5 space-y-1.5 bg-white text-[10.5px] border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Structure Type</span>
+                  <span className="font-semibold text-slate-800 capitalize">{designData.structure?.type || designData.structure_type || "Elevated"}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Height / Clearance</span>
+                  <span className="font-semibold text-slate-800">{designData.structure?.height_m || designData.mounting_height_m || 1.8} m</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Tilt</span>
+                  <span className="font-semibold text-slate-800">{designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15}°</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Azimuth</span>
+                  <span className="font-semibold text-slate-800">{designData.structure?.azimuth || designData.azimuth_angle || 180}°</span>
+                </div>
+                {/* Manual interactive structure counts */}
+                {(manualPostCount > 0 || manualMemberCount > 0 || manualBraceCount > 0) && (
+                  <>
+                    <div className="pt-1 border-t border-slate-100" />
+                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Interactive Structure</div>
+                    {manualPostCount > 0 && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500">│ Support Posts</span>
+                        <span className="font-bold text-slate-800">{manualPostCount}</span>
+                      </div>
+                    )}
+                    {manualMemberCount > 0 && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500">━ Members</span>
+                        <span className="font-bold text-slate-800">{manualMemberCount}</span>
+                      </div>
+                    )}
+                    {manualBraceCount > 0 && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500">╲ Braces</span>
+                        <span className="font-bold text-slate-800">{manualBraceCount}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">◉ Nodes</span>
+                      <span className="font-bold text-slate-800">{structNodes.length}</span>
+                    </div>
+                  </>
+                )}
+                {manualPostCount === 0 && manualMemberCount === 0 && manualBraceCount === 0 && (
+                  <div className="text-[10px] text-slate-400 italic">No manually-added structure. Use 3D Structure Editor to add supports and members.</div>
                 )}
               </div>
             )}

@@ -155,6 +155,11 @@ export default function SolarStudio() {
     mounting_height_m: 1.8,
     material_estimates: {},
     camera_state: {},
+    // 5. Interactive Structure Editor — nodes & members
+    // A node = { id, x, y, z, type: 'anchor'|'post_top'|'junction'|'manual' }
+    // A member = { id, nodeAId, nodeBId, type: 'post'|'rail'|'brace'|'beam'|'member' }
+    structure_nodes: [],
+    structure_members: [],
     status: "Draft",
     notes: "",
   });
@@ -192,6 +197,9 @@ export default function SolarStudio() {
           doc.obstacles = Array.isArray(doc.obstacles) ? doc.obstacles : [];
           doc.panels = Array.isArray(doc.panels) ? doc.panels : [];
           doc.roof_polygon = Array.isArray(doc.roof_polygon) ? doc.roof_polygon : [];
+          // Restore interactive structure editor data
+          doc.structure_nodes = Array.isArray(doc.structure_nodes) ? doc.structure_nodes : [];
+          doc.structure_members = Array.isArray(doc.structure_members) ? doc.structure_members : [];
           setDesignData(doc);
           if (doc.formatted_address || doc.address) {
             setSearchQuery(doc.formatted_address || doc.address);
@@ -1144,38 +1152,45 @@ export default function SolarStudio() {
 
         {/* CENTER COLUMN: DOMINANT LIVE WORKSPACE (6 cols) */}
         <div className={`lg:col-span-6 flex flex-col space-y-2 ${isFullscreen ? "flex-1 min-h-0" : "h-[740px]"}`}>
-          {/* Mode Switcher Toolbar */}
+          {/* Mode Switcher Toolbar — Prominent segmented control */}
           <div className="flex items-center justify-between bg-slate-900 p-1.5 rounded-2xl border border-slate-800 shadow-md shrink-0">
-            <div className="flex items-center gap-1">
-              <Button
-                size="sm"
-                variant={activeTab === "2d" ? "default" : "ghost"}
+            {/* Primary 2D / 3D segmented control */}
+            <div className="flex items-center bg-slate-800 rounded-xl p-0.5 gap-0.5">
+              <button
                 onClick={() => setActiveTab("2d")}
-                className="h-7 text-xs font-semibold px-3 rounded-xl"
+                className={`h-8 px-4 text-xs font-bold rounded-lg transition-all ${
+                  activeTab === "2d"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
               >
-                2D Satellite Plan
-              </Button>
-              <Button
-                size="sm"
-                variant={activeTab === "3d" ? "default" : "ghost"}
+                📍 2D PLAN
+              </button>
+              <button
                 onClick={() => setActiveTab("3d")}
-                className="h-7 text-xs font-semibold px-3 rounded-xl"
+                className={`h-8 px-4 text-xs font-bold rounded-lg transition-all ${
+                  activeTab === "3d"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
               >
-                3D Live View
-              </Button>
-              <Button
-                size="sm"
-                variant={activeTab === "split" ? "default" : "ghost"}
+                🧊 3D VIEW
+              </button>
+              <button
                 onClick={() => setActiveTab("split")}
-                className="h-7 text-xs font-semibold px-3 rounded-xl hidden xl:inline-flex"
+                className={`h-8 px-3 text-xs font-bold rounded-lg transition-all hidden xl:block ${
+                  activeTab === "split"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
               >
-                Split Mode
-              </Button>
+                ⊞ SPLIT
+              </button>
             </div>
 
             <div className="text-[11px] text-slate-400 pr-2 flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Real-Time Synchronized</span>
+              <span>Real-Time Sync</span>
             </div>
           </div>
 
@@ -1252,6 +1267,10 @@ export default function SolarStudio() {
                   width_m: designData.panel_dimensions?.width_m || 1.134,
                   wattage: designData.panel_wattage || 550,
                 }}
+                structureNodes={designData.structure_nodes || []}
+                structureMembers={designData.structure_members || []}
+                onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
+                onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
               />
             )}
 
@@ -1280,6 +1299,10 @@ export default function SolarStudio() {
                     ...designData.structure,
                     azimuth: Number(designData.azimuth_angle || 180),
                   }}
+                  structureNodes={designData.structure_nodes || []}
+                  structureMembers={designData.structure_members || []}
+                  onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
+                  onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
                 />
               </div>
             )}
