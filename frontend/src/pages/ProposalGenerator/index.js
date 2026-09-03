@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import api, { formatApiError, downloadFile } from "@/lib/api";
 import { useCompany, useClientList } from "@/hooks/useClients";
@@ -8,7 +8,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -16,17 +15,17 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { toast } from "sonner";
 import dayjs from "dayjs";
 import {
-  FileText, Sparkles, Sun, Zap, CheckCircle2, ArrowRight, ArrowLeft,
-  Download, Printer, Share2, Eye, RefreshCw, Layers, UserPlus, Users2,
-  Edit3, ShieldCheck, TreePine, Leaf, DollarSign, Calendar, Clock,
-  MapPin, Phone, Mail, Building2, Check, AlertCircle, Save, Trash2,
-  Plus, CheckSquare, X, Copy, ExternalLink, SlidersHorizontal, Maximize2
+  FileText, Sparkles, Sun, Zap, CheckCircle2, ArrowLeft,
+  Download, Eye, RefreshCw, Layers, UserPlus, Users2,
+  ShieldCheck, TreePine, Leaf, DollarSign, Calendar, Clock,
+  MapPin, Phone, Mail, Building2, Check, AlertCircle, Save,
+  Plus, X, Copy, ExternalLink, SlidersHorizontal, ChevronDown,
+  ChevronUp, ChevronRight, FileCheck, Layers3, CheckSquare
 } from "lucide-react";
 
 import {
   calculateSolarMetrics,
   calculateSubsidy,
-  calculatePaymentMilestones,
   formatINR,
   formatNumberIN,
 } from "./utils/proposalCalculations";
@@ -45,35 +44,66 @@ import {
 } from "./utils/defaultProposalData";
 
 import ProposalDocumentViewer from "./components/ProposalDocumentViewer";
-import LiveProposalPreviewCard from "./components/LiveProposalPreviewCard";
 
-const DRAFT_STORAGE_KEY = "solarix_proposal_generator_draft_v2";
+const DRAFT_STORAGE_KEY = "solarix_proposal_generator_draft_v3";
 
 export default function ProposalGenerator() {
   const location = useLocation();
   const nav = useNavigate();
   const { user } = useAuth();
 
-  // Queries
+  // Master queries
   const { data: companyData } = useCompany();
   const { data: clients = [] } = useClientList();
-  const { data: history = [], refetch: refetchHistory } = useSalesDocuments("proposal");
+  const { refetch: refetchHistory } = useSalesDocuments("proposal");
 
-  // Step Management: 1: Customer, 2: System, 3: Equipment, 4: Scope, 5: Financial, 6: Review
-  const [currentStep, setCurrentStep] = useState(1);
+  // Accordion Section Expansion State
+  const [expandedSections, setExpandedSections] = useState({
+    customer: true,
+    system: true,
+    equipment: true,
+    commercial: true,
+    roi: true,
+    scope: false,
+    terms: false,
+  });
+
+  const toggleSection = (sec) => {
+    setExpandedSections((prev) => ({ ...prev, [sec]: !prev[sec] }));
+  };
+
+  const expandAll = () => {
+    setExpandedSections({
+      customer: true,
+      system: true,
+      equipment: true,
+      commercial: true,
+      roi: true,
+      scope: true,
+      terms: true,
+    });
+  };
+
+  const collapseAll = () => {
+    setExpandedSections({
+      customer: false,
+      system: false,
+      equipment: false,
+      commercial: false,
+      roi: false,
+      scope: false,
+      terms: false,
+    });
+  };
+
+  // Source selection & entity autofill
   const [sourceType, setSourceType] = useState("manual"); // 'lead' | 'client' | 'design' | 'manual'
-  const [isSavedDraft, setIsSavedDraft] = useState(true);
-  const [showMobilePreview, setShowMobilePreview] = useState(false);
-
-  // Async selector data
   const [leadsList, setLeadsList] = useState([]);
   const [designsList, setDesignsList] = useState([]);
-  const [loadingSources, setLoadingSources] = useState(false);
-
-  // Selected entities
   const [selectedLeadId, setSelectedLeadId] = useState("");
   const [selectedClientId, setSelectedClientId] = useState("");
   const [selectedDesignId, setSelectedDesignId] = useState("");
+  const [isSavedDraft, setIsSavedDraft] = useState(true);
 
   // Edit modals state
   const [editingEquipmentType, setEditingEquipmentType] = useState(null); // 'panel' | 'inverter' | 'structure' | 'cables' | 'custom'
@@ -84,7 +114,11 @@ export default function ProposalGenerator() {
   const [showAddMilestoneModal, setShowAddMilestoneModal] = useState(false);
   const [newMilestoneForm, setNewMilestoneForm] = useState({ stage: "Milestone", label: "", pct: 10 });
 
-  // Primary Proposal Form State
+  // Full PDF document preview viewer modal
+  const [showFullViewerModal, setShowFullViewerModal] = useState(false);
+  const [generating, setGenerating] = useState(false);
+
+  // Primary Form State
   const [form, setForm] = useState(() => {
     const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
     if (saved) {
@@ -97,7 +131,7 @@ export default function ProposalGenerator() {
     const refNum = `PROP-${dayjs().format("YYMMDD")}-${Math.floor(1000 + Math.random() * 9000)}`;
 
     return {
-      // Step 1: Customer & Project
+      // 1. Customer & Project Details
       proposal_number: refNum,
       proposal_date: todayStr,
       customer_name: "",
@@ -107,22 +141,22 @@ export default function ProposalGenerator() {
       city: "",
       state: "Maharashtra",
       pincode: "",
-      system_kw: 10.0,
       project_type: "Residential",
       solar_system_type: "Grid Connected / On Grid",
       prepared_by: user?.name || "Solar Solutions Engineer",
-      linked_design_name: "",
-      linked_design_id: "",
 
-      // Step 2: System Design Specs
+      // 2. Solar System Details
+      system_kw: 10.0,
       roof_area_sqm: 41.4,
       tilt_deg: 15,
       azimuth_deg: 180,
       mounting_clearance_m: 1.8,
       snapshot_2d: "",
       snapshot_3d: "",
+      linked_design_id: "",
+      linked_design_name: "",
 
-      // Step 3: Equipment & Warranty
+      // 3. Equipment & Warranty
       panel: { ...DEFAULT_PANEL_DATA, quantity: 18 },
       inverter: { ...DEFAULT_INVERTER_DATA, capacity: "10.0 kW", quantity: 1 },
       structure: { ...DEFAULT_STRUCTURE_DATA },
@@ -130,35 +164,34 @@ export default function ProposalGenerator() {
       bos: [...DEFAULT_BOS_COMPONENTS],
       warranties: [...DEFAULT_WARRANTIES],
 
-      // Step 4: Scope & Delivery
-      timeline: [...DEFAULT_TIMELINE_STAGES],
-      our_scope: [...DEFAULT_OUR_SCOPE],
-      customer_scope: [...DEFAULT_CUSTOMER_SCOPE],
-      terms: [...DEFAULT_TERMS],
-
-      // Step 5: Financials
+      // 4. Commercial & Payment
       system_price: 500000,
       additional_charges: 0,
       net_meter_charges: 0,
       gst_pct: 13.8,
       subsidy_applicable: false,
       subsidy_amount: 0,
-      tariff_rate: 8.5,
       milestones: [
         { stage: "Milestone 1", label: "20% Advance with Order Confirmation", pct: 20 },
         { stage: "Milestone 2", label: "70% Upon Material Readiness & Site Dispatch", pct: 70 },
         { stage: "Milestone 3", label: "5% Upon Complete Installation & Wiring", pct: 5 },
         { stage: "Milestone 4", label: "5% Upon Net-Meter Installation & Commissioning", pct: 5 },
       ],
+
+      // 5. Energy Generation & ROI
+      tariff_rate: 8.5,
+
+      // 6. Scope & Timeline
+      timeline: [...DEFAULT_TIMELINE_STAGES],
+      our_scope: [...DEFAULT_OUR_SCOPE],
+      customer_scope: [...DEFAULT_CUSTOMER_SCOPE],
+
+      // 7. Terms & Conditions
+      terms: [...DEFAULT_TERMS],
     };
   });
 
-  // Generated document state & full preview viewer
-  const [generating, setGenerating] = useState(false);
-  const [generatedDoc, setGeneratedDoc] = useState(null);
-  const [showFullViewerModal, setShowFullViewerModal] = useState(false);
-
-  // Autosave draft to localStorage
+  // Autosave to localStorage
   useEffect(() => {
     localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(form));
     setIsSavedDraft(true);
@@ -168,7 +201,6 @@ export default function ProposalGenerator() {
   useEffect(() => {
     let mounted = true;
     async function loadSources() {
-      setLoadingSources(true);
       try {
         const [leadsRes, designsRes] = await Promise.all([
           api.get("/leads", { params: { page: 1, page_size: 50 } }).catch(() => ({ data: { items: [] } })),
@@ -178,10 +210,7 @@ export default function ProposalGenerator() {
           setLeadsList(leadsRes.data?.items || []);
           setDesignsList(designsRes.data?.designs || []);
         }
-      } catch (e) {
-      } finally {
-        if (mounted) setLoadingSources(false);
-      }
+      } catch (e) {}
     }
     loadSources();
     return () => { mounted = false; };
@@ -378,39 +407,10 @@ export default function ProposalGenerator() {
     form.gst_pct,
   ]);
 
-  // Sync net_customer_cost into form state for consistent preview
-  useEffect(() => {
-    if (metrics.netCustomerCost) {
-      setForm((prev) => ({
-        ...prev,
-        net_customer_cost: metrics.netCustomerCost,
-        gross_cost: metrics.grossCost,
-        gst_amount: metrics.gstAmount,
-      }));
-    }
-  }, [metrics.netCustomerCost, metrics.grossCost, metrics.gstAmount]);
-
   // Payment milestone percentage sum validation
   const milestoneTotalPct = useMemo(() => {
     return (form.milestones || []).reduce((sum, m) => sum + (Number(m.pct) || 0), 0);
   }, [form.milestones]);
-
-  // Proposal Readiness Validation
-  const readiness = useMemo(() => {
-    const checks = [
-      { id: "customer", label: "Customer details", step: 1, ok: Boolean(form.customer_name?.trim() && form.mobile?.trim()) },
-      { id: "site", label: "Site address & city", step: 1, ok: Boolean(form.site_address?.trim()) },
-      { id: "system", label: "Solar system capacity", step: 2, ok: Number(form.system_kw) > 0 },
-      { id: "equipment", label: "Equipment specifications", step: 3, ok: Boolean(form.panel?.make && form.inverter?.make) },
-      { id: "warranty", label: "Warranty terms", step: 3, ok: Array.isArray(form.warranties) && form.warranties.length > 0 },
-      { id: "financials", label: "Financial pricing", step: 5, ok: Number(form.system_price) > 0 },
-      { id: "milestones", label: "Payment milestones (100%)", step: 5, ok: Math.abs(milestoneTotalPct - 100) < 0.1 },
-      { id: "scope", label: "Project scope checklist", step: 4, ok: Array.isArray(form.our_scope) && form.our_scope.length > 0 },
-    ];
-    const isReady = checks.every((c) => c.ok);
-    const missingCount = checks.filter((c) => !c.ok).length;
-    return { checks, isReady, missingCount };
-  }, [form, milestoneTotalPct]);
 
   // Save Draft Action
   const handleSaveDraft = () => {
@@ -419,19 +419,11 @@ export default function ProposalGenerator() {
     toast.success("Proposal draft saved locally ✓");
   };
 
-  // Reset Draft Action
-  const handleResetDraft = () => {
-    if (window.confirm("Are you sure you want to clear and reset this proposal draft?")) {
-      localStorage.removeItem(DRAFT_STORAGE_KEY);
-      window.location.reload();
-    }
-  };
-
-  // Generate Proposal PDF
+  // Generate Proposal Action
   const handleGenerateProposal = async () => {
-    if (!readiness.isReady) {
-      toast.warning(`Please complete all required fields (${readiness.missingCount} item(s) pending).`);
-      setCurrentStep(readiness.checks.find((c) => !c.ok)?.step || 1);
+    if (!form.customer_name?.trim() || !form.mobile?.trim()) {
+      toast.warning("Please enter Customer Name and Phone Number.");
+      setExpandedSections((prev) => ({ ...prev, customer: true }));
       return;
     }
 
@@ -456,9 +448,8 @@ export default function ProposalGenerator() {
       };
 
       const res = await api.post("/documents/generate", payload);
-      setGeneratedDoc(res.data);
       refetchHistory();
-      toast.success("11-Page Customer Proposal generated successfully!");
+      toast.success("11-Page Customer Proposal PDF generated successfully!");
 
       if (res.data?.id) {
         downloadFile(`/documents/${res.data.id}/download`, res.data.filename || "Solar_Proposal.pdf");
@@ -470,97 +461,71 @@ export default function ProposalGenerator() {
     }
   };
 
-  // Steps Definition
-  const steps = [
-    { num: 1, title: "Customer & Project", sub: "01 Customer" },
-    { num: 2, title: "Solar System Design", sub: "02 System" },
-    { num: 3, title: "Equipment & Warranty", sub: "03 Equipment" },
-    { num: 4, title: "Scope & Project Delivery", sub: "04 Scope" },
-    { num: 5, title: "Commercial & Financial", sub: "05 Financial" },
-    { num: 6, title: "Review Proposal", sub: "06 Review" },
-  ];
-
   return (
-    <div className="space-y-4 select-none pb-16 max-w-7xl mx-auto px-2 sm:px-4">
+    <div className="space-y-4 max-w-5xl mx-auto px-2 sm:px-4 pb-20 select-none">
 
-      {/* ── 1. TOP HEADER BAR ─────────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900 text-white px-4 py-3 rounded-2xl border border-slate-800 shadow-xl">
+      {/* ── TOP HEADER BAR ─────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200/90 shadow-xs">
         <div className="flex items-center gap-3">
           <Button
             variant="ghost"
             size="sm"
             onClick={() => nav(-1)}
-            className="h-8 w-8 p-0 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800"
+            className="h-8 w-8 p-0 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100"
           >
             <ArrowLeft className="w-4 h-4" />
           </Button>
 
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md">
-              <Sun className="w-4 h-4" />
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-black text-slate-900 text-base tracking-tight" style={{ fontFamily: "Outfit" }}>
+                SOLARIX PROPOSAL GENERATOR
+              </span>
+              <Badge
+                variant="outline"
+                className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                  isSavedDraft ? "bg-emerald-50 text-emerald-700 border-emerald-300" : "bg-amber-50 text-amber-700 border-amber-300"
+                }`}
+              >
+                {isSavedDraft ? "Draft Saved" : "Unsaved Changes"}
+              </Badge>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-sm text-white tracking-tight" style={{ fontFamily: "Outfit" }}>
-                  SOLARIX PROPOSAL GENERATOR
-                </span>
-                <Badge
-                  variant="outline"
-                  className={`text-[9px] font-semibold px-2 py-0.5 rounded-full ${
-                    isSavedDraft ? "bg-emerald-950/70 text-emerald-400 border-emerald-800" : "bg-amber-950/70 text-amber-400 border-amber-800"
-                  }`}
-                >
-                  {isSavedDraft ? "Draft Saved" : "Unsaved Changes"}
-                </Badge>
-              </div>
-              <div className="text-[11px] text-slate-400 flex items-center gap-2">
-                <span>Ref: <b className="font-mono text-slate-200">{form.proposal_number}</b></span>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(form.proposal_number);
-                    toast.success("Copied proposal number");
-                  }}
-                  className="hover:text-white transition"
-                  title="Copy reference number"
-                >
-                  <Copy className="w-3 h-3 inline" />
-                </button>
-              </div>
+            <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+              <span>Proposal No: <b className="font-mono text-slate-800">{form.proposal_number}</b></span>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(form.proposal_number);
+                  toast.success("Copied proposal number");
+                }}
+                className="hover:text-blue-600 transition text-slate-400"
+                title="Copy reference number"
+              >
+                <Copy className="w-3 h-3 inline" />
+              </button>
             </div>
           </div>
         </div>
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
-          {/* Mobile Preview Toggle */}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setShowMobilePreview(!showMobilePreview)}
-            className="lg:hidden h-8 text-xs font-semibold rounded-xl bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 gap-1.5"
-          >
-            <Eye className="w-3.5 h-3.5" />
-            <span>{showMobilePreview ? "Show Form" : "Preview"}</span>
-          </Button>
-
           <Button
             size="sm"
             variant="outline"
             onClick={() => setShowFullViewerModal(true)}
-            className="h-8 text-xs font-semibold rounded-xl bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 gap-1.5 hidden sm:flex"
-            title="Open 11-Page Customer Proposal Viewer"
+            className="h-8 text-xs font-semibold rounded-xl border-slate-300 text-slate-700 hover:bg-slate-50 gap-1.5"
+            title="Open Complete 11-Page Customer Proposal Document Viewer"
           >
-            <Eye className="w-3.5 h-3.5" />
-            <span>Preview</span>
+            <Eye className="w-3.5 h-3.5 text-blue-600" />
+            <span>Preview Document</span>
           </Button>
 
           <Button
             size="sm"
             variant="outline"
             onClick={handleSaveDraft}
-            className="h-8 text-xs font-semibold rounded-xl bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 gap-1.5"
+            className="h-8 text-xs font-semibold rounded-xl border-slate-300 text-slate-700 hover:bg-slate-50 gap-1.5"
           >
-            <Save className="w-3.5 h-3.5" />
+            <Save className="w-3.5 h-3.5 text-slate-500" />
             <span>Save Draft</span>
           </Button>
 
@@ -568,7 +533,7 @@ export default function ProposalGenerator() {
             size="sm"
             onClick={handleGenerateProposal}
             disabled={generating}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs h-8 px-3.5 rounded-xl shadow-xs gap-1.5"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs h-8 px-4 rounded-xl shadow-xs gap-1.5"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>{generating ? "Generating…" : "Generate Proposal"}</span>
@@ -576,1182 +541,869 @@ export default function ProposalGenerator() {
         </div>
       </div>
 
-      {/* ── 2. STEP PROGRESS STEPPER (6 Steps) ─────────────────────────────── */}
-      <div className="bg-white p-2.5 rounded-2xl border border-slate-200/80 shadow-xs">
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-          {steps.map((s) => {
-            const isActive = currentStep === s.num;
-            const isDone = currentStep > s.num;
-            return (
-              <button
-                key={s.num}
-                onClick={() => setCurrentStep(s.num)}
-                className={`flex items-center gap-2 p-2 rounded-xl text-left transition-all ${
-                  isActive
-                    ? "bg-blue-50/90 border border-blue-500/80 shadow-xs"
-                    : isDone
-                    ? "bg-slate-50/80 hover:bg-slate-100/80 text-slate-700"
-                    : "text-slate-400 hover:bg-slate-50/60"
-                }`}
-              >
-                <div
-                  className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold shrink-0 ${
-                    isActive
+      {/* ── EXPAND / COLLAPSE TOOLBAR & QUICK AUTOFILL ─────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-1 text-xs text-slate-500">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-slate-600">Autofill from:</span>
+          <Select value={sourceType} onValueChange={setSourceType}>
+            <SelectTrigger className="h-7 text-xs rounded-lg bg-white border-slate-200 w-[150px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="manual">Manual Entry</SelectItem>
+              <SelectItem value="lead">Existing Lead</SelectItem>
+              <SelectItem value="client">Client Record</SelectItem>
+              <SelectItem value="design">3D Solar Design</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {sourceType === "lead" && (
+            <Select value={selectedLeadId} onValueChange={handleSelectLead}>
+              <SelectTrigger className="h-7 text-xs rounded-lg bg-white border-blue-300 w-[200px]">
+                <SelectValue placeholder="Select Lead…" />
+              </SelectTrigger>
+              <SelectContent className="max-h-56">
+                {leadsList.map((lead) => (
+                  <SelectItem key={lead.id} value={lead.id} className="text-xs">
+                    {lead.name} ({lead.system_kw || 5} kW)
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          {sourceType === "client" && (
+            <Select value={selectedClientId} onValueChange={handleSelectClient}>
+              <SelectTrigger className="h-7 text-xs rounded-lg bg-white border-blue-300 w-[200px]">
+                <SelectValue placeholder="Select Client…" />
+              </SelectTrigger>
+              <SelectContent className="max-h-56">
+                {clients.map((c) => (
+                  <SelectItem key={c.id} value={c.id} className="text-xs">
+                    {c.full_name} ({c.city || "Site"})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          {sourceType === "design" && (
+            <Select value={selectedDesignId} onValueChange={handleSelectDesign}>
+              <SelectTrigger className="h-7 text-xs rounded-lg bg-white border-blue-300 w-[200px]">
+                <SelectValue placeholder="Select 3D Project…" />
+              </SelectTrigger>
+              <SelectContent className="max-h-56">
+                {designsList.map((d) => (
+                  <SelectItem key={d.id} value={d.id} className="text-xs">
+                    {d.site_name || d.name} ({d.system_kw || 0} kWp)
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button onClick={expandAll} className="hover:text-blue-600 font-medium">
+            Expand All
+          </button>
+          <span>•</span>
+          <button onClick={collapseAll} className="hover:text-blue-600 font-medium">
+            Collapse All
+          </button>
+        </div>
+      </div>
+
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      {/* SECTION 1: CUSTOMER & PROJECT DETAILS                                 */}
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      <Card className="rounded-2xl border-slate-200/90 shadow-2xs overflow-hidden">
+        <div
+          onClick={() => toggleSection("customer")}
+          className="p-3.5 sm:p-4 bg-slate-50/70 hover:bg-slate-100/70 flex items-center justify-between cursor-pointer transition select-none"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-blue-100 text-blue-800 flex items-center justify-center font-bold text-xs">
+              👤
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <span>Customer & Project Details</span>
+                {form.customer_name && (
+                  <span className="text-[11px] font-normal text-slate-500">· {form.customer_name}</span>
+                )}
+              </h3>
+              <p className="text-[10.5px] text-slate-500">Customer contact information, site address and project classification</p>
+            </div>
+          </div>
+          {expandedSections.customer ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+        </div>
+
+        {expandedSections.customer && (
+          <CardContent className="p-4 pt-3 border-t border-slate-100 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <Label className="text-[11px] font-semibold text-slate-600">Customer Name *</Label>
+                <Input
+                  value={form.customer_name}
+                  onChange={(e) => { setForm({ ...form, customer_name: e.target.value }); setIsSavedDraft(false); }}
+                  placeholder="e.g. Shubham Jadhav"
+                  className="h-8 text-xs mt-1"
+                />
+              </div>
+
+              <div>
+                <Label className="text-[11px] font-semibold text-slate-600">Phone Number *</Label>
+                <Input
+                  value={form.mobile}
+                  onChange={(e) => { setForm({ ...form, mobile: e.target.value }); setIsSavedDraft(false); }}
+                  placeholder="e.g. +91 98765 43210"
+                  className="h-8 text-xs mt-1"
+                />
+              </div>
+
+              <div>
+                <Label className="text-[11px] font-semibold text-slate-600">Email Address</Label>
+                <Input
+                  value={form.email}
+                  onChange={(e) => { setForm({ ...form, email: e.target.value }); setIsSavedDraft(false); }}
+                  placeholder="e.g. customer@example.com"
+                  className="h-8 text-xs mt-1"
+                />
+              </div>
+
+              <div>
+                <Label className="text-[11px] font-semibold text-slate-600">Project Type</Label>
+                <Select
+                  value={form.project_type}
+                  onValueChange={(val) => { setForm({ ...form, project_type: val }); setIsSavedDraft(false); }}
+                >
+                  <SelectTrigger className="h-8 text-xs mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Residential">Residential Rooftop</SelectItem>
+                    <SelectItem value="Commercial">Commercial & Institutional</SelectItem>
+                    <SelectItem value="Industrial">Industrial High-Tension</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="sm:col-span-2">
+                <Label className="text-[11px] font-semibold text-slate-600">Site Address *</Label>
+                <Input
+                  value={form.site_address}
+                  onChange={(e) => { setForm({ ...form, site_address: e.target.value }); setIsSavedDraft(false); }}
+                  placeholder="Full site location / rooftop address"
+                  className="h-8 text-xs mt-1"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-[11px] font-semibold text-slate-600">City</Label>
+                  <Input
+                    value={form.city}
+                    onChange={(e) => { setForm({ ...form, city: e.target.value }); setIsSavedDraft(false); }}
+                    placeholder="e.g. Ichalkaranji"
+                    className="h-8 text-xs mt-1"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] font-semibold text-slate-600">Pincode</Label>
+                  <Input
+                    value={form.pincode}
+                    onChange={(e) => { setForm({ ...form, pincode: e.target.value }); setIsSavedDraft(false); }}
+                    placeholder="416115"
+                    className="h-8 text-xs mt-1"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-[11px] font-semibold text-slate-600">Grid Connection</Label>
+                <Select
+                  value={form.solar_system_type}
+                  onValueChange={(val) => { setForm({ ...form, solar_system_type: val }); setIsSavedDraft(false); }}
+                >
+                  <SelectTrigger className="h-8 text-xs mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Grid Connected / On Grid">Grid Connected / On Grid</SelectItem>
+                    <SelectItem value="Off Grid Battery Storage">Off Grid with Battery Bank</SelectItem>
+                    <SelectItem value="Hybrid Solar System">Hybrid Bi-Directional</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label className="text-[11px] font-semibold text-slate-600">Proposal Date</Label>
+                <Input
+                  type="date"
+                  value={form.proposal_date}
+                  onChange={(e) => { setForm({ ...form, proposal_date: e.target.value }); setIsSavedDraft(false); }}
+                  className="h-8 text-xs mt-1"
+                />
+              </div>
+
+              <div>
+                <Label className="text-[11px] font-semibold text-slate-600">Prepared By</Label>
+                <Input
+                  value={form.prepared_by}
+                  onChange={(e) => { setForm({ ...form, prepared_by: e.target.value }); setIsSavedDraft(false); }}
+                  placeholder="Solar Engineer Name"
+                  className="h-8 text-xs mt-1"
+                />
+              </div>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      {/* SECTION 2: SOLAR SYSTEM DETAILS                                       */}
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      <Card className="rounded-2xl border-slate-200/90 shadow-2xs overflow-hidden">
+        <div
+          onClick={() => toggleSection("system")}
+          className="p-3.5 sm:p-4 bg-slate-50/70 hover:bg-slate-100/70 flex items-center justify-between cursor-pointer transition select-none"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs">
+              ☀
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <span>Solar System Details</span>
+                <Badge className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] font-mono">
+                  {form.system_kw} kWp
+                </Badge>
+              </h3>
+              <p className="text-[10.5px] text-slate-500">System capacity, module count, orientation, roof area & 3D layout snapshots</p>
+            </div>
+          </div>
+          {expandedSections.system ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+        </div>
+
+        {expandedSections.system && (
+          <CardContent className="p-4 pt-3 border-t border-slate-100 space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+              <div>
+                <Label className="text-[10.5px] text-slate-600 font-semibold">Capacity (kWp) *</Label>
+                <Input
+                  type="number"
+                  step="0.1"
+                  value={form.system_kw}
+                  onChange={(e) => {
+                    const kw = parseFloat(e.target.value) || 1;
+                    const pCount = Math.max(1, Math.round((kw * 1000) / (form.panel?.wattage || 555)));
+                    setForm({
+                      ...form,
+                      system_kw: kw,
+                      panel: { ...form.panel, quantity: pCount },
+                      inverter: { ...form.inverter, capacity: `${kw}.0 kW` },
+                    });
+                    setIsSavedDraft(false);
+                  }}
+                  className="h-8 text-xs font-bold mt-1"
+                />
+              </div>
+
+              <div>
+                <Label className="text-[10.5px] text-slate-600 font-semibold">Module Quantity</Label>
+                <Input
+                  type="number"
+                  value={form.panel?.quantity || 18}
+                  onChange={(e) => {
+                    const q = parseInt(e.target.value) || 1;
+                    setForm({ ...form, panel: { ...form.panel, quantity: q } });
+                    setIsSavedDraft(false);
+                  }}
+                  className="h-8 text-xs mt-1"
+                />
+              </div>
+
+              <div>
+                <Label className="text-[10.5px] text-slate-600 font-semibold">Tilt Angle (°)</Label>
+                <Input
+                  type="number"
+                  value={form.tilt_deg || 15}
+                  onChange={(e) => { setForm({ ...form, tilt_deg: parseFloat(e.target.value) || 15 }); setIsSavedDraft(false); }}
+                  className="h-8 text-xs mt-1"
+                />
+              </div>
+
+              <div>
+                <Label className="text-[10.5px] text-slate-600 font-semibold">Roof Area (m²)</Label>
+                <Input
+                  type="number"
+                  value={form.roof_area_sqm || 41.4}
+                  onChange={(e) => { setForm({ ...form, roof_area_sqm: parseFloat(e.target.value) || 40 }); setIsSavedDraft(false); }}
+                  className="h-8 text-xs mt-1"
+                />
+              </div>
+            </div>
+
+            {/* Quick kW Presets */}
+            <div className="flex items-center gap-2 pt-1">
+              <span className="text-[10.5px] text-slate-500 font-medium">Quick Presets:</span>
+              {[3, 5, 10, 15, 25].map((kw) => (
+                <button
+                  key={kw}
+                  onClick={() => {
+                    const pCount = Math.max(1, Math.round((kw * 1000) / (form.panel?.wattage || 555)));
+                    setForm((prev) => ({
+                      ...prev,
+                      system_kw: kw,
+                      system_price: kw * 50000,
+                      panel: { ...prev.panel, quantity: pCount },
+                      inverter: { ...prev.inverter, capacity: `${kw}.0 kW` },
+                    }));
+                    setIsSavedDraft(false);
+                  }}
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition ${
+                    form.system_kw === kw
                       ? "bg-blue-600 text-white shadow-xs"
-                      : isDone
-                      ? "bg-emerald-600 text-white"
-                      : "bg-slate-200 text-slate-600"
+                      : "bg-slate-100 hover:bg-slate-200 text-slate-700"
                   }`}
                 >
-                  {isDone ? <Check className="w-3.5 h-3.5" /> : s.num}
-                </div>
-                <div className="min-w-0">
-                  <span className={`text-[11px] font-bold block truncate ${isActive ? "text-blue-900" : isDone ? "text-slate-900" : "text-slate-500"}`}>
-                    {s.sub}
-                  </span>
-                  <span className="text-[9px] text-slate-400 hidden xl:block truncate">
-                    {s.title}
-                  </span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── 3. TWO-COLUMN WORKSPACE: LEFT FORM, RIGHT LIVE PREVIEW ─────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-
-        {/* LEFT COLUMN: ACTIVE STEP INPUT WIZARD (7 cols) */}
-        <div className={`lg:col-span-7 space-y-4 ${showMobilePreview ? "hidden lg:block" : "block"}`}>
-
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {/* STEP 1: CUSTOMER & PROJECT                                       */}
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {currentStep === 1 && (
-            <div className="space-y-4 animate-in fade-in">
-              {/* Step Header */}
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">
-                    STEP 01
-                  </span>
-                  <h2 className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                    Customer & Project Information
-                  </h2>
-                </div>
-
-                {/* Source Select Dropdown */}
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-500 hidden sm:inline">Use existing:</span>
-                  <Select
-                    value={sourceType}
-                    onValueChange={(val) => {
-                      setSourceType(val);
-                    }}
-                  >
-                    <SelectTrigger className="h-8 text-xs rounded-xl bg-slate-50 border-slate-200 w-[140px]">
-                      <SelectValue placeholder="Autofill from…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="manual">Manual Entry</SelectItem>
-                      <SelectItem value="lead">From Lead CRM</SelectItem>
-                      <SelectItem value="client">From Client Master</SelectItem>
-                      <SelectItem value="design">From 3D Design</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {/* Source Picker Banners */}
-              {sourceType === "lead" && (
-                <div className="p-3 bg-blue-50/80 rounded-xl border border-blue-200 text-xs space-y-2">
-                  <div className="font-bold text-blue-900 flex items-center gap-1.5">
-                    <UserPlus className="w-3.5 h-3.5" /> Select Lead to Populate
-                  </div>
-                  <Select value={selectedLeadId} onValueChange={handleSelectLead}>
-                    <SelectTrigger className="bg-white border-blue-300 text-xs h-9 rounded-lg">
-                      <SelectValue placeholder="Choose a lead from CRM…" />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-56">
-                      {leadsList.map((lead) => (
-                        <SelectItem key={lead.id} value={lead.id} className="text-xs">
-                          {lead.name} · {lead.mobile || "No Mobile"} ({lead.system_kw || 5} kW)
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {sourceType === "client" && (
-                <div className="p-3 bg-blue-50/80 rounded-xl border border-blue-200 text-xs space-y-2">
-                  <div className="font-bold text-blue-900 flex items-center gap-1.5">
-                    <Users2 className="w-3.5 h-3.5" /> Select Client Record
-                  </div>
-                  <Select value={selectedClientId} onValueChange={handleSelectClient}>
-                    <SelectTrigger className="bg-white border-blue-300 text-xs h-9 rounded-lg">
-                      <SelectValue placeholder="Choose an onboarded client…" />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-56">
-                      {clients.map((c) => (
-                        <SelectItem key={c.id} value={c.id} className="text-xs">
-                          {c.full_name} · {c.mobile || "No Mobile"} · {c.city || "Site"}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {sourceType === "design" && (
-                <div className="p-3 bg-blue-50/80 rounded-xl border border-blue-200 text-xs space-y-2">
-                  <div className="font-bold text-blue-900 flex items-center gap-1.5">
-                    <Layers className="w-3.5 h-3.5" /> Select 3D Solar Project
-                  </div>
-                  <Select value={selectedDesignId} onValueChange={handleSelectDesign}>
-                    <SelectTrigger className="bg-white border-blue-300 text-xs h-9 rounded-lg">
-                      <SelectValue placeholder="Choose a 3D Solar Designer project…" />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-56">
-                      {designsList.map((d) => (
-                        <SelectItem key={d.id} value={d.id} className="text-xs">
-                          {d.site_name || d.name} · {d.system_kw || 0} kWp ({d.panel_count || 0} Modules)
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {/* TWO-COLUMN CARDS */}
-              <div className="grid sm:grid-cols-2 gap-4">
-                {/* CARD 1: Customer Information */}
-                <Card className="rounded-2xl border-slate-200 shadow-2xs">
-                  <CardContent className="p-4 space-y-3">
-                    <div className="flex items-center gap-2 text-slate-800 font-bold text-xs pb-2 border-b border-slate-100">
-                      <Building2 className="w-3.5 h-3.5 text-blue-600" />
-                      <span>Customer Information</span>
-                    </div>
-
-                    <div>
-                      <Label className="text-[11px] font-semibold text-slate-600">Client / Customer Name *</Label>
-                      <Input
-                        value={form.customer_name}
-                        onChange={(e) => { setForm({ ...form, customer_name: e.target.value }); setIsSavedDraft(false); }}
-                        placeholder="e.g. Shubham Jadhav"
-                        className="h-8 text-xs mt-1"
-                      />
-                    </div>
-
-                    <div>
-                      <Label className="text-[11px] font-semibold text-slate-600">Phone Number *</Label>
-                      <Input
-                        value={form.mobile}
-                        onChange={(e) => { setForm({ ...form, mobile: e.target.value }); setIsSavedDraft(false); }}
-                        placeholder="e.g. +91 98765 43210"
-                        className="h-8 text-xs mt-1"
-                      />
-                    </div>
-
-                    <div>
-                      <Label className="text-[11px] font-semibold text-slate-600">Email Address</Label>
-                      <Input
-                        value={form.email}
-                        onChange={(e) => { setForm({ ...form, email: e.target.value }); setIsSavedDraft(false); }}
-                        placeholder="e.g. customer@example.com"
-                        className="h-8 text-xs mt-1"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-[11px] font-semibold text-slate-600">City</Label>
-                        <Input
-                          value={form.city}
-                          onChange={(e) => { setForm({ ...form, city: e.target.value }); setIsSavedDraft(false); }}
-                          placeholder="e.g. Ichalkaranji"
-                          className="h-8 text-xs mt-1"
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-[11px] font-semibold text-slate-600">Pincode</Label>
-                        <Input
-                          value={form.pincode}
-                          onChange={(e) => { setForm({ ...form, pincode: e.target.value }); setIsSavedDraft(false); }}
-                          placeholder="416115"
-                          className="h-8 text-xs mt-1"
-                        />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* CARD 2: Project Information */}
-                <Card className="rounded-2xl border-slate-200 shadow-2xs">
-                  <CardContent className="p-4 space-y-3">
-                    <div className="flex items-center gap-2 text-slate-800 font-bold text-xs pb-2 border-b border-slate-100">
-                      <MapPin className="w-3.5 h-3.5 text-blue-600" />
-                      <span>Project Information</span>
-                    </div>
-
-                    <div>
-                      <Label className="text-[11px] font-semibold text-slate-600">Project Type</Label>
-                      <Select
-                        value={form.project_type}
-                        onValueChange={(val) => { setForm({ ...form, project_type: val }); setIsSavedDraft(false); }}
-                      >
-                        <SelectTrigger className="h-8 text-xs mt-1">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="Residential">Residential Rooftop</SelectItem>
-                          <SelectItem value="Commercial">Commercial & Institutional</SelectItem>
-                          <SelectItem value="Industrial">Industrial High-Tension</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div>
-                      <Label className="text-[11px] font-semibold text-slate-600">Site Address *</Label>
-                      <Input
-                        value={form.site_address}
-                        onChange={(e) => { setForm({ ...form, site_address: e.target.value }); setIsSavedDraft(false); }}
-                        placeholder="e.g. Ganesh Nagar, Near Water Tank"
-                        className="h-8 text-xs mt-1"
-                      />
-                    </div>
-
-                    <div>
-                      <Label className="text-[11px] font-semibold text-slate-600">Grid Connection</Label>
-                      <Select
-                        value={form.solar_system_type}
-                        onValueChange={(val) => { setForm({ ...form, solar_system_type: val }); setIsSavedDraft(false); }}
-                      >
-                        <SelectTrigger className="h-8 text-xs mt-1">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="Grid Connected / On Grid">Grid Connected / On Grid</SelectItem>
-                          <SelectItem value="Off Grid Battery Storage">Off Grid with Battery Bank</SelectItem>
-                          <SelectItem value="Hybrid Solar System">Hybrid Bi-Directional</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-[11px] font-semibold text-slate-600">Proposal Date</Label>
-                        <Input
-                          type="date"
-                          value={form.proposal_date}
-                          onChange={(e) => { setForm({ ...form, proposal_date: e.target.value }); setIsSavedDraft(false); }}
-                          className="h-8 text-xs mt-1"
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-[11px] font-semibold text-slate-600">Prepared By</Label>
-                        <Input
-                          value={form.prepared_by}
-                          onChange={(e) => { setForm({ ...form, prepared_by: e.target.value }); setIsSavedDraft(false); }}
-                          placeholder="Solar Engineer"
-                          className="h-8 text-xs mt-1"
-                        />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Navigation Footer */}
-              <div className="flex justify-end pt-2">
-                <Button
-                  onClick={() => setCurrentStep(2)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold h-9 px-5 rounded-xl shadow-xs gap-1.5"
-                >
-                  <span>Next: Solar System Design</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
-              </div>
+                  {kw} kW
+                </button>
+              ))}
             </div>
-          )}
 
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {/* STEP 2: SOLAR SYSTEM DESIGN                                      */}
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {currentStep === 2 && (
-            <div className="space-y-4 animate-in fade-in">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">
-                    STEP 02
-                  </span>
-                  <h2 className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                    Solar System Design & 3D Engineering
-                  </h2>
-                </div>
-
-                {form.linked_design_id && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => nav(`/solar-designer/${form.linked_design_id}`)}
-                    className="h-8 text-xs text-blue-700 border-blue-300 rounded-xl gap-1"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" /> Edit in Solar Designer
-                  </Button>
-                )}
-              </div>
-
-              {/* System Capacity Quick Slider */}
-              <Card className="rounded-2xl border-slate-200 shadow-2xs">
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-500 uppercase block">Total System Size</span>
-                      <div className="text-2xl font-black text-slate-900" style={{ fontFamily: "Outfit" }}>
-                        {form.system_kw} kWp
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Label className="text-xs text-slate-600 font-semibold">Quick Set:</Label>
-                      {[3, 5, 10, 15, 25].map((kw) => (
-                        <button
-                          key={kw}
-                          onClick={() => {
-                            const pCount = Math.max(1, Math.round((kw * 1000) / (form.panel?.wattage || 555)));
-                            setForm((prev) => ({
-                              ...prev,
-                              system_kw: kw,
-                              system_price: kw * 50000,
-                              panel: { ...prev.panel, quantity: pCount },
-                              inverter: { ...prev.inverter, capacity: `${kw}.0 kW` },
-                            }));
-                            setIsSavedDraft(false);
-                          }}
-                          className={`px-2 py-1 rounded-lg text-xs font-bold transition ${
-                            form.system_kw === kw
-                              ? "bg-blue-600 text-white shadow-xs"
-                              : "bg-slate-100 hover:bg-slate-200 text-slate-700"
-                          }`}
-                        >
-                          {kw}kW
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-100">
-                    <div>
-                      <Label className="text-[10px] text-slate-500 font-bold uppercase">Capacity (kWp)</Label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        value={form.system_kw}
-                        onChange={(e) => {
-                          const kw = parseFloat(e.target.value) || 1;
-                          setForm({ ...form, system_kw: kw });
-                          setIsSavedDraft(false);
-                        }}
-                        className="h-8 text-xs font-bold mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-[10px] text-slate-500 font-bold uppercase">Module Count</Label>
-                      <Input
-                        type="number"
-                        value={form.panel?.quantity || 18}
-                        onChange={(e) => {
-                          const q = parseInt(e.target.value) || 1;
-                          setForm({ ...form, panel: { ...form.panel, quantity: q } });
-                          setIsSavedDraft(false);
-                        }}
-                        className="h-8 text-xs font-bold mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-[10px] text-slate-500 font-bold uppercase">Tilt Angle (°)</Label>
-                      <Input
-                        type="number"
-                        value={form.tilt_deg || 15}
-                        onChange={(e) => {
-                          setForm({ ...form, tilt_deg: parseFloat(e.target.value) || 15 });
-                          setIsSavedDraft(false);
-                        }}
-                        className="h-8 text-xs font-bold mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-[10px] text-slate-500 font-bold uppercase">Roof Area (m²)</Label>
-                      <Input
-                        type="number"
-                        value={form.roof_area_sqm || 41.4}
-                        onChange={(e) => {
-                          setForm({ ...form, roof_area_sqm: parseFloat(e.target.value) || 40 });
-                          setIsSavedDraft(false);
-                        }}
-                        className="h-8 text-xs font-bold mt-1"
-                      />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Design Snapshot / Visual Preview Card */}
-              <Card className="rounded-2xl border-slate-200 shadow-2xs">
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-slate-800 font-bold text-xs">
-                      <Layers className="w-3.5 h-3.5 text-blue-600" />
-                      <span>Rooftop Layout & 3D Engineering Model</span>
-                    </div>
-                    {form.linked_design_name && (
-                      <Badge className="bg-blue-50 text-blue-700 border-blue-200 text-[10px]">
-                        Linked: {form.linked_design_name}
-                      </Badge>
-                    )}
-                  </div>
-
-                  {form.snapshot_2d || form.snapshot_3d ? (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video relative group">
-                        <img src={form.snapshot_2d} alt="2D Roof Plan" className="w-full h-full object-cover" />
-                        <span className="absolute bottom-2 left-2 bg-black/70 text-white text-[9px] px-2 py-0.5 rounded font-mono">
-                          2D Satellite Plan
-                        </span>
-                      </div>
-                      <div className="rounded-xl overflow-hidden border border-slate-200 bg-slate-950 aspect-video relative group">
-                        <img src={form.snapshot_3d} alt="3D Model" className="w-full h-full object-cover" />
-                        <span className="absolute bottom-2 left-2 bg-black/70 text-white text-[9px] px-2 py-0.5 rounded font-mono">
-                          3D Simulation
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="bg-slate-50 rounded-xl p-6 text-center border border-dashed border-slate-300 space-y-2">
-                      <Sun className="w-8 h-8 text-amber-500 mx-auto" />
-                      <div className="text-xs font-bold text-slate-800">No 3D Simulation Snapshot Attached</div>
-                      <p className="text-[11px] text-slate-500 max-w-sm mx-auto">
-                        Open this proposal from the 3D Solar Designer to attach high-resolution 2D and 3D rooftop renderings.
-                      </p>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => nav("/solar-designer")}
-                        className="text-xs text-blue-600 border-blue-200 rounded-lg h-7"
-                      >
-                        Open 3D Solar Designer
-                      </Button>
+            {/* 2D / 3D Layout Thumbnails */}
+            {(form.snapshot_2d || form.snapshot_3d) && (
+              <div className="pt-2 border-t border-slate-100">
+                <span className="text-[10.5px] text-slate-500 font-semibold block mb-1.5">3D Solar Designer Snapshots:</span>
+                <div className="grid grid-cols-2 gap-2">
+                  {form.snapshot_2d && (
+                    <div className="rounded-lg overflow-hidden border border-slate-200 aspect-video relative">
+                      <img src={form.snapshot_2d} alt="2D Roof Plan" className="w-full h-full object-cover" />
+                      <span className="absolute bottom-1 left-1 bg-black/70 text-white text-[8px] px-1.5 py-0.5 rounded font-mono">
+                        2D Layout
+                      </span>
                     </div>
                   )}
-                </CardContent>
-              </Card>
+                  {form.snapshot_3d && (
+                    <div className="rounded-lg overflow-hidden border border-slate-200 aspect-video relative">
+                      <img src={form.snapshot_3d} alt="3D Simulation" className="w-full h-full object-cover" />
+                      <span className="absolute bottom-1 left-1 bg-black/70 text-white text-[8px] px-1.5 py-0.5 rounded font-mono">
+                        3D Simulation
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        )}
+      </Card>
 
-              {/* Navigation Footer */}
-              <div className="flex justify-between pt-2">
-                <Button variant="ghost" onClick={() => setCurrentStep(1)} className="text-xs text-slate-600 h-9 rounded-xl">
-                  <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Customer Info
-                </Button>
-                <Button
-                  onClick={() => setCurrentStep(3)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold h-9 px-5 rounded-xl shadow-xs gap-1.5"
-                >
-                  <span>Next: Equipment & Warranty</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      {/* SECTION 3: EQUIPMENT & WARRANTY                                       */}
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      <Card className="rounded-2xl border-slate-200/90 shadow-2xs overflow-hidden">
+        <div
+          onClick={() => toggleSection("equipment")}
+          className="p-3.5 sm:p-4 bg-slate-50/70 hover:bg-slate-100/70 flex items-center justify-between cursor-pointer transition select-none"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs">
+              ⚡
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-slate-900">Equipment Specifications & Warranties</h3>
+              <p className="text-[10.5px] text-slate-500">Tier-1 PV modules, inverters, mounting structures, cabling and Balance of System</p>
+            </div>
+          </div>
+          {expandedSections.equipment ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+        </div>
+
+        {expandedSections.equipment && (
+          <CardContent className="p-4 pt-3 border-t border-slate-100 space-y-3">
+            <div className="grid sm:grid-cols-2 gap-2.5 text-xs">
+              {/* PV Module Card */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-bold text-blue-700 uppercase">Solar Module</span>
+                  <button
+                    onClick={() => setEditingEquipmentType("panel")}
+                    className="text-[10.5px] text-blue-600 hover:text-blue-800 font-bold"
+                  >
+                    Edit
+                  </button>
+                </div>
+                <div className="font-bold text-slate-900 text-[11.5px]">{form.panel?.make || "INA Solar"}</div>
+                <div className="text-[10.5px] text-slate-600">{form.panel?.model || "555W DCR TOPCon Bifacial"}</div>
+                <div className="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-200/60">
+                  <span>Qty: <b>{form.panel?.quantity || 18} Nos</b></span>
+                  <span>Wattage: <b>{form.panel?.wattage || 555}W</b></span>
+                </div>
+                <div className="text-[9.5px] text-emerald-700 font-medium">
+                  🛡️ {form.panel?.warrantyProductYears || 12}Y Product / {form.panel?.warrantyPerformanceYears || 30}Y Linear
+                </div>
+              </div>
+
+              {/* Inverter Card */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-bold text-amber-700 uppercase">Solar Inverter</span>
+                  <button
+                    onClick={() => setEditingEquipmentType("inverter")}
+                    className="text-[10.5px] text-blue-600 hover:text-blue-800 font-bold"
+                  >
+                    Edit
+                  </button>
+                </div>
+                <div className="font-bold text-slate-900 text-[11.5px]">{form.inverter?.make || "UTL Solar"}</div>
+                <div className="text-[10.5px] text-slate-600">{form.inverter?.model || "Smart Grid-Tied Inverter"}</div>
+                <div className="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-200/60">
+                  <span>Rating: <b>{form.inverter?.capacity || "10.0 kW"}</b></span>
+                  <span>Phase: <b>{form.inverter?.phase || "Three Phase"}</b></span>
+                </div>
+                <div className="text-[9.5px] text-emerald-700 font-medium">
+                  🛡️ {form.inverter?.warrantyYears || 10} Years Comprehensive Warranty
+                </div>
+              </div>
+
+              {/* Structure Card */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-bold text-slate-700 uppercase">Mounting Structure</span>
+                  <button
+                    onClick={() => setEditingEquipmentType("structure")}
+                    className="text-[10.5px] text-blue-600 hover:text-blue-800 font-bold"
+                  >
+                    Edit
+                  </button>
+                </div>
+                <div className="font-bold text-slate-900 text-[11.5px]">{form.structure?.type || "Elevated Super Structure"}</div>
+                <div className="text-[10.5px] text-slate-600">{form.structure?.material || "Aluminium 6063-T6 & HDGI"}</div>
+                <div className="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-200/60">
+                  <span>Clearance: <b>{form.structure?.height || "1.8m"}</b></span>
+                  <span>Wind: <b>150 km/h</b></span>
+                </div>
+              </div>
+
+              {/* Cables & BOS */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-bold text-purple-700 uppercase">Cabling & BOS</span>
+                  <button
+                    onClick={() => {
+                      setCustomItemForm({ name: "", spec: "", qty: "1 Nos" });
+                      setEditingEquipmentType("custom");
+                    }}
+                    className="text-[10.5px] text-blue-600 hover:text-blue-800 font-bold"
+                  >
+                    + Add BOS
+                  </button>
+                </div>
+                <div className="font-bold text-slate-900 text-[11.5px]">Polycab / Havells / Siechem</div>
+                <div className="text-[10.5px] text-slate-600 truncate">{form.cables?.dcCable || "4/6 sq.mm Tinned Copper DC Cable"}</div>
+                <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-200/60">
+                  BOS Items: <b>{(form.bos || []).length} safety components</b> (ACDB, DCDB, Chemical Earth, LA)
+                </div>
               </div>
             </div>
-          )}
+          </CardContent>
+        )}
+      </Card>
 
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {/* STEP 3: EQUIPMENT & WARRANTY                                     */}
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {currentStep === 3 && (
-            <div className="space-y-4 animate-in fade-in">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">
-                    STEP 03
-                  </span>
-                  <h2 className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                    Equipment Specifications & Warranties
-                  </h2>
-                </div>
-
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setCustomItemForm({ name: "", spec: "", qty: "1 Nos" });
-                    setEditingEquipmentType("custom");
-                  }}
-                  className="h-8 text-xs text-blue-700 border-blue-300 rounded-xl gap-1 font-semibold"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Add Equipment
-                </Button>
-              </div>
-
-              {/* EQUIPMENT CARDS GRID */}
-              <div className="grid sm:grid-cols-2 gap-3">
-                {/* 1. Solar Module Card */}
-                <Card className="rounded-2xl border-slate-200 shadow-2xs hover:border-blue-300 transition">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Badge className="bg-blue-100 text-blue-800 text-[10px] font-bold">SOLAR MODULE</Badge>
-                      <button
-                        onClick={() => setEditingEquipmentType("panel")}
-                        className="text-[11px] text-blue-600 hover:text-blue-800 font-bold"
-                      >
-                        Edit
-                      </button>
-                    </div>
-                    <div className="text-xs font-bold text-slate-900">{form.panel?.make || "INA Solar"}</div>
-                    <div className="text-[11px] text-slate-600">{form.panel?.model || "555 WP DCR TOPCon Bifacial"}</div>
-                    <div className="grid grid-cols-2 gap-1 text-[10px] pt-1 text-slate-600 border-t border-slate-100">
-                      <div>Quantity: <b>{form.panel?.quantity || 18} Nos</b></div>
-                      <div>Wattage: <b>{form.panel?.wattage || 555} Wp</b></div>
-                    </div>
-                    <div className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md font-medium">
-                      🛡️ Warranty: {form.panel?.warrantyProductYears || 12}Y Product / {form.panel?.warrantyPerformanceYears || 30}Y Linear
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* 2. Solar Inverter Card */}
-                <Card className="rounded-2xl border-slate-200 shadow-2xs hover:border-blue-300 transition">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Badge className="bg-amber-100 text-amber-800 text-[10px] font-bold">SOLAR INVERTER</Badge>
-                      <button
-                        onClick={() => setEditingEquipmentType("inverter")}
-                        className="text-[11px] text-blue-600 hover:text-blue-800 font-bold"
-                      >
-                        Edit
-                      </button>
-                    </div>
-                    <div className="text-xs font-bold text-slate-900">{form.inverter?.make || "UTL Solar"}</div>
-                    <div className="text-[11px] text-slate-600">{form.inverter?.model || "Smart Grid-Tied Inverter"}</div>
-                    <div className="grid grid-cols-2 gap-1 text-[10px] pt-1 text-slate-600 border-t border-slate-100">
-                      <div>Capacity: <b>{form.inverter?.capacity || "10.0 kW"}</b></div>
-                      <div>Phase: <b>{form.inverter?.phase || "Three Phase"}</b></div>
-                    </div>
-                    <div className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md font-medium">
-                      🛡️ Warranty: {form.inverter?.warrantyYears || 10} Years Manufacturer
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* 3. Mounting Structure Card */}
-                <Card className="rounded-2xl border-slate-200 shadow-2xs hover:border-blue-300 transition">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Badge className="bg-slate-100 text-slate-800 text-[10px] font-bold">MOUNTING STRUCTURE</Badge>
-                      <button
-                        onClick={() => setEditingEquipmentType("structure")}
-                        className="text-[11px] text-blue-600 hover:text-blue-800 font-bold"
-                      >
-                        Edit
-                      </button>
-                    </div>
-                    <div className="text-xs font-bold text-slate-900">{form.structure?.type || "Elevated Super Structure"}</div>
-                    <div className="text-[11px] text-slate-600">{form.structure?.material || "Aluminium 6063 & HDGI"}</div>
-                    <div className="grid grid-cols-2 gap-1 text-[10px] pt-1 text-slate-600 border-t border-slate-100">
-                      <div>Clearance: <b>{form.structure?.height || "1.8m"}</b></div>
-                      <div>Wind Rating: <b>150 km/h</b></div>
-                    </div>
-                    <div className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md font-medium">
-                      🛡️ Warranty: {form.structure?.warrantyYears || 5} Years Structural
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* 4. Cabling & Electricals */}
-                <Card className="rounded-2xl border-slate-200 shadow-2xs hover:border-blue-300 transition">
-                  <CardContent className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Badge className="bg-purple-100 text-purple-800 text-[10px] font-bold">CABLING & HARNESS</Badge>
-                      <button
-                        onClick={() => setEditingEquipmentType("cables")}
-                        className="text-[11px] text-blue-600 hover:text-blue-800 font-bold"
-                      >
-                        Edit
-                      </button>
-                    </div>
-                    <div className="text-xs font-bold text-slate-900">Polycab / Havells / Siechem</div>
-                    <div className="text-[11px] text-slate-600">{form.cables?.dcCable || "4/6 sq.mm Tinned Copper DC Cable"}</div>
-                    <div className="text-[10px] text-slate-500">AC: {form.cables?.acCable || "4-Core Armoured Cable"}</div>
-                    <div className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md font-medium">
-                      🛡️ Warranty: 1 Year Workmanship Guarantee
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Balance of System (BOS) Table Card */}
-              <Card className="rounded-2xl border-slate-200 shadow-2xs">
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-slate-800 font-bold text-xs">
-                      <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
-                      <span>Balance of System (BOS) & Safety Protection</span>
-                    </div>
-                    <span className="text-[10px] text-slate-500 font-mono">{(form.bos || []).length} Components</span>
-                  </div>
-
-                  <div className="divide-y divide-slate-100 text-xs">
-                    {(form.bos || []).map((item, idx) => (
-                      <div key={idx} className="py-2 flex items-center justify-between gap-2">
-                        <div>
-                          <div className="font-bold text-slate-900 text-[11px]">{item.name}</div>
-                          <div className="text-[10px] text-slate-500">{item.spec}</div>
-                        </div>
-                        <Badge variant="outline" className="text-[9px] font-mono shrink-0">
-                          {item.qty}
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Navigation Footer */}
-              <div className="flex justify-between pt-2">
-                <Button variant="ghost" onClick={() => setCurrentStep(2)} className="text-xs text-slate-600 h-9 rounded-xl">
-                  <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Solar Design
-                </Button>
-                <Button
-                  onClick={() => setCurrentStep(4)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold h-9 px-5 rounded-xl shadow-xs gap-1.5"
-                >
-                  <span>Next: Scope & Delivery</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
-              </div>
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      {/* SECTION 4: COMMERCIAL & PAYMENT MILESTONES                            */}
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      <Card className="rounded-2xl border-slate-200/90 shadow-2xs overflow-hidden">
+        <div
+          onClick={() => toggleSection("commercial")}
+          className="p-3.5 sm:p-4 bg-slate-50/70 hover:bg-slate-100/70 flex items-center justify-between cursor-pointer transition select-none"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-800 flex items-center justify-center font-bold text-xs">
+              💰
             </div>
-          )}
-
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {/* STEP 4: SCOPE & PROJECT DELIVERY                                 */}
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {currentStep === 4 && (
-            <div className="space-y-4 animate-in fade-in">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">
-                    STEP 04
-                  </span>
-                  <h2 className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                    Scope Matrix & Project Delivery
-                  </h2>
-                </div>
-              </div>
-
-              {/* TWO LARGE CARDS: EPC SCOPE VS CUSTOMER RESPONSIBILITY */}
-              <div className="grid sm:grid-cols-2 gap-4">
-                {/* CARD 1: EPC Turnkey Scope */}
-                <Card className="rounded-2xl border-slate-200 shadow-2xs">
-                  <CardContent className="p-4 space-y-3">
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                      <div className="font-bold text-xs text-emerald-800 flex items-center gap-1.5">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>EPC Scope (Included)</span>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setScopeTargetType("our");
-                          setNewScopeText("");
-                          setShowAddScopeModal(true);
-                        }}
-                        className="h-6 text-[10px] text-blue-600 px-1.5 rounded-lg"
-                      >
-                        + Add Item
-                      </Button>
-                    </div>
-
-                    <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
-                      {(form.our_scope || []).map((item, idx) => {
-                        const itemText = typeof item === "string" ? item : item?.text || "";
-                        return (
-                          <div key={idx} className="flex items-center justify-between p-1.5 rounded-lg bg-emerald-50/50 border border-emerald-100 text-xs">
-                            <div className="flex items-center gap-2 truncate">
-                              <Check className="w-3 h-3 text-emerald-600 shrink-0" />
-                              <span className="text-slate-800 text-[11px] truncate">{itemText}</span>
-                            </div>
-                            <button
-                              onClick={() => {
-                                setForm({ ...form, our_scope: form.our_scope.filter((_, i) => i !== idx) });
-                                setIsSavedDraft(false);
-                              }}
-                              className="text-slate-400 hover:text-red-500 p-0.5"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* CARD 2: Customer Responsibility */}
-                <Card className="rounded-2xl border-slate-200 shadow-2xs">
-                  <CardContent className="p-4 space-y-3">
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                      <div className="font-bold text-xs text-amber-800 flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-amber-600" />
-                        <span>Customer Deliverables</span>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setScopeTargetType("customer");
-                          setNewScopeText("");
-                          setShowAddScopeModal(true);
-                        }}
-                        className="h-6 text-[10px] text-blue-600 px-1.5 rounded-lg"
-                      >
-                        + Add Item
-                      </Button>
-                    </div>
-
-                    <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
-                      {(form.customer_scope || []).map((item, idx) => {
-                        const itemText = typeof item === "string" ? item : item?.text || "";
-                        return (
-                          <div key={idx} className="flex items-center justify-between p-1.5 rounded-lg bg-amber-50/50 border border-amber-100 text-xs">
-                            <div className="flex items-center gap-2 truncate">
-                              <div className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                              <span className="text-slate-800 text-[11px] truncate">{itemText}</span>
-                            </div>
-                            <button
-                              onClick={() => {
-                                setForm({ ...form, customer_scope: form.customer_scope.filter((_, i) => i !== idx) });
-                                setIsSavedDraft(false);
-                              }}
-                              className="text-slate-400 hover:text-red-500 p-0.5"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Project Delivery Timeline Card */}
-              <Card className="rounded-2xl border-slate-200 shadow-2xs">
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <div className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
-                      <Calendar className="w-3.5 h-3.5 text-blue-600" />
-                      <span>Project Execution Timeline</span>
-                    </div>
-                    <span className="text-[10px] text-slate-500 font-semibold">Turnkey in ~45 Days</span>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                    {(form.timeline || []).map((t, idx) => (
-                      <div key={idx} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
-                        <div className="flex justify-between items-center text-[10px] text-blue-700 font-bold uppercase">
-                          <span>{t.stage}</span>
-                          <span className="font-mono text-slate-500">{t.days} Days</span>
-                        </div>
-                        <div className="font-bold text-slate-900 text-[11px] leading-tight">{t.title}</div>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Navigation Footer */}
-              <div className="flex justify-between pt-2">
-                <Button variant="ghost" onClick={() => setCurrentStep(3)} className="text-xs text-slate-600 h-9 rounded-xl">
-                  <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Equipment
-                </Button>
-                <Button
-                  onClick={() => setCurrentStep(5)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold h-9 px-5 rounded-xl shadow-xs gap-1.5"
-                >
-                  <span>Next: Commercial & Financial</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
-              </div>
+            <div>
+              <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <span>Commercial Cost & Payment Milestones</span>
+                <span className="text-[11px] font-bold text-emerald-700">
+                  · Net: {formatINR(metrics.netCustomerCost)}
+                </span>
+              </h3>
+              <p className="text-[10.5px] text-slate-500">Project cost, GST, central subsidy calculation and milestone schedule</p>
             </div>
-          )}
+          </div>
+          {expandedSections.commercial ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+        </div>
 
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {/* STEP 5: COMMERCIAL & FINANCIAL                                   */}
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {currentStep === 5 && (
-            <div className="space-y-4 animate-in fade-in">
-              <div className="flex items-center justify-between">
+        {expandedSections.commercial && (
+          <CardContent className="p-4 pt-3 border-t border-slate-100 space-y-4">
+            {/* Commercial Breakdown */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="space-y-2">
                 <div>
-                  <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">
-                    STEP 05
-                  </span>
-                  <h2 className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                    Commercial Offer & Financial Returns
-                  </h2>
+                  <Label className="text-[10.5px] text-slate-600 font-semibold">Base Package (₹)</Label>
+                  <Input
+                    type="number"
+                    step="1000"
+                    value={form.system_price}
+                    onChange={(e) => { setForm({ ...form, system_price: parseFloat(e.target.value) || 0 }); setIsSavedDraft(false); }}
+                    className="h-8 text-xs font-bold mt-1"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-[10.5px] text-slate-600 font-semibold">Additional Structural / Civil (₹)</Label>
+                  <Input
+                    type="number"
+                    step="500"
+                    value={form.additional_charges || 0}
+                    onChange={(e) => { setForm({ ...form, additional_charges: parseFloat(e.target.value) || 0 }); setIsSavedDraft(false); }}
+                    className="h-8 text-xs mt-1"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-[10.5px] text-slate-600 font-semibold">DISCOM / Net Metering (₹)</Label>
+                  <Input
+                    type="number"
+                    step="500"
+                    value={form.net_meter_charges || 0}
+                    onChange={(e) => { setForm({ ...form, net_meter_charges: parseFloat(e.target.value) || 0 }); setIsSavedDraft(false); }}
+                    className="h-8 text-xs mt-1"
+                  />
                 </div>
               </div>
 
-              {/* LARGE FINANCIAL SUMMARY CARDS */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="bg-slate-900 text-white p-3.5 rounded-2xl border border-slate-800 shadow-md">
-                  <span className="text-[10px] font-semibold text-slate-400 uppercase block">Project Cost</span>
-                  <div className="text-lg sm:text-xl font-black text-white" style={{ fontFamily: "Outfit" }}>
-                    {formatINR(form.system_price)}
+              {/* Financial Summary Card */}
+              <div className="bg-slate-900 text-white p-3.5 rounded-xl space-y-2 flex flex-col justify-between">
+                <div>
+                  <span className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wider block">Financial Summary</span>
+                  <div className="divide-y divide-slate-800 text-[11px] mt-1 space-y-1">
+                    <div className="flex justify-between py-1 text-slate-300">
+                      <span>Gross Project Cost</span>
+                      <span className="font-bold text-white">{formatINR(metrics.grossCost)}</span>
+                    </div>
+                    <div className="flex justify-between py-1 text-slate-300">
+                      <span>GST ({form.gst_pct}%)</span>
+                      <span className="font-bold text-white">{formatINR(metrics.gstAmount)}</span>
+                    </div>
+                    <div className="flex justify-between py-1 text-emerald-400">
+                      <span>Central Subsidy</span>
+                      <span className="font-bold">{form.subsidy_applicable ? formatINR(form.subsidy_amount) : "₹0"}</span>
+                    </div>
                   </div>
-                  <span className="text-[9px] text-slate-400">Base System Pricing</span>
                 </div>
 
-                <div className="bg-blue-50/90 text-blue-950 p-3.5 rounded-2xl border border-blue-200 shadow-xs">
-                  <span className="text-[10px] font-bold text-blue-700 uppercase block">GST ({form.gst_pct}%)</span>
-                  <div className="text-lg sm:text-xl font-black text-blue-950" style={{ fontFamily: "Outfit" }}>
-                    {formatINR(metrics.gstAmount)}
-                  </div>
-                  <span className="text-[9px] text-blue-600">Standard Solar GST</span>
-                </div>
-
-                <div className="bg-emerald-50/90 text-emerald-950 p-3.5 rounded-2xl border border-emerald-200 shadow-xs">
-                  <span className="text-[10px] font-bold text-emerald-700 uppercase block">Central Subsidy</span>
-                  <div className="text-lg sm:text-xl font-black text-emerald-950" style={{ fontFamily: "Outfit" }}>
-                    {form.subsidy_applicable ? formatINR(form.subsidy_amount) : "₹0"}
-                  </div>
-                  <span className="text-[9px] text-emerald-700">PM Surya Ghar Scheme</span>
-                </div>
-
-                <div className="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-3.5 rounded-2xl shadow-md">
-                  <span className="text-[10px] font-bold text-blue-100 uppercase block">Net Customer Cost</span>
-                  <div className="text-lg sm:text-xl font-black text-white" style={{ fontFamily: "Outfit" }}>
+                <div className="pt-2 border-t border-slate-700 flex justify-between items-center">
+                  <span className="text-[11px] font-bold text-slate-300 uppercase">Net Customer Cost</span>
+                  <span className="text-base font-black text-white" style={{ fontFamily: "Outfit" }}>
                     {formatINR(metrics.netCustomerCost)}
-                  </div>
-                  <span className="text-[9px] text-blue-200">Post-Subsidy Net</span>
-                </div>
-              </div>
-
-              {/* Pricing & Subsidy Inputs Card */}
-              <Card className="rounded-2xl border-slate-200 shadow-2xs">
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <span className="text-xs font-bold text-slate-800">Commercial Pricing Adjustments</span>
-                    <div className="flex items-center gap-2">
-                      <Label className="text-[11px] font-semibold text-slate-600">Apply Central Subsidy:</Label>
-                      <Switch
-                        checked={form.subsidy_applicable}
-                        onCheckedChange={(val) => {
-                          const subAmt = val ? calculateSubsidy(form.system_kw, form.project_type) : 0;
-                          setForm({ ...form, subsidy_applicable: val, subsidy_amount: subAmt });
-                          setIsSavedDraft(false);
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                    <div>
-                      <Label className="text-[10px] text-slate-500 font-bold uppercase">Base Price (₹)</Label>
-                      <Input
-                        type="number"
-                        step="1000"
-                        value={form.system_price}
-                        onChange={(e) => {
-                          setForm({ ...form, system_price: parseFloat(e.target.value) || 0 });
-                          setIsSavedDraft(false);
-                        }}
-                        className="h-8 text-xs font-bold mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-[10px] text-slate-500 font-bold uppercase">DISCOM / Net-Meter (₹)</Label>
-                      <Input
-                        type="number"
-                        step="500"
-                        value={form.net_meter_charges || 0}
-                        onChange={(e) => {
-                          setForm({ ...form, net_meter_charges: parseFloat(e.target.value) || 0 });
-                          setIsSavedDraft(false);
-                        }}
-                        className="h-8 text-xs font-bold mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-[10px] text-slate-500 font-bold uppercase">Grid Tariff (₹/kWh)</Label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        value={form.tariff_rate || 8.5}
-                        onChange={(e) => {
-                          setForm({ ...form, tariff_rate: parseFloat(e.target.value) || 8.5 });
-                          setIsSavedDraft(false);
-                        }}
-                        className="h-8 text-xs font-bold mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-[10px] text-slate-500 font-bold uppercase">GST Rate (%)</Label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        value={form.gst_pct || 13.8}
-                        onChange={(e) => {
-                          setForm({ ...form, gst_pct: parseFloat(e.target.value) || 13.8 });
-                          setIsSavedDraft(false);
-                        }}
-                        className="h-8 text-xs font-bold mt-1"
-                      />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Payment Milestones Card with 100% validation */}
-              <Card className="rounded-2xl border-slate-200 shadow-2xs">
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <div className="flex items-center gap-2">
-                      <DollarSign className="w-3.5 h-3.5 text-blue-600" />
-                      <span className="text-xs font-bold text-slate-800">Payment Terms & Milestones</span>
-                      <Badge
-                        variant="outline"
-                        className={`text-[9px] font-bold ${
-                          Math.abs(milestoneTotalPct - 100) < 0.1
-                            ? "bg-emerald-50 text-emerald-700 border-emerald-300"
-                            : "bg-amber-50 text-amber-700 border-amber-300"
-                        }`}
-                      >
-                        Total: {milestoneTotalPct}%
-                      </Badge>
-                    </div>
-
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setNewMilestoneForm({ stage: `Milestone ${(form.milestones || []).length + 1}`, label: "", pct: 10 });
-                        setShowAddMilestoneModal(true);
-                      }}
-                      className="h-6 text-[10px] text-blue-600 px-1.5 rounded-lg"
-                    >
-                      + Add Milestone
-                    </Button>
-                  </div>
-
-                  {/* Percentage Progress Bar */}
-                  <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                    <div
-                      className={`h-full transition-all ${Math.abs(milestoneTotalPct - 100) < 0.1 ? "bg-emerald-500" : "bg-amber-500"}`}
-                      style={{ width: `${Math.min(100, milestoneTotalPct)}%` }}
-                    />
-                  </div>
-
-                  <div className="space-y-2 text-xs">
-                    {(form.milestones || []).map((m, idx) => {
-                      const amount = metrics.netCustomerCost * (Number(m.pct) / 100);
-                      return (
-                        <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-slate-50 border border-slate-200 gap-2">
-                          <div className="min-w-0">
-                            <span className="text-[10px] font-bold text-blue-700 uppercase block">{m.stage}</span>
-                            <div className="font-semibold text-slate-800 text-[11px] truncate">{m.label}</div>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <div className="text-right">
-                              <span className="font-bold text-slate-900 text-xs">{formatINR(amount)}</span>
-                              <div className="text-[9px] text-slate-500">{m.pct}%</div>
-                            </div>
-                            <button
-                              onClick={() => {
-                                setForm({ ...form, milestones: form.milestones.filter((_, i) => i !== idx) });
-                                setIsSavedDraft(false);
-                              }}
-                              className="text-slate-400 hover:text-red-500 p-1"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Navigation Footer */}
-              <div className="flex justify-between pt-2">
-                <Button variant="ghost" onClick={() => setCurrentStep(4)} className="text-xs text-slate-600 h-9 rounded-xl">
-                  <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Scope & Delivery
-                </Button>
-                <Button
-                  onClick={() => setCurrentStep(6)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold h-9 px-5 rounded-xl shadow-xs gap-1.5"
-                >
-                  <span>Next: Review Proposal</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {/* STEP 6: REVIEW PROPOSAL                                          */}
-          {/* ───────────────────────────────────────────────────────────────── */}
-          {currentStep === 6 && (
-            <div className="space-y-4 animate-in fade-in">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">
-                    STEP 06
                   </span>
-                  <h2 className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                    Proposal Final Review & Generation
-                  </h2>
-                </div>
-              </div>
-
-              {/* Proposal Readiness Checklist Card */}
-              <Card className="rounded-2xl border-slate-200 shadow-2xs">
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <div className="flex items-center gap-2">
-                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                      <span className="font-bold text-xs text-slate-900">Proposal Readiness Audit</span>
-                    </div>
-                    <Badge
-                      className={`text-[10px] font-bold ${
-                        readiness.isReady
-                          ? "bg-emerald-100 text-emerald-800"
-                          : "bg-amber-100 text-amber-800"
-                      }`}
-                    >
-                      {readiness.isReady ? "Ready to Generate" : `${readiness.missingCount} Incomplete Items`}
-                    </Badge>
-                  </div>
-
-                  <div className="grid sm:grid-cols-2 gap-2 text-xs">
-                    {readiness.checks.map((c) => (
-                      <div
-                        key={c.id}
-                        className={`flex items-center justify-between p-2 rounded-xl border ${
-                          c.ok
-                            ? "bg-emerald-50/50 border-emerald-100 text-slate-800"
-                            : "bg-amber-50/70 border-amber-200 text-amber-900"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          {c.ok ? (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                          ) : (
-                            <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          )}
-                          <span className="font-medium text-[11px]">{c.label}</span>
-                        </div>
-                        {!c.ok && (
-                          <button
-                            onClick={() => setCurrentStep(c.step)}
-                            className="text-[10px] font-bold text-blue-600 hover:text-blue-800 bg-white px-2 py-0.5 rounded border border-blue-200"
-                          >
-                            Fix →
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Executive Review Cards with [Edit] Jump Links */}
-              <div className="space-y-3">
-                {/* 1. Customer & Site Review Card */}
-                <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase">Customer & Site</span>
-                    <div className="text-xs font-bold text-slate-900">{form.customer_name || "—"} ({form.mobile || "—"})</div>
-                    <div className="text-[10px] text-slate-500">{form.site_address || "—"}, {form.city}</div>
-                  </div>
-                  <Button size="sm" variant="ghost" onClick={() => setCurrentStep(1)} className="text-xs text-blue-600 h-7">
-                    Edit
-                  </Button>
-                </div>
-
-                {/* 2. System Design Review Card */}
-                <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase">Solar System</span>
-                    <div className="text-xs font-bold text-slate-900">{form.system_kw} kWp · {form.panel?.quantity || 18} Modules ({form.panel?.wattage || 555}W)</div>
-                    <div className="text-[10px] text-slate-500">{form.inverter?.capacity || "10 kW"} Inverter · {form.structure?.type || "Elevated"}</div>
-                  </div>
-                  <Button size="sm" variant="ghost" onClick={() => setCurrentStep(2)} className="text-xs text-blue-600 h-7">
-                    Edit
-                  </Button>
-                </div>
-
-                {/* 3. Commercials Review Card */}
-                <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase">Commercial Offer</span>
-                    <div className="text-xs font-bold text-slate-900">Net Customer Cost: {formatINR(metrics.netCustomerCost)}</div>
-                    <div className="text-[10px] text-emerald-700 font-medium">
-                      Est. Payback: {metrics.paybackYears} Years · Lifetime Savings: {formatINR(metrics.lifetimeSavings)}
-                    </div>
-                  </div>
-                  <Button size="sm" variant="ghost" onClick={() => setCurrentStep(5)} className="text-xs text-blue-600 h-7">
-                    Edit
-                  </Button>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3">
-                <Button variant="ghost" onClick={() => setCurrentStep(5)} className="text-xs text-slate-600 h-9 rounded-xl">
-                  <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Financials
-                </Button>
-
-                <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setShowFullViewerModal(true)}
-                    className="flex-1 sm:flex-none h-10 text-xs font-bold rounded-xl border-slate-300"
-                  >
-                    <Eye className="w-4 h-4 mr-1.5" /> Open Full Document
-                  </Button>
-
-                  <Button
-                    size="sm"
-                    onClick={handleGenerateProposal}
-                    disabled={generating}
-                    className="flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs h-10 px-6 rounded-xl shadow-md gap-2"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    <span>{generating ? "Building PDF…" : "Generate Proposal PDF"}</span>
-                  </Button>
                 </div>
               </div>
             </div>
-          )}
 
+            {/* Subsidy Toggle */}
+            <div className="flex items-center justify-between p-2.5 bg-blue-50/70 rounded-xl border border-blue-200 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-blue-950">Apply Central Subsidy (PM Surya Ghar):</span>
+                <span className="text-blue-700 text-[11px]">
+                  {form.subsidy_applicable ? `${formatINR(form.subsidy_amount)} eligible` : "Disabled"}
+                </span>
+              </div>
+              <Switch
+                checked={form.subsidy_applicable}
+                onCheckedChange={(val) => {
+                  const subAmt = val ? calculateSubsidy(form.system_kw, form.project_type) : 0;
+                  setForm({ ...form, subsidy_applicable: val, subsidy_amount: subAmt });
+                  setIsSavedDraft(false);
+                }}
+              />
+            </div>
+
+            {/* Payment Milestones */}
+            <div className="space-y-2 pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-800">
+                  Payment Milestones (Total: {milestoneTotalPct}%)
+                </span>
+                <button
+                  onClick={() => {
+                    setNewMilestoneForm({ stage: `Milestone ${(form.milestones || []).length + 1}`, label: "", pct: 10 });
+                    setShowAddMilestoneModal(true);
+                  }}
+                  className="text-xs text-blue-600 hover:text-blue-800 font-bold"
+                >
+                  + Add Milestone
+                </button>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-2 text-xs">
+                {(form.milestones || []).map((m, idx) => {
+                  const amt = metrics.netCustomerCost * (Number(m.pct) / 100);
+                  return (
+                    <div key={idx} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex justify-between items-center gap-2">
+                      <div className="min-w-0">
+                        <span className="text-[9.5px] font-bold text-blue-700 uppercase block">{m.stage}</span>
+                        <div className="font-semibold text-slate-800 text-[11px] truncate">{m.label}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="font-bold text-slate-900 text-xs">{formatINR(amt)}</div>
+                        <div className="text-[9.5px] text-slate-500 font-medium">({m.pct}%)</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      {/* SECTION 5: ENERGY GENERATION, SAVINGS & ROI                           */}
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      <Card className="rounded-2xl border-slate-200/90 shadow-2xs overflow-hidden">
+        <div
+          onClick={() => toggleSection("roi")}
+          className="p-3.5 sm:p-4 bg-slate-50/70 hover:bg-slate-100/70 flex items-center justify-between cursor-pointer transition select-none"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-800 flex items-center justify-center font-bold text-xs">
+              📈
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-slate-900">Energy Generation, Savings & ROI</h3>
+              <p className="text-[10.5px] text-slate-500">Annual production, tariff electricity savings, payback period and CO₂ offset</p>
+            </div>
+          </div>
+          {expandedSections.roi ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
         </div>
 
-        {/* RIGHT COLUMN: STICKY LIVE PROPOSAL PREVIEW CARD (5 cols on desktop) */}
-        <div className={`lg:col-span-5 ${showMobilePreview ? "block" : "hidden lg:block"}`}>
-          <LiveProposalPreviewCard
-            form={form}
-            metrics={metrics}
-            companyData={companyData}
-            onOpenFullViewer={() => setShowFullViewerModal(true)}
-            onGenerateProposal={handleGenerateProposal}
-            generating={generating}
-          />
+        {expandedSections.roi && (
+          <CardContent className="p-4 pt-3 border-t border-slate-100 space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
+              <div className="p-2.5 bg-blue-50/80 rounded-xl border border-blue-200">
+                <span className="text-[9.5px] font-bold text-blue-700 uppercase block">Annual Generation</span>
+                <div className="text-base font-black text-blue-950 mt-0.5">{formatNumberIN(metrics.annualKwh)}</div>
+                <span className="text-[9px] text-slate-500">kWh / Year</span>
+              </div>
+
+              <div className="p-2.5 bg-emerald-50/80 rounded-xl border border-emerald-200">
+                <span className="text-[9.5px] font-bold text-emerald-700 uppercase block">Annual Savings</span>
+                <div className="text-base font-black text-emerald-950 mt-0.5">{formatINR(metrics.annualSavings)}</div>
+                <span className="text-[9px] text-slate-500">@ ₹{form.tariff_rate}/kWh</span>
+              </div>
+
+              <div className="p-2.5 bg-indigo-50/80 rounded-xl border border-indigo-200">
+                <span className="text-[9.5px] font-bold text-indigo-700 uppercase block">Estimated Payback</span>
+                <div className="text-base font-black text-indigo-950 mt-0.5">{metrics.paybackYears} Yrs</div>
+                <span className="text-[9px] text-slate-500">Simple ROI</span>
+              </div>
+
+              <div className="p-2.5 bg-amber-50/80 rounded-xl border border-amber-200">
+                <span className="text-[9.5px] font-bold text-amber-700 uppercase block">CO₂ Offset</span>
+                <div className="text-base font-black text-amber-950 mt-0.5">{metrics.co2Tons} Tons</div>
+                <span className="text-[9px] text-slate-500">~{metrics.treesCount} Trees/Yr</span>
+              </div>
+            </div>
+
+            <div className="pt-2 flex items-center justify-between text-xs text-slate-600">
+              <span className="font-medium">Electricity Grid Tariff:</span>
+              <div className="flex items-center gap-1.5">
+                <span className="font-bold">₹</span>
+                <Input
+                  type="number"
+                  step="0.1"
+                  value={form.tariff_rate || 8.5}
+                  onChange={(e) => { setForm({ ...form, tariff_rate: parseFloat(e.target.value) || 8.5 }); setIsSavedDraft(false); }}
+                  className="w-20 h-7 text-xs font-bold text-right"
+                />
+                <span className="text-[11px] text-slate-500">/ kWh</span>
+              </div>
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      {/* SECTION 6: SCOPE MATRIX & TIMELINE                                    */}
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      <Card className="rounded-2xl border-slate-200/90 shadow-2xs overflow-hidden">
+        <div
+          onClick={() => toggleSection("scope")}
+          className="p-3.5 sm:p-4 bg-slate-50/70 hover:bg-slate-100/70 flex items-center justify-between cursor-pointer transition select-none"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-orange-100 text-orange-800 flex items-center justify-center font-bold text-xs">
+              📋
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-slate-900">Scope Matrix & Project Timeline</h3>
+              <p className="text-[10.5px] text-slate-500">Scope of work checklist, customer deliverables and 4-phase delivery schedule</p>
+            </div>
+          </div>
+          {expandedSections.scope ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
         </div>
 
+        {expandedSections.scope && (
+          <CardContent className="p-4 pt-3 border-t border-slate-100 space-y-3">
+            <div className="grid sm:grid-cols-2 gap-3 text-xs">
+              {/* EPC Scope */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-emerald-800 text-[11px]">EPC Scope (Included)</span>
+                  <button
+                    onClick={() => {
+                      setScopeTargetType("our");
+                      setNewScopeText("");
+                      setShowAddScopeModal(true);
+                    }}
+                    className="text-[10.5px] text-blue-600 hover:text-blue-800 font-bold"
+                  >
+                    + Add Item
+                  </button>
+                </div>
+                <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
+                  {(form.our_scope || []).map((item, idx) => {
+                    const text = typeof item === "string" ? item : item?.text || "";
+                    return (
+                      <div key={idx} className="flex justify-between items-center text-[10.5px] text-slate-700 py-0.5">
+                        <span className="truncate pr-2">✓ {text}</span>
+                        <button
+                          onClick={() => setForm({ ...form, our_scope: form.our_scope.filter((_, i) => i !== idx) })}
+                          className="text-slate-400 hover:text-red-500"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Customer Scope */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-amber-800 text-[11px]">Customer Deliverables</span>
+                  <button
+                    onClick={() => {
+                      setScopeTargetType("customer");
+                      setNewScopeText("");
+                      setShowAddScopeModal(true);
+                    }}
+                    className="text-[10.5px] text-blue-600 hover:text-blue-800 font-bold"
+                  >
+                    + Add Item
+                  </button>
+                </div>
+                <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
+                  {(form.customer_scope || []).map((item, idx) => {
+                    const text = typeof item === "string" ? item : item?.text || "";
+                    return (
+                      <div key={idx} className="flex justify-between items-center text-[10.5px] text-slate-700 py-0.5">
+                        <span className="truncate pr-2">• {text}</span>
+                        <button
+                          onClick={() => setForm({ ...form, customer_scope: form.customer_scope.filter((_, i) => i !== idx) })}
+                          className="text-slate-400 hover:text-red-500"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Timeline */}
+            <div className="pt-2 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              {(form.timeline || []).map((t, idx) => (
+                <div key={idx} className="p-2 bg-slate-50 rounded-lg border border-slate-200">
+                  <div className="text-[9.5px] font-bold text-blue-700 uppercase">{t.stage} ({t.days}d)</div>
+                  <div className="font-semibold text-slate-800 text-[10.5px] truncate mt-0.5">{t.title}</div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      {/* SECTION 7: TERMS & ACCEPTANCE                                         */}
+      {/* ───────────────────────────────────────────────────────────────────── */}
+      <Card className="rounded-2xl border-slate-200/90 shadow-2xs overflow-hidden">
+        <div
+          onClick={() => toggleSection("terms")}
+          className="p-3.5 sm:p-4 bg-slate-50/70 hover:bg-slate-100/70 flex items-center justify-between cursor-pointer transition select-none"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-slate-200 text-slate-800 flex items-center justify-center font-bold text-xs">
+              📄
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-slate-900">Terms & Conditions & Acceptance</h3>
+              <p className="text-[10.5px] text-slate-500">Commercial parameters, validity, civil grouting, DISCOM policies and signoff</p>
+            </div>
+          </div>
+          {expandedSections.terms ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+        </div>
+
+        {expandedSections.terms && (
+          <CardContent className="p-4 pt-3 border-t border-slate-100 space-y-3">
+            <div className="space-y-1.5 text-xs text-slate-600 max-h-56 overflow-y-auto pr-1">
+              {(form.terms || []).map((term, idx) => (
+                <div key={idx} className="p-2 bg-slate-50 rounded-lg border border-slate-200">
+                  <span className="font-bold text-slate-900 text-[11px] block">{idx + 1}. {term.title}</span>
+                  <span className="text-[10px] text-slate-600">{term.desc}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        )}
+      </Card>
+
+      {/* ── BOTTOM ACTIONS ─────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between pt-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            if (window.confirm("Clear all fields and reset draft?")) {
+              localStorage.removeItem(DRAFT_STORAGE_KEY);
+              window.location.reload();
+            }
+          }}
+          className="h-9 text-xs text-slate-500 hover:text-red-600 rounded-xl"
+        >
+          <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Reset Draft
+        </Button>
+
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setShowFullViewerModal(true)}
+            className="h-9 text-xs font-bold rounded-xl border-slate-300 gap-1.5"
+          >
+            <Eye className="w-4 h-4 text-blue-600" /> Preview Full Proposal
+          </Button>
+
+          <Button
+            size="sm"
+            onClick={handleGenerateProposal}
+            disabled={generating}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs h-9 px-6 rounded-xl shadow-md gap-2"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>{generating ? "Building PDF…" : "Generate Proposal PDF"}</span>
+          </Button>
+        </div>
       </div>
 
-      {/* ── 4. FULL 11-PAGE PROPOSAL DOCUMENT VIEWER MODAL ────────────────── */}
+      {/* ── COMPLETE 11-PAGE PROPOSAL DOCUMENT VIEWER MODAL ────────────────── */}
       <Dialog open={showFullViewerModal} onOpenChange={setShowFullViewerModal}>
         <DialogContent className="max-w-6xl w-[95vw] h-[90vh] p-0 bg-slate-950 border-slate-800 text-white overflow-hidden flex flex-col">
           <ProposalDocumentViewer
@@ -1765,7 +1417,7 @@ export default function ProposalGenerator() {
         </DialogContent>
       </Dialog>
 
-      {/* ── 5. EQUIPMENT EDIT / ADD MODAL ──────────────────────────────────── */}
+      {/* ── EQUIPMENT EDIT / ADD MODAL ─────────────────────────────────────── */}
       <Dialog open={Boolean(editingEquipmentType)} onOpenChange={(o) => !o && setEditingEquipmentType(null)}>
         <DialogContent className="max-w-md bg-white text-slate-900 border-slate-200">
           <DialogHeader>
@@ -1775,8 +1427,7 @@ export default function ProposalGenerator() {
                 {editingEquipmentType === "panel" && "Edit Solar PV Module"}
                 {editingEquipmentType === "inverter" && "Edit Solar Inverter"}
                 {editingEquipmentType === "structure" && "Edit Mounting Structure"}
-                {editingEquipmentType === "cables" && "Edit Cabling & Harness"}
-                {editingEquipmentType === "custom" && "Add Custom Equipment Item"}
+                {editingEquipmentType === "custom" && "Add Custom BOS Equipment"}
               </span>
             </DialogTitle>
           </DialogHeader>
@@ -1853,6 +1504,27 @@ export default function ProposalGenerator() {
               </>
             )}
 
+            {editingEquipmentType === "structure" && (
+              <>
+                <div>
+                  <Label className="text-[11px] font-semibold text-slate-600">Structure Type</Label>
+                  <Input
+                    value={form.structure?.type || ""}
+                    onChange={(e) => setForm({ ...form, structure: { ...form.structure, type: e.target.value } })}
+                    className="h-8 text-xs mt-1"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] font-semibold text-slate-600">Clearance Height</Label>
+                  <Input
+                    value={form.structure?.height || ""}
+                    onChange={(e) => setForm({ ...form, structure: { ...form.structure, height: e.target.value } })}
+                    className="h-8 text-xs mt-1"
+                  />
+                </div>
+              </>
+            )}
+
             {editingEquipmentType === "custom" && (
               <>
                 <div>
@@ -1912,7 +1584,7 @@ export default function ProposalGenerator() {
         </DialogContent>
       </Dialog>
 
-      {/* ── 6. ADD SCOPE MODAL ──────────────────────────────────────────────── */}
+      {/* ── ADD SCOPE MODAL ────────────────────────────────────────────────── */}
       <Dialog open={showAddScopeModal} onOpenChange={setShowAddScopeModal}>
         <DialogContent className="max-w-sm bg-white text-slate-900 border-slate-200">
           <DialogHeader>
@@ -1954,7 +1626,7 @@ export default function ProposalGenerator() {
         </DialogContent>
       </Dialog>
 
-      {/* ── 7. ADD MILESTONE MODAL ──────────────────────────────────────────── */}
+      {/* ── ADD MILESTONE MODAL ────────────────────────────────────────────── */}
       <Dialog open={showAddMilestoneModal} onOpenChange={setShowAddMilestoneModal}>
         <DialogContent className="max-w-sm bg-white text-slate-900 border-slate-200">
           <DialogHeader>
