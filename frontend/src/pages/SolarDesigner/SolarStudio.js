@@ -51,7 +51,7 @@ export default function SolarStudio() {
   const [isCalibrated, setIsCalibrated] = useState(false);
 
   // Accordion state: only ONE major section open at a time
-  const [openSection, setOpenSection] = useState("location"); // 'location' | 'roof' | 'obstacles' | 'pv_module' | 'structure' | 'layout'
+  const [openSection, setOpenSection] = useState(null); // null = all collapsed; 'location' | 'roof' | 'obstacles' | 'pv_module' | 'structure' | 'layout'
 
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -662,207 +662,138 @@ export default function SolarStudio() {
       </div>
 
       {/* 2. THREE-COLUMN DESKTOP ENGINEERING WORKSPACE */}
-      <div className={`grid grid-cols-1 lg:grid-cols-12 gap-2.5 ${isFullscreen ? "flex-1 min-h-0" : ""}`}>
-        {/* LEFT COLUMN: DESIGN TOOLS ACCORDION (3 cols) */}
-        <div className={`lg:col-span-3 space-y-1.5 bg-white p-2.5 rounded-2xl border border-slate-200 shadow-xs overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[860px]"}`}>
+      <div className={`grid grid-cols-1 lg:grid-cols-12 gap-2 ${isFullscreen ? "flex-1 min-h-0" : ""}`}>
+        {/* LEFT COLUMN: DESIGN TOOLS ACCORDION (2 cols — compact) */}
+        <div className={`lg:col-span-2 space-y-1 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-xs overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[860px]"}`}>
           {/* SECTION 1: Location & Search */}
-          <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+          <div className="rounded-lg border border-slate-200 overflow-hidden">
             <button
               onClick={() => toggleSection("location")}
-              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
             >
-              <div className="flex items-center gap-1.5">
-                <Globe className="w-3.5 h-3.5 text-blue-600" />
-                <span>1. Location & Search</span>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Globe className="w-3 h-3 text-blue-600 shrink-0" />
+                <span className="text-[10.5px] font-bold text-slate-800 truncate">1. Location</span>
               </div>
-              {openSection === "location" ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
+              <div className="flex items-center gap-1 shrink-0 ml-1">
+                {openSection !== "location" && designData.formatted_address && (
+                  <span className="text-[9px] text-slate-500 truncate max-w-[60px] hidden xl:block">
+                    {designData.formatted_address.split(",")[0]}
+                  </span>
+                )}
+                {openSection === "location" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
+              </div>
             </button>
 
             {openSection === "location" && (
-              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
-                {/* Search Input with Autocomplete */}
+              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
                 <div className="relative">
-                  <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-2.5" />
+                  <Search className="w-3 h-3 text-slate-400 absolute left-2 top-2" />
                   <Input
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search city, town, PIN..."
-                    className="h-7 pl-7 pr-3 text-xs"
+                    className="h-6 pl-6 pr-2 text-[10.5px]"
                   />
-                  {searching && (
-                    <RefreshCw className="w-3 h-3 text-blue-600 animate-spin absolute right-2.5 top-2" />
-                  )}
-
+                  {searching && <RefreshCw className="w-3 h-3 text-blue-600 animate-spin absolute right-2 top-1.5" />}
                   {searchPredictions.length > 0 && (
-                    <div className="absolute top-8 left-0 right-0 z-50 bg-white rounded-xl border border-slate-200 shadow-2xl max-h-52 overflow-y-auto divide-y divide-slate-100">
+                    <div className="absolute top-7 left-0 right-0 z-50 bg-white rounded-xl border border-slate-200 shadow-2xl max-h-48 overflow-y-auto divide-y divide-slate-100">
                       {searchPredictions.map((p, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => handleSelectPrediction(p)}
-                          className="w-full text-left p-2 hover:bg-blue-50 text-[11px] transition block"
-                        >
-                          <div className="font-bold text-slate-900">{p.name}</div>
-                          <div className="text-[10px] text-slate-500 truncate">{p.secondary || p.description}</div>
+                        <button key={idx} onClick={() => handleSelectPrediction(p)} className="w-full text-left px-2 py-1.5 hover:bg-blue-50 text-[10.5px] transition block">
+                          <div className="font-bold text-slate-900 truncate">{p.name}</div>
+                          <div className="text-[9.5px] text-slate-500 truncate">{p.secondary || p.description}</div>
                         </button>
                       ))}
                     </div>
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleDetectGPS}
-                    disabled={detectingGps}
-                    className="h-7 text-[10.5px] font-semibold text-blue-700 bg-blue-50/50 border-blue-200 hover:bg-blue-100"
-                  >
-                    <Navigation className="w-3 h-3 mr-1" /> GPS Locate
+                <div className="grid grid-cols-2 gap-1">
+                  <Button size="sm" variant="outline" onClick={handleDetectGPS} disabled={detectingGps}
+                    className="h-6 text-[9.5px] font-semibold text-blue-700 bg-blue-50/50 border-blue-200 hover:bg-blue-100 px-1.5">
+                    <Navigation className="w-2.5 h-2.5 mr-0.5" /> GPS
                   </Button>
-
-                  <Select
-                    value={designData.client_id || "none"}
-                    onValueChange={(val) => {
-                      const c = clients.find((item) => item.id === val);
-                      updateDesignData({
-                        client_id: val === "none" ? "" : val,
-                        client_name: c ? c.full_name : "",
-                      });
-                    }}
-                  >
-                    <SelectTrigger className="h-7 text-[10.5px]">
-                      <SelectValue placeholder="Link Client" />
-                    </SelectTrigger>
+                  <Select value={designData.client_id || "none"} onValueChange={(val) => { const c = clients.find((item) => item.id === val); updateDesignData({ client_id: val === "none" ? "" : val, client_name: c ? c.full_name : "" }); }}>
+                    <SelectTrigger className="h-6 text-[9.5px]"><SelectValue placeholder="Client" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">-- No Client --</SelectItem>
-                      {clients.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.full_name}
-                        </SelectItem>
-                      ))}
+                      {clients.map((c) => <SelectItem key={c.id} value={c.id}>{c.full_name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
 
-                {/* Selected Location Info Box */}
-                <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 text-[10.5px] space-y-0.5 text-slate-600">
-                  <div className="font-bold text-slate-800 truncate">{designData.formatted_address || "Mumbai, India"}</div>
-                  <div className="text-[10px] text-slate-400">
-                    Lat: <b>{Number(designData.latitude).toFixed(5)}</b> · Lng: <b>{Number(designData.longitude).toFixed(5)}</b>
-                  </div>
+                <div className="bg-slate-50 px-2 py-1 rounded-lg border border-slate-100 text-[9.5px] space-y-0.5">
+                  <div className="font-bold text-slate-800 truncate">{designData.formatted_address || "—"}</div>
+                  <div className="text-slate-400">Lat: <b>{Number(designData.latitude).toFixed(4)}</b> · Lng: <b>{Number(designData.longitude).toFixed(4)}</b></div>
                 </div>
               </div>
             )}
           </div>
 
           {/* SECTION 2: Roof Geometry & Pitch */}
-          <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+          <div className="rounded-lg border border-slate-200 overflow-hidden">
             <button
               onClick={() => toggleSection("roof")}
-              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
             >
-              <div className="flex items-center gap-1.5">
-                <PenTool className="w-3.5 h-3.5 text-emerald-600" />
-                <span>2. Roof Geometry & Pitch</span>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <PenTool className="w-3 h-3 text-emerald-600 shrink-0" />
+                <span className="text-[10.5px] font-bold text-slate-800 truncate">2. Roof</span>
               </div>
-              {openSection === "roof" ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
+              <div className="flex items-center gap-1 shrink-0 ml-1">
+                {openSection !== "roof" && (
+                  <span className="text-[9px] text-slate-500 truncate max-w-[60px] hidden xl:block">
+                    {designData.roof?.type ? designData.roof.type.replace("_", " ") : "Flat"} · {designData.roof?.pitch_deg ?? 0}°
+                  </span>
+                )}
+                {openSection === "roof" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
+              </div>
             </button>
 
             {openSection === "roof" && (
-              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
-                <Button
-                  size="sm"
-                  variant={activeTool === "draw_roof" ? "default" : "outline"}
+              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
+                <Button size="sm" variant={activeTool === "draw_roof" ? "default" : "outline"}
                   onClick={() => setActiveTool(activeTool === "draw_roof" ? "select" : "draw_roof")}
-                  className={`w-full h-7 text-xs font-semibold rounded-xl gap-1.5 ${
+                  className={`w-full h-6 text-[10.5px] font-semibold rounded-lg gap-1 ${
                     activeTool === "draw_roof" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "border-emerald-300 text-emerald-700 bg-emerald-50/40 hover:bg-emerald-100"
-                  }`}
-                >
-                  <PenTool className="w-3.5 h-3.5" />
-                  <span>{activeTool === "draw_roof" ? "Drawing Roof Mode (Active)" : "Draw Roof on Map"}</span>
+                  }`}>
+                  <PenTool className="w-3 h-3" />
+                  {activeTool === "draw_roof" ? "Drawing (Active)" : "Draw Roof on Map"}
                 </Button>
 
-                <div className="grid grid-cols-2 gap-1.5">
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-semibold text-slate-600">Roof Type</Label>
-                    <Select
-                      value={designData.roof?.type || "flat"}
-                      onValueChange={(val) => {
-                        setDesignData((prev) => ({
-                          ...prev,
-                          roof: { ...prev.roof, type: val },
-                        }));
-                      }}
-                    >
-                      <SelectTrigger className="h-7 text-[10.5px]">
-                        <SelectValue />
-                      </SelectTrigger>
+                <div className="grid grid-cols-2 gap-1">
+                  <div>
+                    <Label className="text-[9px] font-semibold text-slate-500">Type</Label>
+                    <Select value={designData.roof?.type || "flat"} onValueChange={(val) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, type: val } }))}>
+                      <SelectTrigger className="h-6 text-[9.5px] mt-0.5"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="flat">Flat Roof (0°)</SelectItem>
+                        <SelectItem value="flat">Flat (0°)</SelectItem>
                         <SelectItem value="single_slope">Single Slope</SelectItem>
-                        <SelectItem value="gable">Gable Roof</SelectItem>
-                        <SelectItem value="hip">Hip Roof</SelectItem>
+                        <SelectItem value="gable">Gable</SelectItem>
+                        <SelectItem value="hip">Hip</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-semibold text-slate-600">Roof Pitch (°)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      max="45"
-                      value={designData.roof?.pitch_deg ?? 0}
-                      onChange={(e) => {
-                        const pitch = parseFloat(e.target.value) || 0;
-                        setDesignData((prev) => ({
-                          ...prev,
-                          roof: { ...prev.roof, pitch_deg: pitch },
-                        }));
-                      }}
-                      className="h-7 text-xs font-bold"
-                    />
+                  <div>
+                    <Label className="text-[9px] font-semibold text-slate-500">Pitch (°)</Label>
+                    <Input type="number" min="0" max="45" value={designData.roof?.pitch_deg ?? 0}
+                      onChange={(e) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, pitch_deg: parseFloat(e.target.value) || 0 } }))}
+                      className="h-6 text-[10px] font-bold mt-0.5" />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-1.5">
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-semibold text-slate-600">Building Height (m)</Label>
-                    <Input
-                      type="number"
-                      step="0.5"
-                      min="1"
-                      max="30"
-                      value={designData.roof?.elevation_m ?? 3.0}
-                      onChange={(e) => {
-                        const elev = parseFloat(e.target.value) || 3.0;
-                        setDesignData((prev) => ({
-                          ...prev,
-                          roof: { ...prev.roof, elevation_m: elev },
-                        }));
-                      }}
-                      className="h-7 text-xs font-bold"
-                    />
+                <div className="grid grid-cols-2 gap-1">
+                  <div>
+                    <Label className="text-[9px] font-semibold text-slate-500">Bldg Ht (m)</Label>
+                    <Input type="number" step="0.5" min="1" max="30" value={designData.roof?.elevation_m ?? 3.0}
+                      onChange={(e) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, elevation_m: parseFloat(e.target.value) || 3.0 } }))}
+                      className="h-6 text-[10px] font-bold mt-0.5" />
                   </div>
-
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-semibold text-slate-600">Setback (m)</Label>
-                    <Input
-                      type="number"
-                      step="0.1"
-                      min="0.1"
-                      max="2.0"
-                      value={designData.roof?.setback_m ?? designData.setback_m ?? 0.5}
-                      onChange={(e) => {
-                        const sb = parseFloat(e.target.value) || 0.5;
-                        setDesignData((prev) => ({
-                          ...prev,
-                          setback_m: sb,
-                          roof: { ...prev.roof, setback_m: sb },
-                        }));
-                      }}
-                      className="h-7 text-xs font-bold"
-                    />
+                  <div>
+                    <Label className="text-[9px] font-semibold text-slate-500">Setback (m)</Label>
+                    <Input type="number" step="0.1" min="0.1" max="2.0" value={designData.roof?.setback_m ?? designData.setback_m ?? 0.5}
+                      onChange={(e) => { const sb = parseFloat(e.target.value) || 0.5; setDesignData((prev) => ({ ...prev, setback_m: sb, roof: { ...prev.roof, setback_m: sb } })); }}
+                      className="h-6 text-[10px] font-bold mt-0.5" />
                   </div>
                 </div>
               </div>
@@ -870,103 +801,84 @@ export default function SolarStudio() {
           </div>
 
           {/* SECTION 3: Obstacles & Exclusions */}
-          <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+          <div className="rounded-lg border border-slate-200 overflow-hidden">
             <button
               onClick={() => toggleSection("obstacles")}
-              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
             >
-              <div className="flex items-center gap-1.5">
-                <Box className="w-3.5 h-3.5 text-red-500" />
-                <span>3. Obstacles ({designData.obstacles?.length || 0})</span>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Box className="w-3 h-3 text-red-500 shrink-0" />
+                <span className="text-[10.5px] font-bold text-slate-800 truncate">3. Obstacles</span>
               </div>
-              {openSection === "obstacles" ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
+              <div className="flex items-center gap-1 shrink-0 ml-1">
+                <span className="text-[9px] font-bold text-slate-500">{designData.obstacles?.length || 0}</span>
+                {openSection === "obstacles" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
+              </div>
             </button>
 
             {openSection === "obstacles" && (
-              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setShowObstacleModal(true)}
-                  className="w-full h-7 text-xs font-bold text-red-600 border-red-200 bg-red-50/40 hover:bg-red-100"
-                >
-                  <Plus className="w-3.5 h-3.5 mr-1" /> Add Obstacle (Water Tank, Staircase)
+              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
+                <Button size="sm" variant="outline" onClick={() => setShowObstacleModal(true)}
+                  className="w-full h-6 text-[10px] font-bold text-red-600 border-red-200 bg-red-50/40 hover:bg-red-100">
+                  <Plus className="w-3 h-3 mr-0.5" /> Add Obstacle
                 </Button>
-
                 {designData.obstacles && designData.obstacles.length > 0 ? (
-                  <div className="space-y-1 max-h-28 overflow-y-auto">
+                  <div className="space-y-1 max-h-24 overflow-y-auto">
                     {designData.obstacles.map((obs) => (
-                      <div key={obs.id} className="flex items-center justify-between bg-red-50/70 px-2 py-1.5 rounded-lg border border-red-100 text-[10.5px]">
-                        <span className="font-semibold text-red-900">{obs.name}</span>
-                        <button
-                          onClick={() => setDesignData((prev) => ({ ...prev, obstacles: prev.obstacles.filter((o) => o.id !== obs.id) }))}
-                          className="text-red-400 hover:text-red-700"
-                          title="Delete Obstacle"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
+                      <div key={obs.id} className="flex items-center justify-between bg-red-50/70 px-1.5 py-1 rounded-lg border border-red-100">
+                        <span className="text-[9.5px] font-semibold text-red-900 truncate">{obs.name}</span>
+                        <button onClick={() => setDesignData((prev) => ({ ...prev, obstacles: prev.obstacles.filter((o) => o.id !== obs.id) }))} className="text-red-400 hover:text-red-700 ml-1">
+                          <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="text-[10.5px] text-slate-400 italic bg-slate-50 p-2 rounded-lg text-center">
-                    0 obstacles on roof
-                  </div>
+                  <div className="text-[9.5px] text-slate-400 italic text-center py-1">No obstacles added</div>
                 )}
               </div>
             )}
           </div>
 
           {/* SECTION 4: PV Module Specification */}
-          <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+          <div className="rounded-lg border border-slate-200 overflow-hidden">
             <button
               onClick={() => toggleSection("pv_module")}
-              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
             >
-              <div className="flex items-center gap-1.5">
-                <Sun className="w-3.5 h-3.5 text-amber-500" />
-                <span>4. PV Module Specification</span>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Sun className="w-3 h-3 text-amber-500 shrink-0" />
+                <span className="text-[10.5px] font-bold text-slate-800 truncate">4. PV Module</span>
               </div>
-              {openSection === "pv_module" ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
+              <div className="flex items-center gap-1 shrink-0 ml-1">
+                <span className="text-[9px] font-bold text-amber-600">{designData.panel_wattage}W</span>
+                {openSection === "pv_module" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
+              </div>
             </button>
 
             {openSection === "pv_module" && (
-              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setShowProductModal(true)}
-                  className="w-full h-7 text-xs font-semibold justify-between border-blue-200 bg-blue-50/40 text-blue-800 hover:bg-blue-100 rounded-lg"
-                >
-                  <span className="truncate max-w-[160px]">{designData.panel_wattage}W ({designData.panel_make})</span>
-                  <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
+                <Button size="sm" variant="outline" onClick={() => setShowProductModal(true)}
+                  className="w-full h-6 text-[9.5px] font-semibold justify-between border-blue-200 bg-blue-50/40 text-blue-800 hover:bg-blue-100 rounded-lg">
+                  <span className="truncate">{designData.panel_wattage}W · {designData.panel_make || "Select Module"}</span>
+                  <ChevronDown className="w-3 h-3 shrink-0" />
                 </Button>
-
-                <div className="grid grid-cols-2 gap-1.5">
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-semibold text-slate-600">Orientation</Label>
-                    <Select
-                      value={designData.orientation || "portrait"}
-                      onValueChange={(val) => updateDesignData({ orientation: val })}
-                    >
-                      <SelectTrigger className="h-7 text-[10.5px]">
-                        <SelectValue />
-                      </SelectTrigger>
+                <div className="grid grid-cols-2 gap-1">
+                  <div>
+                    <Label className="text-[9px] font-semibold text-slate-500">Orientation</Label>
+                    <Select value={designData.orientation || "portrait"} onValueChange={(val) => updateDesignData({ orientation: val })}>
+                      <SelectTrigger className="h-6 text-[9.5px] mt-0.5"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="portrait">Portrait</SelectItem>
                         <SelectItem value="landscape">Landscape</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-semibold text-slate-600">Module Wattage</Label>
-                    <Input
-                      type="number"
-                      value={designData.panel_wattage}
+                  <div>
+                    <Label className="text-[9px] font-semibold text-slate-500">Wattage (Wp)</Label>
+                    <Input type="number" value={designData.panel_wattage}
                       onChange={(e) => updateDesignData({ panel_wattage: parseFloat(e.target.value) || 550 })}
-                      className="h-7 text-xs font-bold"
-                    />
+                      className="h-6 text-[10px] font-bold mt-0.5" />
                   </div>
                 </div>
               </div>
@@ -974,118 +886,76 @@ export default function SolarStudio() {
           </div>
 
           {/* SECTION 5: Mounting Structure & Tilt */}
-          <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+          <div className="rounded-lg border border-slate-200 overflow-hidden">
             <button
               onClick={() => toggleSection("structure")}
-              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
             >
-              <div className="flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 text-blue-600" />
-                <span>5. Mounting Structure & Tilt</span>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Layers className="w-3 h-3 text-blue-600 shrink-0" />
+                <span className="text-[10.5px] font-bold text-slate-800 truncate">5. Mounting</span>
               </div>
-              {openSection === "structure" ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
+              <div className="flex items-center gap-1 shrink-0 ml-1">
+                {openSection !== "structure" && (
+                  <span className="text-[9px] text-slate-500 truncate max-w-[55px] hidden xl:block">
+                    {(designData.structure?.type || "elevated").charAt(0).toUpperCase() + (designData.structure?.type || "elevated").slice(1)} · {designData.structure?.tilt_deg ?? 15}°
+                  </span>
+                )}
+                {openSection === "structure" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
+              </div>
             </button>
 
             {openSection === "structure" && (
-              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
-                <div className="grid grid-cols-2 gap-1.5">
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-semibold text-slate-600">Structure Type</Label>
+              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
+                <div className="grid grid-cols-2 gap-1">
+                  <div>
+                    <Label className="text-[9px] font-semibold text-slate-500">Type</Label>
                     <Select
                       value={designData.structure?.type || designData.structure_type || "elevated"}
                       onValueChange={(val) => {
                         const isFlush = val === "flush";
-                        setDesignData((prev) => ({
-                          ...prev,
-                          structure_type: val,
-                          mounting_height_m: isFlush ? 0.12 : prev.mounting_height_m || 1.8,
-                          structure: {
-                            ...prev.structure,
-                            type: val,
-                            height_m: isFlush ? 0.12 : prev.structure?.height_m || 1.8,
-                          },
-                        }));
+                        setDesignData((prev) => ({ ...prev, structure_type: val, mounting_height_m: isFlush ? 0.12 : prev.mounting_height_m || 1.8, structure: { ...prev.structure, type: val, height_m: isFlush ? 0.12 : prev.structure?.height_m || 1.8 } }));
                       }}
                     >
-                      <SelectTrigger className="h-7 text-[10.5px]">
-                        <SelectValue />
-                      </SelectTrigger>
+                      <SelectTrigger className="h-6 text-[9.5px] mt-0.5"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="elevated">Elevated (1.8m)</SelectItem>
-                        <SelectItem value="flush">Flush Flat Roof</SelectItem>
+                        <SelectItem value="elevated">Elevated</SelectItem>
+                        <SelectItem value="flush">Flush</SelectItem>
                         <SelectItem value="fixed_tilt">Fixed Tilt</SelectItem>
                         <SelectItem value="ballasted">Ballasted</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-semibold text-slate-600">Tilt Angle (°)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      max="45"
+                  <div>
+                    <Label className="text-[9px] font-semibold text-slate-500">Tilt (°)</Label>
+                    <Input type="number" min="0" max="45"
                       value={designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15}
-                      onChange={(e) => {
-                        const tilt = parseFloat(e.target.value) || 15;
-                        setDesignData((prev) => ({
-                          ...prev,
-                          tilt_angle: tilt,
-                          structure: { ...prev.structure, tilt_deg: tilt },
-                        }));
-                      }}
-                      className="h-7 text-xs font-bold"
-                    />
+                      onChange={(e) => { const t = parseFloat(e.target.value) || 15; setDesignData((prev) => ({ ...prev, tilt_angle: t, structure: { ...prev.structure, tilt_deg: t } })); }}
+                      className="h-6 text-[10px] font-bold mt-0.5" />
                   </div>
                 </div>
-
-                <div className="grid grid-cols-2 gap-1.5">
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-semibold text-slate-600">Azimuth Direction</Label>
-                    <Select
-                      value={String(designData.azimuth_angle ?? 180)}
-                      onValueChange={(val) => {
-                        const az = parseFloat(val) || 180;
-                        setDesignData((prev) => ({
-                          ...prev,
-                          azimuth_angle: az,
-                          structure: { ...prev.structure, azimuth: az },
-                          panels: (prev.panels || []).map((p) => ({ ...p, azimuth: az })),
-                        }));
-                      }}
-                    >
-                      <SelectTrigger className="h-7 text-[10.5px]">
-                        <SelectValue />
-                      </SelectTrigger>
+                <div className="grid grid-cols-2 gap-1">
+                  <div>
+                    <Label className="text-[9px] font-semibold text-slate-500">Azimuth</Label>
+                    <Select value={String(designData.azimuth_angle ?? 180)}
+                      onValueChange={(val) => { const az = parseFloat(val) || 180; setDesignData((prev) => ({ ...prev, azimuth_angle: az, structure: { ...prev.structure, azimuth: az }, panels: (prev.panels || []).map((p) => ({ ...p, azimuth: az })) })); }}>
+                      <SelectTrigger className="h-6 text-[9.5px] mt-0.5"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="180">South (180° - Optimal)</SelectItem>
-                        <SelectItem value="135">South-East (135°)</SelectItem>
-                        <SelectItem value="225">South-West (225°)</SelectItem>
-                        <SelectItem value="90">East (90°)</SelectItem>
-                        <SelectItem value="270">West (270°)</SelectItem>
-                        <SelectItem value="0">North (0°)</SelectItem>
+                        <SelectItem value="180">South 180°</SelectItem>
+                        <SelectItem value="135">SE 135°</SelectItem>
+                        <SelectItem value="225">SW 225°</SelectItem>
+                        <SelectItem value="90">East 90°</SelectItem>
+                        <SelectItem value="270">West 270°</SelectItem>
+                        <SelectItem value="0">North 0°</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-semibold text-slate-600">Clearance Height (m)</Label>
-                    <Input
-                      type="number"
-                      step="0.1"
-                      min="0.1"
-                      max="6.0"
+                  <div>
+                    <Label className="text-[9px] font-semibold text-slate-500">Clearance (m)</Label>
+                    <Input type="number" step="0.1" min="0.1" max="6.0"
                       value={designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8}
-                      onChange={(e) => {
-                        const h = parseFloat(e.target.value) || 1.8;
-                        setDesignData((prev) => ({
-                          ...prev,
-                          mounting_height_m: h,
-                          structure: { ...prev.structure, height_m: h },
-                        }));
-                      }}
-                      className="h-7 text-xs font-bold"
-                    />
+                      onChange={(e) => { const h = parseFloat(e.target.value) || 1.8; setDesignData((prev) => ({ ...prev, mounting_height_m: h, structure: { ...prev.structure, height_m: h } })); }}
+                      className="h-6 text-[10px] font-bold mt-0.5" />
                   </div>
                 </div>
               </div>
@@ -1093,66 +963,47 @@ export default function SolarStudio() {
           </div>
 
           {/* SECTION 6: Panel Layout Controls */}
-          <div className="rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+          <div className="rounded-lg border border-slate-200 overflow-hidden">
             <button
               onClick={() => toggleSection("layout")}
-              className="w-full flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-800 transition"
+              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
             >
-              <div className="flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                <span>6. Panel Layout Controls</span>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Sparkles className="w-3 h-3 text-blue-600 shrink-0" />
+                <span className="text-[10.5px] font-bold text-slate-800 truncate">6. Layout</span>
               </div>
-              {openSection === "layout" ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
+              <div className="flex items-center gap-1 shrink-0 ml-1">
+                <span className="text-[9px] font-bold text-blue-600">{designData.panels.filter((p) => !p.hidden).length} pcs</span>
+                {openSection === "layout" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
+              </div>
             </button>
 
             {openSection === "layout" && (
-              <div className="p-2.5 space-y-2 bg-white border-t border-slate-200 text-xs">
-                <Button
-                  size="sm"
-                  onClick={() => handleAutoLayout("auto")}
-                  className="w-full h-8 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs gap-1.5"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Auto Layout Panels on Roof</span>
+              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
+                <Button size="sm" onClick={() => handleAutoLayout("auto")}
+                  className="w-full h-7 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10.5px] rounded-lg shadow-xs gap-1">
+                  <Sparkles className="w-3 h-3" /> Auto Layout Panels
                 </Button>
-
-                <div className="grid grid-cols-2 gap-1.5">
-                  <Button
-                    size="sm"
-                    variant={activeTool === "add_panel" ? "default" : "outline"}
+                <div className="grid grid-cols-2 gap-1">
+                  <Button size="sm" variant={activeTool === "add_panel" ? "default" : "outline"}
                     onClick={() => setActiveTool(activeTool === "add_panel" ? "select" : "add_panel")}
-                    className={`h-7 text-[11px] font-semibold rounded-lg ${
+                    className={`h-6 text-[9.5px] font-semibold rounded-lg ${
                       activeTool === "add_panel" ? "bg-amber-600 hover:bg-amber-700 text-white" : "border-amber-300 text-amber-700 bg-amber-50/50"
-                    }`}
-                  >
-                    <PlusCircle className="w-3 h-3 mr-1" /> + Add Panel
+                    }`}>
+                    <PlusCircle className="w-2.5 h-2.5 mr-0.5" /> + Panel
                   </Button>
-
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setDesignData((prev) => ({
-                        ...prev,
-                        panels: [],
-                        panel_count: 0,
-                        system_kw: 0,
-                        coverage_pct: 0,
-                      }));
-                      toast.success("Reset panel layout");
-                    }}
-                    className="h-7 text-[11px] text-slate-600 hover:text-red-600 border-slate-200 rounded-lg"
-                  >
-                    <Undo2 className="w-3 h-3 mr-1" /> Reset Layout
+                  <Button size="sm" variant="outline"
+                    onClick={() => { setDesignData((prev) => ({ ...prev, panels: [], panel_count: 0, system_kw: 0, coverage_pct: 0 })); toast.success("Reset panel layout"); }}
+                    className="h-6 text-[9.5px] text-slate-600 hover:text-red-600 border-slate-200 rounded-lg">
+                    <Undo2 className="w-2.5 h-2.5 mr-0.5" /> Reset
                   </Button>
                 </div>
-
-                <div className="flex items-center justify-between bg-slate-50 p-2 rounded-xl border border-slate-200 text-xs">
-                  <span className="text-slate-600 font-semibold text-[11px]">Fine-tune Count:</span>
-                  <div className="flex items-center gap-1.5">
-                    <Button size="sm" variant="outline" onClick={handleDecreasePanelCount} className="h-6 w-7 p-0 font-bold">-</Button>
-                    <span className="font-bold text-slate-900 px-1 text-xs">{designData.panels.filter((p) => !p.hidden).length}</span>
-                    <Button size="sm" variant="outline" onClick={handleIncreasePanelCount} className="h-6 w-7 p-0 font-bold">+</Button>
+                <div className="flex items-center justify-between bg-slate-50 px-2 py-1 rounded-lg border border-slate-200">
+                  <span className="text-[9.5px] text-slate-600 font-semibold">Count:</span>
+                  <div className="flex items-center gap-1">
+                    <Button size="sm" variant="outline" onClick={handleDecreasePanelCount} className="h-5 w-6 p-0 font-bold text-xs">−</Button>
+                    <span className="font-bold text-slate-900 text-[10.5px] w-6 text-center">{designData.panels.filter((p) => !p.hidden).length}</span>
+                    <Button size="sm" variant="outline" onClick={handleIncreasePanelCount} className="h-5 w-6 p-0 font-bold text-xs">+</Button>
                   </div>
                 </div>
               </div>
@@ -1160,8 +1011,8 @@ export default function SolarStudio() {
           </div>
         </div>
 
-        {/* CENTER COLUMN: DOMINANT LIVE WORKSPACE (6 cols) */}
-        <div className={`lg:col-span-6 flex flex-col space-y-2 ${isFullscreen ? "flex-1 min-h-0" : "h-[740px]"}`}>
+        {/* CENTER COLUMN: DOMINANT LIVE WORKSPACE (8 cols — wider map) */}
+        <div className={`lg:col-span-8 flex flex-col space-y-2 ${isFullscreen ? "flex-1 min-h-0" : "h-[740px]"}`}>
           {/* Mode Switcher Toolbar — Prominent segmented control */}
           <div className="flex items-center justify-between bg-slate-900 p-1.5 rounded-2xl border border-slate-800 shadow-md shrink-0">
             {/* Primary 2D / 3D segmented control */}
@@ -1319,8 +1170,8 @@ export default function SolarStudio() {
           </div>
         </div>
 
-        {/* RIGHT COLUMN: LIVE DATA & DESIGN SUMMARY (3 cols) */}
-        <div className={`lg:col-span-3 overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[860px]"}`}>
+        {/* RIGHT COLUMN: LIVE DATA & DESIGN SUMMARY (2 cols) */}
+        <div className={`lg:col-span-2 overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[860px]"}`}>
           <DesignSummaryPanel
             designData={designData}
             onSave={() => handleSaveDesign(false)}
