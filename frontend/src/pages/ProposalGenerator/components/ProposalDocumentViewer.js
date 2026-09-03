@@ -1,14 +1,15 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
 import {
-  FileText, Download, Printer, ArrowLeft, ArrowRight, Share2, Check,
+  FileText, Download, Printer, ArrowLeft, Share2, Check,
   Sun, Zap, ShieldCheck, TreePine, Leaf, DollarSign, Calendar, Clock,
-  MapPin, Phone, Mail, Building2, Eye, ChevronLeft, ChevronRight, Sparkles
+  MapPin, Phone, Mail, Building2, Eye, ChevronLeft, ChevronRight, Sparkles,
+  Layers, CheckCircle2, BatteryCharging
 } from "lucide-react";
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
+  LineChart, Line, AreaChart, Area
 } from "recharts";
 import { formatINR, formatNumberIN } from "../utils/proposalCalculations";
 
@@ -23,7 +24,7 @@ export default function ProposalDocumentViewer({
 }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [viewMode, setViewMode] = useState("paged"); // 'paged' | 'continuous'
-  const totalPages = 11;
+  const totalPages = 8;
 
   const co = companyData || {};
   const pd = proposalData || {};
@@ -37,13 +38,116 @@ export default function ProposalDocumentViewer({
     }
   }, [pd.template_id, selectedTemplate]);
 
-  const companyName = co.company_name || co.name || "GVP Solar Energy Solutions";
+  const companyName = co.company_name || co.name || "Solarix Solar Energy EPC";
   const customerName = pd.customer_name || "Valued Customer";
   const systemKw = Number(pd.system_kw) || 5.0;
   const propNumber = pd.proposal_number || `PROP-${pd.proposal_date || "2026"}`;
   const propDate = pd.proposal_date || new Date().toISOString().slice(0, 10);
-  const netCost = Number(pd.net_customer_cost) || 172000;
-  const roiPct = netCost > 0 ? ((m.annualSavings / netCost) * 100).toFixed(2) : "19.84";
+  const validUntil = pd.valid_until || "15 Days from Date of Issue";
+  const repName = pd.prepared_by || co.owner_name || "Solar Solutions Engineer";
+  const repPhone = pd.representative_phone || co.mobile || co.phone || "+91 98765 43210";
+  const repEmail = pd.representative_email || co.email || "info@solarix.energy";
+  const netCost = Number(pd.net_customer_cost) || (m.netCustomerCost - (pd.custom_discount || 0)) || 172000;
+  const grossCost = Number(m.grossCost) || (netCost + (pd.subsidy_amount || 0));
+  const gstAmount = Number(m.gstAmount) || Math.round((grossCost * 13.8) / 113.8);
+  const subsidyAmount = pd.subsidy_applicable ? (Number(pd.subsidy_amount) || 0) : 0;
+  const customDiscount = Number(pd.custom_discount) || 0;
+  const roiPct = netCost > 0 && m.annualSavings > 0 ? ((m.annualSavings / netCost) * 100).toFixed(2) : "19.85";
+
+  const panelCount = pd.panel?.quantity || 18;
+  const panelWatt = pd.panel?.wattage || 555;
+  const panelMake = pd.panel?.make || "Tier-1 Mono PERC";
+  const panelModel = pd.panel?.model || "SPR-E19-320";
+
+  const invCap = pd.inverter?.capacity || `${systemKw.toFixed(1)} kW`;
+  const invMake = pd.inverter?.make || "Growatt / ABB";
+  const invModel = pd.inverter?.model || "PVI-10.0-TL-OUTD";
+  const invQty = pd.inverter?.quantity || 1;
+
+  const batteryIncluded = Boolean(pd.battery_included);
+  const batteryMake = pd.battery?.make || "LiFePO4 Storage";
+  const batteryCap = pd.battery?.capacity || "5.0 kWh";
+  const batteryQty = pd.battery?.quantity || 1;
+
+  const structureType = pd.structure?.type || "Elevated Super Structure";
+  const structureHeight = pd.structure?.height || "1.8m Clearance";
+  const structureMat = pd.structure?.material || "Aluminium 6063-T6 & Hot Dip Galvanized Iron";
+
+  const retailer = pd.customer_retailer || "Origin Energy / MSEDCL";
+  const nmi = pd.customer_nmi || "Essential Energy / 4001292991";
+  const projectNotes = pd.proposal_notes || "Standard rooftop installation. Inverter located with minimum 300mm ventilation clearance. Real-time smartphone monitoring setup included.";
+
+  const warrantyPanel = pd.warranty_panel_performance || "25 Years Guaranteed Performance 80% / 10 Years Material";
+  const warrantyInverter = pd.warranty_inverter || "10 Years Replacement Warranty";
+  const warrantyBattery = batteryIncluded ? (pd.warranty_battery || "10 Years Limited Warranty") : "NA";
+  const warrantyMounting = pd.warranty_mounting || "10 Years Structural & Racking Warranty";
+  const warrantyWorkmanship = pd.warranty_workmanship || "5 Years Workmanship Warranty";
+
+  const dailyUsage = pd.daily_usage_kwh || 20.0;
+  const annualUsage = pd.annual_usage_kwh || 7301;
+  const currentQtrBill = pd.current_quarterly_bill || Math.round(systemKw * 6800);
+  const postSolarQtrBill = pd.post_solar_quarterly_bill || Math.round(systemKw * 2900);
+  const selfConsumedPct = pd.self_consumption_pct || 46.68;
+  const gridExportPct = pd.grid_export_pct || 53.32;
+  const avgDailyGen = (m.annualKwh / 365).toFixed(1);
+
+  // Weekly & Seasonal chart data for Page 4
+  const hourlyCurveData = [
+    { time: "02:00", mon: 0.1, wed: 0.15, sat: 0.2, summer: 0.2, autumn: 0.15, winter: 0.1, spring: 0.15 },
+    { time: "06:00", mon: 0.4, wed: 0.45, sat: 0.5, summer: 0.6, autumn: 0.45, winter: 0.35, spring: 0.45 },
+    { time: "09:00", mon: 2.1, wed: 2.2, sat: 2.0, summer: 2.3, autumn: 2.0, winter: 1.8, spring: 2.0 },
+    { time: "12:00", mon: 2.5, wed: 2.6, sat: 2.4, summer: 2.7, autumn: 2.3, winter: 2.0, spring: 2.4 },
+    { time: "16:00", mon: 1.2, wed: 1.3, sat: 1.4, summer: 1.5, autumn: 1.2, winter: 0.9, spring: 1.2 },
+    { time: "20:00", mon: 0.3, wed: 0.35, sat: 0.4, summer: 0.4, autumn: 0.3, winter: 0.25, spring: 0.3 },
+    { time: "23:00", mon: 0.1, wed: 0.1, sat: 0.15, summer: 0.15, autumn: 0.1, winter: 0.08, spring: 0.1 },
+  ];
+
+  // Power bill comparison data for Page 4
+  const billCompareData = [
+    { name: "Power Bill", beforeSolar: currentQtrBill, afterSolar: postSolarQtrBill }
+  ];
+
+  // Average day snapshot & energy mix data for Page 5
+  const daySnapshotData = [
+    { time: "05:00", consumption: 0.4, generation: 0.1 },
+    { time: "08:00", consumption: 1.6, generation: 1.2 },
+    { time: "11:00", consumption: 2.2, generation: 3.5 },
+    { time: "14:00", consumption: 1.8, generation: 3.2 },
+    { time: "17:00", consumption: 1.4, generation: 1.1 },
+    { time: "20:00", consumption: 0.6, generation: 0.0 },
+    { time: "23:00", consumption: 0.3, generation: 0.0 },
+  ];
+
+  const energyMixData = [
+    { name: "Grid Power Used", value: Math.round(annualUsage * (1 - selfConsumedPct / 100)) },
+    { name: "Solar Consumed", value: Math.round(m.annualKwh * (selfConsumedPct / 100)) },
+    { name: "Solar Exported", value: Math.round(m.annualKwh * (gridExportPct / 100)) },
+  ];
+
+  // Monthly table data (Jan - Dec)
+  const monthlyTableData = [
+    { month: "Jan", total: Math.round(m.annualKwh * 0.104), shade: 5, avg: (m.annualKwh * 0.104 / 31).toFixed(1) },
+    { month: "Feb", total: Math.round(m.annualKwh * 0.083), shade: 4, avg: (m.annualKwh * 0.083 / 28).toFixed(1) },
+    { month: "Mar", total: Math.round(m.annualKwh * 0.087), shade: 12, avg: (m.annualKwh * 0.087 / 31).toFixed(1) },
+    { month: "Apr", total: Math.round(m.annualKwh * 0.073), shade: 11, avg: (m.annualKwh * 0.073 / 30).toFixed(1) },
+    { month: "May", total: Math.round(m.annualKwh * 0.059), shade: 10, avg: (m.annualKwh * 0.059 / 31).toFixed(1) },
+    { month: "Jun", total: Math.round(m.annualKwh * 0.057), shade: 23, avg: (m.annualKwh * 0.057 / 30).toFixed(1) },
+    { month: "Jul", total: Math.round(m.annualKwh * 0.067), shade: 26, avg: (m.annualKwh * 0.067 / 31).toFixed(1) },
+    { month: "Aug", total: Math.round(m.annualKwh * 0.080), shade: 33, avg: (m.annualKwh * 0.080 / 31).toFixed(1) },
+    { month: "Sep", total: Math.round(m.annualKwh * 0.094), shade: 9, avg: (m.annualKwh * 0.094 / 30).toFixed(1) },
+    { month: "Oct", total: Math.round(m.annualKwh * 0.093), shade: 10, avg: (m.annualKwh * 0.093 / 31).toFixed(1) },
+    { month: "Nov", total: Math.round(m.annualKwh * 0.098), shade: 10, avg: (m.annualKwh * 0.098 / 30).toFixed(1) },
+    { month: "Dec", total: Math.round(m.annualKwh * 0.105), shade: 6, avg: (m.annualKwh * 0.105 / 31).toFixed(1) },
+  ];
+
+  // 5-Year Return on Investment data for Page 6
+  const returnsData = [
+    { year: "Year 1", returns: Math.round(m.annualSavings) },
+    { year: "Year 2", returns: Math.round(m.annualSavings * 2.05) },
+    { year: "Year 3", returns: Math.round(m.annualSavings * 3.15) },
+    { year: "Year 4", returns: Math.round(m.annualSavings * 4.30) },
+    { year: "Year 5", returns: Math.round(m.annualSavings * 5.50) },
+  ];
 
   const handlePrint = () => {
     window.print();
@@ -54,27 +158,13 @@ export default function ProposalDocumentViewer({
       `System Capacity: *${systemKw.toFixed(2)} kWp*\n` +
       `Est. Annual Generation: *${formatNumberIN(m.annualKwh)} units/year*\n` +
       `Est. Annual Savings: *${formatINR(m.annualSavings)}/year*\n` +
-      `Net Cost to Customer: *${formatINR(netCost)}*\n` +
+      `Net Upfront Investment: *${formatINR(netCost)}*\n` +
       `Estimated Payback: *${m.paybackYears} Years*\n\n` +
-      `Prepared by: *${companyName}*\n` +
+      `Prepared by: *${repName}* (${companyName})\n` +
       `Proposal Ref: ${propNumber}\n\n` +
       `Please review your customer-ready proposal document!`;
     const url = `https://wa.me/?text=${encodeURIComponent(text)}`;
     window.open(url, "_blank");
-  };
-
-  // Recharts custom tooltip
-  const CustomChartTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-slate-900 text-white p-2.5 rounded-lg shadow-xl text-xs border border-slate-700">
-          <div className="font-bold text-blue-300">{label}</div>
-          <div className="text-slate-200">Generation: <span className="font-semibold text-emerald-400">{payload[0]?.value} kWh</span></div>
-          <div className="text-slate-200">Savings: <span className="font-semibold text-amber-300">{formatINR(payload[1]?.value)}</span></div>
-        </div>
-      );
-    }
-    return null;
   };
 
   return (
@@ -102,33 +192,33 @@ export default function ProposalDocumentViewer({
           </div>
         </div>
 
-        {/* Template Switcher Buttons */}
+        {/* Template Selector Buttons */}
         <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
           <button
             onClick={() => {
               setSelectedTemplate("template1");
               if (onSelectTemplate) onSelectTemplate("template1");
             }}
-            className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition ${
+            className={`px-3 py-1 text-xs rounded-lg font-semibold transition ${
               selectedTemplate === "template1"
-                ? "bg-sky-600 text-white shadow-xs"
+                ? "bg-blue-600 text-white shadow-xs"
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            Template 01 · Solar Professional
+            Template 1 · Solarix Premium
           </button>
           <button
             onClick={() => {
               setSelectedTemplate("template2");
               if (onSelectTemplate) onSelectTemplate("template2");
             }}
-            className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition ${
+            className={`px-3 py-1 text-xs rounded-lg font-semibold transition ${
               selectedTemplate === "template2"
-                ? "bg-blue-600 text-white shadow-xs"
+                ? "bg-sky-600 text-white shadow-xs"
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            Template 02 · Modern Solar
+            Template 2 · Solarix Corporate
           </button>
         </div>
 
@@ -144,7 +234,7 @@ export default function ProposalDocumentViewer({
             <ChevronLeft className="w-4 h-4" />
           </Button>
           <span className="text-xs font-semibold px-2 text-slate-300 min-w-[70px] text-center">
-            {viewMode === "continuous" ? "All Pages" : `Page ${currentPage} of ${totalPages}`}
+            {viewMode === "continuous" ? "All 8 Pages" : `Page ${currentPage} of ${totalPages}`}
           </span>
           <Button
             variant="ghost"
@@ -209,7 +299,7 @@ export default function ProposalDocumentViewer({
               min-height: 297mm !important;
               height: 297mm !important;
               margin: 0 !important;
-              padding: 16mm 18mm !important;
+              padding: 14mm 16mm !important;
               box-shadow: none !important;
               border: none !important;
               page-break-after: always !important;
@@ -219,8 +309,8 @@ export default function ProposalDocumentViewer({
           }
         `}</style>
 
-        {/* Page Render Helper */}
-        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((pageNum) => {
+        {/* 8-Page Render Loop */}
+        {[1, 2, 3, 4, 5, 6, 7, 8].map((pageNum) => {
           if (viewMode === "paged" && currentPage !== pageNum) {
             return null;
           }
@@ -231,10 +321,10 @@ export default function ProposalDocumentViewer({
               className="a4-page relative w-full max-w-[820px] min-h-[1140px] bg-white text-slate-800 rounded-xl shadow-2xl p-10 sm:p-12 flex flex-col justify-between print:rounded-none print:shadow-none print:max-w-none"
               style={{ fontFamily: "'Inter', sans-serif" }}
             >
-              {/* Top Accent Line (Pages 2-11) */}
+              {/* Top Accent Line (Pages 2-8) */}
               {pageNum > 1 && (
-                selectedTemplate === "template1" ? (
-                  <div className="w-full border-b-2 border-sky-500 pb-2 mb-6 flex items-center justify-between text-[11px] text-slate-500">
+                selectedTemplate === "template2" ? (
+                  <div className="w-full border-b-2 border-sky-500 pb-2 mb-5 flex items-center justify-between text-[11px] text-slate-500">
                     <div className="flex items-center gap-1.5 font-bold text-sky-800 tracking-wide">
                       <Sun className="w-3.5 h-3.5 text-sky-600" />
                       <span>{companyName.toUpperCase()}</span>
@@ -244,7 +334,7 @@ export default function ProposalDocumentViewer({
                     </div>
                   </div>
                 ) : (
-                  <div className="w-full border-b border-slate-800/80 pb-2 mb-6 flex items-center justify-between text-[11px] text-slate-500">
+                  <div className="w-full border-b border-slate-800/80 pb-2 mb-5 flex items-center justify-between text-[11px] text-slate-500">
                     <div className="flex items-center gap-1.5 font-bold text-slate-900 tracking-wide">
                       <Sun className="w-3.5 h-3.5 text-blue-600" />
                       <span>{companyName.toUpperCase()}</span>
@@ -258,47 +348,48 @@ export default function ProposalDocumentViewer({
 
               {/* ── PAGE CONTENT ROUTER ───────────────────────────────────── */}
               <div className="flex-1 flex flex-col">
-                {/* PAGE 1: COVER / HERO */}
+                {/* ───────────────────────────────────────────────────────────── */}
+                {/* PAGE 1: COVER PAGE                                            */}
+                {/* ───────────────────────────────────────────────────────────── */}
                 {pageNum === 1 && (
-                  selectedTemplate === "template1" ? (
-                    /* ── TEMPLATE 01: SOLAR PROOF / REFERENCE PDF STYLE ────── */
+                  selectedTemplate === "template2" ? (
+                    /* ── TEMPLATE 2: SOLARIX CORPORATE (REFERENCE PDF STYLE) ─── */
                     <div className="flex-1 flex flex-col justify-between py-2">
                       <div className="space-y-6">
                         {/* Reference PDF Contact Details Header */}
                         <div className="grid grid-cols-2 gap-4 pb-4 border-b border-slate-200">
                           <div>
                             <span className="text-[10px] font-bold text-sky-700 uppercase tracking-wider block">Prepared by:</span>
-                            <div className="text-xs font-bold text-slate-900">{co.owner_name || "Solar EPC Specialist"}</div>
-                            <div className="text-[11px] text-slate-600">{co.mobile || co.phone || "+91 98765 43210"}</div>
-                            <div className="text-[11px] text-slate-600">{co.email || "info@solarix.energy"}</div>
+                            <div className="text-xs font-bold text-slate-900">{repName}</div>
+                            <div className="text-[11px] text-slate-600">{repPhone}</div>
+                            <div className="text-[11px] text-slate-600">{repEmail}</div>
                             <div className="text-[11px] text-sky-700 font-semibold">{companyName}</div>
                           </div>
                           <div>
                             <span className="text-[10px] font-bold text-sky-700 uppercase tracking-wider block">Created for:</span>
                             <div className="text-xs font-bold text-slate-900">{customerName}</div>
-                            <div className="text-[11px] text-slate-600">{pd.mobile || "Mobile Not Specified"}</div>
+                            <div className="text-[11px] text-slate-600">{pd.mobile || "Phone Not Specified"}</div>
                             {pd.email && <div className="text-[11px] text-slate-600">{pd.email}</div>}
                             <div className="text-[11px] text-slate-600">{pd.site_address || "Site Address"}, {pd.city}</div>
                             <div className="text-[10.5px] text-slate-400 mt-1 font-mono">
-                              Date: {propDate} · Ref: {propNumber}
+                              Date: {propDate} · Project No.: {propNumber}
                             </div>
                           </div>
                         </div>
 
-                        {/* Reference PDF Angular Hero Card with Rooftop Solar Imagery */}
-                        <div className="relative rounded-2xl overflow-hidden bg-gradient-to-r from-sky-600 to-blue-700 text-white p-6 shadow-xl">
+                        {/* Reference PDF Angular Hero Banner */}
+                        <div className="relative rounded-2xl overflow-hidden bg-gradient-to-r from-sky-600 to-blue-700 text-white p-7 shadow-xl">
                           <div className="max-w-xs space-y-2 relative z-10">
                             <span className="text-[10px] font-bold uppercase tracking-widest text-sky-200 block">
                               ENGINEERING ROOFTOP SOLAR
                             </span>
-                            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight" style={{ fontFamily: "Outfit" }}>
+                            <h1 className="text-3xl sm:text-4xl font-black text-white tracking-tight" style={{ fontFamily: "Outfit" }}>
                               SOLAR POWER<br />PROPOSAL
                             </h1>
                             <div className="text-4xl font-black text-white tracking-tight pt-1">
                               {systemKw.toFixed(2)}kW
                             </div>
                           </div>
-                          {/* Angled background badge */}
                           <div className="absolute right-0 top-0 bottom-0 w-1/2 opacity-25 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-white via-transparent to-transparent pointer-events-none" />
                         </div>
 
@@ -315,7 +406,7 @@ export default function ProposalDocumentViewer({
                             </div>
                             <div>
                               <span className="text-[9.5px] font-bold text-slate-500 uppercase block">RETURN ON INVESTMENT</span>
-                              <span className="text-lg font-black text-emerald-700">{roiPct}%</span>
+                              <span className="text-lg font-black text-emerald-700">{roiPct}% p.a.</span>
                             </div>
                             <div>
                               <span className="text-[9.5px] font-bold text-slate-500 uppercase block">PAYBACK PERIOD</span>
@@ -328,8 +419,8 @@ export default function ProposalDocumentViewer({
                         <div className="grid grid-cols-2 gap-3 text-xs">
                           <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
                             <span className="text-[9.5px] font-bold text-slate-500 uppercase block">Hardware Inclusions</span>
-                            <div className="font-semibold text-slate-800 text-[11px] mt-0.5">{pd.panel?.quantity || 18} × {pd.panel?.wattage || 555}W DCR TOPCon Modules</div>
-                            <div className="text-[10px] text-slate-500">{pd.inverter?.capacity || "10.0 kW"} On-Grid Smart Inverter with App</div>
+                            <div className="font-semibold text-slate-800 text-[11px] mt-0.5">{panelCount} × {panelWatt}W {panelMake}</div>
+                            <div className="text-[10px] text-slate-500">{invCap} {invMake} Inverter with App Monitoring</div>
                           </div>
                           <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
                             <span className="text-[9.5px] font-bold text-slate-500 uppercase block">Financial Summary</span>
@@ -341,11 +432,11 @@ export default function ProposalDocumentViewer({
 
                       <div className="pt-4 border-t border-slate-200 flex justify-between items-center text-[10.5px] text-slate-500">
                         <span>{companyName} · Solar Energy EPC</span>
-                        <span className="font-semibold text-sky-700">Proposal Valid for 15 Days</span>
+                        <span className="font-semibold text-sky-700">Proposal Valid Until: {validUntil}</span>
                       </div>
                     </div>
                   ) : (
-                    /* ── TEMPLATE 02: MODERN SOLAR THEME ─────────────────────── */
+                    /* ── TEMPLATE 1: SOLARIX PREMIUM COVER ───────────────────── */
                     <div className="flex-1 flex flex-col justify-between py-6">
                       <div>
                         {/* Top Header Row */}
@@ -414,626 +505,576 @@ export default function ProposalDocumentViewer({
                               <div className="flex justify-between"><span className="text-slate-500">Project Type:</span> <span className="font-medium text-slate-800">{pd.project_type || "Residential"}</span></div>
                               <div className="flex justify-between"><span className="text-slate-500">Grid Tie:</span> <span className="font-medium text-slate-800">{pd.solar_system_type || "On-Grid"}</span></div>
                               <div className="flex justify-between"><span className="text-slate-500">Govt. Subsidy:</span> <span className="font-bold text-emerald-700">{pd.subsidy_applicable ? "Eligible (PM Surya Ghar)" : "Not Applicable"}</span></div>
-                              <div className="flex justify-between"><span className="text-slate-500">Prepared By:</span> <span className="font-medium text-slate-800">{pd.prepared_by || "Solar Engineering Team"}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">Prepared By:</span> <span className="font-medium text-slate-800">{repName}</span></div>
                             </div>
                           </div>
                         </div>
                       </div>
 
                       <div className="text-center pt-6 border-t border-slate-200 text-xs text-slate-400">
-                        <div><b>{companyName}</b> · {co.address || "Solar EPC Headquarters"} · {co.mobile || co.phone} · {co.email}</div>
+                        <div><b>{companyName}</b> · {co.address || "Solar EPC Headquarters"} · {repPhone} · {repEmail}</div>
                         <div className="text-[10px] mt-1 text-slate-400">Confidential · Strictly for client evaluation</div>
                       </div>
                     </div>
                   )
                 )}
 
-                {/* PAGE 2: EXECUTIVE SUMMARY */}
+                {/* ───────────────────────────────────────────────────────────── */}
+                {/* PAGE 2: ABOUT US                                              */}
+                {/* ───────────────────────────────────────────────────────────── */}
                 {pageNum === 2 && (
                   <div className="space-y-6">
                     <div>
-                      <h2 className="text-2xl font-bold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>Executive Summary</h2>
-                      <p className="text-xs text-slate-500">Comprehensive overview of plant specifications, expected power yield, and financial viability.</p>
-                    </div>
-
-                    {/* 4-Box Top KPI Grid */}
-                    <div className="grid grid-cols-4 gap-3">
-                      <div className="bg-blue-50/80 p-3.5 rounded-xl border border-blue-200 text-center">
-                        <span className="text-[10px] font-bold text-blue-700 block uppercase">SYSTEM CAPACITY</span>
-                        <span className="text-xl font-extrabold text-slate-900">{systemKw.toFixed(2)}</span>
-                        <span className="text-[11px] text-slate-500 block">kWp DC</span>
-                      </div>
-                      <div className="bg-emerald-50/80 p-3.5 rounded-xl border border-emerald-200 text-center">
-                        <span className="text-[10px] font-bold text-emerald-700 block uppercase">YEAR 1 GENERATION</span>
-                        <span className="text-xl font-extrabold text-slate-900">{formatNumberIN(m.annualKwh)}</span>
-                        <span className="text-[11px] text-slate-500 block">Units (kWh)</span>
-                      </div>
-                      <div className="bg-amber-50/80 p-3.5 rounded-xl border border-amber-200 text-center">
-                        <span className="text-[10px] font-bold text-amber-700 block uppercase">ANNUAL SAVINGS</span>
-                        <span className="text-xl font-extrabold text-slate-900">{formatINR(m.annualSavings)}</span>
-                        <span className="text-[11px] text-slate-500 block">Electricity Bill</span>
-                      </div>
-                      <div className="bg-indigo-50/80 p-3.5 rounded-xl border border-indigo-200 text-center">
-                        <span className="text-[10px] font-bold text-indigo-700 block uppercase">EST. PAYBACK</span>
-                        <span className="text-xl font-extrabold text-indigo-700">{m.paybackYears}</span>
-                        <span className="text-[11px] text-slate-500 block">Years</span>
-                      </div>
-                    </div>
-
-                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs text-slate-700 leading-relaxed space-y-2">
-                      <p>
-                        We present this engineering proposal to <b>{customerName}</b> for establishing a state-of-the-art <b>{systemKw.toFixed(2)} kWp</b> Grid-Connected Solar Photovoltaic Plant. The installation incorporates Tier-1 ALMM approved high-wattage modules and an intelligent MPPT string inverter with real-time cloud data logging.
-                      </p>
-                      <p>
-                        Over its guaranteed 25-year operational lifecycle, the rooftop solar array will produce over <b>{formatNumberIN(m.annualKwh * 23.5)} units</b> of electricity, delivering approximately <b>{formatINR(m.lifetimeSavings)}</b> in cumulative bill offsets.
+                      <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase" style={{ fontFamily: "Outfit", color: selectedTemplate === "template2" ? "#0284c7" : undefined }}>
+                        ABOUT US
+                      </h2>
+                      <p className="text-xs text-slate-600 mt-1">
+                        We are an experienced solar installation company with a special focus on providing the best possible products to you with the best possible service.
                       </p>
                     </div>
 
-                    {/* Comparison Table */}
-                    <div className="rounded-xl border border-slate-200 overflow-hidden">
-                      <table className="w-full text-xs text-left">
-                        <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                          <tr>
-                            <th className="px-3.5 py-2.5">Key Performance Indicator</th>
-                            <th className="px-3.5 py-2.5">Design Specification / Projected Return</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          <tr><td className="px-3.5 py-2 text-slate-600">Client & Site Location</td><td className="px-3.5 py-2 font-semibold text-slate-900">{customerName} · {pd.city || "Site"}</td></tr>
-                          <tr><td className="px-3.5 py-2 text-slate-600">Total Solar PV Modules</td><td className="px-3.5 py-2 font-semibold text-slate-900">{pd.panel?.quantity || 9} Modules ({pd.panel?.wattage || 555}W {pd.panel?.make || "Tier-1"})</td></tr>
-                          <tr><td className="px-3.5 py-2 text-slate-600">Solar Inverter Rating</td><td className="px-3.5 py-2 font-semibold text-slate-900">{pd.inverter?.capacity || `${systemKw.toFixed(1)} kW`} ({pd.inverter?.make || "UTL Solar"}, {pd.inverter?.phase || "Single Phase"})</td></tr>
-                          <tr><td className="px-3.5 py-2 text-slate-600">Gross Project Cost</td><td className="px-3.5 py-2 font-semibold text-slate-900">{formatINR(pd.gross_cost || 250000)} (Including GST)</td></tr>
-                          <tr><td className="px-3.5 py-2 text-slate-600">Central Government Subsidy</td><td className="px-3.5 py-2 font-bold text-emerald-600">{pd.subsidy_applicable ? formatINR(pd.subsidy_amount || 78000) : "Not Applicable"}</td></tr>
-                          <tr className="bg-blue-50/50"><td className="px-3.5 py-2 font-bold text-blue-900">Net Cost to Customer</td><td className="px-3.5 py-2 font-bold text-blue-700 text-sm">{formatINR(netCost)}</td></tr>
-                          <tr><td className="px-3.5 py-2 text-slate-600">25-Year Cumulative Savings</td><td className="px-3.5 py-2 font-semibold text-emerald-700">{formatINR(m.lifetimeSavings)}</td></tr>
-                          <tr><td className="px-3.5 py-2 text-slate-600">Environmental CO₂ Mitigation</td><td className="px-3.5 py-2 text-slate-900">{m.co2Tons} Tonnes / Year (Equivalent to ~{m.treesEquivalent} Trees)</td></tr>
-                        </tbody>
-                      </table>
+                    <div className="space-y-4 text-xs text-slate-700 leading-relaxed">
+                      <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70">
+                        <h3 className="font-bold text-sm text-slate-900 mb-2 uppercase tracking-wide" style={{ color: selectedTemplate === "template2" ? "#0284c7" : undefined }}>
+                          OUR COMPANY
+                        </h3>
+                        <p>
+                          <b>{companyName}</b> is a full-service solar engineering, procurement, and construction (EPC) company focused on the success and energy independence of homeowners and businesses.
+                          Our aim is to make high quality, success-oriented clean energy systems accessible and dependable. We always listen to each individual customer to discover what your unique requirements are — so that we can offer a service that matches your highest expectations.
+                        </p>
+                        <div className="mt-3 pt-3 border-t border-slate-200">
+                          <span className="font-bold text-slate-900 block mb-1">Key Features of {companyName}:</span>
+                          <ul className="list-disc pl-5 space-y-0.5 text-[11.5px] text-slate-600">
+                            <li>Cutting edge 3D solar panel design and precision irradiance simulation</li>
+                            <li>Tier-1 DCR solar modules compliant with MNRE & IEC international benchmarks</li>
+                            <li>Advanced shadow analysis, string sizing and export limiting integration</li>
+                            <li>Complete liaisoning with local DISCOM for fast net-metering and subsidy credit</li>
+                            <li>Full remote performance monitoring via cloud smartphone apps</li>
+                          </ul>
+                        </div>
+                      </div>
+
+                      <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70">
+                        <h3 className="font-bold text-sm text-slate-900 mb-2 uppercase tracking-wide" style={{ color: selectedTemplate === "template2" ? "#0284c7" : undefined }}>
+                          CONTACT US
+                        </h3>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Headquarters</span>
+                            <div className="font-bold text-slate-900">{companyName}</div>
+                            <div className="text-slate-600 mt-0.5">{co.address || "Solar EPC Corporate Office"}</div>
+                            {co.gst_number && <div className="text-slate-500 font-mono text-[10.5px]">GSTIN: {co.gst_number}</div>}
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">Your Representative</span>
+                            <div className="font-bold text-slate-900">{repName}</div>
+                            <div className="text-slate-600 mt-0.5">{repPhone}</div>
+                            <div className="text-slate-600">{repEmail}</div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
 
-                {/* PAGE 3: WHY CHOOSE US */}
+                {/* ───────────────────────────────────────────────────────────── */}
+                {/* PAGE 3: SITE ANALYSIS                                         */}
+                {/* ───────────────────────────────────────────────────────────── */}
                 {pageNum === 3 && (
                   <div className="space-y-5">
                     <div>
-                      <h2 className="text-2xl font-bold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>Why Choose {companyName}</h2>
-                      <p className="text-xs text-slate-500">Uncompromising solar EPC engineering, certified components, and long-term customer dedication.</p>
+                      <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase" style={{ fontFamily: "Outfit", color: selectedTemplate === "template2" ? "#0284c7" : undefined }}>
+                        SITE ANALYSIS
+                      </h2>
+                      <p className="text-xs text-slate-600 mt-1">
+                        We have reviewed your site and determined the below information to be correct and suitable for your premises.
+                      </p>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                      {[
-                        { title: "MNRE Approved Solar EPC", desc: "Recognized and certified under Ministry of New & Renewable Energy channel partner standards with verified engineering quality." },
-                        { title: "Comprehensive Energy Audit", desc: "Detailed site assessment and energy requirement auditing to design optimal solar capacity without over-sizing or under-sizing." },
-                        { title: "Customized Engineering Solutions", desc: "Tailored rooftop structural designs engineered specifically for wind loads up to 150 km/h with zero roof puncture options." },
-                        { title: "End-to-End Net-Metering Support", desc: "Complete liaisoning with state DISCOM for solar application, sanction, meter testing, and bi-directional meter commissioning." },
-                        { title: "Direct Government Subsidy Assistance", desc: "Dedicated team assisting in PM Surya Ghar / National Portal registration, document verification, and subsidy release." },
-                        { title: "Accelerated Tax Depreciation Benefit", desc: "For commercial entities, solar assets qualify for 40% accelerated depreciation benefit under Section 32 of Income Tax Act." },
-                        { title: "Tier-1 Certified Components", desc: "Strict adherence to ALMM listed DCR solar modules, high-efficiency MPPT string inverters, and UV-resistant fire-retardant cabling." },
-                        { title: "24/7 Mobile Cloud Monitoring", desc: "Real-time generation tracking, fault detection, and performance analytics directly via smartphone application." },
-                      ].map((item, idx) => (
-                        <div key={idx} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200">
-                          <div className="flex items-center gap-2 mb-1.5">
-                            <div className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold shrink-0">
-                              ✓
-                            </div>
-                            <h3 className="font-bold text-slate-900 text-xs">{item.title}</h3>
-                          </div>
-                          <p className="text-[11px] text-slate-600 leading-relaxed pl-7">{item.desc}</p>
+                    {/* Satellite / 3D Layout Image Display */}
+                    <div className="rounded-xl border border-slate-300 overflow-hidden bg-slate-100 flex items-center justify-center aspect-video max-h-72">
+                      {pd.snapshot_3d || pd.snapshot_2d ? (
+                        <img
+                          src={pd.snapshot_3d || pd.snapshot_2d}
+                          alt="Roof Solar Layout"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="p-8 text-center text-slate-400 text-xs">
+                          <Compass className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+                          <span>Satellite imagery and 3D rooftop array layout verified for {pd.site_address || customerName}</span>
                         </div>
-                      ))}
+                      )}
                     </div>
 
-                    <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-center gap-3">
-                      <ShieldCheck className="w-6 h-6 text-blue-600 shrink-0" />
-                      <div>
-                        <span className="font-bold">5-Year Workmanship & Comprehensive EPC Warranty</span>
-                        <span className="block text-[11px] text-blue-700 mt-0.5">We stand behind every component we erect with round-the-clock technical support.</span>
+                    {/* System Summary Table (Exact Reference PDF Section) */}
+                    <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-3">
+                      <div className="font-bold text-xs uppercase tracking-wide border-b border-slate-100 pb-1.5" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                        SYSTEM SUMMARY
+                      </div>
+                      <div className="text-xs space-y-2">
+                        <div className="flex justify-between py-1 border-b border-slate-100">
+                          <span className="font-bold text-slate-600">Site Address:</span>
+                          <span className="font-semibold text-slate-900 text-right">{pd.site_address || "222 Margaret Street, Brisbane City, QLD, 4000, Australia"}</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center pt-2">
+                          <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase block">Array Capacity</span>
+                            <span className="text-base font-extrabold text-slate-900">{systemKw.toFixed(2)}kW</span>
+                          </div>
+                          <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase block">Tilt Angle</span>
+                            <span className="text-base font-extrabold text-slate-900">{pd.tilt_deg || 22}°</span>
+                          </div>
+                          <div className="p-2 bg-slate-50 rounded-lg border border-slate-100">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase block">Direction (from North)</span>
+                            <span className="text-base font-extrabold text-slate-900">{pd.azimuth_deg || 317.5}°</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* PAGE 4: SYSTEM DESIGN */}
+                {/* ───────────────────────────────────────────────────────────── */}
+                {/* PAGE 4: ENERGY NEEDS                                          */}
+                {/* ───────────────────────────────────────────────────────────── */}
                 {pageNum === 4 && (
                   <div className="space-y-5">
                     <div>
-                      <h2 className="text-2xl font-bold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>System Design & Engineering</h2>
-                      <p className="text-xs text-slate-500">Rooftop module layout matrix, mechanical orientation, and engineering parameters.</p>
+                      <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase" style={{ fontFamily: "Outfit", color: selectedTemplate === "template2" ? "#0284c7" : undefined }}>
+                        ENERGY NEEDS
+                      </h2>
+                      <p className="text-xs text-slate-600 mt-1">
+                        We have thoroughly assessed your energy use to determine the best solar solution to fit your needs.
+                      </p>
                     </div>
 
-                    {/* Snapshots Grid */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 text-center">
-                        <span className="text-[10px] font-bold text-slate-500 block mb-2 uppercase">2D ROOF PLAN & PANEL GRID</span>
-                        {pd.snapshot_2d ? (
-                          <img src={pd.snapshot_2d} alt="2D Roof Plan" className="w-full h-40 object-cover rounded-lg border border-slate-200" />
-                        ) : (
-                          <div className="w-full h-40 bg-slate-200 rounded-lg flex flex-col items-center justify-center text-slate-400 text-xs">
-                            <Sun className="w-6 h-6 mb-1 text-slate-400" />
-                            <span>Geospatial Layout</span>
+                    {/* Section: Your Energy Use */}
+                    <div className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2">
+                      <div className="font-bold text-xs uppercase tracking-wide border-b border-slate-100 pb-1" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                        YOUR ENERGY USE
+                      </div>
+                      <div className="text-xs text-slate-700 space-y-0.5">
+                        <div>Current Energy Use Per Day: <b>{dailyUsage} kWh/day</b></div>
+                        <div>Current Annual Use: <b>{formatNumberIN(annualUsage)} kWh</b></div>
+                      </div>
+
+                      {/* Dual Curves: Weekly & Seasonal */}
+                      <div className="grid grid-cols-2 gap-3 pt-2">
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-500 block text-center mb-1">WEEKLY AVERAGES</span>
+                          <div className="h-28 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <LineChart data={hourlyCurveData}>
+                                <XAxis dataKey="time" tick={{ fontSize: 8 }} />
+                                <YAxis tick={{ fontSize: 8 }} domain={[0, 3]} />
+                                <Line type="monotone" dataKey="mon" stroke="#ef4444" strokeWidth={1.5} dot={false} />
+                                <Line type="monotone" dataKey="wed" stroke="#f59e0b" strokeWidth={1.5} dot={false} />
+                                <Line type="monotone" dataKey="sat" stroke="#0ea5e9" strokeWidth={1.5} dot={false} />
+                              </LineChart>
+                            </ResponsiveContainer>
                           </div>
-                        )}
-                      </div>
+                        </div>
 
-                      <div className="border border-slate-200 rounded-xl p-3 bg-slate-50 text-center">
-                        <span className="text-[10px] font-bold text-slate-500 block mb-2 uppercase">3D ROOFTOP SIMULATION</span>
-                        {pd.snapshot_3d ? (
-                          <img src={pd.snapshot_3d} alt="3D Rooftop Simulation" className="w-full h-40 object-cover rounded-lg border border-slate-200" />
-                        ) : (
-                          <div className="w-full h-40 bg-slate-200 rounded-lg flex flex-col items-center justify-center text-slate-400 text-xs">
-                            <Sparkles className="w-6 h-6 mb-1 text-slate-400" />
-                            <span>3D Visualization</span>
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-500 block text-center mb-1">SEASONAL AVERAGES</span>
+                          <div className="h-28 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <LineChart data={hourlyCurveData}>
+                                <XAxis dataKey="time" tick={{ fontSize: 8 }} />
+                                <YAxis tick={{ fontSize: 8 }} domain={[0, 3]} />
+                                <Line type="monotone" dataKey="summer" stroke="#ef4444" strokeWidth={1.5} dot={false} />
+                                <Line type="monotone" dataKey="winter" stroke="#0ea5e9" strokeWidth={1.5} dot={false} />
+                              </LineChart>
+                            </ResponsiveContainer>
                           </div>
-                        )}
+                        </div>
                       </div>
                     </div>
 
-                    {/* Technical Parameter Grid */}
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-2">
-                        <div className="font-bold text-blue-900 text-[11px] uppercase tracking-wider">MECHANICAL DESIGN</div>
-                        <div className="flex justify-between border-b border-slate-100 pb-1"><span className="text-slate-500">System Rating:</span> <span className="font-semibold">{systemKw.toFixed(2)} kWp DC</span></div>
-                        <div className="flex justify-between border-b border-slate-100 pb-1"><span className="text-slate-500">Module Orientation:</span> <span className="font-semibold">Portrait (True South)</span></div>
-                        <div className="flex justify-between border-b border-slate-100 pb-1"><span className="text-slate-500">Tilt Angle:</span> <span className="font-semibold">15° Fixed Optimized</span></div>
-                        <div className="flex justify-between border-b border-slate-100 pb-1"><span className="text-slate-500">Mounting Structure:</span> <span className="font-semibold">{pd.structure?.type || "Elevated Super Structure"}</span></div>
-                        <div className="flex justify-between"><span className="text-slate-500">Clearance Height:</span> <span className="font-semibold">{pd.structure?.height || "1.8m Clearance"}</span></div>
+                    {/* Section: Your Power Bill */}
+                    <div className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2">
+                      <div className="font-bold text-xs uppercase tracking-wide border-b border-slate-100 pb-1" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                        YOUR POWER BILL
+                      </div>
+                      <div className="text-xs text-slate-700 space-y-0.5">
+                        <div>Current Quarterly Power Bill: <b>{formatINR(currentQtrBill)} /quarter</b></div>
+                        <div>Quarterly Power Bill After Solar: <b>{formatINR(postSolarQtrBill)} /quarter</b></div>
+                        <div>Your Overall (Lifetime) Power Bill Savings Estimate: <b className="text-emerald-700">{formatINR(m.lifetimeSavings)}</b></div>
                       </div>
 
-                      <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-2">
-                        <div className="font-bold text-blue-900 text-[11px] uppercase tracking-wider">ELECTRICAL PARAMETERS</div>
-                        <div className="flex justify-between border-b border-slate-100 pb-1"><span className="text-slate-500">AC Output Voltage:</span> <span className="font-semibold">{pd.inverter?.phase?.includes("Three") ? "415V, 3-Phase" : "230V, Single Phase"}</span></div>
-                        <div className="flex justify-between border-b border-slate-100 pb-1"><span className="text-slate-500">Grid Frequency:</span> <span className="font-semibold">50 Hz ± 5%</span></div>
-                        <div className="flex justify-between border-b border-slate-100 pb-1"><span className="text-slate-500">Power Factor:</span> <span className="font-semibold">&gt; 0.99 (Unity)</span></div>
-                        <div className="flex justify-between border-b border-slate-100 pb-1"><span className="text-slate-500">Inverter IP Rating:</span> <span className="font-semibold">IP65 Weatherproof</span></div>
-                        <div className="flex justify-between"><span className="text-slate-500">Lightning & Surge:</span> <span className="font-semibold">Type-II SPD & Copper LA</span></div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* PAGE 5: EQUIPMENT & WARRANTIES */}
-                {pageNum === 5 && (
-                  <div className="space-y-5">
-                    <div>
-                      <h2 className="text-2xl font-bold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>Equipment Specifications & Warranties</h2>
-                      <p className="text-xs text-slate-500">Tier-1 solar components, certified switchgear, and comprehensive warranty schedule.</p>
-                    </div>
-
-                    <div className="rounded-xl border border-slate-200 overflow-hidden text-xs">
-                      <table className="w-full text-left">
-                        <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                          <tr>
-                            <th className="px-3.5 py-2.5">Component</th>
-                            <th className="px-3.5 py-2.5">Make & Model</th>
-                            <th className="px-3.5 py-2.5">Quantity</th>
-                            <th className="px-3.5 py-2.5">Warranty Coverage</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          <tr>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-900">Solar PV Modules</td>
-                            <td className="px-3.5 py-2.5">{pd.panel?.make || "INA Solar"} · {pd.panel?.model || "555W TOPCon"}</td>
-                            <td className="px-3.5 py-2.5 font-semibold">{pd.panel?.quantity || 9} Nos</td>
-                            <td className="px-3.5 py-2.5 font-bold text-blue-700">12 Yrs Product · 30 Yrs Perf.</td>
-                          </tr>
-                          <tr>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-900">Solar Inverter</td>
-                            <td className="px-3.5 py-2.5">{pd.inverter?.make || "UTL Solar"} ({pd.inverter?.capacity || `${systemKw} kW`})</td>
-                            <td className="px-3.5 py-2.5 font-semibold">1 Set</td>
-                            <td className="px-3.5 py-2.5 font-bold text-blue-700">10 Years Product Warranty</td>
-                          </tr>
-                          <tr>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-900">Mounting Structure</td>
-                            <td className="px-3.5 py-2.5">{pd.structure?.type || "Elevated"} · {pd.structure?.material || "Aluminium & HDGI"}</td>
-                            <td className="px-3.5 py-2.5 font-semibold">1 Lot</td>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-700">5 Years Structural Warranty</td>
-                          </tr>
-                          <tr>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-900">Solar DC & AC Cables</td>
-                            <td className="px-3.5 py-2.5">{pd.cables?.brand || "Siechem / Polycab"} (4/6 sq.mm)</td>
-                            <td className="px-3.5 py-2.5 font-semibold">As per site</td>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-700">18 Months Workmanship</td>
-                          </tr>
-                          <tr>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-900">DC Distribution Box</td>
-                            <td className="px-3.5 py-2.5">IP65 Enclosure with 1000V DC SPD & Fuses</td>
-                            <td className="px-3.5 py-2.5 font-semibold">1 Set</td>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-700">1 Year System Warranty</td>
-                          </tr>
-                          <tr>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-900">AC Distribution Box</td>
-                            <td className="px-3.5 py-2.5">IP65 Enclosure with MCB, Isolator & Type-2 SPD</td>
-                            <td className="px-3.5 py-2.5 font-semibold">1 Set</td>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-700">1 Year System Warranty</td>
-                          </tr>
-                          <tr>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-900">Chemical Earthing</td>
-                            <td className="px-3.5 py-2.5">Dual Earth Pits with Copper-Bonded Electrodes</td>
-                            <td className="px-3.5 py-2.5 font-semibold">2 Sets</td>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-700">1 Year System Warranty</td>
-                          </tr>
-                          <tr>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-900">Lightning Arrestor</td>
-                            <td className="px-3.5 py-2.5">Class-I Copper Spike Arrestor with Base Plate</td>
-                            <td className="px-3.5 py-2.5 font-semibold">1 Set</td>
-                            <td className="px-3.5 py-2.5 font-bold text-slate-700">1 Year System Warranty</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-
-                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900">
-                      <b>Warranty Terms:</b> Solar module 30-year performance guarantee ensures minimum 90% peak output at Year 10 and 80-85% at Year 25/30. All manufacturer warranty certificates will be handed over upon plant commissioning.
-                    </div>
-                  </div>
-                )}
-
-                {/* PAGE 6: SOLAR SAVINGS & ROI */}
-                {pageNum === 6 && (
-                  <div className="space-y-5">
-                    <div>
-                      <h2 className="text-2xl font-bold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>Solar Savings & Return on Investment (ROI)</h2>
-                      <p className="text-xs text-slate-500">Detailed financial analysis of electricity cost reduction, payback, and 25-year lifetime yield.</p>
-                    </div>
-
-                    {/* Green Metrics Card */}
-                    <div className="grid grid-cols-4 gap-3 bg-emerald-50/70 border border-emerald-200 p-4 rounded-xl text-center">
-                      <div>
-                        <span className="text-[10px] font-bold text-emerald-800 uppercase block">YEARLY ENERGY</span>
-                        <span className="text-xl font-black text-emerald-700">{formatNumberIN(m.annualKwh)}</span>
-                        <span className="text-[11px] text-emerald-600 block">kWh Units</span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-bold text-emerald-800 uppercase block">YEAR 1 SAVINGS</span>
-                        <span className="text-xl font-black text-emerald-700">{formatINR(m.annualSavings)}</span>
-                        <span className="text-[11px] text-emerald-600 block">At current tariff</span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-bold text-emerald-800 uppercase block">CARBON OFFSET</span>
-                        <span className="text-xl font-black text-emerald-700">{m.co2Tons} T</span>
-                        <span className="text-[11px] text-emerald-600 block">CO₂ per Year</span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-bold text-emerald-800 uppercase block">TREES EQUIVALENT</span>
-                        <span className="text-xl font-black text-emerald-700">{m.treesEquivalent}</span>
-                        <span className="text-[11px] text-emerald-600 block">Trees Planted</span>
-                      </div>
-                    </div>
-
-                    {/* 10-Year Projections Table */}
-                    <div className="rounded-xl border border-slate-200 overflow-hidden text-xs">
-                      <div className="bg-slate-100 px-3.5 py-2 font-bold text-slate-700">10-Year Financial Forecast (Assumes 3% Annual Tariff Escalation)</div>
-                      <table className="w-full text-left">
-                        <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
-                          <tr>
-                            <th className="px-3.5 py-2">Year</th>
-                            <th className="px-3.5 py-2">Est. Generation</th>
-                            <th className="px-3.5 py-2">Grid Tariff</th>
-                            <th className="px-3.5 py-2">Annual Savings</th>
-                            <th className="px-3.5 py-2">Cumulative Savings</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {(m.yearlyProjections || []).slice(0, 8).map((row) => (
-                            <tr key={row.year}>
-                              <td className="px-3.5 py-1.5 font-semibold text-slate-800">Year {row.year}</td>
-                              <td className="px-3.5 py-1.5 text-slate-600">{formatNumberIN(row.generationKwh)} units</td>
-                              <td className="px-3.5 py-1.5 text-slate-600">₹{row.tariff.toFixed(2)}/u</td>
-                              <td className="px-3.5 py-1.5 text-slate-800 font-medium">{formatINR(row.annualSavings)}</td>
-                              <td className="px-3.5 py-1.5 font-bold text-emerald-700">{formatINR(row.cumulativeSavings)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-center justify-between">
-                      <div>
-                        <span className="font-bold">25-Year Cumulative Savings:</span>
-                        <span className="text-sm font-black text-blue-700 ml-2">{formatINR(m.lifetimeSavings)}</span>
-                      </div>
-                      <Badge className="bg-emerald-600 text-white font-semibold">
-                        Payback in ~{m.paybackYears} Years
-                      </Badge>
-                    </div>
-                  </div>
-                )}
-
-                {/* PAGE 7: MONTHLY GENERATION & SAVINGS */}
-                {pageNum === 7 && (
-                  <div className="space-y-5">
-                    <div>
-                      <h2 className="text-2xl font-bold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>Monthly Generation & Savings Profile</h2>
-                      <p className="text-xs text-slate-500">Estimated month-by-month power harvest based on regional solar irradiance models.</p>
-                    </div>
-
-                    {/* Chart Container */}
-                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-                      <div className="text-[11px] font-bold text-slate-600 uppercase mb-3 tracking-wider">MONTHLY GENERATION (kWh) & SAVINGS (₹)</div>
-                      <div className="h-64 w-full">
+                      {/* Bar Chart: Bill Before vs After Solar */}
+                      <div className="h-32 w-full pt-1">
                         <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={m.monthlyData || []} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                            <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#64748b" }} />
-                            <YAxis tick={{ fontSize: 10, fill: "#64748b" }} />
-                            <Tooltip content={<CustomChartTooltip />} />
-                            <Legend wrapperStyle={{ fontSize: "11px", paddingTop: "8px" }} />
-                            <Bar dataKey="generation" name="Generation (Units)" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                            <Bar dataKey="savings" name="Savings (₹)" fill="#10b981" radius={[4, 4, 0, 0]} />
+                          <BarChart data={billCompareData}>
+                            <CartGrid strokeDasharray="3 3" vertical={false} />
+                            <XAxis dataKey="name" tick={{ fontSize: 9 }} />
+                            <YAxis tick={{ fontSize: 8 }} />
+                            <Tooltip formatter={(v) => formatINR(v)} />
+                            <Bar dataKey="beforeSolar" name="Power Bill Before Solar" fill="#475569" radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="afterSolar" name="Power Bill After Solar" fill="#0284c7" radius={[4, 4, 0, 0]} />
                           </BarChart>
                         </ResponsiveContainer>
                       </div>
                     </div>
+                  </div>
+                )}
 
-                    {/* 12 Months Data Table */}
-                    <div className="rounded-xl border border-slate-200 overflow-hidden text-[11px]">
-                      <table className="w-full text-left">
-                        <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                          <tr>
-                            <th className="px-3 py-1.5">Month</th>
-                            <th className="px-3 py-1.5">Est. Generation (kWh)</th>
-                            <th className="px-3 py-1.5">Est. Bill Savings</th>
-                            <th className="px-3 py-1.5">Solar Radiation Condition</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {(m.monthlyData || []).map((row) => (
-                            <tr key={row.month}>
-                              <td className="px-3 py-1 font-semibold text-slate-800">{row.fullMonth}</td>
-                              <td className="px-3 py-1 font-mono text-blue-700">{row.generation} units</td>
-                              <td className="px-3 py-1 font-bold text-emerald-700">{formatINR(row.savings)}</td>
-                              <td className="px-3 py-1 text-slate-500">{row.tag}</td>
+                {/* ───────────────────────────────────────────────────────────── */}
+                {/* PAGE 5: SOLAR SYSTEM                                          */}
+                {/* ───────────────────────────────────────────────────────────── */}
+                {pageNum === 5 && (
+                  <div className="space-y-4">
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase" style={{ fontFamily: "Outfit", color: selectedTemplate === "template2" ? "#0284c7" : undefined }}>
+                        SOLAR SYSTEM
+                      </h2>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        The solar system we have proposed for your premises will decrease your reliance on fossil-fuel "grid" energy and save you money on your power bill.
+                      </p>
+                    </div>
+
+                    {/* System Performance Monthly */}
+                    <div className="p-3 rounded-xl border border-slate-200 bg-white space-y-2">
+                      <div className="font-bold text-xs uppercase tracking-wide border-b border-slate-100 pb-1" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                        SYSTEM PERFORMANCE (MONTHLY)
+                      </div>
+                      <div className="text-xs text-slate-700 flex flex-wrap justify-between gap-2">
+                        <span>Average Solar Energy Produced: <b>{avgDailyGen} kWh/day</b></span>
+                        <span>Solar Energy Produced (Year 1): <b>{formatNumberIN(m.annualKwh)} kWh</b></span>
+                        <span>Solar Exported / Self-Consumed: <b>{gridExportPct}% / {selfConsumedPct}%</b></span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 pt-1">
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-500 block text-center mb-1">AVERAGE DAY SNAPSHOT</span>
+                          <div className="h-24 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <AreaChart data={daySnapshotData}>
+                                <XAxis dataKey="time" tick={{ fontSize: 8 }} />
+                                <YAxis tick={{ fontSize: 8 }} />
+                                <Area type="monotone" dataKey="generation" name="Solar Production" fill="#fef08a" stroke="#eab308" />
+                                <Area type="monotone" dataKey="consumption" name="Energy Use" fill="#94a3b8" stroke="#475569" fillOpacity={0.4} />
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-500 block text-center mb-1">NEW ENERGY MIX</span>
+                          <div className="h-24 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={energyMixData}>
+                                <XAxis dataKey="name" tick={{ fontSize: 7 }} />
+                                <YAxis tick={{ fontSize: 8 }} />
+                                <Bar dataKey="value" fill="#0284c7" radius={[3, 3, 0, 0]} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Daily Average Solar Energy Table & Chart (Exact Reference PDF layout) */}
+                    <div className="p-3 rounded-xl border border-slate-200 bg-white space-y-2">
+                      <div className="font-bold text-xs uppercase tracking-wide border-b border-slate-100 pb-1" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                        DAILY AVERAGE SOLAR ENERGY
+                      </div>
+                      <div className="h-24 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={monthlyTableData}>
+                            <XAxis dataKey="month" tick={{ fontSize: 8 }} />
+                            <YAxis tick={{ fontSize: 8 }} />
+                            <Bar dataKey="total" fill="#0284c7" radius={[2, 2, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                      {/* Solar Generation Estimates Table */}
+                      <div className="overflow-x-auto pt-1">
+                        <span className="text-[10px] font-bold text-slate-700 block mb-1">Solar Generation Estimates (All Figures in kWhs)</span>
+                        <table className="w-full text-[9px] text-center border-collapse border border-slate-200">
+                          <thead>
+                            <tr className="bg-slate-100 text-slate-700">
+                              <th className="p-1 border border-slate-200 font-bold">Month</th>
+                              {monthlyTableData.map((d) => <th key={d.month} className="p-1 border border-slate-200">{d.month}</th>)}
                             </tr>
-                          ))}
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td className="p-1 border border-slate-200 font-bold bg-slate-50">Total</td>
+                              {monthlyTableData.map((d) => <td key={d.month} className="p-1 border border-slate-200">{d.total}</td>)}
+                            </tr>
+                            <tr>
+                              <td className="p-1 border border-slate-200 font-bold bg-slate-50">Shade Losses</td>
+                              {monthlyTableData.map((d) => <td key={d.month} className="p-1 border border-slate-200">{d.shade}</td>)}
+                            </tr>
+                            <tr>
+                              <td className="p-1 border border-slate-200 font-bold bg-slate-50">Avg Daily</td>
+                              {monthlyTableData.map((d) => <td key={d.month} className="p-1 border border-slate-200 font-semibold">{d.avg}</td>)}
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ───────────────────────────────────────────────────────────── */}
+                {/* PAGE 6: FINANCIALS                                            */}
+                {/* ───────────────────────────────────────────────────────────── */}
+                {pageNum === 6 && (
+                  <div className="space-y-5">
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase" style={{ fontFamily: "Outfit", color: selectedTemplate === "template2" ? "#0284c7" : undefined }}>
+                        FINANCIALS
+                      </h2>
+                      <p className="text-xs text-slate-600 mt-1">
+                        We have determined the savings you will make from your solar system based on the information detailed in this proposal.
+                      </p>
+                    </div>
+
+                    {/* Section: Your Savings */}
+                    <div className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2">
+                      <div className="font-bold text-xs uppercase tracking-wide border-b border-slate-100 pb-1" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                        YOUR SAVINGS*
+                      </div>
+                      <div className="text-xs text-slate-700 flex justify-between">
+                        <span>Total Savings In Year 1: <b>{formatINR(m.annualSavings)}</b></span>
+                        <span>25 Year Savings Estimate: <b className="text-emerald-700">{formatINR(m.lifetimeSavings)}</b></span>
+                      </div>
+                    </div>
+
+                    {/* Section: Your Returns */}
+                    <div className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2">
+                      <div className="font-bold text-xs uppercase tracking-wide border-b border-slate-100 pb-1" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                        YOUR RETURNS*
+                      </div>
+                      <div className="text-xs text-slate-700 flex justify-between">
+                        <span>Return On Investment: <b>{roiPct}% p.a.</b></span>
+                        <span>Payback Period: <b>{m.paybackYears} years</b></span>
+                      </div>
+
+                      {/* Cumulative Returns Chart */}
+                      <div className="h-36 w-full pt-1">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={returnsData}>
+                            <CartGrid strokeDasharray="3 3" vertical={false} />
+                            <XAxis dataKey="year" tick={{ fontSize: 8 }} />
+                            <YAxis tick={{ fontSize: 8 }} />
+                            <Tooltip formatter={(v) => formatINR(v)} />
+                            <Bar dataKey="returns" name="Cumulative Returns" fill="#0284c7" radius={[4, 4, 0, 0]} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+
+                      {/* Disclaimer */}
+                      <p className="text-[9px] text-slate-400 pt-2 border-t border-slate-100 leading-relaxed">
+                        *Disclaimer: The savings shown above assume total estimated generation as mentioned in the engineering model at standard peak tariff. Assuming self-consumption of {selfConsumedPct}% and remaining {gridExportPct}% exported to the grid based on the solar yield profile. These figures are indicative and based on standard test conditions.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* ───────────────────────────────────────────────────────────── */}
+                {/* PAGE 7: COMPONENTS & WARRANTY                                 */}
+                {/* ───────────────────────────────────────────────────────────── */}
+                {pageNum === 7 && (
+                  <div className="space-y-5">
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase" style={{ fontFamily: "Outfit", color: selectedTemplate === "template2" ? "#0284c7" : undefined }}>
+                        COMPONENTS
+                      </h2>
+                      <p className="text-xs text-slate-600 mt-1">
+                        Your system includes all of the components required to install your fully-functioning solar power system. We have made a list of inclusions below.
+                      </p>
+                    </div>
+
+                    {/* Solar System Inclusions Table */}
+                    <div className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2">
+                      <div className="font-bold text-xs uppercase tracking-wide border-b border-slate-100 pb-1" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                        YOUR SYSTEM · INCLUSIONS
+                      </div>
+                      <table className="w-full text-xs">
+                        <tbody className="divide-y divide-slate-100">
+                          <tr className="py-1">
+                            <td className="w-1/3 py-1 font-bold text-slate-700">Solar Panels</td>
+                            <td className="py-1 text-slate-800">{panelCount} × {panelWatt}W - {panelMake} - ({panelModel})</td>
+                          </tr>
+                          <tr className="py-1">
+                            <td className="w-1/3 py-1 font-bold text-slate-700">Inverters</td>
+                            <td className="py-1 text-slate-800">{invQty} × {invMake} {invCap} ({invModel})</td>
+                          </tr>
+                          <tr className="py-1">
+                            <td className="w-1/3 py-1 font-bold text-slate-700">Batteries</td>
+                            <td className="py-1 text-slate-800">{batteryIncluded ? `${batteryQty} × ${batteryMake} (${batteryCap})` : "NA"}</td>
+                          </tr>
+                          <tr className="py-1">
+                            <td className="w-1/3 py-1 font-bold text-slate-700">Mounting System</td>
+                            <td className="py-1 text-slate-800">{structureType} ({structureHeight})</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Customer Information & Project Notes */}
+                    <div className="grid grid-cols-2 gap-3 text-xs">
+                      <div className="p-3 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                        <div className="font-bold text-[11px] uppercase tracking-wide" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                          CUSTOMER INFORMATION
+                        </div>
+                        <div className="space-y-0.5 text-slate-700">
+                          <div>Energy Retailer: <b>{retailer}</b></div>
+                          <div>Distributor / NMI: <b>{nmi}</b></div>
+                          <div>Site Address: <b>{pd.site_address || "222 Margaret Street, Brisbane City"}</b></div>
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-xl border border-slate-200 bg-white space-y-1.5">
+                        <div className="font-bold text-[11px] uppercase tracking-wide" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                          PROJECT NOTES
+                        </div>
+                        <p className="text-slate-600 text-[10.5px] leading-relaxed">
+                          {projectNotes}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Warranty Table */}
+                    <div className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-2">
+                      <div className="font-bold text-xs uppercase tracking-wide border-b border-slate-100 pb-1" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                        WARRANTY
+                      </div>
+                      <table className="w-full text-xs">
+                        <tbody className="divide-y divide-slate-100">
+                          <tr className="py-1">
+                            <td className="w-1/3 py-1 font-bold text-slate-700">Solar Panels</td>
+                            <td className="py-1 text-slate-800">{warrantyPanel}</td>
+                          </tr>
+                          <tr className="py-1">
+                            <td className="w-1/3 py-1 font-bold text-slate-700">Inverter / Battery</td>
+                            <td className="py-1 text-slate-800">{warrantyInverter} / {warrantyBattery}</td>
+                          </tr>
+                          <tr className="py-1">
+                            <td className="w-1/3 py-1 font-bold text-slate-700">Racking / Mounting</td>
+                            <td className="py-1 text-slate-800">{warrantyMounting}</td>
+                          </tr>
+                          <tr className="py-1">
+                            <td className="w-1/3 py-1 font-bold text-slate-700">Workmanship</td>
+                            <td className="py-1 text-slate-800">{warrantyWorkmanship}</td>
+                          </tr>
                         </tbody>
                       </table>
                     </div>
                   </div>
                 )}
 
-                {/* PAGE 8: COMMERCIAL OFFER */}
+                {/* ───────────────────────────────────────────────────────────── */}
+                {/* PAGE 8: QUOTATION & ACCEPTANCE                                */}
+                {/* ───────────────────────────────────────────────────────────── */}
                 {pageNum === 8 && (
                   <div className="space-y-5">
                     <div>
-                      <h2 className="text-2xl font-bold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>Commercial Offer & Payment Schedule</h2>
-                      <p className="text-xs text-slate-500">Transparent system investment, applicable subsidy deduction, and project milestone schedule.</p>
+                      <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase" style={{ fontFamily: "Outfit", color: selectedTemplate === "template2" ? "#0284c7" : undefined }}>
+                        QUOTATION
+                      </h2>
+                      <p className="text-xs text-slate-600 mt-1">
+                        We have prepared a quotation for your consideration below.
+                      </p>
                     </div>
 
-                    {/* Commercial Breakdown */}
-                    <div className="rounded-xl border border-slate-200 overflow-hidden text-xs">
-                      <table className="w-full text-left">
-                        <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                          <tr>
-                            <th className="px-4 py-3">Cost Component</th>
-                            <th className="px-4 py-3 text-right">Amount (₹)</th>
+                    {/* Your Solar System Quote Table */}
+                    <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+                      <div className="p-3 font-bold text-xs uppercase tracking-wide bg-slate-50 border-b border-slate-200" style={{ color: selectedTemplate === "template2" ? "#0284c7" : "#0f172a" }}>
+                        YOUR SOLAR SYSTEM QUOTE
+                      </div>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-slate-100 text-slate-700 border-b border-slate-200 text-left">
+                            <th className="p-2 font-bold">Description</th>
+                            <th className="p-2 font-bold text-center">Qty</th>
+                            <th className="p-2 font-bold text-right">Price Incl. GST</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           <tr>
-                            <td className="px-4 py-2.5 text-slate-700 font-medium">
-                              Solar PV System Package ({systemKw.toFixed(2)} kWp with Modules, Inverter, Structure & Cables)
-                            </td>
-                            <td className="px-4 py-2.5 text-right font-semibold">{formatINR(pd.system_price || 250000)}</td>
+                            <td className="p-2 font-medium">{systemKw.toFixed(2)}kW Solar Power System</td>
+                            <td className="p-2 text-center">1 Unit</td>
+                            <td className="p-2 text-right font-semibold">{formatINR(grossCost)}</td>
                           </tr>
-                          {Number(pd.additional_charges || 0) > 0 && (
-                            <tr>
-                              <td className="px-4 py-2 text-slate-600">Additional Structural Elevation / Civil Foundation</td>
-                              <td className="px-4 py-2 text-right font-semibold">{formatINR(pd.additional_charges)}</td>
+                          <tr className="bg-slate-50 font-medium">
+                            <td colSpan={2} className="p-1.5 text-right text-slate-600">Sub-Total</td>
+                            <td className="p-1.5 text-right">{formatINR(grossCost - gstAmount)}</td>
+                          </tr>
+                          <tr className="bg-slate-50 font-medium">
+                            <td colSpan={2} className="p-1.5 text-right text-slate-600">GST Total ({pd.gst_pct || 13.8}%)</td>
+                            <td className="p-1.5 text-right">{formatINR(gstAmount)}</td>
+                          </tr>
+                          {subsidyAmount > 0 && (
+                            <tr className="text-emerald-700 font-bold">
+                              <td colSpan={2} className="p-1.5 text-right">Govt. Central Subsidy / STC Incentive</td>
+                              <td className="p-1.5 text-right">-{formatINR(subsidyAmount)}</td>
                             </tr>
                           )}
-                          {Number(pd.net_meter_charges || 0) > 0 && (
-                            <tr>
-                              <td className="px-4 py-2 text-slate-600">DISCOM Liaisoning & Net Metering Charges</td>
-                              <td className="px-4 py-2 text-right font-semibold">{formatINR(pd.net_meter_charges)}</td>
+                          {customDiscount > 0 && (
+                            <tr className="text-amber-700 font-bold">
+                              <td colSpan={2} className="p-1.5 text-right">Special Discount</td>
+                              <td className="p-1.5 text-right">-{formatINR(customDiscount)}</td>
                             </tr>
                           )}
-                          <tr>
-                            <td className="px-4 py-2 text-slate-600">Goods and Services Tax (GST @ {pd.gst_pct || 13.8}%)</td>
-                            <td className="px-4 py-2 text-right font-semibold">{formatINR(pd.gst_amount || 34500)}</td>
-                          </tr>
-                          <tr className="bg-slate-50 font-bold text-slate-900">
-                            <td className="px-4 py-2.5">Gross Project Cost (Including GST)</td>
-                            <td className="px-4 py-2.5 text-right">{formatINR(pd.gross_cost || 284500)}</td>
-                          </tr>
-                          {pd.subsidy_applicable && (
-                            <tr className="text-emerald-700 bg-emerald-50/50">
-                              <td className="px-4 py-2.5 font-bold">
-                                Central Govt. Subsidy (PM Surya Ghar Muft Bijli Yojana)
-                                <span className="block text-[10px] text-emerald-600 font-normal">Directly credited to consumer bank account post-commissioning</span>
-                              </td>
-                              <td className="px-4 py-2.5 text-right font-extrabold text-sm">- {formatINR(pd.subsidy_amount || 78000)}</td>
-                            </tr>
-                          )}
-                          <tr className="bg-blue-50/80 border-t-2 border-blue-500">
-                            <td className="px-4 py-3.5">
-                              <span className="text-sm font-black text-blue-900 uppercase block">FINAL NET COST TO CUSTOMER</span>
-                              <span className="text-[11px] text-blue-700">Total out-of-pocket investment after subsidy</span>
-                            </td>
-                            <td className="px-4 py-3.5 text-right">
-                              <span className="text-xl font-black text-blue-700">{formatINR(netCost)}</span>
-                            </td>
+                          <tr className="bg-slate-900 text-white font-extrabold text-sm">
+                            <td colSpan={2} className="p-2.5 text-right">Upfront Balance Total</td>
+                            <td className="p-2.5 text-right">{formatINR(netCost)}</td>
                           </tr>
                         </tbody>
                       </table>
                     </div>
 
-                    {/* Milestone Payment Schedule */}
-                    <div className="rounded-xl border border-slate-200 overflow-hidden text-xs">
-                      <div className="bg-slate-100 px-4 py-2 font-bold text-slate-700">Project Payment Schedule</div>
-                      <table className="w-full text-left">
-                        <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
-                          <tr>
-                            <th className="px-4 py-2">Milestone</th>
-                            <th className="px-4 py-2">Stage Description</th>
-                            <th className="px-4 py-2">Percentage</th>
-                            <th className="px-4 py-2 text-right">Amount (₹)</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {(pd.milestones || [
-                            { stage: "Milestone 1", label: "20% Advance with Confirmed Work Order", pct: 20 },
-                            { stage: "Milestone 2", label: "70% Upon Material Readiness & Dispatch to Site", pct: 70 },
-                            { stage: "Milestone 3", label: "5% Upon Complete Mechanical & Electrical Installation", pct: 5 },
-                            { stage: "Milestone 4", label: "5% Upon Net-Meter Installation & Commissioning", pct: 5 },
-                          ]).map((mItem, idx) => {
-                            const mAmt = Math.round((netCost * Number(mItem.pct)) / 100);
-                            return (
-                              <tr key={idx}>
-                                <td className="px-4 py-2 font-bold text-slate-900">{mItem.stage}</td>
-                                <td className="px-4 py-2 text-slate-700">{mItem.label}</td>
-                                <td className="px-4 py-2 font-semibold text-blue-700">{mItem.pct}%</td>
-                                <td className="px-4 py-2 text-right font-bold text-slate-900">{formatINR(mAmt)}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* PAGE 9: PROJECT TIMELINE & SCOPE MATRIX */}
-                {pageNum === 9 && (
-                  <div className="space-y-5">
-                    <div>
-                      <h2 className="text-2xl font-bold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>Project Timeline & Scope Matrix</h2>
-                      <p className="text-xs text-slate-500">Stage-by-stage execution schedule and demarcation of responsibilities.</p>
-                    </div>
-
-                    {/* Timeline Visual */}
-                    <div className="grid grid-cols-4 gap-3 text-xs">
-                      {[
-                        { stage: "Phase 1", title: "Design & Drawings", days: "7 Days", desc: "Shadow modeling & structural drawing signoff" },
-                        { stage: "Phase 2", title: "Procurement & Supply", days: "15 Days", desc: "Tier-1 material dispatch to site" },
-                        { stage: "Phase 3", title: "Installation & Wiring", days: "20 Days", desc: "Structure, modules, ACDB/DCDB & earthing" },
-                        { stage: "Phase 4", title: "Net Metering & Handover", days: "14 Days", desc: "DISCOM inspection & app configuration" },
-                      ].map((t, idx) => (
-                        <div key={idx} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 relative">
-                          <Badge className="bg-blue-600 text-white text-[10px] py-0 mb-1.5 font-bold">{t.stage}</Badge>
-                          <div className="font-bold text-slate-900 text-xs">{t.title}</div>
-                          <div className="text-[11px] text-emerald-700 font-bold mt-0.5">{t.days}</div>
-                          <p className="text-[10px] text-slate-500 mt-1 leading-snug">{t.desc}</p>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Scope Comparison Cards */}
-                    <div className="grid grid-cols-2 gap-4 text-xs">
-                      <div className="p-4 bg-blue-50/60 rounded-xl border border-blue-200">
-                        <div className="text-[11px] font-bold text-blue-900 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-                          <Check className="w-4 h-4 text-blue-600" /> OUR SCOPE OF WORK ({companyName.toUpperCase()})
-                        </div>
-                        <ul className="space-y-1.5 text-slate-700">
-                          {(pd.our_scope || []).map((s, idx) => (
-                            <li key={idx} className="flex items-start gap-1.5">
-                              <span className="text-blue-600 font-bold">✓</span>
-                              <span className="text-[11px]">{typeof s === "string" ? s : s.text}</span>
-                            </li>
-                          ))}
-                        </ul>
+                    {/* Customer Acceptance Block */}
+                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-4">
+                      <div className="text-xs font-semibold text-slate-800">
+                        I <b>{customerName}</b> accept the offer described in this document.
                       </div>
 
-                      <div className="p-4 bg-amber-50/60 rounded-xl border border-amber-200">
-                        <div className="text-[11px] font-bold text-amber-900 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-                          <Building2 className="w-4 h-4 text-amber-600" /> CUSTOMER SCOPE OF RESPONSIBILITY
-                        </div>
-                        <ul className="space-y-1.5 text-slate-700">
-                          {(pd.customer_scope || []).map((cs, idx) => (
-                            <li key={idx} className="flex items-start gap-1.5">
-                              <span className="text-amber-600 font-bold">•</span>
-                              <span className="text-[11px]">{typeof cs === "string" ? cs : cs.text}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* PAGE 10: TERMS & CONDITIONS */}
-                {pageNum === 10 && (
-                  <div className="space-y-5">
-                    <div>
-                      <h2 className="text-2xl font-bold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>General Terms & Conditions</h2>
-                      <p className="text-xs text-slate-500">Commercial parameters, delivery conditions, and contractual guidelines.</p>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
-                      {(pd.terms || []).map((term, idx) => (
-                        <div key={idx} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200">
-                          <div className="font-bold text-slate-900 text-xs mb-1 flex items-center gap-1.5">
-                            <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px] font-mono shrink-0">{idx + 1}</span>
-                            <span>{term.title}</span>
+                      <div className="grid grid-cols-2 gap-6 pt-2">
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Signed:</span>
+                          <div className="h-10 border-b-2 border-slate-400 flex items-end pb-1 font-serif text-slate-800 text-sm">
+                            {customerName}
                           </div>
-                          <p className="text-[11px] text-slate-600 leading-relaxed pl-5">{term.desc}</p>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* PAGE 11: ACCEPTANCE & CONTACT */}
-                {pageNum === 11 && (
-                  <div className="space-y-6">
-                    <div>
-                      <h2 className="text-2xl font-bold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>Project Acceptance & Formal Signoff</h2>
-                      <p className="text-xs text-slate-500">Company payment details, banking coordinates, and contract authorization.</p>
-                    </div>
-
-                    {/* Bank Details Card */}
-                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs">
-                      <div className="font-bold text-blue-900 text-xs uppercase tracking-wider mb-3">OFFICIAL PAYMENT & BANK DETAILS</div>
-                      <div className="grid grid-cols-2 gap-3 text-slate-700">
-                        <div><span className="text-slate-500">Account Name:</span> <span className="font-bold text-slate-900 ml-1">{co.company_name || companyName}</span></div>
-                        <div><span className="text-slate-500">Bank Name:</span> <span className="font-bold text-slate-900 ml-1">{co.bank_name || "State Bank of India / HDFC"}</span></div>
-                        <div><span className="text-slate-500">Account Number:</span> <span className="font-mono font-bold text-slate-900 ml-1">{co.account_number || "XXXXXXXXXX (On Request)"}</span></div>
-                        <div><span className="text-slate-500">IFSC Code:</span> <span className="font-mono font-bold text-slate-900 ml-1">{co.ifsc_code || "SBIN000XXXX"}</span></div>
-                        <div><span className="text-slate-500">GSTIN:</span> <span className="font-mono font-semibold text-slate-800 ml-1">{co.gst_number || "27XXXXX0000X1ZX"}</span></div>
-                        <div><span className="text-slate-500">Contact:</span> <span className="font-semibold text-slate-800 ml-1">{co.mobile || co.phone}</span></div>
-                      </div>
-                    </div>
-
-                    {/* Dual Signature Block */}
-                    <div className="grid grid-cols-2 gap-6 pt-6 text-xs">
-                      <div className="p-6 bg-white border border-slate-200 rounded-xl flex flex-col justify-between h-44 text-center">
-                        <div className="font-bold text-blue-900 uppercase tracking-wider text-[11px]">FOR {companyName.toUpperCase()}</div>
-                        <div className="border-t border-slate-300 pt-2 text-slate-500">
-                          <div className="font-semibold text-slate-800">{co.owner_name || pd.prepared_by || "Authorized Signatory"}</div>
-                          <div className="text-[10px]">Authorized Technical Signatory & Stamp</div>
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Date:</span>
+                          <div className="h-10 border-b-2 border-slate-400 flex items-end pb-1 text-xs text-slate-700 font-mono">
+                            {propDate}
+                          </div>
                         </div>
                       </div>
 
-                      <div className="p-6 bg-white border border-slate-200 rounded-xl flex flex-col justify-between h-44 text-center">
-                        <div className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">CUSTOMER WORK ORDER ACCEPTANCE</div>
-                        <div className="border-t border-slate-300 pt-2 text-slate-500">
-                          <div className="font-semibold text-slate-800">{customerName}</div>
-                          <div className="text-[10px]">Customer Signature & Date</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="text-center pt-8 border-t border-slate-200 text-xs text-slate-500">
-                      <p className="font-bold text-blue-900">Thank you for placing your trust in {companyName} as your clean energy partner.</p>
-                      <p className="text-[11px] text-slate-400 mt-1">Together we build a sustainable, self-reliant, and green future.</p>
+                      <p className="text-[9.5px] text-slate-400 leading-relaxed border-t border-slate-200 pt-2">
+                        * Note: This proposal is valid until {validUntil}. Payment terms as outlined in project milestones. Grid tie-in and net metering timeline are subject to DISCOM inspection and statutory approvals.
+                      </p>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* Bottom Footer Line (Pages 2-11) */}
+              {/* ── FOOTER ON PAGES 2-8 ───────────────────────────────────── */}
               {pageNum > 1 && (
-                selectedTemplate === "template1" ? (
-                  <div className="w-full border-t border-slate-200 pt-2.5 mt-6 flex items-center justify-between text-[10px] text-slate-500">
+                selectedTemplate === "template2" ? (
+                  /* Template 2: Reference PDF footer with contact on left and solid blue square tab with page number on right */
+                  <div className="w-full border-t border-slate-200 pt-2.5 mt-5 flex items-center justify-between text-[10px] text-slate-500">
                     <div className="truncate max-w-lg">
-                      {co.owner_name || "Solar EPC"} {co.mobile ? `| ${co.mobile}` : ""} {co.email ? `| ${co.email}` : ""} | {companyName} {co.gst_number ? `| GSTIN: ${co.gst_number}` : ""}
+                      {repName} | {repPhone} | {repEmail} | {companyName} {co.gst_number ? `| GST: ${co.gst_number}` : ""}
                     </div>
                     <div className="w-7 h-7 bg-sky-500 text-white font-black text-xs flex items-center justify-center rounded-xs shadow-2xs shrink-0">
                       {pageNum}
                     </div>
                   </div>
                 ) : (
-                  <div className="w-full border-t border-slate-200 pt-3 mt-6 flex items-center justify-between text-[10px] text-slate-400">
+                  /* Template 1: Solarix Premium clean footer */
+                  <div className="w-full border-t border-slate-200 pt-3 mt-5 flex items-center justify-between text-[10px] text-slate-400">
                     <div>Confidential · Prepared specifically for {customerName}</div>
                     <div className="font-bold text-slate-600">Page {pageNum} of {totalPages}</div>
                   </div>
