@@ -328,7 +328,7 @@ export default function LiveProposalPreviewCard({
                     {(form.our_scope || []).slice(0, 8).map((s, idx) => (
                       <div key={idx} className="flex items-center gap-1 truncate">
                         <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
-                        <span className="truncate">{s}</span>
+                        <span className="truncate">{typeof s === "string" ? s : s?.text || ""}</span>
                       </div>
                     ))}
                   </div>
@@ -342,7 +342,7 @@ export default function LiveProposalPreviewCard({
                     {(form.customer_scope || []).slice(0, 6).map((cs, idx) => (
                       <div key={idx} className="flex items-center gap-1 truncate">
                         <div className="w-1 h-1 rounded-full bg-slate-400 shrink-0" />
-                        <span className="truncate">{cs}</span>
+                        <span className="truncate">{typeof cs === "string" ? cs : cs?.text || ""}</span>
                       </div>
                     ))}
                   </div>

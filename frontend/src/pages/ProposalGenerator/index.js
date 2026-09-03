@@ -1271,23 +1271,26 @@ export default function ProposalGenerator() {
                     </div>
 
                     <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
-                      {(form.our_scope || []).map((item, idx) => (
-                        <div key={idx} className="flex items-center justify-between p-1.5 rounded-lg bg-emerald-50/50 border border-emerald-100 text-xs">
-                          <div className="flex items-center gap-2 truncate">
-                            <Check className="w-3 h-3 text-emerald-600 shrink-0" />
-                            <span className="text-slate-800 text-[11px] truncate">{item}</span>
+                      {(form.our_scope || []).map((item, idx) => {
+                        const itemText = typeof item === "string" ? item : item?.text || "";
+                        return (
+                          <div key={idx} className="flex items-center justify-between p-1.5 rounded-lg bg-emerald-50/50 border border-emerald-100 text-xs">
+                            <div className="flex items-center gap-2 truncate">
+                              <Check className="w-3 h-3 text-emerald-600 shrink-0" />
+                              <span className="text-slate-800 text-[11px] truncate">{itemText}</span>
+                            </div>
+                            <button
+                              onClick={() => {
+                                setForm({ ...form, our_scope: form.our_scope.filter((_, i) => i !== idx) });
+                                setIsSavedDraft(false);
+                              }}
+                              className="text-slate-400 hover:text-red-500 p-0.5"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
                           </div>
-                          <button
-                            onClick={() => {
-                              setForm({ ...form, our_scope: form.our_scope.filter((_, i) => i !== idx) });
-                              setIsSavedDraft(false);
-                            }}
-                            className="text-slate-400 hover:text-red-500 p-0.5"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </CardContent>
                 </Card>
@@ -1315,23 +1318,26 @@ export default function ProposalGenerator() {
                     </div>
 
                     <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
-                      {(form.customer_scope || []).map((item, idx) => (
-                        <div key={idx} className="flex items-center justify-between p-1.5 rounded-lg bg-amber-50/50 border border-amber-100 text-xs">
-                          <div className="flex items-center gap-2 truncate">
-                            <div className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                            <span className="text-slate-800 text-[11px] truncate">{item}</span>
+                      {(form.customer_scope || []).map((item, idx) => {
+                        const itemText = typeof item === "string" ? item : item?.text || "";
+                        return (
+                          <div key={idx} className="flex items-center justify-between p-1.5 rounded-lg bg-amber-50/50 border border-amber-100 text-xs">
+                            <div className="flex items-center gap-2 truncate">
+                              <div className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                              <span className="text-slate-800 text-[11px] truncate">{itemText}</span>
+                            </div>
+                            <button
+                              onClick={() => {
+                                setForm({ ...form, customer_scope: form.customer_scope.filter((_, i) => i !== idx) });
+                                setIsSavedDraft(false);
+                              }}
+                              className="text-slate-400 hover:text-red-500 p-0.5"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
                           </div>
-                          <button
-                            onClick={() => {
-                              setForm({ ...form, customer_scope: form.customer_scope.filter((_, i) => i !== idx) });
-                              setIsSavedDraft(false);
-                            }}
-                            className="text-slate-400 hover:text-red-500 p-0.5"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </CardContent>
                 </Card>
@@ -1932,9 +1938,9 @@ export default function ProposalGenerator() {
               onClick={() => {
                 if (!newScopeText.trim()) return;
                 if (scopeTargetType === "our") {
-                  setForm({ ...form, our_scope: [...(form.our_scope || []), newScopeText.trim()] });
+                  setForm({ ...form, our_scope: [...(form.our_scope || []), { text: newScopeText.trim(), checked: true }] });
                 } else {
-                  setForm({ ...form, customer_scope: [...(form.customer_scope || []), newScopeText.trim()] });
+                  setForm({ ...form, customer_scope: [...(form.customer_scope || []), { text: newScopeText.trim(), checked: true }] });
                 }
                 setIsSavedDraft(false);
                 setShowAddScopeModal(false);
