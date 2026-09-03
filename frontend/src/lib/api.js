@@ -362,8 +362,16 @@ export async function downloadFile(fileId, defaultFilename = "document.pdf") {
     toast.error("File identifier is missing.");
     return false;
   }
+  let resolvedId = String(fileId).trim();
+  const uuidMatch = resolvedId.match(/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/);
+  if (uuidMatch && uuidMatch[1]) {
+    resolvedId = uuidMatch[1];
+  } else if (resolvedId.startsWith("/")) {
+    resolvedId = resolvedId.replace(/^\/+/, "");
+  }
+
   try {
-    const res = await api.get(`/files/${fileId}`, {
+    const res = await api.get(`/files/${resolvedId}`, {
       params: { download: 1 },
       responseType: "blob",
     });

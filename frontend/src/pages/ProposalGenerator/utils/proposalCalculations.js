@@ -68,13 +68,29 @@ export function calculateSubsidy(systemKw, projectType = "residential") {
 export function calculateSolarMetrics({
   systemKw = 5.0,
   tariffRate = 8.5,
-  netCost = 172000,
+  systemPrice = 0,
+  additionalCharges = 0,
+  netMeterCharges = 0,
+  gstPct = 13.8,
+  subsidyAmount = 0,
+  netCost,
   degradationPct = 0.7,
   tariffEscalationPct = 3.0,
 }) {
   const kw = Math.max(0.1, Number(systemKw) || 5.0);
   const tariff = Math.max(1, Number(tariffRate) || 8.5);
-  const cost = Math.max(1, Number(netCost) || 0);
+
+  const price = Math.max(0, Number(systemPrice) || 0);
+  const additions = Math.max(0, Number(additionalCharges) || 0);
+  const netMeter = Math.max(0, Number(netMeterCharges) || 0);
+  const baseSubtotal = price + additions + netMeter;
+  const gstRate = Math.max(0, Number(gstPct) || 13.8);
+  const gstAmount = Math.round((baseSubtotal * gstRate) / 100);
+  const grossCost = baseSubtotal + gstAmount;
+  const subsidy = Math.max(0, Number(subsidyAmount) || 0);
+  const netCustomerCost = Math.max(0, grossCost - subsidy);
+
+  const cost = netCost !== undefined ? Math.max(1, Number(netCost) || 0) : (netCustomerCost > 0 ? netCustomerCost : 172000);
 
   // Industry standard benchmark: ~1,450 kWh per kWp installed annually in India
   const annualKwh = Math.round(kw * 1450);
@@ -137,9 +153,13 @@ export function calculateSolarMetrics({
     lifetimeSavings: Math.round(cumulativeSavings),
     co2Tons,
     treesEquivalent,
+    treesCount: treesEquivalent,
     coalSavedKg,
     yearlyProjections,
     monthlyData,
+    grossCost,
+    gstAmount,
+    netCustomerCost,
   };
 }
 

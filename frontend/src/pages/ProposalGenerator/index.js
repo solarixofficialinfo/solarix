@@ -132,19 +132,11 @@ export default function ProposalGenerator() {
 
   // Primary Form State
   const [form, setForm] = useState(() => {
-    const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {}
-    }
-
     const todayStr = dayjs().format("YYYY-MM-DD");
     const refNum = `PROP-${dayjs().format("YYMMDD")}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    return {
-      // ── STEP 1: BASIC DETAILS ─────────────────────────────────────────────
-      template_id: "template1", // 'template1' (Solarix Premium) | 'template2' (Solarix Corporate)
+    const defaultForm = {
+      template_id: "template1",
       proposal_number: refNum,
       proposal_date: todayStr,
       valid_until: dayjs().add(15, "day").format("YYYY-MM-DD"),
@@ -162,8 +154,6 @@ export default function ProposalGenerator() {
       representative_email: user?.email || companyData?.email || "info@solarix.energy",
       customer_retailer: "Origin Energy / DISCOM",
       customer_nmi: "",
-
-      // ── STEP 2: SOLAR SYSTEM ──────────────────────────────────────────────
       system_kw: 10.0,
       panel: { ...DEFAULT_PANEL_DATA, quantity: 18 },
       inverter: { ...DEFAULT_INVERTER_DATA, capacity: "10.0 kW", quantity: 1 },
@@ -177,8 +167,6 @@ export default function ProposalGenerator() {
       structure: { ...DEFAULT_STRUCTURE_DATA },
       cables: { ...DEFAULT_CABLES_DATA },
       proposal_notes: "Standard rooftop installation. Inverter to be positioned with minimum 300mm clearance on internal wall. Full smartphone monitoring setup included.",
-
-      // ── STEP 3: SITE / DESIGN ─────────────────────────────────────────────
       roof_area_sqm: 41.4,
       usable_area_sqm: 35.0,
       roof_type: "RCC Flat Roof",
@@ -190,8 +178,6 @@ export default function ProposalGenerator() {
       snapshot_3d: "",
       linked_design_id: "",
       linked_design_name: "",
-
-      // ── STEP 4: ENERGY & FINANCIALS ───────────────────────────────────────
       daily_usage_kwh: 20.0,
       annual_usage_kwh: 7300,
       current_quarterly_bill: 68000,
@@ -199,8 +185,6 @@ export default function ProposalGenerator() {
       self_consumption_pct: 47,
       grid_export_pct: 53,
       tariff_rate: 8.5,
-
-      // ── STEP 5: COMPONENTS & WARRANTY ─────────────────────────────────────
       bos: [...DEFAULT_BOS_COMPONENTS],
       warranty_panel_product: "10 Years Product & Material Warranty",
       warranty_panel_performance: "25 Years 80% Performance Warranty",
@@ -209,8 +193,6 @@ export default function ProposalGenerator() {
       warranty_mounting: "10 Years Structural & Racking Warranty",
       warranty_workmanship: "5 Years Complete Workmanship Warranty",
       warranties: [...DEFAULT_WARRANTIES],
-
-      // ── STEP 6: QUOTATION ─────────────────────────────────────────────────
       system_price: 500000,
       additional_charges: 0,
       net_meter_charges: 0,
@@ -224,14 +206,33 @@ export default function ProposalGenerator() {
         { stage: "Milestone 3", label: "5% Upon Complete Installation & Wiring", pct: 5 },
         { stage: "Milestone 4", label: "5% Upon Net-Meter Installation & Commissioning", pct: 5 },
       ],
-
-      // Scope & Terms (for backwards compatibility)
       timeline: [...DEFAULT_TIMELINE_STAGES],
       our_scope: [...DEFAULT_OUR_SCOPE],
       customer_scope: [...DEFAULT_CUSTOMER_SCOPE],
       terms: [...DEFAULT_TERMS],
     };
+
+    const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return {
+          ...defaultForm,
+          ...parsed,
+          panel: { ...defaultForm.panel, ...(parsed.panel || {}) },
+          inverter: { ...defaultForm.inverter, ...(parsed.inverter || {}) },
+          battery: { ...defaultForm.battery, ...(parsed.battery || {}) },
+          structure: { ...defaultForm.structure, ...(parsed.structure || {}) },
+          cables: { ...defaultForm.cables, ...(parsed.cables || {}) },
+          bos: Array.isArray(parsed.bos) && parsed.bos.length > 0 ? parsed.bos : defaultForm.bos,
+          milestones: Array.isArray(parsed.milestones) && parsed.milestones.length > 0 ? parsed.milestones : defaultForm.milestones,
+        };
+      } catch (e) {}
+    }
+
+    return defaultForm;
   });
+
 
   // Autosave to localStorage
   useEffect(() => {
@@ -505,7 +506,7 @@ export default function ProposalGenerator() {
       toast.success("Customer Proposal PDF generated successfully!");
 
       if (res.data?.id) {
-        downloadFile(`/documents/${res.data.id}/download`, res.data.filename || "Solar_Proposal.pdf");
+        await downloadFile(res.data.id, res.data.filename || "Solar_Proposal.pdf");
       }
     } catch (err) {
       toast.error(formatApiError(err) || "Failed to generate proposal PDF");
@@ -1792,18 +1793,20 @@ export default function ProposalGenerator() {
       {/* ── COMPLETE PROPOSAL DOCUMENT VIEWER MODAL ─────────────────────────── */}
       <Dialog open={showFullViewerModal} onOpenChange={setShowFullViewerModal}>
         <DialogContent className="max-w-6xl w-[95vw] h-[90vh] p-0 bg-slate-950 border-slate-800 text-white overflow-hidden flex flex-col">
-          <ProposalDocumentViewer
-            proposalData={form}
-            companyData={companyData}
-            metrics={metrics}
-            onClose={() => setShowFullViewerModal(false)}
-            onDownloadPdf={handleGenerateProposal}
-            onSelectTemplate={(tid) => {
-              setForm((prev) => ({ ...prev, template_id: tid }));
-              setIsSavedDraft(false);
-            }}
-            downloading={generating}
-          />
+          {showFullViewerModal && (
+            <ProposalDocumentViewer
+              proposalData={form}
+              companyData={companyData}
+              metrics={metrics}
+              onClose={() => setShowFullViewerModal(false)}
+              onDownloadPdf={handleGenerateProposal}
+              onSelectTemplate={(tid) => {
+                setForm((prev) => ({ ...prev, template_id: tid }));
+                setIsSavedDraft(false);
+              }}
+              downloading={generating}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

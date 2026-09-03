@@ -5,7 +5,7 @@ import {
   FileText, Download, Printer, ArrowLeft, Share2, Check,
   Sun, Zap, ShieldCheck, TreePine, Leaf, DollarSign, Calendar, Clock,
   MapPin, Phone, Mail, Building2, Eye, ChevronLeft, ChevronRight, Sparkles,
-  Layers, CheckCircle2, BatteryCharging
+  Layers, CheckCircle2, BatteryCharging, Compass
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
@@ -52,7 +52,12 @@ export default function ProposalDocumentViewer({
   const gstAmount = Number(m.gstAmount) || Math.round((grossCost * 13.8) / 113.8);
   const subsidyAmount = pd.subsidy_applicable ? (Number(pd.subsidy_amount) || 0) : 0;
   const customDiscount = Number(pd.custom_discount) || 0;
-  const roiPct = netCost > 0 && m.annualSavings > 0 ? ((m.annualSavings / netCost) * 100).toFixed(2) : "19.85";
+
+  const annualKwh = Number(m.annualKwh) || Number(pd.annual_kwh) || Math.round(systemKw * 1450);
+  const annualSavings = Number(m.annualSavings) || Number(pd.annual_savings) || Math.round(annualKwh * 8.5);
+  const lifetimeSavings = Number(m.lifetimeSavings) || Number(pd.lifetime_savings) || Math.round(annualSavings * 25);
+  const paybackYears = Number(m.paybackYears) || Number(pd.payback_years) || (netCost > 0 && annualSavings > 0 ? (netCost / annualSavings).toFixed(1) : 4.9);
+  const roiPct = netCost > 0 && annualSavings > 0 ? ((annualSavings / netCost) * 100).toFixed(2) : "19.85";
 
   const panelCount = pd.panel?.quantity || 18;
   const panelWatt = pd.panel?.wattage || 555;
@@ -89,7 +94,7 @@ export default function ProposalDocumentViewer({
   const postSolarQtrBill = pd.post_solar_quarterly_bill || Math.round(systemKw * 2900);
   const selfConsumedPct = pd.self_consumption_pct || 46.68;
   const gridExportPct = pd.grid_export_pct || 53.32;
-  const avgDailyGen = (m.annualKwh / 365).toFixed(1);
+  const avgDailyGen = (annualKwh / 365).toFixed(1);
 
   // Weekly & Seasonal chart data for Page 4
   const hourlyCurveData = [
@@ -708,7 +713,7 @@ export default function ProposalDocumentViewer({
                       <div className="h-32 w-full pt-1">
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart data={billCompareData}>
-                            <CartGrid strokeDasharray="3 3" vertical={false} />
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
                             <XAxis dataKey="name" tick={{ fontSize: 9 }} />
                             <YAxis tick={{ fontSize: 8 }} />
                             <Tooltip formatter={(v) => formatINR(v)} />
@@ -860,7 +865,7 @@ export default function ProposalDocumentViewer({
                       <div className="h-36 w-full pt-1">
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart data={returnsData}>
-                            <CartGrid strokeDasharray="3 3" vertical={false} />
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
                             <XAxis dataKey="year" tick={{ fontSize: 8 }} />
                             <YAxis tick={{ fontSize: 8 }} />
                             <Tooltip formatter={(v) => formatINR(v)} />
