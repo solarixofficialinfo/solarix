@@ -505,8 +505,8 @@ export default function SolarStudio() {
     setSaving(true);
     setSaveError(null);
     try {
-      const snap2d = liveMapRef.current?.getSnapshotDataUrl?.() || "";
-      const snap3d = viewer3dRef.current?.getSnapshotDataUrl?.() || "";
+      const snap2d = liveMapRef.current?.getSnapshotDataUrl?.() || designData.layout_snapshot_2d || "";
+      const snap3d = viewer3dRef.current?.getSnapshotDataUrl?.() || designData.layout_snapshot_3d || "";
 
       const payload = {
         ...designData,
@@ -585,6 +585,7 @@ export default function SolarStudio() {
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     designData.id,
     designData.roof_polygon,
@@ -596,7 +597,7 @@ export default function SolarStudio() {
     designData.latitude,
     designData.longitude,
     saving,
-  ]); // eslint-disable-line react-hooks/exhaustive-deps
+  ]);
 
   // Export PDF Report
   const handleExportPdf = async () => {
@@ -686,8 +687,8 @@ export default function SolarStudio() {
     const pCount = designData.panels.filter((p) => !p.hidden).length;
     const pWatt = Number(designData.panel_wattage || 550);
     const systemKw = ((pCount * pWatt) / 1000.0).toFixed(2);
-    const snap2d = liveMapRef.current?.getSnapshotDataUrl?.() || "";
-    const snap3d = viewer3dRef.current?.getSnapshotDataUrl?.() || "";
+    const snap2d = liveMapRef.current?.getSnapshotDataUrl?.() || designData.layout_snapshot_2d || "";
+    const snap3d = viewer3dRef.current?.getSnapshotDataUrl?.() || designData.layout_snapshot_3d || "";
 
     nav("/proposal-generator", {
       state: {

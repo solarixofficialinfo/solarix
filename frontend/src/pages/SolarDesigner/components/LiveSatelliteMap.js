@@ -236,15 +236,249 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       const map = mapInstanceRef.current;
       if (!map) return null;
       try {
+        const poly = roofPolygonRef.current;
+        const currentPanels = (Array.isArray(panels) ? panels : []).filter((p) => !p.hidden);
+        const currentObstacles = Array.isArray(obstacles) ? obstacles : [];
+
         const canvas = document.createElement("canvas");
-        const container = map.getContainer();
-        canvas.width = container.clientWidth;
-        canvas.height = container.clientHeight;
+        const w = 1200;
+        const h = 800;
+        canvas.width = w;
+        canvas.height = h;
         const ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#0f172a";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        if (!ctx) return null;
+
+        // 1. Blueprint-style Dark Gradient Background
+        const bgGrad = ctx.createLinearGradient(0, 0, w, h);
+        bgGrad.addColorStop(0, "#0a0f1d");
+        bgGrad.addColorStop(1, "#111827");
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, w, h);
+
+        // Architectural Grid Lines
+        ctx.strokeStyle = "rgba(51, 65, 85, 0.25)";
+        ctx.lineWidth = 1;
+        for (let gx = 0; gx < w; gx += 40) {
+          ctx.beginPath();
+          ctx.moveTo(gx, 0);
+          ctx.lineTo(gx, h);
+          ctx.stroke();
+        }
+        for (let gy = 0; gy < h; gy += 40) {
+          ctx.beginPath();
+          ctx.moveTo(0, gy);
+          ctx.lineTo(w, gy);
+          ctx.stroke();
+        }
+
+        // 2. Determine Bounding Box in Cartesian Coordinates (meters)
+        let minX = -10, maxX = 10, minY = -10, maxY = 10;
+        if (poly && poly.length >= 3) {
+          minX = Math.min(...poly.map((p) => p.x));
+          maxX = Math.max(...poly.map((p) => p.x));
+          minY = Math.min(...poly.map((p) => p.y));
+          maxY = Math.max(...poly.map((p) => p.y));
+        } else if (currentPanels.length > 0) {
+          minX = Math.min(...currentPanels.map((p) => p.x)) - 2;
+          maxX = Math.max(...currentPanels.map((p) => p.x)) + 2;
+          minY = Math.min(...currentPanels.map((p) => p.y)) - 2;
+          maxY = Math.max(...currentPanels.map((p) => p.y)) + 2;
+        }
+
+        // Add generous margins around structure
+        minX -= 3.0; maxX += 3.0;
+        minY -= 3.0; maxY += 3.0;
+        const rangeX = Math.max(6, maxX - minX);
+        const rangeY = Math.max(6, maxY - minY);
+
+        const padX = 90;
+        const padY = 90;
+        const availW = w - padX * 2;
+        const availH = h - padY * 2;
+        const scale = Math.min(availW / rangeX, availH / rangeY);
+
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+
+        const toScreenX = (x) => w / 2 + (x - centerX) * scale;
+        const toScreenY = (y) => h / 2 - (y - centerY) * scale; // Invert Y so North is up
+
+        // 3. Draw Roof Boundary Polygon
+        if (poly && poly.length >= 3) {
+          ctx.beginPath();
+          poly.forEach((pt, i) => {
+            const sx = toScreenX(pt.x);
+            const sy = toScreenY(pt.y);
+            if (i === 0) ctx.moveTo(sx, sy);
+            else ctx.lineTo(sx, sy);
+          });
+          ctx.closePath();
+          ctx.fillStyle = "rgba(14, 116, 144, 0.22)";
+          ctx.fill();
+          ctx.strokeStyle = "#38bdf8";
+          ctx.lineWidth = 3.5;
+          ctx.stroke();
+
+          // Vertex Points and Labels (P1, P2, ...)
+          poly.forEach((pt, i) => {
+            const sx = toScreenX(pt.x);
+            const sy = toScreenY(pt.y);
+            ctx.beginPath();
+            ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+            ctx.fillStyle = "#f59e0b";
+            ctx.fill();
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.font = "bold 11px system-ui, sans-serif";
+            ctx.fillStyle = "#ffffff";
+            ctx.fillText(`P${i + 1}`, sx + 8, sy - 6);
+          });
+
+          // Edge Dimension Labels (Meters)
+          for (let i = 0; i < poly.length; i++) {
+            const j = (i + 1) % poly.length;
+            const p1 = poly[i], p2 = poly[j];
+            const distM = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+            const mx = (toScreenX(p1.x) + toScreenX(p2.x)) / 2;
+            const my = (toScreenY(p1.y) + toScreenY(p2.y)) / 2;
+
+            ctx.fillStyle = "rgba(15, 23, 42, 0.88)";
+            ctx.strokeStyle = "rgba(56, 189, 248, 0.4)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(mx - 22, my - 10, 44, 20, 4);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.font = "bold 10px monospace";
+            ctx.fillStyle = "#38bdf8";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(`${distM.toFixed(1)}m`, mx, my);
+          }
+        }
+
+        // 4. Draw Obstacles
+        currentObstacles.forEach((obs) => {
+          const ow = (Number(obs.width) || 1.5) * scale;
+          const ol = (Number(obs.length) || 1.5) * scale;
+          const ox = toScreenX(obs.x || 0) - ow / 2;
+          const oy = toScreenY(obs.y || 0) - ol / 2;
+          ctx.fillStyle = "rgba(239, 68, 68, 0.35)";
+          ctx.strokeStyle = "#ef4444";
+          ctx.lineWidth = 2;
+          ctx.fillRect(ox, oy, ow, ol);
+          ctx.strokeRect(ox, oy, ow, ol);
+          ctx.font = "9px system-ui";
+          ctx.fillStyle = "#fca5a5";
+          ctx.textAlign = "center";
+          ctx.fillText(obs.name || "Obstacle", ox + ow / 2, oy + ol / 2);
+        });
+
+        // 5. Draw Solar PV Modules
+        const pLenM = Number(panelSpecs?.length_m || 2.278);
+        const pWidM = Number(panelSpecs?.width_m || 1.134);
+        currentPanels.forEach((p) => {
+          const isLandscape = p.orientation === "landscape";
+          const pw = (isLandscape ? pLenM : pWidM) * scale;
+          const ph = (isLandscape ? pWidM : pLenM) * scale;
+          const px = toScreenX(p.x) - pw / 2;
+          const py = toScreenY(p.y) - ph / 2;
+
+          // Panel Glass (Deep Solar Blue gradient)
+          const pGrad = ctx.createLinearGradient(px, py, px + pw, py + ph);
+          pGrad.addColorStop(0, "#1d4ed8");
+          pGrad.addColorStop(1, "#1e3a8a");
+          ctx.fillStyle = pGrad;
+          ctx.fillRect(px, py, pw, ph);
+
+          // Anodized Aluminum Frame
+          ctx.strokeStyle = "#cbd5e1";
+          ctx.lineWidth = 1.2;
+          ctx.strokeRect(px, py, pw, ph);
+
+          // PV Cell Busbar Gridlines
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+          ctx.lineWidth = 0.6;
+          ctx.beginPath();
+          ctx.moveTo(px + pw / 2, py);
+          ctx.lineTo(px + pw / 2, py + ph);
+          ctx.moveTo(px, py + ph / 3);
+          ctx.lineTo(px + pw, py + ph / 3);
+          ctx.moveTo(px, py + (2 * ph) / 3);
+          ctx.lineTo(px + pw, py + (2 * ph) / 3);
+          ctx.stroke();
+        });
+
+        // 6. Header Annotation Banner
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+        ctx.fillRect(20, 16, 520, 52);
+        ctx.strokeStyle = "rgba(56, 189, 248, 0.4)";
+        ctx.strokeRect(20, 16, 520, 52);
+
+        ctx.font = "bold 13px system-ui, sans-serif";
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText("SOLARIX 2D ROOFTOP ARRAY LAYOUT & SITE PLAN", 32, 24);
+
+        const pWatt = Number(panelSpecs?.wattage || 550);
+        const totalKw = ((currentPanels.length * pWatt) / 1000).toFixed(2);
+        const roofArea = poly && poly.length >= 3 ? Math.round(getCartesianPolygonArea(poly)) : 0;
+        ctx.font = "11px system-ui, sans-serif";
+        ctx.fillStyle = "#38bdf8";
+        ctx.fillText(`${totalKw} kWp System · ${currentPanels.length} Modules (${pWatt}W) · Roof Area: ${roofArea} m²`, 32, 44);
+
+        // 7. North Compass Rose
+        const compassX = w - 50;
+        const compassY = 45;
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 11px system-ui";
+        ctx.textAlign = "center";
+        ctx.fillText("N", compassX, compassY - 22);
+
+        ctx.beginPath();
+        ctx.moveTo(compassX, compassY - 18);
+        ctx.lineTo(compassX - 6, compassY + 6);
+        ctx.lineTo(compassX, compassY + 2);
+        ctx.closePath();
+        ctx.fillStyle = "#ef4444";
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(compassX, compassY - 18);
+        ctx.lineTo(compassX + 6, compassY + 6);
+        ctx.lineTo(compassX, compassY + 2);
+        ctx.closePath();
+        ctx.fillStyle = "#b91c1c";
+        ctx.fill();
+
+        // 8. Scale Indicator (Bottom Left)
+        ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+        ctx.fillRect(20, h - 45, 130, 30);
+        ctx.strokeStyle = "rgba(148, 163, 184, 0.4)";
+        ctx.strokeRect(20, h - 45, 130, 30);
+
+        const scaleBarM = 5;
+        const scaleBarPx = scaleBarM * scale;
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(30, h - 26);
+        ctx.lineTo(30 + Math.min(100, scaleBarPx), h - 26);
+        ctx.stroke();
+
+        ctx.font = "bold 10px monospace";
+        ctx.fillStyle = "#ffffff";
+        ctx.textAlign = "left";
+        ctx.fillText(`Scale: ${scaleBarM}m`, 30, h - 38);
+
         return canvas.toDataURL("image/png");
-      } catch (e) { return null; }
+      } catch (e) {
+        return null;
+      }
     },
     panTo: (lat, lng) => {
       if (!isValidLatLng(lat, lng)) return;
@@ -630,13 +864,19 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         return cartesianToLatLng(p.x, p.y);
       });
 
-      L.polygon(polyLatLngs, {
+      const polyLayer = L.polygon(polyLatLngs, {
         color: editingRoof ? "#f59e0b" : "#2563eb",
         weight: editingRoof ? 2.5 : 3,
         fillColor: editingRoof ? "#fbbf24" : "#3b82f6",
         fillOpacity: editingRoof ? 0.18 : 0.28,
         dashArray: editingRoof ? "4, 4" : undefined,
       }).addTo(roofGroup);
+
+      polyLayer.on("dblclick", (e) => {
+        L.DomEvent.stopPropagation(e);
+        setActiveTool("edit_roof");
+        toast.info("Roof editing enabled — drag any vertex P1..Pn to adjust.");
+      });
 
       // Vertex markers
       validPoly.forEach((pt, idx) => {
@@ -680,13 +920,18 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           vertexHandlesRef.current.push(handle);
         } else {
           const cm = L.circleMarker(latlng, {
-            radius: 5,
+            radius: 6,
             fillColor: "#2563eb",
-            fillOpacity: 1,
+            fillOpacity: 0.95,
             color: "#ffffff",
             weight: 2,
           }).addTo(roofGroup);
-          cm.bindTooltip(`P${idx + 1}`, { permanent: false, direction: "top" });
+          cm.on("click", (e) => {
+            L.DomEvent.stopPropagation(e);
+            setActiveTool("edit_roof");
+            toast.info(`Editing roof vertices — drag P${idx + 1} to reposition.`);
+          });
+          cm.bindTooltip(`<b>P${idx + 1}</b> (click to edit)`, { permanent: false, direction: "top" });
         }
       });
 
@@ -850,7 +1095,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     roofPolygon, panels, obstacles, walkways, setbackMeters,
     activeDrawPoints, layers, selectedPanelId, editingRoof,
     cartesianToLatLng, latLngToCartesian, handleVertexDrag, handleDeleteVertex,
-    handleInsertVertexOnEdge, pushVertexHistory, setSelectedPanelId, setPanels
+    handleInsertVertexOnEdge, pushVertexHistory, setSelectedPanelId, setPanels,
+    setActiveTool
   ]);
 
   // Zoom & Fit Viewport Helpers
