@@ -132,6 +132,7 @@ export default function ProposalGenerator() {
 
     return {
       // 1. Customer & Project Details
+      template_id: "template1", // 'template1' (Solar Professional) | 'template2' (Modern Solar)
       proposal_number: refNum,
       proposal_date: todayStr,
       customer_name: "",
@@ -611,6 +612,81 @@ export default function ProposalGenerator() {
           <button onClick={collapseAll} className="hover:text-blue-600 font-medium">
             Collapse All
           </button>
+        </div>
+      </div>
+
+      {/* ── PROPOSAL DESIGN TEMPLATE / THEME SELECTOR ──────────────────────── */}
+      <div className="bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-2xs">
+        <div className="flex items-center justify-between mb-2.5">
+          <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+            <SlidersHorizontal className="w-3.5 h-3.5 text-blue-600" />
+            <span>Proposal Design Template</span>
+          </span>
+          <span className="text-[10.5px] text-slate-500">
+            Choose presentation theme before previewing or generating PDF
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Template 01 */}
+          <div
+            onClick={() => {
+              setForm((prev) => ({ ...prev, template_id: "template1" }));
+              setIsSavedDraft(false);
+            }}
+            className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-start gap-3 ${
+              (form.template_id || "template1") === "template1"
+                ? "border-blue-600 bg-blue-50/50 shadow-xs"
+                : "border-slate-200 hover:border-slate-300 bg-white"
+            }`}
+          >
+            <div className="w-10 h-12 rounded-lg bg-sky-500 text-white flex flex-col justify-between p-1 shadow-xs shrink-0">
+              <div className="w-full h-1 bg-white/40 rounded-full" />
+              <div className="text-[7px] font-bold text-center">PROOF</div>
+              <div className="w-3 h-3 bg-white text-sky-700 text-[7px] font-bold rounded-xs flex items-center justify-center self-end">1</div>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-900">Template 01 · Solar Professional</span>
+                {(form.template_id || "template1") === "template1" && (
+                  <Badge className="bg-blue-600 text-white text-[9px] px-1.5 py-0">✓ Selected</Badge>
+                )}
+              </div>
+              <p className="text-[10.5px] text-slate-500 mt-0.5 leading-snug">
+                Reference PDF style: clean white background, cyan/blue accents, structured investment summary and blue page tab.
+              </p>
+            </div>
+          </div>
+
+          {/* Template 02 */}
+          <div
+            onClick={() => {
+              setForm((prev) => ({ ...prev, template_id: "template2" }));
+              setIsSavedDraft(false);
+            }}
+            className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-start gap-3 ${
+              form.template_id === "template2"
+                ? "border-blue-600 bg-blue-50/50 shadow-xs"
+                : "border-slate-200 hover:border-slate-300 bg-white"
+            }`}
+          >
+            <div className="w-10 h-12 rounded-lg bg-slate-950 text-white flex flex-col justify-between p-1 shadow-xs shrink-0 border border-slate-800">
+              <div className="w-full h-1 bg-amber-400 rounded-full" />
+              <div className="text-[7px] font-bold text-center text-amber-400">SOLAR</div>
+              <div className="w-3 h-3 bg-blue-600 text-white text-[7px] font-bold rounded-xs flex items-center justify-center self-end">2</div>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-900">Template 02 · Modern Solar</span>
+                {form.template_id === "template2" && (
+                  <Badge className="bg-blue-600 text-white text-[9px] px-1.5 py-0">✓ Selected</Badge>
+                )}
+              </div>
+              <p className="text-[10.5px] text-slate-500 mt-0.5 leading-snug">
+                Modern solar visual language: deep navy & slate palette with solar amber accents and framed metric cards.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1412,6 +1488,10 @@ export default function ProposalGenerator() {
             metrics={metrics}
             onClose={() => setShowFullViewerModal(false)}
             onDownloadPdf={handleGenerateProposal}
+            onSelectTemplate={(tid) => {
+              setForm((prev) => ({ ...prev, template_id: tid }));
+              setIsSavedDraft(false);
+            }}
             downloading={generating}
           />
         </DialogContent>

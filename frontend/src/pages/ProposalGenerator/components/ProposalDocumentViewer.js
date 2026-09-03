@@ -18,6 +18,7 @@ export default function ProposalDocumentViewer({
   metrics,
   onClose,
   onDownloadPdf,
+  onSelectTemplate,
   downloading = false,
 }) {
   const [currentPage, setCurrentPage] = useState(1);
@@ -28,12 +29,21 @@ export default function ProposalDocumentViewer({
   const pd = proposalData || {};
   const m = metrics || {};
 
+  const [selectedTemplate, setSelectedTemplate] = useState(pd.template_id || "template1");
+
+  useEffect(() => {
+    if (pd.template_id && pd.template_id !== selectedTemplate) {
+      setSelectedTemplate(pd.template_id);
+    }
+  }, [pd.template_id, selectedTemplate]);
+
   const companyName = co.company_name || co.name || "GVP Solar Energy Solutions";
   const customerName = pd.customer_name || "Valued Customer";
   const systemKw = Number(pd.system_kw) || 5.0;
   const propNumber = pd.proposal_number || `PROP-${pd.proposal_date || "2026"}`;
   const propDate = pd.proposal_date || new Date().toISOString().slice(0, 10);
   const netCost = Number(pd.net_customer_cost) || 172000;
+  const roiPct = netCost > 0 ? ((m.annualSavings / netCost) * 100).toFixed(2) : "19.84";
 
   const handlePrint = () => {
     window.print();
@@ -92,6 +102,36 @@ export default function ProposalDocumentViewer({
           </div>
         </div>
 
+        {/* Template Switcher Buttons */}
+        <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
+          <button
+            onClick={() => {
+              setSelectedTemplate("template1");
+              if (onSelectTemplate) onSelectTemplate("template1");
+            }}
+            className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition ${
+              selectedTemplate === "template1"
+                ? "bg-sky-600 text-white shadow-xs"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            Template 01 · Solar Professional
+          </button>
+          <button
+            onClick={() => {
+              setSelectedTemplate("template2");
+              if (onSelectTemplate) onSelectTemplate("template2");
+            }}
+            className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition ${
+              selectedTemplate === "template2"
+                ? "bg-blue-600 text-white shadow-xs"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            Template 02 · Modern Solar
+          </button>
+        </div>
+
         {/* Center Pager Controls */}
         <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
           <Button
@@ -142,7 +182,7 @@ export default function ProposalDocumentViewer({
             onClick={handlePrint}
             className="border-slate-700 bg-slate-800 hover:bg-slate-700 text-white text-xs h-8 px-3 rounded-lg gap-1.5"
           >
-            <Printer className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Print / Save PDF</span>
+            <Printer className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Print</span>
           </Button>
           <Button
             size="sm"
@@ -193,101 +233,199 @@ export default function ProposalDocumentViewer({
             >
               {/* Top Accent Line (Pages 2-11) */}
               {pageNum > 1 && (
-                <div className="w-full border-b border-blue-600/80 pb-2 mb-6 flex items-center justify-between text-[11px] text-slate-500">
-                  <div className="flex items-center gap-1.5 font-bold text-blue-900 tracking-wide">
-                    <Sun className="w-3.5 h-3.5 text-blue-600" />
-                    <span>{companyName.toUpperCase()}</span>
+                selectedTemplate === "template1" ? (
+                  <div className="w-full border-b-2 border-sky-500 pb-2 mb-6 flex items-center justify-between text-[11px] text-slate-500">
+                    <div className="flex items-center gap-1.5 font-bold text-sky-800 tracking-wide">
+                      <Sun className="w-3.5 h-3.5 text-sky-600" />
+                      <span>{companyName.toUpperCase()}</span>
+                    </div>
+                    <div className="font-semibold text-slate-400">
+                      SOLAR PV TECHNICAL PROPOSAL · {propNumber}
+                    </div>
                   </div>
-                  <div className="font-medium text-slate-400">
-                    Solar PV Technical Proposal · {propNumber}
+                ) : (
+                  <div className="w-full border-b border-slate-800/80 pb-2 mb-6 flex items-center justify-between text-[11px] text-slate-500">
+                    <div className="flex items-center gap-1.5 font-bold text-slate-900 tracking-wide">
+                      <Sun className="w-3.5 h-3.5 text-blue-600" />
+                      <span>{companyName.toUpperCase()}</span>
+                    </div>
+                    <div className="font-medium text-slate-400">
+                      Solar PV Proposal · {propNumber}
+                    </div>
                   </div>
-                </div>
+                )
               )}
 
               {/* ── PAGE CONTENT ROUTER ───────────────────────────────────── */}
               <div className="flex-1 flex flex-col">
                 {/* PAGE 1: COVER / HERO */}
                 {pageNum === 1 && (
-                  <div className="flex-1 flex flex-col justify-between py-6">
-                    <div>
-                      {/* Top Header Row */}
-                      <div className="flex items-center justify-between border-b-2 border-blue-600 pb-4">
-                        <div>
-                          <div className="text-2xl font-black text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>
-                            {companyName.toUpperCase()}
+                  selectedTemplate === "template1" ? (
+                    /* ── TEMPLATE 01: SOLAR PROOF / REFERENCE PDF STYLE ────── */
+                    <div className="flex-1 flex flex-col justify-between py-2">
+                      <div className="space-y-6">
+                        {/* Reference PDF Contact Details Header */}
+                        <div className="grid grid-cols-2 gap-4 pb-4 border-b border-slate-200">
+                          <div>
+                            <span className="text-[10px] font-bold text-sky-700 uppercase tracking-wider block">Prepared by:</span>
+                            <div className="text-xs font-bold text-slate-900">{co.owner_name || "Solar EPC Specialist"}</div>
+                            <div className="text-[11px] text-slate-600">{co.mobile || co.phone || "+91 98765 43210"}</div>
+                            <div className="text-[11px] text-slate-600">{co.email || "info@solarix.energy"}</div>
+                            <div className="text-[11px] text-sky-700 font-semibold">{companyName}</div>
                           </div>
-                          <div className="text-xs text-slate-500 font-medium mt-0.5">
-                            Certified Solar EPC & Clean Energy Solutions
+                          <div>
+                            <span className="text-[10px] font-bold text-sky-700 uppercase tracking-wider block">Created for:</span>
+                            <div className="text-xs font-bold text-slate-900">{customerName}</div>
+                            <div className="text-[11px] text-slate-600">{pd.mobile || "Mobile Not Specified"}</div>
+                            {pd.email && <div className="text-[11px] text-slate-600">{pd.email}</div>}
+                            <div className="text-[11px] text-slate-600">{pd.site_address || "Site Address"}, {pd.city}</div>
+                            <div className="text-[10.5px] text-slate-400 mt-1 font-mono">
+                              Date: {propDate} · Ref: {propNumber}
+                            </div>
                           </div>
                         </div>
-                        <div className="text-right text-xs">
-                          <div className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">PROPOSAL REF</div>
-                          <div className="font-mono font-bold text-blue-700">{propNumber}</div>
-                          <div className="text-slate-500 text-[11px] mt-0.5">Date: {propDate}</div>
+
+                        {/* Reference PDF Angular Hero Card with Rooftop Solar Imagery */}
+                        <div className="relative rounded-2xl overflow-hidden bg-gradient-to-r from-sky-600 to-blue-700 text-white p-6 shadow-xl">
+                          <div className="max-w-xs space-y-2 relative z-10">
+                            <span className="text-[10px] font-bold uppercase tracking-widest text-sky-200 block">
+                              ENGINEERING ROOFTOP SOLAR
+                            </span>
+                            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight" style={{ fontFamily: "Outfit" }}>
+                              SOLAR POWER<br />PROPOSAL
+                            </h1>
+                            <div className="text-4xl font-black text-white tracking-tight pt-1">
+                              {systemKw.toFixed(2)}kW
+                            </div>
+                          </div>
+                          {/* Angled background badge */}
+                          <div className="absolute right-0 top-0 bottom-0 w-1/2 opacity-25 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-white via-transparent to-transparent pointer-events-none" />
+                        </div>
+
+                        {/* INVESTMENT SUMMARY BOX (Exact Reference PDF Section) */}
+                        <div className="p-5 rounded-xl border-2 border-sky-500 bg-sky-50/40 space-y-3">
+                          <div className="text-xs font-black text-sky-900 uppercase tracking-wider border-b border-sky-200 pb-1.5 flex items-center justify-between">
+                            <span>INVESTMENT SUMMARY</span>
+                            <Badge className="bg-sky-600 text-white text-[9px] px-2 py-0">Turnkey EPC</Badge>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                            <div>
+                              <span className="text-[9.5px] font-bold text-slate-500 uppercase block">ESTIMATED SAVINGS (YEAR 1)</span>
+                              <span className="text-lg font-black text-slate-900">{formatINR(m.annualSavings)}</span>
+                            </div>
+                            <div>
+                              <span className="text-[9.5px] font-bold text-slate-500 uppercase block">RETURN ON INVESTMENT</span>
+                              <span className="text-lg font-black text-emerald-700">{roiPct}%</span>
+                            </div>
+                            <div>
+                              <span className="text-[9.5px] font-bold text-slate-500 uppercase block">PAYBACK PERIOD</span>
+                              <span className="text-lg font-black text-sky-700">{m.paybackYears} years</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Scope Snapshot */}
+                        <div className="grid grid-cols-2 gap-3 text-xs">
+                          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                            <span className="text-[9.5px] font-bold text-slate-500 uppercase block">Hardware Inclusions</span>
+                            <div className="font-semibold text-slate-800 text-[11px] mt-0.5">{pd.panel?.quantity || 18} × {pd.panel?.wattage || 555}W DCR TOPCon Modules</div>
+                            <div className="text-[10px] text-slate-500">{pd.inverter?.capacity || "10.0 kW"} On-Grid Smart Inverter with App</div>
+                          </div>
+                          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                            <span className="text-[9.5px] font-bold text-slate-500 uppercase block">Financial Summary</span>
+                            <div className="font-semibold text-slate-800 text-[11px] mt-0.5">Net Investment: {formatINR(netCost)}</div>
+                            <div className="text-[10px] text-emerald-700 font-medium">Includes PM Surya Ghar Subsidy Assistance</div>
+                          </div>
                         </div>
                       </div>
 
-                      {/* Large Hero Banner */}
-                      <div className="my-10 bg-gradient-to-br from-slate-950 via-blue-950 to-indigo-950 text-white p-8 rounded-2xl shadow-xl relative overflow-hidden">
-                        <div className="absolute right-0 top-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
-                        <span className="inline-block bg-blue-500/20 text-blue-300 border border-blue-400/30 text-[11px] font-bold px-3 py-1 rounded-full uppercase tracking-wider mb-4">
-                          Grid-Connected Solar PV
-                        </span>
-                        <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-white leading-tight" style={{ fontFamily: "Outfit" }}>
-                          Commercial & Technical<br />Solar Rooftop Proposal
-                        </h1>
-                        <p className="text-sm text-slate-300 mt-3 max-w-lg leading-relaxed">
-                          Tailored turnkey engineering proposal for a high-efficiency <b>{systemKw.toFixed(2)} kWp</b> rooftop solar installation.
-                        </p>
-                        <div className="mt-6 flex flex-wrap gap-4 pt-4 border-t border-slate-800 text-xs">
-                          <div>
-                            <span className="text-slate-400 text-[10px] block font-medium">PLANT CAPACITY</span>
-                            <span className="text-xl font-bold text-amber-400">{systemKw.toFixed(2)} kWp</span>
-                          </div>
-                          <div className="w-[1px] h-8 bg-slate-800" />
-                          <div>
-                            <span className="text-slate-400 text-[10px] block font-medium">ANNUAL GENERATION</span>
-                            <span className="text-xl font-bold text-emerald-400">~{formatNumberIN(m.annualKwh)} kWh</span>
-                          </div>
-                          <div className="w-[1px] h-8 bg-slate-800" />
-                          <div>
-                            <span className="text-slate-400 text-[10px] block font-medium">NET COST TO CUSTOMER</span>
-                            <span className="text-xl font-bold text-white">{formatINR(netCost)}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Customer & Project Detail Cards */}
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                          <div className="text-[10px] font-bold text-blue-900 uppercase tracking-wider mb-2">PREPARED FOR</div>
-                          <div className="font-bold text-slate-900 text-base">{customerName}</div>
-                          <div className="text-xs text-slate-600 mt-1">{pd.site_address || "Site Address"}</div>
-                          <div className="text-xs text-slate-600">{pd.city} {pd.state} {pd.pincode}</div>
-                          <div className="text-xs text-slate-500 mt-2">
-                            {pd.mobile && <span>Ph: {pd.mobile}</span>}
-                            {pd.email && <span className="ml-2">· {pd.email}</span>}
-                          </div>
-                        </div>
-
-                        <div className="p-4 bg-blue-50/60 rounded-xl border border-blue-200">
-                          <div className="text-[10px] font-bold text-blue-900 uppercase tracking-wider mb-2">PROJECT OVERVIEW</div>
-                          <div className="text-xs space-y-1">
-                            <div className="flex justify-between"><span className="text-slate-500">System Rating:</span> <span className="font-bold text-slate-800">{systemKw.toFixed(2)} kWp DC</span></div>
-                            <div className="flex justify-between"><span className="text-slate-500">Project Type:</span> <span className="font-medium text-slate-800">{pd.project_type || "Residential"}</span></div>
-                            <div className="flex justify-between"><span className="text-slate-500">Grid Tie:</span> <span className="font-medium text-slate-800">{pd.solar_system_type || "On-Grid"}</span></div>
-                            <div className="flex justify-between"><span className="text-slate-500">Govt. Subsidy:</span> <span className="font-bold text-emerald-700">{pd.subsidy_applicable ? "Eligible (PM Surya Ghar)" : "Not Applicable"}</span></div>
-                            <div className="flex justify-between"><span className="text-slate-500">Prepared By:</span> <span className="font-medium text-slate-800">{pd.prepared_by || "Solar Engineering Team"}</span></div>
-                          </div>
-                        </div>
+                      <div className="pt-4 border-t border-slate-200 flex justify-between items-center text-[10.5px] text-slate-500">
+                        <span>{companyName} · Solar Energy EPC</span>
+                        <span className="font-semibold text-sky-700">Proposal Valid for 15 Days</span>
                       </div>
                     </div>
+                  ) : (
+                    /* ── TEMPLATE 02: MODERN SOLAR THEME ─────────────────────── */
+                    <div className="flex-1 flex flex-col justify-between py-6">
+                      <div>
+                        {/* Top Header Row */}
+                        <div className="flex items-center justify-between border-b-2 border-slate-900 pb-4">
+                          <div>
+                            <div className="text-2xl font-black text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>
+                              {companyName.toUpperCase()}
+                            </div>
+                            <div className="text-xs text-slate-500 font-medium mt-0.5">
+                              Certified Solar EPC & Clean Energy Solutions
+                            </div>
+                          </div>
+                          <div className="text-right text-xs">
+                            <div className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">PROPOSAL REF</div>
+                            <div className="font-mono font-bold text-blue-700">{propNumber}</div>
+                            <div className="text-slate-500 text-[11px] mt-0.5">Date: {propDate}</div>
+                          </div>
+                        </div>
 
-                    <div className="text-center pt-6 border-t border-slate-200 text-xs text-slate-400">
-                      <div><b>{companyName}</b> · {co.address || "Solar EPC Headquarters"} · {co.mobile || co.phone} · {co.email}</div>
-                      <div className="text-[10px] mt-1 text-slate-400">Confidential · Strictly for client evaluation</div>
+                        {/* Large Hero Banner */}
+                        <div className="my-8 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-white p-8 rounded-2xl shadow-xl relative overflow-hidden border border-slate-800">
+                          <span className="inline-block bg-amber-400/20 text-amber-300 border border-amber-400/30 text-[11px] font-bold px-3 py-0.5 rounded-full uppercase tracking-wider mb-3">
+                            Grid-Connected Solar PV
+                          </span>
+                          <h1 className="text-3xl font-black tracking-tight text-white leading-tight" style={{ fontFamily: "Outfit" }}>
+                            Commercial & Technical<br />Solar Rooftop Proposal
+                          </h1>
+                          <p className="text-xs text-slate-300 mt-2 max-w-lg leading-relaxed">
+                            Tailored turnkey engineering proposal for a high-efficiency <b>{systemKw.toFixed(2)} kWp</b> rooftop solar installation.
+                          </p>
+                          <div className="mt-5 flex flex-wrap gap-4 pt-4 border-t border-slate-800 text-xs">
+                            <div>
+                              <span className="text-slate-400 text-[10px] block font-medium">PLANT CAPACITY</span>
+                              <span className="text-lg font-bold text-amber-400">{systemKw.toFixed(2)} kWp</span>
+                            </div>
+                            <div className="w-[1px] h-7 bg-slate-800" />
+                            <div>
+                              <span className="text-slate-400 text-[10px] block font-medium">ANNUAL GENERATION</span>
+                              <span className="text-lg font-bold text-emerald-400">~{formatNumberIN(m.annualKwh)} kWh</span>
+                            </div>
+                            <div className="w-[1px] h-7 bg-slate-800" />
+                            <div>
+                              <span className="text-slate-400 text-[10px] block font-medium">NET INVESTMENT</span>
+                              <span className="text-lg font-bold text-white">{formatINR(netCost)}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Customer & Project Detail Cards */}
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                            <div className="text-[10px] font-bold text-slate-900 uppercase tracking-wider mb-2">PREPARED FOR</div>
+                            <div className="font-bold text-slate-900 text-base">{customerName}</div>
+                            <div className="text-xs text-slate-600 mt-1">{pd.site_address || "Site Address"}</div>
+                            <div className="text-xs text-slate-600">{pd.city} {pd.state} {pd.pincode}</div>
+                            <div className="text-xs text-slate-500 mt-2">
+                              {pd.mobile && <span>Ph: {pd.mobile}</span>}
+                              {pd.email && <span className="ml-2">· {pd.email}</span>}
+                            </div>
+                          </div>
+
+                          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                            <div className="text-[10px] font-bold text-slate-900 uppercase tracking-wider mb-2">PROJECT OVERVIEW</div>
+                            <div className="text-xs space-y-1">
+                              <div className="flex justify-between"><span className="text-slate-500">System Rating:</span> <span className="font-bold text-slate-800">{systemKw.toFixed(2)} kWp DC</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">Project Type:</span> <span className="font-medium text-slate-800">{pd.project_type || "Residential"}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">Grid Tie:</span> <span className="font-medium text-slate-800">{pd.solar_system_type || "On-Grid"}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">Govt. Subsidy:</span> <span className="font-bold text-emerald-700">{pd.subsidy_applicable ? "Eligible (PM Surya Ghar)" : "Not Applicable"}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500">Prepared By:</span> <span className="font-medium text-slate-800">{pd.prepared_by || "Solar Engineering Team"}</span></div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-center pt-6 border-t border-slate-200 text-xs text-slate-400">
+                        <div><b>{companyName}</b> · {co.address || "Solar EPC Headquarters"} · {co.mobile || co.phone} · {co.email}</div>
+                        <div className="text-[10px] mt-1 text-slate-400">Confidential · Strictly for client evaluation</div>
+                      </div>
                     </div>
-                  </div>
+                  )
                 )}
 
                 {/* PAGE 2: EXECUTIVE SUMMARY */}
@@ -885,10 +1023,21 @@ export default function ProposalDocumentViewer({
 
               {/* Bottom Footer Line (Pages 2-11) */}
               {pageNum > 1 && (
-                <div className="w-full border-t border-slate-200 pt-3 mt-6 flex items-center justify-between text-[10px] text-slate-400">
-                  <div>Confidential · Prepared specifically for {customerName}</div>
-                  <div className="font-bold text-slate-600">Page {pageNum} of {totalPages}</div>
-                </div>
+                selectedTemplate === "template1" ? (
+                  <div className="w-full border-t border-slate-200 pt-2.5 mt-6 flex items-center justify-between text-[10px] text-slate-500">
+                    <div className="truncate max-w-lg">
+                      {co.owner_name || "Solar EPC"} {co.mobile ? `| ${co.mobile}` : ""} {co.email ? `| ${co.email}` : ""} | {companyName} {co.gst_number ? `| GSTIN: ${co.gst_number}` : ""}
+                    </div>
+                    <div className="w-7 h-7 bg-sky-500 text-white font-black text-xs flex items-center justify-center rounded-xs shadow-2xs shrink-0">
+                      {pageNum}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="w-full border-t border-slate-200 pt-3 mt-6 flex items-center justify-between text-[10px] text-slate-400">
+                    <div>Confidential · Prepared specifically for {customerName}</div>
+                    <div className="font-bold text-slate-600">Page {pageNum} of {totalPages}</div>
+                  </div>
+                )
               )}
             </div>
           );

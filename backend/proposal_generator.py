@@ -68,6 +68,11 @@ class ProposalCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.pages = []
+        self.template_id = "template1"
+        self.company_name = "Solarix Solar"
+        self.co_owner = ""
+        self.co_mobile = ""
+        self.co_email = ""
 
     def showPage(self):
         self.pages.append(dict(self.__dict__))
@@ -87,25 +92,64 @@ class ProposalCanvas(canvas.Canvas):
         self.saveState()
         page_w, page_h = A4
 
-        # Top decorative thin line
-        self.setStrokeColor(colors.HexColor('#2563eb'))
-        self.setLineWidth(1.5)
-        self.line(1.5 * cm, page_h - 1.2 * cm, page_w - 1.5 * cm, page_h - 1.2 * cm)
+        if self.template_id == "template1":
+            # ── TEMPLATE 01 (SOLAR PROOF REFERENCE STYLE) ───────────────────
+            # Top cyan/sky blue accent line
+            self.setStrokeColor(colors.HexColor('#0284c7'))
+            self.setLineWidth(2.0)
+            self.line(1.5 * cm, page_h - 1.2 * cm, page_w - 1.5 * cm, page_h - 1.2 * cm)
 
-        # Header small label
-        self.setFont(PDF_FONT, 7.5)
-        self.setFillColor(MUTED_TEXT)
-        self.drawString(1.5 * cm, page_h - 1.0 * cm, "SOLARIX — Comprehensive Solar PV Proposal")
+            # Top header text
+            self.setFont(PDF_FONT_BOLD, 8)
+            self.setFillColor(colors.HexColor('#0369a1'))
+            self.drawString(1.5 * cm, page_h - 1.0 * cm, f"{self.company_name.upper()} — SOLAR PV TECHNICAL PROPOSAL")
 
-        # Bottom footer line
-        self.setStrokeColor(colors.HexColor('#e2e8f0'))
-        self.setLineWidth(0.75)
-        self.line(1.5 * cm, 1.3 * cm, page_w - 1.5 * cm, 1.3 * cm)
+            # Bottom footer line
+            self.setStrokeColor(colors.HexColor('#e2e8f0'))
+            self.setLineWidth(0.75)
+            self.line(1.5 * cm, 1.4 * cm, page_w - 1.5 * cm, 1.4 * cm)
 
-        # Footer text
-        self.drawString(1.5 * cm, 0.9 * cm, "Confidential — Prepared for Customer Evaluation")
-        pg_str = f"Page {self._pageNumber} of {page_count}"
-        self.drawRightString(page_w - 1.5 * cm, 0.9 * cm, pg_str)
+            # Footer contact info on left
+            self.setFont(PDF_FONT, 7.5)
+            self.setFillColor(MUTED_TEXT)
+            contact_parts = list(filter(None, [self.co_owner, self.co_mobile, self.co_email, self.company_name]))
+            contact_str = " | ".join(contact_parts) or self.company_name
+            self.drawString(1.5 * cm, 0.9 * cm, contact_str)
+
+            # Bottom-right: Distinctive solid cyan square tab with bold white page number (matching Solar Proof reference PDF!)
+            tab_w = 0.75 * cm
+            tab_h = 0.75 * cm
+            tab_x = page_w - 1.5 * cm - tab_w
+            tab_y = 0.65 * cm
+            self.setFillColor(colors.HexColor('#0284c7'))
+            self.rect(tab_x, tab_y, tab_w, tab_h, fill=1, stroke=0)
+            self.setFillColor(colors.white)
+            self.setFont(PDF_FONT_BOLD, 10)
+            self.drawCentredString(tab_x + (tab_w / 2.0), tab_y + 0.22 * cm, str(self._pageNumber))
+
+        else:
+            # ── TEMPLATE 02 (MODERN SOLAR STYLE) ─────────────────────────────
+            # Top decorative navy line
+            self.setStrokeColor(colors.HexColor('#0f172a'))
+            self.setLineWidth(1.5)
+            self.line(1.5 * cm, page_h - 1.2 * cm, page_w - 1.5 * cm, page_h - 1.2 * cm)
+
+            # Header small label
+            self.setFont(PDF_FONT_BOLD, 7.5)
+            self.setFillColor(colors.HexColor('#1e3a8a'))
+            self.drawString(1.5 * cm, page_h - 1.0 * cm, "SOLARIX — Modern Rooftop Solar PV Proposal")
+
+            # Bottom footer line
+            self.setStrokeColor(colors.HexColor('#e2e8f0'))
+            self.setLineWidth(0.75)
+            self.line(1.5 * cm, 1.3 * cm, page_w - 1.5 * cm, 1.3 * cm)
+
+            # Footer text
+            self.setFont(PDF_FONT, 7.5)
+            self.setFillColor(MUTED_TEXT)
+            self.drawString(1.5 * cm, 0.9 * cm, "Confidential — Prepared for Customer Evaluation")
+            pg_str = f"Page {self._pageNumber} of {page_count}"
+            self.drawRightString(page_w - 1.5 * cm, 0.9 * cm, pg_str)
 
         self.restoreState()
 
@@ -216,50 +260,119 @@ def generate_proposal_pdf(doc_data: Dict[str, Any], company: Dict[str, Any]) -> 
     ac_cable = cables.get("ac") or "4-Core Armoured Copper AC Cable"
     cable_brand = cables.get("brand") or "Polycab / Havells / Siechem"
 
+    template_id = doc_data.get("template_id") or "template1"
+
     # =========================================================================
     # PAGE 1: COVER PAGE / HERO
     # =========================================================================
-    story.append(Spacer(1, 2.5 * cm))
-    
-    # Branded Header Badge
-    badge_table = Table([[
-        Paragraph(f"<b>{company_name.upper()}</b>", ParagraphStyle('CoHd', parent=PROP_TITLE, fontSize=16, textColor=ACCENT_BLUE)),
-        Paragraph(f"Ref: <b>{prop_number}</b><br/>Date: <b>{prop_date}</b>", ParagraphStyle('RefHd', parent=BODY_TEXT, alignment=2))
-    ]], colWidths=[content_w * 0.65, content_w * 0.35])
-    badge_table.setStyle(TableStyle([
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 12),
-    ]))
-    story.append(badge_table)
-    story.append(HRFlowable(width="100%", thickness=2, color=ACCENT_BLUE, spaceBefore=0, spaceAfter=20))
+    if template_id == "template1":
+        # ── TEMPLATE 01: SOLAR PROOF / REFERENCE PDF STYLE COVER ─────────────
+        story.append(Spacer(1, 1.2 * cm))
+        
+        # Reference PDF Contact Details Header Table
+        prep_html = f"""
+        <font color='#0284c7'><b>Prepared by:</b></font><br/>
+        <b>{co_owner or 'Solar EPC Specialist'}</b><br/>
+        {co_mobile or '+91 98765 43210'}<br/>
+        {co_email or 'info@solarix.energy'}<br/>
+        <font color='#0284c7'><b>{company_name}</b></font>
+        """
+        creat_html = f"""
+        <font color='#0284c7'><b>Created for:</b></font><br/>
+        <b>{customer_name}</b><br/>
+        {mobile}<br/>
+        {email}<br/>
+        {full_address}<br/><br/>
+        <b>Date:</b> {prop_date} &nbsp;·&nbsp; <b>Project Ref No.:</b> {prop_number}
+        """
+        contact_tbl = Table([
+            [Paragraph(prep_html, BODY_TEXT), Paragraph(creat_html, BODY_TEXT)]
+        ], colWidths=[content_w * 0.5, content_w * 0.5])
+        contact_tbl.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('LINEBELOW', (0,0), (-1,-1), 1, colors.HexColor('#e2e8f0')),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 12),
+        ]))
+        story.append(contact_tbl)
+        story.append(Spacer(1, 1.2 * cm))
 
-    # Big Proposal Title Block
-    story.append(Paragraph("GRID CONNECTED SOLAR PV SYSTEM", ParagraphStyle('CovSub', parent=PROP_SUBTITLE, fontSize=11, fontName=PDF_FONT_BOLD, textColor=colors.HexColor('#0284c7'))))
-    story.append(Paragraph(f"COMMERCIAL & TECHNICAL PROPOSAL", ParagraphStyle('CovMain', parent=PROP_TITLE, fontSize=24, leading=28, textColor=PRIMARY_COLOR)))
-    story.append(Paragraph(f"ENGINEERING-GRADE ROOFTOP SOLAR INSTALLATION ({system_kw:.2f} kWp)", ParagraphStyle('CovPwr', parent=PROP_TITLE, fontSize=14, leading=18, textColor=ACCENT_BLUE)))
-    story.append(Spacer(1, 1.5 * cm))
+        # Title Block inspired by reference PDF
+        story.append(Paragraph("SOLAR POWER", ParagraphStyle('T1Sub', parent=PROP_SUBTITLE, fontSize=18, fontName=PDF_FONT_BOLD, textColor=colors.HexColor('#0284c7'), spaceAfter=2, leading=22)))
+        story.append(Paragraph("PROPOSAL", ParagraphStyle('T1Main', parent=PROP_TITLE, fontSize=32, leading=36, textColor=PRIMARY_COLOR, spaceAfter=4)))
+        story.append(Paragraph(f"<b>{system_kw:.2f} kWp</b>", ParagraphStyle('T1Kw', parent=PROP_TITLE, fontSize=38, leading=42, textColor=colors.HexColor('#0284c7'))))
+        story.append(Spacer(1, 1.2 * cm))
 
-    # Customer & Project Details Card
-    cust_card = [
-        [Paragraph("<b>PROPOSAL PREPARED FOR:</b>", ParagraphStyle('CH', parent=BODY_BOLD, textColor=ACCENT_BLUE)), Paragraph("<b>PROJECT SPECIFICATIONS:</b>", ParagraphStyle('CH2', parent=BODY_BOLD, textColor=ACCENT_BLUE))],
-        [Paragraph(f"<b>{customer_name}</b>", ParagraphStyle('CN', parent=PROP_TITLE, fontSize=14, leading=16)), Paragraph(f"System Capacity: <b>{system_kw:.2f} kWp DC</b>", BODY_TEXT)],
-        [Paragraph(f"Phone: {mobile}<br/>Email: {email}", BODY_TEXT), Paragraph(f"Project Type: <b>{project_type}</b>", BODY_TEXT)],
-        [Paragraph(f"Site Address:<br/>{full_address}", BODY_TEXT), Paragraph(f"Grid Connection: <b>{solar_system_type}</b>", BODY_TEXT)],
-        [Paragraph(f"Prepared By: <b>{prepared_by}</b>", BODY_TEXT), Paragraph(f"Govt Subsidy: <b>{'Eligible (PM Surya Ghar)' if subsidy_applicable else 'Not Applicable'}</b>", BODY_TEXT)]
-    ]
-    cust_tbl = Table(cust_card, colWidths=[content_w * 0.5, content_w * 0.5])
-    cust_tbl.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,-1), LIGHT_BLUE),
-        ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#bfdbfe')),
-        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#dbeafe')),
-        ('PADDING', (0,0), (-1,-1), 8),
-        ('VALIGN', (0,0), (-1,-1), 'TOP'),
-    ]))
-    story.append(cust_tbl)
+        # INVESTMENT SUMMARY BLOCK (Exact reference PDF layout)
+        inv_roi_pct = (annual_savings / max(1, net_customer_cost) * 100)
+        inv_rows = [
+            [Paragraph("<b>INVESTMENT SUMMARY</b>", ParagraphStyle('InvH', parent=BODY_BOLD, fontSize=11, textColor=colors.white)), ""],
+            [Paragraph("<b>ESTIMATED SAVINGS (YEAR 1):</b>", BODY_TEXT), Paragraph(f"<b>{format_currency(annual_savings)}</b>", BODY_BOLD)],
+            [Paragraph("<b>RETURN ON INVESTMENT:</b>", BODY_TEXT), Paragraph(f"<b>{inv_roi_pct:.2f}%</b>", BODY_BOLD)],
+            [Paragraph("<b>PAYBACK PERIOD:</b>", BODY_TEXT), Paragraph(f"<b>{payback_years:.2f} years</b>", BODY_BOLD)],
+            [Paragraph("<b>NET PROJECT INVESTMENT:</b>", BODY_TEXT), Paragraph(f"<b>{format_currency(net_customer_cost)}</b>", BODY_BOLD)],
+        ]
+        inv_tbl = Table(inv_rows, colWidths=[content_w * 0.6, content_w * 0.4])
+        inv_tbl.setStyle(TableStyle([
+            ('SPAN', (0,0), (1,0)),
+            ('BACKGROUND', (0,0), (1,0), colors.HexColor('#0284c7')),
+            ('PADDING', (0,0), (1,0), 6),
+            ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#f0f9ff')),
+            ('BOX', (0,0), (-1,-1), 1.5, colors.HexColor('#0284c7')),
+            ('INNERGRID', (0,1), (-1,-1), 0.5, colors.HexColor('#bae6fd')),
+            ('PADDING', (0,1), (-1,-1), 7),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        story.append(inv_tbl)
+        story.append(Spacer(1, 1.8 * cm))
 
-    story.append(Spacer(1, 3.0 * cm))
-    story.append(Paragraph(f"<b>{company_name}</b> · {co_full_addr} · {co_mobile} · {co_email}", ParagraphStyle('CoFt', parent=SMALL_TEXT, alignment=1)))
-    story.append(PageBreak())
+        # Validity footer
+        val_tbl = Table([[
+            Paragraph(f"<b>{company_name}</b> · {co_full_addr}", SMALL_TEXT),
+            Paragraph("Proposal Valid for 15 Days", ParagraphStyle('Val', parent=BODY_BOLD, alignment=2, textColor=colors.HexColor('#0284c7')))
+        ]], colWidths=[content_w * 0.7, content_w * 0.3])
+        val_tbl.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'MIDDLE')]))
+        story.append(val_tbl)
+        story.append(PageBreak())
+
+    else:
+        # ── TEMPLATE 02: MODERN SOLAR THEME COVER ─────────────────────────────
+        story.append(Spacer(1, 2.5 * cm))
+        badge_table = Table([[
+            Paragraph(f"<b>{company_name.upper()}</b>", ParagraphStyle('CoHd', parent=PROP_TITLE, fontSize=16, textColor=ACCENT_BLUE)),
+            Paragraph(f"Ref: <b>{prop_number}</b><br/>Date: <b>{prop_date}</b>", ParagraphStyle('RefHd', parent=BODY_TEXT, alignment=2))
+        ]], colWidths=[content_w * 0.65, content_w * 0.35])
+        badge_table.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 12),
+        ]))
+        story.append(badge_table)
+        story.append(HRFlowable(width="100%", thickness=2, color=ACCENT_BLUE, spaceBefore=0, spaceAfter=20))
+
+        story.append(Paragraph("GRID CONNECTED SOLAR PV SYSTEM", ParagraphStyle('CovSub', parent=PROP_SUBTITLE, fontSize=11, fontName=PDF_FONT_BOLD, textColor=colors.HexColor('#d97706'))))
+        story.append(Paragraph("COMMERCIAL & TECHNICAL PROPOSAL", ParagraphStyle('CovMain', parent=PROP_TITLE, fontSize=24, leading=28, textColor=PRIMARY_COLOR)))
+        story.append(Paragraph(f"ENGINEERING-GRADE ROOFTOP SOLAR INSTALLATION ({system_kw:.2f} kWp)", ParagraphStyle('CovPwr', parent=PROP_TITLE, fontSize=14, leading=18, textColor=ACCENT_BLUE)))
+        story.append(Spacer(1, 1.5 * cm))
+
+        cust_card = [
+            [Paragraph("<b>PROPOSAL PREPARED FOR:</b>", ParagraphStyle('CH', parent=BODY_BOLD, textColor=ACCENT_BLUE)), Paragraph("<b>PROJECT SPECIFICATIONS:</b>", ParagraphStyle('CH2', parent=BODY_BOLD, textColor=ACCENT_BLUE))],
+            [Paragraph(f"<b>{customer_name}</b>", ParagraphStyle('CN', parent=PROP_TITLE, fontSize=14, leading=16)), Paragraph(f"System Capacity: <b>{system_kw:.2f} kWp DC</b>", BODY_TEXT)],
+            [Paragraph(f"Phone: {mobile}<br/>Email: {email}", BODY_TEXT), Paragraph(f"Project Type: <b>{project_type}</b>", BODY_TEXT)],
+            [Paragraph(f"Site Address:<br/>{full_address}", BODY_TEXT), Paragraph(f"Grid Connection: <b>{solar_system_type}</b>", BODY_TEXT)],
+            [Paragraph(f"Prepared By: <b>{prepared_by}</b>", BODY_TEXT), Paragraph(f"Govt Subsidy: <b>{'Eligible (PM Surya Ghar)' if subsidy_applicable else 'Not Applicable'}</b>", BODY_TEXT)]
+        ]
+        cust_tbl = Table(cust_card, colWidths=[content_w * 0.5, content_w * 0.5])
+        cust_tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,-1), LIGHT_BLUE),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#bfdbfe')),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#dbeafe')),
+            ('PADDING', (0,0), (-1,-1), 8),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ]))
+        story.append(cust_tbl)
+
+        story.append(Spacer(1, 3.0 * cm))
+        story.append(Paragraph(f"<b>{company_name}</b> · {co_full_addr} · {co_mobile} · {co_email}", ParagraphStyle('CoFt', parent=SMALL_TEXT, alignment=1)))
+        story.append(PageBreak())
 
     # =========================================================================
     # PAGE 2: EXECUTIVE SUMMARY
@@ -759,6 +872,15 @@ def generate_proposal_pdf(doc_data: Dict[str, Any], company: Dict[str, Any]) -> 
 
     story.append(Paragraph(f"Thank you for choosing <b>{company_name}</b> as your clean energy partner.", ParagraphStyle('Ty', parent=BODY_BOLD, alignment=1, textColor=ACCENT_BLUE)))
 
-    # Build Document with ProposalCanvas
-    doc.build(story, canvasmaker=ProposalCanvas)
+    # Build Document with ProposalCanvas carrying template settings
+    def canvas_factory(*args, **kwargs):
+        c = ProposalCanvas(*args, **kwargs)
+        c.template_id = template_id
+        c.company_name = company_name
+        c.co_owner = co_owner
+        c.co_mobile = co_mobile
+        c.co_email = co_email
+        return c
+
+    doc.build(story, canvasmaker=canvas_factory)
     return buf.getvalue()
