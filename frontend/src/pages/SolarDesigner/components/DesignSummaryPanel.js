@@ -22,6 +22,7 @@ export default function DesignSummaryPanel({
   onExportPdf,
   onExportDocx,
   onTransferToQuotation,
+  onTransferToProposal,
   saving = false,
   exporting = false,
 }) {
@@ -275,10 +276,17 @@ export default function DesignSummaryPanel({
                 Save New Version
               </Button>
               <Button
-                onClick={onTransferToQuotation}
-                className="text-[11px] h-7 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg shadow-xs"
+                onClick={onTransferToProposal}
+                className="text-[11px] h-7 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-xs"
               >
-                <Sparkles className="w-3 h-3 mr-1" /> To Quotation
+                <Sparkles className="w-3 h-3 mr-1" /> To Proposal
+              </Button>
+              <Button
+                onClick={onTransferToQuotation}
+                variant="outline"
+                className="text-[11px] h-7 text-emerald-700 border-emerald-300 hover:bg-emerald-50 font-semibold rounded-lg shadow-xs"
+              >
+                To Quotation
               </Button>
             </div>
 

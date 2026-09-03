@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
-import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp, ShieldAlert, Sparkles, PackageSearch, UserPlus, Layers } from "lucide-react";
+import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, FileCheck, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp, ShieldAlert, Sparkles, PackageSearch, UserPlus, Layers } from "lucide-react";
 import NotificationBell from "@/components/NotificationBell";
 import ProfileMenu from "@/components/ProfileMenu";
 import TrialBanner from "@/components/TrialBanner";
@@ -199,6 +199,7 @@ export default function Layout({ children }) {
     {
       title: "DOCUMENTS",
       items: [
+        { to: "/proposal-generator", label: "Proposal Generator", icon: FileCheck, key: "sales_documents" },
         { to: "/sales-documents", label: "Sales Documents", icon: FileText, key: "sales_documents" },
         { to: "/templates", label: "Document Templates", icon: FileText, key: "documents" },
         { to: "/purchase-orders", label: "Purchase Orders", icon: FileText, key: "purchase_orders" },

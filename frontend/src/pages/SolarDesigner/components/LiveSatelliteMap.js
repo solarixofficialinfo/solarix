@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo, useImperativeHandle, forwardRef } from "react";
 import L from "leaflet";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -6,10 +6,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  MousePointer, PenTool, Ruler, Square, Trash2, RotateCw, Copy, Lock, Unlock,
-  Layers, ZoomIn, ZoomOut, Maximize2, Minimize2, Compass, Move, Plus, Sparkles,
-  AlertTriangle, Navigation, CheckCircle2, ShieldCheck, Undo2, MapPin, Check, Info, PlusCircle,
-  Edit3, CheckSquare
+  MousePointer, PenTool, Ruler, Trash2, RotateCw, Copy, Plus,
+  AlertTriangle, Navigation, CheckCircle2, Undo2, Redo2, MapPin, Check, Info, PlusCircle,
+  Edit3, CheckSquare, X
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -21,6 +20,7 @@ import {
   getPolygonBounds,
   computeSetbackPolygon,
   getRotatedRectCorners,
+  isPointInPolygon,
 } from "../utils/geoCalculations";
 import { validatePanelPlacement } from "../utils/layoutEngine";
 
@@ -88,28 +88,13 @@ function isValidCartesian(pt) {
   );
 }
 
-/**
- * High-Precision Interactive Live Satellite Rooftop Designer Map
- *
- * Bug Fixes Applied:
- * - FIXED: Click offset — handleFinishDrawingRoof now uses the same stable
- *   originLat/originLng as cartesianToLatLng for a single consistent origin.
- * - FIXED: maxZoom 22→20 to prevent white-screen at unsupported tile zoom levels.
- * - FIXED: ResizeObserver calls map.invalidateSize() on container resize,
- *   fixing click offset after accordion open/close or fullscreen toggle.
- * - FIXED: Roof vertex editing — "Edit Roof" mode with draggable L.marker handles.
- * - FIXED: Marker drag with roof shows confirmation (no silent geometry shift).
- * - ADDED: "+ Add Point" on edge click in edit mode.
- * - ADDED: Error boundary prevents full white screen on map crash.
- * - ADDED: Coordinate validation guards against NaN/Infinite values.
- */
 const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   {
     latitude = 19.076,
     longitude = 72.8777,
     zoom = 19,
     onLocationChange,
-    onCaptureLocation,        // NEW: called with { lat, lng } when user captures site
+    onCaptureLocation,
     roofPolygon = [],
     setRoofPolygon,
     panels = [],
@@ -138,9 +123,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const panelsLayerGroupRef = useRef(null);
   const obstaclesLayerGroupRef = useRef(null);
   const markerRef = useRef(null);
-  // Vertex drag handles for roof edit mode (keyed by index)
   const vertexHandlesRef = useRef([]);
-  // Stable refs for latest prop values (avoid stale closures in Leaflet handlers)
+
+  // Stable refs for latest prop values
   const roofPolygonRef = useRef(roofPolygon);
   const setRoofPolygonRef = useRef(setRoofPolygon);
   const originRef = useRef({ lat: Number(latitude) || 19.076, lng: Number(longitude) || 72.8777 });
@@ -153,14 +138,42 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const [activeDrawPoints, setActiveDrawPoints] = useState([]);
   const [cursorCoords, setCursorCoords] = useState({ lat: Number(latitude) || 19.076, lng: Number(longitude) || 72.8777 });
 
-  // Capture Location state — tracks whether user has explicitly captured a site
+  // Location Capture & Drag confirmation states
   const [locationCaptured, setLocationCaptured] = useState(false);
-  const [capturedCoords, setCapturedCoords] = useState(null); // { lat, lng }
+  const [capturedCoords, setCapturedCoords] = useState(null);
+  const [pendingMarkerLocation, setPendingMarkerLocation] = useState(null);
 
-  // Roof edit mode
-  const [editingRoof, setEditingRoof] = useState(false);
-  const editingRoofRef = useRef(false);
+  // Roof Edit Mode state & Undo/Redo Stacks
+  const editingRoof = activeTool === "edit_roof";
+  const editingRoofRef = useRef(editingRoof);
   useEffect(() => { editingRoofRef.current = editingRoof; }, [editingRoof]);
+
+  const [vertexHistory, setVertexHistory] = useState([]);
+  const [vertexRedoStack, setVertexRedoStack] = useState([]);
+
+  const pushVertexHistory = useCallback((prevPoly) => {
+    if (!prevPoly || prevPoly.length === 0) return;
+    setVertexHistory((h) => [...h.slice(-20), prevPoly]);
+    setVertexRedoStack([]);
+  }, []);
+
+  const handleUndoVertex = useCallback(() => {
+    if (vertexHistory.length === 0) return;
+    const previous = vertexHistory[vertexHistory.length - 1];
+    setVertexRedoStack((r) => [...r, roofPolygonRef.current]);
+    setVertexHistory((h) => h.slice(0, -1));
+    setRoofPolygonRef.current(previous);
+    toast.info("Undid roof modification");
+  }, [vertexHistory]);
+
+  const handleRedoVertex = useCallback(() => {
+    if (vertexRedoStack.length === 0) return;
+    const next = vertexRedoStack[vertexRedoStack.length - 1];
+    setVertexHistory((h) => [...h, roofPolygonRef.current]);
+    setVertexRedoStack((r) => r.slice(0, -1));
+    setRoofPolygonRef.current(next);
+    toast.info("Redid roof modification");
+  }, [vertexRedoStack]);
 
   // Calibration
   const [calibratePoints, setCalibratePoints] = useState([]);
@@ -178,21 +191,15 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     walkways: true,
   });
 
-  // ── STABLE ORIGIN: always use canonical site lat/lng as Cartesian origin ────
-  // This is the SINGLE source of truth for coordinate conversion.
-  // All Cartesian (x,y) values are relative to this origin.
+  // Canonical Site Origin
   const originLat = Number(latitude) || 19.076;
   const originLng = Number(longitude) || 72.8777;
-  const latRad = toRad(originLat);
 
-  // Keep originRef updated so Leaflet event handlers can access current value
   useEffect(() => {
     originRef.current = { lat: originLat, lng: originLng };
   }, [originLat, originLng]);
 
-  // ── COORDINATE CONVERSION (using stable origin from props) ──────────────────
-  // FIX: Both cartesianToLatLng AND latLngToCartesian use the same originLat/originLng.
-  // Previously handleFinishDrawingRoof used a different centroid origin, causing the offset.
+  // Coordinate Conversion with Stable Origin
   const cartesianToLatLng = useCallback((x, y) => {
     if (!isFinite(x) || !isFinite(y)) return [originLat, originLng];
     const dLngRad = x / (Math.cos(toRad(originRef.current.lat)) * 6378137);
@@ -201,16 +208,29 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     const lng = originRef.current.lng + toDeg(dLngRad);
     if (!isValidLatLng(lat, lng)) return [originRef.current.lat, originRef.current.lng];
     return [lat, lng];
-  }, [originLat, originLng]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [originLat, originLng]);
 
   const latLngToCartesian = useCallback((lat, lng) => {
     if (!isValidLatLng(lat, lng)) return { x: 0, y: 0 };
     const x = (toRad(lng) - toRad(originRef.current.lng)) * Math.cos(toRad(originRef.current.lat)) * 6378137;
     const y = (toRad(lat) - toRad(originRef.current.lat)) * 6378137;
     return { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 };
-  }, []); // originRef is mutable, no deps needed
+  }, []);
 
-  // Expose snapshot + panTo + invalidateSize + getCenter to parent
+  // Check for Out-of-Bounds panels
+  const outOfBoundsPanels = useMemo(() => {
+    if (!roofPolygon || roofPolygon.length < 3 || !Array.isArray(panels)) return [];
+    return panels.filter((p) => !p.hidden && isValidCartesian(p) && !isPointInPolygon(p.x, p.y, roofPolygon));
+  }, [roofPolygon, panels]);
+
+  const handleRemoveOutOfBoundsPanels = useCallback(() => {
+    if (outOfBoundsPanels.length === 0) return;
+    const badIds = new Set(outOfBoundsPanels.map((p) => p.id));
+    setPanels?.((prev) => prev.filter((p) => !badIds.has(p.id)));
+    toast.success(`Removed ${outOfBoundsPanels.length} out-of-bounds panel(s).`);
+  }, [outOfBoundsPanels, setPanels]);
+
+  // Expose methods to parent
   useImperativeHandle(ref, () => ({
     getSnapshotDataUrl: () => {
       const map = mapInstanceRef.current;
@@ -221,7 +241,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         canvas.width = container.clientWidth;
         canvas.height = container.clientHeight;
         const ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#1e293b";
+        ctx.fillStyle = "#0f172a";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         return canvas.toDataURL("image/png");
       } catch (e) { return null; }
@@ -230,13 +250,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       if (!isValidLatLng(lat, lng)) return;
       const map = mapInstanceRef.current;
       if (map) {
-        // Preserve current zoom level — only fly to location
         const currentZoom = map.getZoom();
         map.setView([lat, lng], currentZoom, { animate: true });
         if (markerRef.current) markerRef.current.setLatLng([lat, lng]);
       }
     },
-    // NEW: returns current map center (for Capture Location in parent)
     getCenter: () => {
       const map = mapInstanceRef.current;
       if (!map) return null;
@@ -248,7 +266,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     },
   }));
 
-  // ── Handle Add Panel click ───────────────────────────────────────────────────
+  // Handle Add Panel click
   const handleMapClickForAddPanel = useCallback((lat, lng) => {
     if (!roofPolygonRef.current || roofPolygonRef.current.length < 3) {
       toast.warning("Please draw a roof boundary first before adding panels.");
@@ -298,8 +316,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
       const map = L.map(mapContainerRef.current, {
         center: [initialLat, initialLng],
-        zoom: Math.min(zoom || 19, 20), // FIX: cap at 20 to prevent white-screen above tile maxNativeZoom
-        maxZoom: 20,   // FIX: was 22, white-screen occurs above provider's maxNativeZoom=19
+        zoom: Math.min(zoom || 19, 20),
+        maxZoom: 20,
         minZoom: 4,
         zoomControl: false,
         attributionControl: false,
@@ -313,7 +331,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       obstaclesLayerGroupRef.current = L.layerGroup().addTo(map);
       panelsLayerGroupRef.current = L.layerGroup().addTo(map);
 
-      // ── Site Location Marker (draggable) ──────────────────────────────────
+      // Site Location Marker with Confirmation on drag
       const centerMarker = L.marker([initialLat, initialLng], {
         draggable: true,
         title: "Solar Rooftop Site Location — Drag to adjust",
@@ -322,43 +340,26 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       centerMarker.on("dragend", () => {
         const pos = centerMarker.getLatLng();
         if (!isValidLatLng(pos.lat, pos.lng)) return;
-
-        // FIX: If a roof exists, warn user — don't silently shift the origin
-        if (roofPolygonRef.current && roofPolygonRef.current.length >= 3) {
-          toast.warning(
-            "Site location updated. Existing roof geometry stays at its saved geographic position.",
-            { duration: 5000 }
-          );
-        }
-
-        if (onLocationChange) {
-          onLocationChange({ latitude: pos.lat, longitude: pos.lng });
-        }
+        setPendingMarkerLocation({ lat: pos.lat, lng: pos.lng });
+        toast.info("Site marker moved. Click 'Update Site Location' to confirm new coordinates.");
       });
 
       markerRef.current = centerMarker;
 
-      // ── Cursor coordinate HUD (uses Leaflet's event latlng — never manual calc) ──
       map.on("mousemove", (e) => {
         if (isValidLatLng(e.latlng.lat, e.latlng.lng)) {
           setCursorCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
         }
       });
 
-      // ── Map Click Handler ────────────────────────────────────────────────
-      // Uses e.latlng directly from Leaflet — the official pixel→geo API.
-      // This is the correct and only way to get accurate click coordinates.
+      // Map Click Handler based on active tool
       map.on("click", (e) => {
         const { lat, lng } = e.latlng;
         if (!isValidLatLng(lat, lng)) return;
 
-        // Do not process click if in roof edit mode (handled by vertex markers)
-        if (editingRoofRef.current) return;
-
         const tool = window.__activeSolarTool;
         if (tool === "draw_roof") {
           setActiveDrawPoints((prev) => {
-            // Prevent duplicate points
             if (prev.length > 0) {
               const last = prev[prev.length - 1];
               if (Math.abs(last.lat - lat) < 0.000001 && Math.abs(last.lng - lng) < 0.000001) return prev;
@@ -376,22 +377,14 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         }
       });
 
-      // ── Tile error handler: prevent blank canvas ────────────────────────
       map.on("tileerror", (e) => {
-        // Silently suppress tile errors (network/zoom issues) — don't crash
-        // The map will show empty grey at those tiles rather than white-screening
-        console.warn("Tile load error (non-fatal):", e?.tile?.src?.slice(-40));
+        // Silently suppress tile errors to prevent canvas crash
       });
 
-      // ── ResizeObserver: invalidateSize on container resize ───────────────
-      // FIX: This is the critical fix for click offset after accordion toggle / fullscreen.
-      // Without this, Leaflet's internal pixel calculations use stale container dimensions.
       const resizeObserver = new ResizeObserver(() => {
         try {
           mapInstanceRef.current?.invalidateSize({ pan: false });
-        } catch (err) {
-          // Silently ignore if map was already removed
-        }
+        } catch (err) {}
       });
       resizeObserver.observe(mapContainerRef.current);
 
@@ -406,7 +399,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       };
     } catch (err) {
       console.error("Leaflet initialization failed", err);
-      setMapError("Satellite map engine initialization failed: " + err.message);
+      setMapError("Satellite map initialization failed: " + err.message);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -415,7 +408,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     window.__handleSolarMapClickAddPanel = handleMapClickForAddPanel;
   }, [activeTool, handleMapClickForAddPanel]);
 
-  // ── Tile Layers on mapType change ──────────────────────────────────────────
+  // Tile Layers with maxNativeZoom: 18 to prevent white-screen on deep zoom
   useEffect(() => {
     const tileGroup = tileLayerGroupRef.current;
     if (!tileGroup) return;
@@ -424,31 +417,28 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     if (mapType === "satellite") {
       L.tileLayer(
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 20, maxNativeZoom: 19, errorTileUrl: "" }
+        { maxZoom: 20, maxNativeZoom: 18, keepBuffer: 6, errorTileUrl: "" }
       ).addTo(tileGroup);
     } else if (mapType === "hybrid") {
       L.tileLayer(
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 20, maxNativeZoom: 19, errorTileUrl: "" }
+        { maxZoom: 20, maxNativeZoom: 18, keepBuffer: 6, errorTileUrl: "" }
       ).addTo(tileGroup);
       L.tileLayer(
         "https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 20, maxNativeZoom: 19, errorTileUrl: "" }
+        { maxZoom: 20, maxNativeZoom: 18, keepBuffer: 6, errorTileUrl: "" }
       ).addTo(tileGroup);
     } else {
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 20, maxNativeZoom: 19,
         subdomains: ["a", "b", "c"],
+        keepBuffer: 6,
         errorTileUrl: "",
       }).addTo(tileGroup);
     }
   }, [mapType]);
 
-  // ── Pan map when canonical location prop changes ─────────────────────────
-  // FIX: Threshold raised from 0.0001 to 0.003 (~330m) to avoid fighting user
-  // manual panning. The map only snaps back when a meaningfully different
-  // location is set (e.g. a new search result), not tiny precision differences.
-  // Marker is always updated to match the canonical location.
+  // Pan map when canonical location prop changes
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -458,36 +448,37 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
     const currentCenter = map.getCenter();
     const dist = Math.abs(currentCenter.lat - lat) + Math.abs(currentCenter.lng - lng);
-    // Only fly to new location if it changed by >0.003 degrees (~330m)
-    // This prevents the map from fighting user's manual panning/zooming
     if (dist > 0.003) {
       const currentZoom = map.getZoom();
       map.setView([lat, lng], Math.max(currentZoom, zoom || 18), { animate: true });
     }
-    // Always keep site marker at canonical location
-    if (markerRef.current) {
+    if (markerRef.current && !pendingMarkerLocation) {
       markerRef.current.setLatLng([lat, lng]);
     }
-  }, [latitude, longitude, zoom]);
+  }, [latitude, longitude, zoom, pendingMarkerLocation]);
 
-  // ── Finish Drawing Roof Polygon ───────────────────────────────────────────
-  // FIX: Uses originLat/originLng (stable canonical origin) for Cartesian conversion —
-  // the SAME origin used by cartesianToLatLng for rendering. Previously used centroid
-  // which caused a systematic visual offset.
+  // Roof Drawing Actions
+  const handleUndoDrawPoint = useCallback(() => {
+    setActiveDrawPoints((prev) => prev.slice(0, -1));
+  }, []);
+
+  const handleCancelDrawing = useCallback(() => {
+    setActiveDrawPoints([]);
+    setActiveTool("select");
+  }, [setActiveTool]);
+
   const handleFinishDrawingRoof = useCallback(() => {
     if (activeDrawPoints.length < 3) {
       toast.warning("A roof boundary requires at least 3 points.");
       return;
     }
 
-    // Validate all points
     const validPoints = activeDrawPoints.filter((p) => isValidLatLng(p.lat, p.lng));
     if (validPoints.length < 3) {
       toast.error("Invalid roof boundary. Please re-draw using valid map clicks.");
       return;
     }
 
-    // FIX: Use stable originLat/originLng (from props) as Cartesian origin — NOT centroid
     const origin = originRef.current;
     const baseLatRad = toRad(origin.lat);
 
@@ -497,12 +488,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       return {
         x: Math.round(x * 100) / 100,
         y: Math.round(y * 100) / 100,
-        lat: pt.lat,   // preserve for accurate rendering without re-conversion
+        lat: pt.lat,
         lng: pt.lng,
       };
     });
 
-    // Validate no self-intersection (simple check: no duplicate consecutive points)
     const deduped = cartesianPoints.filter((p, i) => {
       if (i === 0) return true;
       const prev = cartesianPoints[i - 1];
@@ -510,19 +500,19 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     });
 
     if (deduped.length < 3) {
-      toast.error("Roof has too many duplicate points. Please re-draw.");
+      toast.error("Roof has duplicate overlapping points. Please re-draw.");
       return;
     }
 
+    pushVertexHistory(roofPolygonRef.current);
     setRoofPolygon(deduped);
     setActiveDrawPoints([]);
     setActiveTool("select");
     toast.success(`Roof drawn: ${deduped.length} vertices. Click "Edit Roof" to adjust.`);
-  }, [activeDrawPoints, setRoofPolygon, setActiveTool]);
+  }, [activeDrawPoints, pushVertexHistory, setRoofPolygon, setActiveTool]);
 
-  // ── Roof Vertex Edit: drag a single vertex ────────────────────────────────
+  // Vertex Drag Handlers
   const handleVertexDrag = useCallback((vertexIdx, lat, lng) => {
-    // Live update during drag — update only that vertex
     if (!isValidLatLng(lat, lng)) return;
     const origin = originRef.current;
     const baseLatRad = toRad(origin.lat);
@@ -536,21 +526,22 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     setRoofPolygonRef.current(updated);
   }, []);
 
-  // ── Delete a roof vertex ───────────────────────────────────────────────────
   const handleDeleteVertex = useCallback((idx) => {
     const poly = roofPolygonRef.current;
     if (poly.length <= 3) {
       toast.warning("A roof requires at least 3 points.");
       return;
     }
+    pushVertexHistory(poly);
     const updated = poly.filter((_, i) => i !== idx);
     setRoofPolygonRef.current(updated);
-  }, []);
+    toast.success(`Removed vertex P${idx + 1}`);
+  }, [pushVertexHistory]);
 
-  // ── Insert vertex on edge midpoint click ─────────────────────────────────
   const handleInsertVertexOnEdge = useCallback((edgeIdx) => {
     const poly = roofPolygonRef.current;
     if (!poly || poly.length < 2) return;
+    pushVertexHistory(poly);
     const j = (edgeIdx + 1) % poly.length;
     const a = poly[edgeIdx], b = poly[j];
     const midLat = (a.lat + b.lat) / 2;
@@ -565,9 +556,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     ];
     setRoofPolygonRef.current(updated);
     toast.success("Added vertex at edge midpoint.");
-  }, []);
+  }, [pushVertexHistory]);
 
-  // ── Calibration ───────────────────────────────────────────────────────────
+  // Calibration
   const handleApplyCalibration = () => {
     if (calibratePoints.length < 2) return;
     const distGeodesic = getHaversineDistance(
@@ -578,13 +569,21 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
     if (distGeodesic > 0 && targetMeters > 0) {
       const scaleFactor = targetMeters / distGeodesic;
-      const rescaledRoof = (roofPolygon || []).map((p) => ({
-        ...p,
-        x: Math.round(p.x * scaleFactor * 100) / 100,
-        y: Math.round(p.y * scaleFactor * 100) / 100,
-      }));
+      const rescaledRoof = (roofPolygon || []).map((p) => {
+        const newX = Math.round(p.x * scaleFactor * 100) / 100;
+        const newY = Math.round(p.y * scaleFactor * 100) / 100;
+        const [newLat, newLng] = cartesianToLatLng(newX, newY);
+        return {
+          ...p,
+          x: newX,
+          y: newY,
+          lat: newLat,
+          lng: newLng,
+        };
+      });
       setRoofPolygon(rescaledRoof);
       if (onCalibrationComplete) onCalibrationComplete({ measuredMeters: distGeodesic, targetMeters, scaleFactor });
+      toast.success(`Calibration applied: Scale Factor ${scaleFactor.toFixed(3)}x`);
     }
 
     setCalibratePoints([]);
@@ -592,13 +591,12 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     setActiveTool("select");
   };
 
-  // ── Render Overlays on Leaflet Map ─────────────────────────────────────────
+  // ── Map Overlays Rendering ──────────────────────────────────────────────────
   useEffect(() => {
     const map = mapInstanceRef.current;
     const roofGroup = roofLayerGroupRef.current;
     const obsGroup = obstaclesLayerGroupRef.current;
     const panelGroup = panelsLayerGroupRef.current;
-
     if (!map || !roofGroup || !obsGroup || !panelGroup) return;
 
     roofGroup.clearLayers();
@@ -619,44 +617,46 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           color: "#ffffff",
           weight: 2,
         }).addTo(roofGroup);
-        cm.bindTooltip(`P${idx + 1}`, { permanent: true, direction: "top", className: "px-1 py-0 text-[10px] font-bold" });
+        cm.bindTooltip(`Point ${idx + 1}`, { permanent: true, direction: "top", className: "px-1.5 py-0.5 text-[10px] font-bold" });
       });
     }
 
     // 2. Committed Roof Polygon
     if (layers.roofBoundary && roofPolygon && roofPolygon.length >= 3) {
-      // Filter invalid points before rendering
       const validPoly = roofPolygon.filter((p) => isValidLatLng(p.lat ?? 0, p.lng ?? 0) || isValidCartesian(p));
 
       const polyLatLngs = validPoly.map((p) => {
-        // FIX: Use stored lat/lng when available (no re-conversion needed → no drift)
         if (isValidLatLng(p.lat, p.lng)) return [p.lat, p.lng];
         return cartesianToLatLng(p.x, p.y);
       });
 
-      // Closed boundary polygon
       L.polygon(polyLatLngs, {
         color: editingRoof ? "#f59e0b" : "#2563eb",
         weight: editingRoof ? 2.5 : 3,
-        fillColor: "#3b82f6",
-        fillOpacity: 0.2,
-        dashArray: editingRoof ? "5,4" : null,
+        fillColor: editingRoof ? "#fbbf24" : "#3b82f6",
+        fillOpacity: editingRoof ? 0.18 : 0.28,
+        dashArray: editingRoof ? "4, 4" : undefined,
       }).addTo(roofGroup);
 
-      // Vertices — draggable in edit mode, static otherwise
-      polyLatLngs.forEach((latlng, idx) => {
+      // Vertex markers
+      validPoly.forEach((pt, idx) => {
+        const latlng = isValidLatLng(pt.lat, pt.lng) ? [pt.lat, pt.lng] : cartesianToLatLng(pt.x, pt.y);
+
         if (editingRoof) {
-          // ── DRAGGABLE VERTEX HANDLE ─────────────────────────────────────
           const handle = L.marker(latlng, {
             draggable: true,
             icon: L.divIcon({
               className: "",
-              html: `<div style="width:18px;height:18px;border-radius:50%;background:#f59e0b;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;cursor:grab;font-size:8px;font-weight:bold;color:#1c1917;">${idx + 1}</div>`,
-              iconSize: [18, 18],
-              iconAnchor: [9, 9],
+              html: `<div style="width:20px;height:20px;border-radius:50%;background:#f59e0b;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;cursor:grab;font-size:9px;font-weight:bold;color:#1c1917;">${idx + 1}</div>`,
+              iconSize: [20, 20],
+              iconAnchor: [10, 10],
             }),
             zIndexOffset: 1000,
           }).addTo(roofGroup);
+
+          handle.on("dragstart", () => {
+            pushVertexHistory(roofPolygonRef.current);
+          });
 
           handle.on("drag", (e) => {
             const { lat, lng } = e.target.getLatLng();
@@ -668,21 +668,19 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             handleVertexDrag(idx, lat, lng);
           });
 
-          // Delete button on right-click
           handle.on("contextmenu", (e) => {
             L.DomEvent.stopPropagation(e);
             handleDeleteVertex(idx);
           });
 
           handle.bindTooltip(
-            `<div style="font-size:10px;font-weight:bold">P${idx + 1} — drag to move<br>Right-click to delete</div>`,
-            { direction: "top", className: "leaflet-tooltip-vertex" }
+            `<div style="font-size:10px;font-weight:bold">P${idx + 1} — drag to adjust<br>Right-click to delete</div>`,
+            { direction: "top" }
           );
           vertexHandlesRef.current.push(handle);
         } else {
-          // ── STATIC VERTEX MARKER ──────────────────────────────────────────
           const cm = L.circleMarker(latlng, {
-            radius: 6,
+            radius: 5,
             fillColor: "#2563eb",
             fillOpacity: 1,
             color: "#ffffff",
@@ -700,14 +698,14 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           const bLL = polyLatLngs[j];
           const midLat = (aLL[0] + bLL[0]) / 2;
           const midLng = (aLL[1] + bLL[1]) / 2;
-          const edgeIdx = i; // capture
+          const edgeIdx = i;
 
           const addBtn = L.marker([midLat, midLng], {
             icon: L.divIcon({
               className: "",
-              html: `<div style="width:14px;height:14px;border-radius:50%;background:#0ea5e9;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px;color:white;font-weight:bold;">+</div>`,
-              iconSize: [14, 14],
-              iconAnchor: [7, 7],
+              html: `<div style="width:16px;height:16px;border-radius:50%;background:#0284c7;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.5);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;color:white;font-weight:bold;">+</div>`,
+              iconSize: [16, 16],
+              iconAnchor: [8, 8],
             }),
             interactive: true,
           }).addTo(roofGroup);
@@ -716,12 +714,12 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             L.DomEvent.stopPropagation(e);
             handleInsertVertexOnEdge(edgeIdx);
           });
-          addBtn.bindTooltip("Click to add vertex here", { direction: "top" });
+          addBtn.bindTooltip("Click to add vertex on this edge", { direction: "top" });
         }
       }
 
-      // 3. Segment dimension labels (only shown outside edit mode, or always)
-      if (layers.dimensions && !editingRoof) {
+      // Segment dimension labels (always shown when dimensions layer is on)
+      if (layers.dimensions) {
         for (let i = 0; i < roofPolygon.length; i++) {
           const j = (i + 1) % roofPolygon.length;
           const p1 = roofPolygon[i], p2 = roofPolygon[j];
@@ -732,14 +730,14 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           const dimIcon = L.divIcon({
             className: "bg-white/95 px-1.5 py-0.5 rounded-md border border-blue-300 text-[10px] font-bold text-blue-900 shadow-sm text-center select-none pointer-events-none whitespace-nowrap",
             html: `${lenM.toFixed(1)}m`,
-            iconSize: [42, 18],
-            iconAnchor: [21, 9],
+            iconSize: [44, 18],
+            iconAnchor: [22, 9],
           });
           L.marker(midLatLng, { icon: dimIcon, interactive: false }).addTo(roofGroup);
         }
       }
 
-      // 4. Setback clearance margin
+      // Setback clearance margin
       if (layers.setbacks && setbackMeters > 0 && !editingRoof) {
         try {
           const setbackPoly = computeSetbackPolygon(roofPolygon, setbackMeters);
@@ -752,13 +750,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
               color: "#dc2626", weight: 1.5, dashArray: "4, 4", fillOpacity: 0,
             }).addTo(roofGroup);
           }
-        } catch (e) {
-          // Silently ignore setback render error (e.g. very small polygon)
-        }
+        } catch (e) {}
       }
     }
 
-    // 5. Obstacles
+    // 3. Obstacles
     if (layers.obstacles && Array.isArray(obstacles) && obstacles.length > 0) {
       obstacles.forEach((obs) => {
         if (!isValidCartesian(obs)) return;
@@ -768,35 +764,46 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         const obsLatLngs = corners.map((c) => cartesianToLatLng(c.x, c.y));
         L.polygon(obsLatLngs, { color: "#dc2626", weight: 2, fillColor: "#ef4444", fillOpacity: 0.45 }).addTo(obsGroup);
         const centerLatLng = cartesianToLatLng(obs.x, obs.y);
-        const labelIcon = L.divIcon({
-          className: "bg-red-900/90 text-white px-1.5 py-0.5 rounded text-[9.5px] font-bold shadow-xs whitespace-nowrap",
-          html: obs.name || obs.type || "Obstacle",
-          iconSize: [60, 16], iconAnchor: [30, 8],
-        });
-        L.marker(centerLatLng, { icon: labelIcon, interactive: false }).addTo(obsGroup);
+        L.marker(centerLatLng, {
+          icon: L.divIcon({
+            className: "bg-red-800 text-white font-bold px-1.5 py-0.5 rounded text-[9px] shadow-sm select-none pointer-events-none whitespace-nowrap",
+            html: `${obs.name || "Exclusion"} (${obs.height || 1.6}m)`,
+            iconSize: [80, 16], iconAnchor: [40, 8],
+          }),
+        }).addTo(obsGroup);
       });
     }
 
-    // 6. Solar Panels (with drag handle for selected)
+    // 4. Solar Panels (with out-of-bounds safety indicator)
     if (layers.panels && Array.isArray(panels) && panels.length > 0) {
       panels.forEach((p, idx) => {
         if (p.hidden || !isValidCartesian(p)) return;
         const isSelected = p.id === selectedPanelId;
+        const isOutOfBounds = roofPolygon && roofPolygon.length >= 3 && !isPointInPolygon(p.x, p.y, roofPolygon);
+
         const corners = getRotatedRectCorners(p.x, p.y, p.width || 1.134, p.height || 2.278, p.rotation || 0);
         const pLatLngs = corners.map((c) => cartesianToLatLng(c.x, c.y));
         const centerLatLng = cartesianToLatLng(p.x, p.y);
 
         const panelPoly = L.polygon(pLatLngs, {
-          color: isSelected ? "#fbbf24" : "#93c5fd",
-          weight: isSelected ? 2.5 : 1,
-          fillColor: isSelected ? "#2563eb" : "#0a192f",
-          fillOpacity: 0.92,
+          color: isOutOfBounds ? "#ef4444" : isSelected ? "#fbbf24" : "#93c5fd",
+          dashArray: isOutOfBounds ? "4, 4" : undefined,
+          weight: isOutOfBounds ? 2.5 : isSelected ? 2.5 : 1,
+          fillColor: isOutOfBounds ? "#b91c1c" : isSelected ? "#2563eb" : "#0a192f",
+          fillOpacity: isOutOfBounds ? 0.85 : 0.92,
         }).addTo(panelGroup);
 
         panelPoly.on("click", (e) => {
           L.DomEvent.stopPropagation(e);
           setSelectedPanelId?.(p.id);
         });
+
+        if (isOutOfBounds) {
+          panelPoly.bindTooltip(
+            `<div class="text-[10px] font-bold text-amber-300">⚠ Panel #${idx + 1} is outside the roof boundary.<br>Click to reposition or delete.</div>`,
+            { direction: "top" }
+          );
+        }
 
         if (isSelected) {
           const moveHandle = L.marker(centerLatLng, {
@@ -826,7 +833,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
               toast.success(`Moved Panel #${idx + 1}`);
             } else {
               toast.warning(validation.reason || "Invalid position.");
-              setPanels?.((prev) => [...prev]); // trigger re-render to revert
+              setPanels?.((prev) => [...prev]);
             }
           });
         } else {
@@ -842,26 +849,76 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   }, [
     roofPolygon, panels, obstacles, walkways, setbackMeters,
     activeDrawPoints, layers, selectedPanelId, editingRoof,
-    cartesianToLatLng, latLngToCartesian,
-    handleVertexDrag, handleDeleteVertex, handleInsertVertexOnEdge,
-    setPanels, setSelectedPanelId,
+    cartesianToLatLng, latLngToCartesian, handleVertexDrag, handleDeleteVertex,
+    handleInsertVertexOnEdge, pushVertexHistory, setSelectedPanelId, setPanels
   ]);
 
-  // ── Zoom helpers ──────────────────────────────────────────────────────────
-  const handleZoomIn = () => mapInstanceRef.current?.zoomIn();
-  const handleZoomOut = () => mapInstanceRef.current?.zoomOut();
-  // FIX: Preserve current zoom level when recentering — was hardcoded to 19
-  const handleLocateCenter = () => {
+  // Zoom & Fit Viewport Helpers
+  const handleZoomIn = () => {
+    const map = mapInstanceRef.current;
+    if (map && map.getZoom() < 20) map.zoomIn();
+  };
+  const handleZoomOut = () => {
+    const map = mapInstanceRef.current;
+    if (map && map.getZoom() > 4) map.zoomOut();
+  };
+
+  const handleLocateCenter = useCallback(() => {
     const map = mapInstanceRef.current;
     if (map && isValidLatLng(Number(latitude), Number(longitude))) {
       const currentZoom = map.getZoom();
       map.setView([Number(latitude), Number(longitude)], currentZoom, { animate: true });
     }
-  };
+  }, [latitude, longitude]);
 
-  // ── Capture Location ──────────────────────────────────────────────────────
-  // Reads the current map center and fires onCaptureLocation with that coordinate.
-  // This lets the user pan to exactly the right building before committing.
+  const handleFitRoof = useCallback(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const poly = roofPolygonRef.current;
+    if (!poly || poly.length < 3) {
+      toast.info("Draw a roof boundary first to fit.");
+      return;
+    }
+    const latLngs = poly.map((p) =>
+      isValidLatLng(p.lat, p.lng) ? [p.lat, p.lng] : cartesianToLatLng(p.x, p.y)
+    );
+    const bounds = L.latLngBounds(latLngs);
+    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 20, animate: true });
+  }, [cartesianToLatLng]);
+
+  const handleFitDesign = useCallback(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const allPts = [];
+    const poly = roofPolygonRef.current;
+    if (poly && poly.length >= 3) {
+      poly.forEach((p) => {
+        allPts.push(isValidLatLng(p.lat, p.lng) ? [p.lat, p.lng] : cartesianToLatLng(p.x, p.y));
+      });
+    }
+    if (Array.isArray(panels) && panels.length > 0) {
+      panels.forEach((p) => {
+        if (!p.hidden && isValidCartesian(p)) {
+          allPts.push(cartesianToLatLng(p.x, p.y));
+        }
+      });
+    }
+    if (Array.isArray(obstacles) && obstacles.length > 0) {
+      obstacles.forEach((o) => {
+        if (isValidCartesian(o)) {
+          allPts.push(cartesianToLatLng(o.x, o.y));
+        }
+      });
+    }
+    if (allPts.length > 0) {
+      const bounds = L.latLngBounds(allPts);
+      map.fitBounds(bounds, { padding: [45, 45], maxZoom: 20, animate: true });
+    } else {
+      handleLocateCenter();
+    }
+  }, [cartesianToLatLng, panels, obstacles, handleLocateCenter]);
+
+  // Capture Location callback
   const handleCaptureLocation = useCallback(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -870,31 +927,25 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       toast.error("Map center coordinates are invalid. Please pan to your site.");
       return;
     }
-    // Move marker to captured location
     if (markerRef.current) {
       markerRef.current.setLatLng([center.lat, center.lng]);
     }
-    // Save captured coords for local state display
     setCapturedCoords({ lat: center.lat, lng: center.lng });
     setLocationCaptured(true);
-    // Fire callback to parent (SolarStudio) to update canonical design state
+    setPendingMarkerLocation(null);
     if (onCaptureLocation) {
       onCaptureLocation({ lat: center.lat, lng: center.lng });
     } else if (onLocationChange) {
-      // Fallback: use existing onLocationChange
       onLocationChange({ latitude: center.lat, longitude: center.lng });
     }
     toast.success(`Site captured: ${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`);
   }, [onCaptureLocation, onLocationChange]);
 
-  // ── Derived geometry stats ────────────────────────────────────────────────
-  const roofArea = getCartesianPolygonArea(roofPolygon);
-  const roofPerimeter = getCartesianPolygonPerimeter(roofPolygon);
   const hasRoof = roofPolygon && roofPolygon.length >= 3;
 
   return (
-    <div className="relative w-full h-full min-h-[580px] rounded-2xl overflow-hidden bg-slate-900 border border-slate-700 shadow-xl select-none flex flex-col">
-      <div ref={mapContainerRef} className="w-full h-full flex-1 z-0 cursor-crosshair" />
+    <div className="relative w-full h-full min-h-[580px] rounded-2xl overflow-hidden bg-slate-950 border border-slate-700 shadow-xl select-none flex flex-col">
+      <div ref={mapContainerRef} className="w-full h-full flex-1 z-0 cursor-crosshair bg-slate-950" />
 
       {/* Map error overlay */}
       {mapError && (
@@ -911,277 +962,364 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         </div>
       )}
 
-      {/* Empty-state guidance */}
-      {!hasRoof && activeDrawPoints.length === 0 && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-10 bg-slate-900/90 backdrop-blur-md px-4 py-2 rounded-xl border border-blue-500/60 shadow-xl text-xs text-blue-200 pointer-events-none flex items-center gap-2">
-          <Info className="w-4 h-4 text-blue-400 shrink-0" />
-          <span>Pan/zoom to your building, click <b>'Capture Location'</b>, then click <b>'Draw Roof'</b> to trace the boundary.</span>
+      {/* Location Move Confirmation Banner */}
+      {pendingMarkerLocation && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-30 bg-slate-900/98 backdrop-blur-md px-4 py-2 rounded-xl border border-amber-500 shadow-2xl flex items-center gap-3 text-xs pointer-events-auto animate-in fade-in">
+          <MapPin className="w-4 h-4 text-amber-400 shrink-0" />
+          <div className="text-slate-200">
+            Location pin moved to <span className="font-mono text-amber-300 font-bold">{pendingMarkerLocation.lat.toFixed(5)}, {pendingMarkerLocation.lng.toFixed(5)}</span>
+          </div>
+          <div className="flex items-center gap-1.5 ml-2">
+            <Button
+              size="sm"
+              onClick={() => {
+                if (onLocationChange) {
+                  onLocationChange({ latitude: pendingMarkerLocation.lat, longitude: pendingMarkerLocation.lng });
+                }
+                setPendingMarkerLocation(null);
+                toast.success("Site location updated!");
+              }}
+              className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-2.5 rounded-lg"
+            >
+              Update Site Location
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                if (markerRef.current) {
+                  markerRef.current.setLatLng([originLat, originLng]);
+                }
+                setPendingMarkerLocation(null);
+              }}
+              className="h-7 text-xs text-slate-400 hover:text-white px-2 rounded-lg"
+            >
+              Reset
+            </Button>
+          </div>
         </div>
       )}
 
-      {/* ── TOP TOOLBAR ──────────────────────────────────────────────────────── */}
+      {/* Out-of-bounds panels notification banner */}
+      {outOfBoundsPanels.length > 0 && !editingRoof && (
+        <div className="absolute top-14 right-3 z-20 bg-amber-950/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-amber-500 shadow-xl flex items-center gap-2 text-xs text-amber-200 pointer-events-auto animate-in fade-in">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          <span>{outOfBoundsPanels.length} panel(s) outside roof</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleRemoveOutOfBoundsPanels}
+            className="h-6 px-2 text-[10px] bg-red-900/60 hover:bg-red-800 text-red-200 rounded font-bold"
+          >
+            Remove Invalid
+          </Button>
+        </div>
+      )}
+
+      {/* ── TOP SMART CONTEXTUAL TOOLBAR ───────────────────────────────────── */}
       <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none gap-2 z-10">
-        {/* Left: Interaction Tools */}
+        {/* Left: Dynamic Context Tools */}
         <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto flex-wrap">
-          {/* ── CAPTURE LOCATION BUTTON ─────────────────────────────────────── */}
-          {locationCaptured ? (
-            <div className="flex items-center gap-1 h-7 px-2.5 rounded-lg bg-emerald-900/80 border border-emerald-600/60 text-emerald-300 text-xs font-semibold">
-              <Check className="w-3 h-3" />
-              <span>Captured</span>
-              {capturedCoords && (
-                <span className="text-emerald-400/70 text-[9px] font-normal hidden xl:inline">
-                  {capturedCoords.lat.toFixed(4)}, {capturedCoords.lng.toFixed(4)}
-                </span>
+          {/* 1. Context: Drawing Roof */}
+          {activeTool === "draw_roof" ? (
+            <div className="flex items-center gap-1">
+              <Badge className="bg-emerald-600 text-white text-[11px] font-bold px-2.5 py-0.5 rounded-lg">
+                Point {activeDrawPoints.length + 1}
+              </Badge>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleUndoDrawPoint}
+                disabled={activeDrawPoints.length === 0}
+                className="h-7 text-xs px-2.5 rounded-lg text-slate-300 hover:text-white disabled:opacity-30 gap-1"
+                title="Undo last placed point"
+              >
+                <Undo2 className="w-3.5 h-3.5" /> Undo Point
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleCancelDrawing}
+                className="h-7 text-xs px-2 rounded-lg text-red-400 hover:text-red-300"
+                title="Cancel roof drawing"
+              >
+                <X className="w-3.5 h-3.5 mr-1" /> Cancel
+              </Button>
+              {activeDrawPoints.length >= 3 && (
+                <Button
+                  size="sm"
+                  onClick={handleFinishDrawingRoof}
+                  className="h-7 text-xs px-3 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold animate-pulse shadow-sm"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Finish Roof ({activeDrawPoints.length} pts)
+                </Button>
               )}
             </div>
-          ) : (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handleCaptureLocation}
-              className="h-7 text-xs px-2.5 rounded-lg gap-1.5 text-blue-300 hover:text-white hover:bg-blue-700 border border-blue-600/50 animate-pulse"
-              title="Capture the current map center as the confirmed site location"
-            >
-              <MapPin className="w-3.5 h-3.5" /> Capture Location
-            </Button>
-          )}
-
-          {/* Re-capture: reset captured state to allow re-capture */}
-          {locationCaptured && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => { setLocationCaptured(false); setCapturedCoords(null); }}
-              className="h-7 px-1.5 rounded-lg text-slate-500 hover:text-amber-400"
-              title="Re-capture location"
-            >
-              <Navigation className="w-3 h-3" />
-            </Button>
-          )}
-
-          <div className="w-[1px] h-4 bg-slate-700 mx-0.5" />
-          <Button
-            size="sm"
-            variant={activeTool === "select" ? "default" : "ghost"}
-            onClick={() => { setActiveTool("select"); setActiveDrawPoints([]); setEditingRoof(false); }}
-            className="h-7 text-xs px-2.5 rounded-lg gap-1.5"
-            title="Select & Drag Objects"
-          >
-            <MousePointer className="w-3.5 h-3.5" /> Select
-          </Button>
-
-          <Button
-            size="sm"
-            variant={activeTool === "draw_roof" ? "default" : "ghost"}
-            onClick={() => { setActiveTool("draw_roof"); setActiveDrawPoints([]); setEditingRoof(false); }}
-            className={`h-7 text-xs px-2.5 rounded-lg gap-1.5 ${activeTool === "draw_roof" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "text-emerald-400 hover:text-white"}`}
-            title="Click points on satellite imagery to trace roof boundary"
-          >
-            <PenTool className="w-3.5 h-3.5" /> Draw Roof
-          </Button>
-
-          {/* Edit Roof button — only shown when roof exists */}
-          {hasRoof && (
-            <Button
-              size="sm"
-              variant={editingRoof ? "default" : "ghost"}
-              onClick={() => {
-                setEditingRoof(!editingRoof);
-                setActiveTool("select");
-                setActiveDrawPoints([]);
-              }}
-              className={`h-7 text-xs px-2.5 rounded-lg gap-1.5 ${editingRoof ? "bg-amber-500 hover:bg-amber-600 text-white" : "text-amber-400 hover:text-white"}`}
-              title="Drag roof vertices to reshape the boundary"
-            >
-              <Edit3 className="w-3.5 h-3.5" /> {editingRoof ? "Done Editing" : "Edit Roof"}
-            </Button>
-          )}
-
-          <Button
-            size="sm"
-            variant={activeTool === "add_panel" ? "default" : "ghost"}
-            onClick={() => { setActiveTool("add_panel"); setActiveDrawPoints([]); setEditingRoof(false); }}
-            className={`h-7 text-xs px-2.5 rounded-lg gap-1.5 ${activeTool === "add_panel" ? "bg-amber-600 hover:bg-amber-700 text-white" : "text-amber-400 hover:text-white"}`}
-            title="Click on roof to manually place a panel"
-          >
-            <Plus className="w-3.5 h-3.5" /> + Add Panel
-          </Button>
-
-          <Button
-            size="sm"
-            variant={activeTool === "calibrate" ? "default" : "ghost"}
-            onClick={() => { setActiveTool("calibrate"); setCalibratePoints([]); }}
-            className="h-7 text-xs px-2 rounded-lg gap-1.5 text-purple-400 hover:text-purple-300"
-            title="Calibrate measurement with known distance"
-          >
-            <Ruler className="w-3.5 h-3.5" /> Calibrate
-          </Button>
-
-          {/* Close Roof (finish drawing) */}
-          {activeTool === "draw_roof" && activeDrawPoints.length >= 3 && (
-            <Button
-              size="sm"
-              onClick={handleFinishDrawingRoof}
-              className="h-7 text-xs px-3 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold animate-pulse shadow-sm"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Close Roof ({activeDrawPoints.length} pts)
-            </Button>
-          )}
-
-          {/* Clear Roof */}
-          {hasRoof && (
-            <>
-              <div className="w-[1px] h-4 bg-slate-700 mx-0.5" />
+          ) : activeTool === "edit_roof" ? (
+            /* 2. Context: Editing Roof Vertices */
+            <div className="flex items-center gap-1">
+              <Badge className="bg-amber-600 text-white text-[11px] font-bold px-2.5 py-0.5 rounded-lg">
+                Editing Roof ({roofPolygon.length} vertices)
+              </Badge>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleUndoVertex}
+                disabled={vertexHistory.length === 0}
+                className="h-7 text-xs px-2 rounded-lg text-slate-300 hover:text-white disabled:opacity-30 gap-1"
+                title="Undo vertex modification"
+              >
+                <Undo2 className="w-3.5 h-3.5" /> Undo
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleRedoVertex}
+                disabled={vertexRedoStack.length === 0}
+                className="h-7 text-xs px-2 rounded-lg text-slate-300 hover:text-white disabled:opacity-30 gap-1"
+                title="Redo vertex modification"
+              >
+                <Redo2 className="w-3.5 h-3.5" /> Redo
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setActiveTool("select")}
+                className="h-7 text-xs px-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg ml-1 shadow-sm gap-1"
+              >
+                <CheckSquare className="w-3.5 h-3.5" /> Finish Editing
+              </Button>
+            </div>
+          ) : selectedPanelId ? (
+            /* 3. Context: Panel Selected */
+            <div className="flex items-center gap-1">
+              <Badge className="bg-blue-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-lg">
+                Panel #{panels.findIndex((p) => p.id === selectedPanelId) + 1}
+              </Badge>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setPanels?.((prev) => prev.map((p) => p.id === selectedPanelId ? { ...p, rotation: (p.rotation || 0) + 90 } : p))}
+                className="h-7 text-xs px-2 rounded-lg text-white hover:bg-blue-800"
+                title="Rotate 90°"
+              >
+                <RotateCw className="w-3 h-3 mr-1" /> Rotate
+              </Button>
               <Button
                 size="sm"
                 variant="ghost"
                 onClick={() => {
-                  setRoofPolygon([]);
-                  setActiveDrawPoints([]);
-                  setEditingRoof(false);
-                  setPanels?.([]);
+                  const t = panels.find((p) => p.id === selectedPanelId);
+                  if (!t) return;
+                  const d = { ...t, id: `panel-${Date.now()}`, x: t.x + 1.2 };
+                  setPanels?.([...panels, d]);
+                  setSelectedPanelId?.(d.id);
+                  toast.success("Duplicated panel");
                 }}
-                className="h-7 px-2 rounded-lg text-slate-400 hover:text-red-400"
-                title="Clear Roof & Panels"
+                className="h-7 text-xs px-2 rounded-lg text-white hover:bg-blue-800"
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <Copy className="w-3 h-3 mr-1" /> Duplicate
               </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setPanels?.((prev) => prev.filter((p) => p.id !== selectedPanelId));
+                  setSelectedPanelId?.(null);
+                  toast.success("Removed panel");
+                }}
+                className="h-7 text-xs px-2 rounded-lg text-red-400 hover:bg-red-900"
+              >
+                <Trash2 className="w-3 h-3" />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setSelectedPanelId?.(null)}
+                className="h-7 text-xs px-2 rounded-lg text-slate-400 hover:text-white"
+              >
+                Deselect
+              </Button>
+            </div>
+          ) : (
+            /* 4. Context: General Mode Toolbar */
+            <>
+              {/* Location Capture Indicator */}
+              {locationCaptured ? (
+                <div className="flex items-center gap-1 h-7 px-2.5 rounded-lg bg-emerald-900/80 border border-emerald-600/60 text-emerald-300 text-xs font-semibold">
+                  <Check className="w-3 h-3" />
+                  <span>Captured</span>
+                </div>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleCaptureLocation}
+                  className="h-7 text-xs px-2.5 rounded-lg gap-1.5 text-blue-300 hover:text-white hover:bg-blue-700 border border-blue-600/50"
+                  title="Capture map center as site coordinates"
+                >
+                  <MapPin className="w-3.5 h-3.5" /> Capture Location
+                </Button>
+              )}
+
+              <div className="w-[1px] h-4 bg-slate-700 mx-0.5" />
+
+              <Button
+                size="sm"
+                variant={activeTool === "select" ? "default" : "ghost"}
+                onClick={() => { setActiveTool("select"); setActiveDrawPoints([]); }}
+                className="h-7 text-xs px-2.5 rounded-lg gap-1.5"
+                title="Select & Move Panels"
+              >
+                <MousePointer className="w-3.5 h-3.5" /> Select
+              </Button>
+
+              <Button
+                size="sm"
+                variant={activeTool === "draw_roof" ? "default" : "ghost"}
+                onClick={() => { setActiveTool("draw_roof"); setActiveDrawPoints([]); }}
+                className={`h-7 text-xs px-2.5 rounded-lg gap-1.5 ${activeTool === "draw_roof" ? "bg-emerald-600 text-white" : "text-emerald-400 hover:text-white"}`}
+                title="Trace rooftop perimeter"
+              >
+                <PenTool className="w-3.5 h-3.5" /> Draw Roof
+              </Button>
+
+              {hasRoof && (
+                <Button
+                  size="sm"
+                  variant={activeTool === "edit_roof" ? "default" : "ghost"}
+                  onClick={() => {
+                    setActiveTool("edit_roof");
+                    setActiveDrawPoints([]);
+                  }}
+                  className={`h-7 text-xs px-2.5 rounded-lg gap-1.5 ${activeTool === "edit_roof" ? "bg-amber-500 text-slate-950 font-bold" : "text-amber-400 hover:text-white"}`}
+                  title="Drag vertices or add points on edges"
+                >
+                  <Edit3 className="w-3.5 h-3.5" /> Edit Roof
+                </Button>
+              )}
+
+              <Button
+                size="sm"
+                variant={activeTool === "add_panel" ? "default" : "ghost"}
+                onClick={() => { setActiveTool("add_panel"); setActiveDrawPoints([]); }}
+                className={`h-7 text-xs px-2.5 rounded-lg gap-1.5 ${activeTool === "add_panel" ? "bg-blue-600 text-white" : "text-blue-400 hover:text-white"}`}
+                title="Click on roof to place individual panel"
+              >
+                <Plus className="w-3.5 h-3.5" /> + Add Panel
+              </Button>
+
+              <Button
+                size="sm"
+                variant={activeTool === "calibrate" ? "default" : "ghost"}
+                onClick={() => { setActiveTool("calibrate"); setCalibratePoints([]); }}
+                className="h-7 text-xs px-2 rounded-lg gap-1.5 text-purple-400 hover:text-purple-300"
+                title="Measure distance & calibrate map scale"
+              >
+                <Ruler className="w-3.5 h-3.5" /> Calibrate
+              </Button>
+
+              {hasRoof && (
+                <>
+                  <div className="w-[1px] h-4 bg-slate-700 mx-0.5" />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      if (window.confirm("Clear roof polygon and panels?")) {
+                        pushVertexHistory(roofPolygonRef.current);
+                        setRoofPolygon([]);
+                        setActiveDrawPoints([]);
+                        setPanels?.([]);
+                      }
+                    }}
+                    className="h-7 px-2 rounded-lg text-slate-400 hover:text-red-400"
+                    title="Clear Roof & Panels"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </>
+              )}
             </>
           )}
         </div>
 
-        {/* Right: Map Type Selector & Zoom Controls */}
+        {/* Right: Small Floating Map Controls (Zoom, Fit, Types) */}
         <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
           <Button size="sm" variant={mapType === "satellite" ? "secondary" : "ghost"} onClick={() => setMapType("satellite")} className="h-6 text-[11px] px-2 rounded-lg">Satellite</Button>
           <Button size="sm" variant={mapType === "hybrid" ? "secondary" : "ghost"} onClick={() => setMapType("hybrid")} className="h-6 text-[11px] px-2 rounded-lg">Hybrid</Button>
           <Button size="sm" variant={mapType === "street" ? "secondary" : "ghost"} onClick={() => setMapType("street")} className="h-6 text-[11px] px-2 rounded-lg">Street</Button>
           <div className="w-[1px] h-3.5 bg-slate-700 mx-0.5" />
-          {/* Zoom +/- buttons — large enough to tap easily */}
-          <Button size="sm" variant="ghost" onClick={handleZoomIn} className="h-6 w-7 p-0 rounded-lg text-slate-300 hover:text-white font-bold text-sm" title="Zoom In (+)">+</Button>
-          <Button size="sm" variant="ghost" onClick={handleZoomOut} className="h-6 w-7 p-0 rounded-lg text-slate-300 hover:text-white font-bold text-sm" title="Zoom Out (−)">−</Button>
+          <Button size="sm" variant="ghost" onClick={handleZoomIn} className="h-6 w-6 p-0 rounded-lg text-slate-300 hover:text-white font-bold text-sm" title="Zoom In (+)">+</Button>
+          <Button size="sm" variant="ghost" onClick={handleZoomOut} className="h-6 w-6 p-0 rounded-lg text-slate-300 hover:text-white font-bold text-sm" title="Zoom Out (−)">−</Button>
           <div className="w-[1px] h-3.5 bg-slate-700 mx-0.5" />
-          {/* Recenter — preserves zoom level (FIX: was hardcoded to 19) */}
-          <Button size="sm" variant="ghost" onClick={handleLocateCenter} className="h-6 px-1.5 rounded-lg text-blue-400 hover:text-blue-300 text-[10px] gap-0.5" title="Recenter on captured site">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleFitRoof}
+            disabled={!hasRoof}
+            className="h-6 px-1.5 rounded-lg text-emerald-400 hover:text-emerald-300 text-[10px] gap-0.5 disabled:opacity-30"
+            title="Fit view to roof"
+          >
+            Fit Roof
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleFitDesign}
+            className="h-6 px-1.5 rounded-lg text-blue-400 hover:text-blue-300 text-[10px] gap-0.5"
+            title="Fit view to all components"
+          >
+            Fit Design
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleLocateCenter}
+            className="h-6 px-1.5 rounded-lg text-slate-400 hover:text-slate-200 text-[10px] gap-0.5"
+            title="Recenter on site marker"
+          >
             <Navigation className="w-3 h-3" />
-            <span className="hidden xl:inline">Fit</span>
           </Button>
         </div>
       </div>
 
-      {/* Selected Panel Toolbar */}
-      {selectedPanelId && (
-        <div className="absolute top-14 left-3 z-10 flex items-center gap-1 bg-blue-900/95 backdrop-blur-md p-1.5 rounded-xl border border-blue-500 shadow-xl pointer-events-auto animate-in fade-in">
-          <span className="text-[11px] font-semibold text-blue-200 px-2">
-            Panel #{panels.findIndex((p) => p.id === selectedPanelId) + 1}
-          </span>
-          <Button size="sm" variant="ghost" onClick={() => setPanels?.((prev) => prev.map((p) => p.id === selectedPanelId ? { ...p, rotation: (p.rotation || 0) + 90 } : p))} className="h-6 text-xs px-2 rounded-lg text-white hover:bg-blue-800" title="Rotate 90°">
-            <RotateCw className="w-3 h-3 mr-1" /> Rotate
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => { const t = panels.find((p) => p.id === selectedPanelId); if (!t) return; const d = { ...t, id: `panel-${Date.now()}`, x: t.x + 1.2 }; setPanels?.([...panels, d]); setSelectedPanelId?.(d.id); toast.success("Duplicated panel"); }} className="h-6 text-xs px-2 rounded-lg text-white hover:bg-blue-800">
-            <Copy className="w-3 h-3 mr-1" /> Duplicate
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => { setPanels?.((prev) => prev.filter((p) => p.id !== selectedPanelId)); setSelectedPanelId?.(null); toast.success("Removed panel"); }} className="h-6 text-xs px-2 rounded-lg text-red-300 hover:bg-red-900">
-            <Trash2 className="w-3 h-3" />
-          </Button>
-        </div>
-      )}
-
-      {/* Add Panel guidance */}
+      {/* Add Panel Floating Guidance */}
       {activeTool === "add_panel" && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-amber-950/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-amber-600 shadow-xl text-xs text-amber-200 pointer-events-auto flex items-center gap-2">
-          <PlusCircle className="w-3.5 h-3.5 text-amber-400 animate-bounce shrink-0" />
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-blue-950/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-blue-600 shadow-xl text-xs text-blue-200 pointer-events-auto flex items-center gap-2">
+          <PlusCircle className="w-3.5 h-3.5 text-blue-400 animate-bounce shrink-0" />
           <span>Click anywhere on the open roof space to place a solar panel</span>
         </div>
       )}
 
-      {/* Drawing Instructions */}
-      {activeTool === "draw_roof" && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-emerald-950/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-emerald-600 shadow-xl text-xs text-emerald-200 pointer-events-auto flex items-center gap-2.5">
-          <PenTool className="w-3.5 h-3.5 text-emerald-400 animate-pulse shrink-0" />
-          <span>Click corners of the rooftop on the satellite map ({activeDrawPoints.length} point{activeDrawPoints.length !== 1 ? "s" : ""} placed)</span>
-          {activeDrawPoints.length >= 3 && (
-            <Button size="sm" onClick={handleFinishDrawingRoof} className="h-6 px-2 text-xs bg-emerald-500 hover:bg-emerald-600 text-white font-bold rounded-lg ml-1">
-              Done / Close
-            </Button>
-          )}
-        </div>
-      )}
-
-      {/* Roof Edit Instructions */}
-      {editingRoof && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-amber-950/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-amber-600 shadow-xl text-xs text-amber-200 pointer-events-auto flex items-center gap-2.5 max-w-sm">
-          <Edit3 className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-          <span>Drag numbered handles to reshape. Click <b>+</b> on edges to add vertex. Right-click handle to delete.</span>
-          <Button size="sm" onClick={() => setEditingRoof(false)} className="h-6 px-2 text-xs bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-lg ml-1 shrink-0">
-            <CheckSquare className="w-3 h-3 mr-1" /> Done
-          </Button>
-        </div>
-      )}
-
-      {/* Bottom HUD */}
-      <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between pointer-events-none z-10 gap-2">
-        <div className="bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto flex items-center gap-3 text-xs text-slate-300">
-          <div>
-            <span className="text-[9px] text-slate-400 block font-medium">ROOF AREA</span>
-            <span className="font-bold text-white">{roofArea > 0 ? `${roofArea.toFixed(1)} m²` : "0 m²"}</span>
-          </div>
-          <div className="w-[1px] h-5 bg-slate-700" />
-          <div>
-            <span className="text-[9px] text-slate-400 block font-medium">PERIMETER</span>
-            <span className="font-bold text-white">{roofPerimeter > 0 ? `${roofPerimeter.toFixed(1)} m` : "0 m"}</span>
-          </div>
-          <div className="w-[1px] h-5 bg-slate-700" />
-          <div>
-            <span className="text-[9px] text-slate-400 block font-medium">PANELS</span>
-            <span className="font-bold text-blue-400">{panels.filter((p) => !p.hidden).length} Nos</span>
-          </div>
-        </div>
-
-        <div className="bg-slate-900/90 backdrop-blur-md px-2.5 py-1 rounded-xl border border-slate-700/80 shadow-lg text-[10px] text-slate-300 pointer-events-auto flex items-center gap-2">
-          <Compass className="w-3 h-3 text-red-400" />
-          {/* Cursor coordinate: from Leaflet mousemove e.latlng — never manually calculated */}
-          <span>Cursor: <b>{cursorCoords.lat.toFixed(5)}, {cursorCoords.lng.toFixed(5)}</b></span>
-          <span className="text-slate-600">|</span>
-          <span className="text-slate-400">
-            {mapType === "satellite" ? "Satellite" : mapType === "hybrid" ? "Hybrid" : "Street"} imagery
-          </span>
-          {isCalibrated && (
-            <>
-              <span className="text-slate-600">|</span>
-              <Badge variant="outline" className="text-[9px] bg-purple-950 text-purple-300 border-purple-800 py-0">Calibrated</Badge>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Calibration Dialog */}
+      {/* Calibration Modal */}
       <Dialog open={showCalibrateModal} onOpenChange={setShowCalibrateModal}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-sm bg-slate-900 border-slate-700 text-white">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-slate-900">
-              <Ruler className="w-5 h-5 text-purple-600" /> Calibrate Roof Reference Dimension
+            <DialogTitle className="text-sm font-bold flex items-center gap-2 text-white">
+              <Ruler className="w-4 h-4 text-purple-400" /> Calibrate Map Scale
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-2 text-sm text-slate-600">
-            <p>You clicked two points on the satellite image. Enter the known physical on-site distance between these two points:</p>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold">Known Distance (meters)</Label>
+          <div className="space-y-3 py-2 text-xs">
+            <p className="text-slate-300">
+              Selected 2 points on the roof. Enter the real-world measured distance between them:
+            </p>
+            <div>
+              <Label className="text-slate-400 text-[11px]">Actual Distance (meters)</Label>
               <Input
-                type="number" step="0.1" min="0.5" max="500"
+                type="number"
+                step="0.1"
+                min="0.5"
                 value={calibrateDistanceInput}
                 onChange={(e) => setCalibrateDistanceInput(e.target.value)}
-                placeholder="e.g. 10.0"
-                className="text-sm font-bold"
-                autoFocus
+                className="mt-1 bg-slate-800 border-slate-700 text-white text-xs h-9 font-bold font-mono"
               />
             </div>
-            <div className="text-xs text-slate-500 bg-purple-50 p-2.5 rounded-lg border border-purple-200">
-              This will accurately rescale the rooftop boundary polygon and all solar module grid arrays.
-            </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCalibrateModal(false)}>Cancel</Button>
-            <Button onClick={handleApplyCalibration} className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs">
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setShowCalibrateModal(false)} className="border-slate-700 text-slate-300 text-xs">
+              Cancel
+            </Button>
+            <Button size="sm" onClick={handleApplyCalibration} className="bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold">
               Apply Calibration
             </Button>
           </DialogFooter>
@@ -1191,13 +1329,10 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   );
 });
 
-// Wrap with error boundary
-const LiveSatelliteMap = forwardRef(function LiveSatelliteMap(props, ref) {
+export default function LiveSatelliteMap(props) {
   return (
     <MapErrorBoundary>
-      <LiveSatelliteMapInner {...props} ref={ref} />
+      <LiveSatelliteMapInner {...props} />
     </MapErrorBoundary>
   );
-});
-
-export default LiveSatelliteMap;
+}

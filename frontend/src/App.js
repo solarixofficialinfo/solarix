@@ -45,6 +45,7 @@ const Pricing = lazy(() => import("@/pages/Pricing"));
 const MaterialRequests = lazy(() => import("@/pages/MaterialRequests"));
 const SolarDesigner = lazy(() => import("@/pages/SolarDesigner"));
 const SolarStudio = lazy(() => import("@/pages/SolarDesigner/SolarStudio"));
+const ProposalGenerator = lazy(() => import("@/pages/ProposalGenerator"));
 
 const ControlCenterLayout = lazy(() => import("@/pages/ControlCenter/ControlCenterLayout"));
 const ControlCenterDashboard = lazy(() => import("@/pages/ControlCenter/ControlCenterDashboard"));
@@ -293,6 +294,8 @@ function App() {
             <Route path="/templates" element={<Protected><PermissionRoute page="documents"><DocumentTemplates /></PermissionRoute></Protected>} />
             <Route path="/document-templates" element={<Protected><PermissionRoute page="documents"><DocumentTemplates /></PermissionRoute></Protected>} />
             <Route path="/documents" element={<Protected><PermissionRoute page="documents"><DocumentTemplates /></PermissionRoute></Protected>} />
+            <Route path="/proposal-generator" element={<Protected><PermissionRoute page="sales_documents"><ProposalGenerator /></PermissionRoute></Protected>} />
+            <Route path="/proposals" element={<Navigate to="/proposal-generator" replace />} />
             <Route path="/quotation" element={<Protected><PermissionRoute page="sales_documents"><Quotation /></PermissionRoute></Protected>} />
             <Route path="/tax-invoice" element={<Protected><PermissionRoute page="sales_documents"><TaxInvoice /></PermissionRoute></Protected>} />
             <Route path="/delivery-bill" element={<Protected><PermissionRoute page="sales_documents"><DeliveryBill /></PermissionRoute></Protected>} />

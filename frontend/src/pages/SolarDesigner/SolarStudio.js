@@ -13,9 +13,10 @@ import {
   Save, FileDown, Plus, Trash2, RotateCw, RefreshCw, Check, CheckCircle2,
   AlertTriangle, ShieldCheck, Download, Sliders, Ruler, Maximize2, Minimize2,
   Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, ChevronUp, Eye, Focus,
-  PlusCircle, Undo2
+  PlusCircle, Undo2, Edit3
 } from "lucide-react";
 import { toast } from "sonner";
+import dayjs from "dayjs";
 
 import LiveSatelliteMap from "./components/LiveSatelliteMap";
 import Rooftop3DViewer from "./components/Rooftop3DViewer";
@@ -54,6 +55,8 @@ export default function SolarStudio() {
   const [openSection, setOpenSection] = useState(null); // null = all collapsed; 'location' | 'roof' | 'obstacles' | 'pv_module' | 'structure' | 'layout'
 
   const [saving, setSaving] = useState(false);
+  const [lastSavedTime, setLastSavedTime] = useState(null);
+  const [saveError, setSaveError] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [loadingInitial, setLoadingInitial] = useState(Boolean(designId));
 
@@ -490,9 +493,17 @@ export default function SolarStudio() {
     toast.success(`Added ${newObs.name} exclusion zone.`);
   };
 
-  // Save Design
+  // Save Design with validation, retry resilience and URL history sync
   const handleSaveDesign = async (saveAsNewVersion = false) => {
+    const lat = Number(designData.latitude);
+    const lng = Number(designData.longitude);
+    if (!isFinite(lat) || !isFinite(lng) || lat === 0) {
+      toast.error("Please set a valid site location on the map before saving.");
+      return;
+    }
+
     setSaving(true);
+    setSaveError(null);
     try {
       const snap2d = liveMapRef.current?.getSnapshotDataUrl?.() || "";
       const snap3d = viewer3dRef.current?.getSnapshotDataUrl?.() || "";
@@ -513,14 +524,79 @@ export default function SolarStudio() {
 
       if (res.data) {
         setDesignData(res.data);
-        toast.success(saveAsNewVersion ? "Saved as new design version!" : "Solar design saved successfully!");
+        setLastSavedTime(new Date());
+        setSaveError(null);
+        if (!designId && res.data.id) {
+          window.history.replaceState(null, "", `/solar-designer/${res.data.id}`);
+        }
+        toast.success(saveAsNewVersion ? "Saved as new design version!" : "Design saved ✓");
       }
     } catch (err) {
-      toast.error("Failed to save design: " + formatApiError(err));
+      const msg = formatApiError(err);
+      setSaveError(msg);
+      toast.error("Unable to save design: " + msg);
     } finally {
       setSaving(false);
     }
   };
+
+  // Lightweight debounced autosave (3s debounce) after meaningful changes
+  const autoSaveTimerRef = useRef(null);
+  const initialLoadDoneRef = useRef(false);
+
+  useEffect(() => {
+    if (!initialLoadDoneRef.current) {
+      initialLoadDoneRef.current = true;
+      return;
+    }
+    if (!designData.id || saving) return;
+
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(async () => {
+      try {
+        const payload = {
+          roof_polygon: designData.roof_polygon,
+          roof_area_sqm: designData.roof_area_sqm,
+          roof_perimeter_m: designData.roof_perimeter_m,
+          roof_dimensions: designData.roof_dimensions,
+          usable_area_sqm: designData.usable_area_sqm,
+          panels: designData.panels,
+          panel_count: designData.panel_count,
+          system_kw: designData.system_kw,
+          obstacles: designData.obstacles,
+          structure: designData.structure,
+          structure_nodes: designData.structure_nodes,
+          structure_members: designData.structure_members,
+          latitude: designData.latitude,
+          longitude: designData.longitude,
+          formatted_address: designData.formatted_address,
+          site_name: designData.site_name,
+        };
+        const res = await api.put(`/solar-designer/designs/${designData.id}`, payload);
+        if (res.data) {
+          setLastSavedTime(new Date());
+          setSaveError(null);
+        }
+      } catch (e) {
+        // Silently preserve in-memory state
+      }
+    }, 3000);
+
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [
+    designData.id,
+    designData.roof_polygon,
+    designData.panels,
+    designData.obstacles,
+    designData.structure,
+    designData.structure_nodes,
+    designData.structure_members,
+    designData.latitude,
+    designData.longitude,
+    saving,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export PDF Report
   const handleExportPdf = async () => {
@@ -605,6 +681,29 @@ export default function SolarStudio() {
     });
   };
 
+  // Transfer to Proposal Generator
+  const handleTransferToProposal = () => {
+    const pCount = designData.panels.filter((p) => !p.hidden).length;
+    const pWatt = Number(designData.panel_wattage || 550);
+    const systemKw = ((pCount * pWatt) / 1000.0).toFixed(2);
+    const snap2d = liveMapRef.current?.getSnapshotDataUrl?.() || "";
+    const snap3d = viewer3dRef.current?.getSnapshotDataUrl?.() || "";
+
+    nav("/proposal-generator", {
+      state: {
+        transferFromSolarDesigner: true,
+        designData: {
+          ...designData,
+          system_kw: systemKw,
+          panel_count: pCount,
+          panel_wattage: pWatt,
+          layout_snapshot_2d: snap2d,
+          layout_snapshot_3d: snap3d,
+        },
+      },
+    });
+  };
+
   if (loadingInitial) {
     return (
       <div className="flex items-center justify-center min-h-[60vh] text-slate-400 text-sm">
@@ -655,6 +754,13 @@ export default function SolarStudio() {
 
         {/* Top Actions */}
         <div className="flex items-center gap-2">
+          {lastSavedTime && (
+            <span className="text-[10px] text-emerald-400 font-medium hidden sm:inline-flex items-center gap-1 bg-emerald-950/60 border border-emerald-800/60 px-2 py-1 rounded-lg">
+              <Check className="w-3 h-3 text-emerald-400" />
+              Saved {dayjs(lastSavedTime).format("hh:mm A")}
+            </span>
+          )}
+
           <Button
             size="sm"
             onClick={() => setIsFullscreen(!isFullscreen)}
@@ -676,6 +782,24 @@ export default function SolarStudio() {
           </Button>
         </div>
       </div>
+
+      {/* Save Error Recovery Banner */}
+      {saveError && (
+        <div className="bg-red-950/95 border border-red-500 text-red-200 px-3.5 py-2 rounded-xl flex items-center justify-between text-xs animate-in fade-in shadow-lg">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+            <span>Unable to save design: <b>{saveError}</b>. Your current design is kept safely in memory.</span>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => handleSaveDesign(false)}
+            disabled={saving}
+            className="h-6 text-xs bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg px-2.5"
+          >
+            Retry Save
+          </Button>
+        </div>
+      )}
 
       {/* 2. THREE-COLUMN DESKTOP ENGINEERING WORKSPACE */}
       <div className={`grid grid-cols-1 lg:grid-cols-12 gap-2 ${isFullscreen ? "flex-1 min-h-0" : ""}`}>
@@ -768,14 +892,26 @@ export default function SolarStudio() {
 
             {openSection === "roof" && (
               <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
-                <Button size="sm" variant={activeTool === "draw_roof" ? "default" : "outline"}
-                  onClick={() => setActiveTool(activeTool === "draw_roof" ? "select" : "draw_roof")}
-                  className={`w-full h-6 text-[10.5px] font-semibold rounded-lg gap-1 ${
-                    activeTool === "draw_roof" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "border-emerald-300 text-emerald-700 bg-emerald-50/40 hover:bg-emerald-100"
-                  }`}>
-                  <PenTool className="w-3 h-3" />
-                  {activeTool === "draw_roof" ? "Drawing (Active)" : "Draw Roof on Map"}
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button size="sm" variant={activeTool === "draw_roof" ? "default" : "outline"}
+                    onClick={() => setActiveTool(activeTool === "draw_roof" ? "select" : "draw_roof")}
+                    className={`flex-1 h-6 text-[10px] font-semibold rounded-lg gap-1 ${
+                      activeTool === "draw_roof" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "border-emerald-300 text-emerald-700 bg-emerald-50/40 hover:bg-emerald-100"
+                    }`}>
+                    <PenTool className="w-3 h-3" />
+                    {activeTool === "draw_roof" ? "Drawing..." : "Draw Roof"}
+                  </Button>
+                  {designData.roof_polygon?.length >= 3 && (
+                    <Button size="sm" variant={activeTool === "edit_roof" ? "default" : "outline"}
+                      onClick={() => setActiveTool(activeTool === "edit_roof" ? "select" : "edit_roof")}
+                      className={`h-6 text-[10px] font-semibold rounded-lg gap-1 ${
+                        activeTool === "edit_roof" ? "bg-amber-500 text-slate-950 font-bold" : "border-amber-300 text-amber-700 bg-amber-50/40 hover:bg-amber-100"
+                      }`}>
+                      <Edit3 className="w-3 h-3" />
+                      {activeTool === "edit_roof" ? "Editing..." : "Edit Roof"}
+                    </Button>
+                  )}
+                </div>
 
                 <div className="grid grid-cols-2 gap-1">
                   <div>
@@ -1197,6 +1333,7 @@ export default function SolarStudio() {
             onExportPdf={handleExportPdf}
             onExportDocx={handleExportDocx}
             onTransferToQuotation={handleTransferToQuotation}
+            onTransferToProposal={handleTransferToProposal}
             saving={saving}
             exporting={exporting}
           />

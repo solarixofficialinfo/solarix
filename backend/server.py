@@ -5933,7 +5933,7 @@ async def delete_client(client_id: str, user=Depends(require_active_subscription
 
 ALLOWED_DOC_TYPES = (
     "annexure", "wcr", "sldr", "net_meter_agreement", "vendor_agreement",
-    "meter_testing_request", "quotation", "sales_order", "tax_invoice",
+    "meter_testing_request", "quotation", "proposal", "sales_order", "tax_invoice",
     "delivery_bill", "purchase_order", "purchase_bill",
 )
 
@@ -5946,6 +5946,7 @@ def _document_label(doc_type: str) -> str:
         "vendor_agreement": "Vendor Agreement",
         "meter_testing_request": "Meter Testing Request",
         "quotation": "Quotation",
+        "proposal": "Customer Proposal",
         "sales_order": "Sales Order",
         "tax_invoice": "Tax Invoice",
         "delivery_bill": "Delivery Bill",
@@ -5969,11 +5970,14 @@ def _generate_meaningful_filename(doc_type: str, doc_data: dict, client_doc: Opt
         party_name = client_doc["full_name"]
     elif doc_data.get("client") and doc_data["client"].get("full_name"):
         party_name = doc_data["client"]["full_name"]
+    elif doc_data.get("customer_name"):
+        party_name = doc_data["customer_name"]
     elif doc_data.get("vendor") and doc_data["vendor"].get("name"):
         party_name = doc_data["vendor"]["name"]
         
     doc_type_map = {
         "quotation": "Quotation",
+        "proposal": "Proposal",
         "tax_invoice": "Invoice",
         "delivery_bill": "DeliveryBill",
         "purchase_order": "PurchaseOrder",
@@ -5984,6 +5988,8 @@ def _generate_meaningful_filename(doc_type: str, doc_data: dict, client_doc: Opt
     doc_number = "Doc"
     if doc_type == "quotation":
         doc_number = doc_data.get("quote_number") or doc_data.get("document_number") or "Q"
+    elif doc_type == "proposal":
+        doc_number = doc_data.get("proposal_number") or doc_data.get("quote_number") or doc_data.get("document_number") or "PROP"
     elif doc_type == "tax_invoice":
         doc_number = doc_data.get("invoice_number") or doc_data.get("document_number") or "INV"
     elif doc_type == "delivery_bill":
@@ -5994,6 +6000,8 @@ def _generate_meaningful_filename(doc_type: str, doc_data: dict, client_doc: Opt
     date_val = None
     if doc_type == "quotation":
         date_val = doc_data.get("quote_date")
+    elif doc_type == "proposal":
+        date_val = doc_data.get("proposal_date") or doc_data.get("quote_date") or doc_data.get("date")
     elif doc_type == "tax_invoice":
         date_val = doc_data.get("invoice_date")
     elif doc_type == "delivery_bill":
@@ -6129,10 +6137,10 @@ async def generate_document_preview(payload: Dict[str, Any], user=Depends(get_cu
         raise HTTPException(status_code=400, detail="Invalid doc_type")
         
     client_id = payload.get("client_id")
-    if not client_id and doc_type not in ("purchase_order", "purchase_bill"):
+    if not client_id and doc_type not in ("purchase_order", "purchase_bill", "proposal", "quotation"):
         raise HTTPException(status_code=400, detail="client_id is required")
         
-    if doc_type in ("quotation", "tax_invoice", "delivery_bill", "purchase_order", "purchase_bill"):
+    if doc_type in ("quotation", "proposal", "tax_invoice", "delivery_bill", "purchase_order", "purchase_bill"):
         if not has_perm(user, "sales_documents", "create"):
             raise HTTPException(status_code=403, detail="Missing permission: sales_documents.create")
     else:
@@ -6142,7 +6150,7 @@ async def generate_document_preview(payload: Dict[str, Any], user=Depends(get_cu
     client_doc = None
     if client_id:
         client_doc = await db.clients.find_one({"id": client_id, "company_id": user["company_id"]}, {"_id": 0})
-        if not client_doc and doc_type not in ("purchase_order", "purchase_bill"):
+        if not client_doc and doc_type not in ("purchase_order", "purchase_bill", "proposal", "quotation"):
             raise HTTPException(status_code=404, detail="Client not found")
 
     company_doc = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}
@@ -6152,7 +6160,13 @@ async def generate_document_preview(payload: Dict[str, Any], user=Depends(get_cu
         client_doc = _enrich_client_doc(client_doc)
 
     doc_data = payload.get("doc_data") or {}
-    if doc_type in ("quotation", "tax_invoice", "delivery_bill", "purchase_order", "purchase_bill"):
+    if doc_type == "proposal":
+        import proposal_generator
+        if client_doc and not doc_data.get("client"):
+            doc_data["client"] = client_doc
+        pdf_bytes = await asyncio.to_thread(proposal_generator.generate_proposal_pdf, doc_data, company_doc)
+        gen_content_type = "application/pdf"
+    elif doc_type in ("quotation", "tax_invoice", "delivery_bill", "purchase_order", "purchase_bill"):
         if client_doc and not doc_data.get("client"):
             doc_data["client"] = client_doc
         pdf_bytes = await asyncio.to_thread(pdf_generator.generate_document, doc_type, doc_data, company_doc)
@@ -6168,6 +6182,8 @@ async def generate_document_preview(payload: Dict[str, Any], user=Depends(get_cu
     doc_number = None
     if doc_type == "quotation":
         doc_number = doc_data.get("quote_number")
+    elif doc_type == "proposal":
+        doc_number = doc_data.get("proposal_number") or doc_data.get("quote_number")
     elif doc_type == "tax_invoice":
         doc_number = doc_data.get("invoice_number")
     elif doc_type == "delivery_bill":
@@ -6225,7 +6241,7 @@ async def generate_public_document(payload: Dict[str, Any], user=Depends(require
     if doc_type not in ALLOWED_DOC_TYPES:
         raise HTTPException(status_code=400, detail="Invalid doc_type")
         
-    if doc_type in ("quotation", "tax_invoice", "delivery_bill", "purchase_order", "purchase_bill"):
+    if doc_type in ("quotation", "proposal", "tax_invoice", "delivery_bill", "purchase_order", "purchase_bill"):
         if not has_perm(user, "sales_documents", "create"):
             raise HTTPException(status_code=403, detail="Missing permission: sales_documents.create")
     else:
@@ -6245,12 +6261,18 @@ async def generate_public_document(payload: Dict[str, Any], user=Depends(require
     client_doc = None
     if client_id:
         client_doc = await db.clients.find_one({"id": client_id, "company_id": user["company_id"]}, {"_id": 0})
-        if not client_doc:
+        if not client_doc and doc_type not in ("purchase_order", "purchase_bill", "proposal", "quotation"):
             raise HTTPException(status_code=404, detail="Client not found")
 
     doc_data = payload.get("doc_data") or {}
     fmt_type = (payload.get("format") or "pdf").lower().strip()
-    if doc_type in ("quotation", "tax_invoice", "delivery_bill", "purchase_order", "purchase_bill"):
+    if doc_type == "proposal":
+        import proposal_generator
+        if client_doc and not doc_data.get("client"):
+            doc_data["client"] = client_doc
+        pdf_bytes = await asyncio.to_thread(proposal_generator.generate_proposal_pdf, doc_data, company_doc)
+        gen_content_type = "application/pdf"
+    elif doc_type in ("quotation", "tax_invoice", "delivery_bill", "purchase_order", "purchase_bill"):
         if client_doc and not doc_data.get("client"):
             doc_data["client"] = client_doc
         if fmt_type == "docx":
@@ -6275,6 +6297,8 @@ async def generate_public_document(payload: Dict[str, Any], user=Depends(require
     doc_number = None
     if doc_type == "quotation":
         doc_number = doc_data.get("quote_number")
+    elif doc_type == "proposal":
+        doc_number = doc_data.get("proposal_number") or doc_data.get("quote_number")
     elif doc_type == "tax_invoice":
         doc_number = doc_data.get("invoice_number")
     elif doc_type == "delivery_bill":

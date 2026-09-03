@@ -134,13 +134,31 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   // ─── Camera Utilities ────────────────────────────────────────────────────────
   const updateCameraPosition = useCallback(() => {
     if (!cameraRef.current) return;
-    const { radius, phi, theta } = controlsRef.current.spherical;
-    const target = controlsRef.current.target;
+    const ctr = controlsRef.current;
+    if (!ctr || !ctr.spherical || !ctr.target) return;
+
+    let { radius, phi, theta } = ctr.spherical;
+    const target = ctr.target;
+
+    // Safety checks against NaN / Infinity to prevent blank 3D screen
+    if (!isFinite(radius) || radius <= 0) radius = 32;
+    if (!isFinite(phi)) phi = Math.PI / 3.2;
+    if (!isFinite(theta)) theta = Math.PI / 4;
+    if (!isFinite(target.x) || !isFinite(target.y) || !isFinite(target.z)) {
+      target.set(0, 3, 0);
+    }
+    ctr.spherical.radius = Math.max(4, Math.min(180, radius));
+    ctr.spherical.phi = Math.max(0.05, Math.min(Math.PI / 2.05, phi));
+    ctr.spherical.theta = theta;
+
     const x = target.x + radius * Math.sin(phi) * Math.sin(theta);
     const y = target.y + radius * Math.cos(phi);
     const z = target.z + radius * Math.sin(phi) * Math.cos(theta);
-    cameraRef.current.position.set(x, y, z);
-    cameraRef.current.lookAt(target);
+
+    if (isFinite(x) && isFinite(y) && isFinite(z)) {
+      cameraRef.current.position.set(x, y, z);
+      cameraRef.current.lookAt(target);
+    }
   }, []);
 
   const fitDesignCamera = useCallback(() => {
@@ -154,12 +172,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const maxDim = Math.max(size.x, size.y, size.z, 8);
     const fov = cameraRef.current.fov * (Math.PI / 180);
     const distance = (maxDim / 2) / Math.tan(fov / 2) * 1.6;
-    controlsRef.current.target.copy(center);
-    controlsRef.current.spherical.radius = Math.max(10, Math.min(160, distance));
-    controlsRef.current.spherical.phi = Math.PI / 3.2;
-    controlsRef.current.spherical.theta = Math.PI / 4;
-    setActivePreset("isometric");
-    updateCameraPosition();
+    if (isFinite(distance) && isFinite(center.x)) {
+      controlsRef.current.target.copy(center);
+      controlsRef.current.spherical.radius = Math.max(10, Math.min(160, distance));
+      controlsRef.current.spherical.phi = Math.PI / 3.2;
+      controlsRef.current.spherical.theta = Math.PI / 4;
+      setActivePreset("isometric");
+      updateCameraPosition();
+    }
   }, [updateCameraPosition]);
 
   const setCameraPreset = useCallback((preset) => {
