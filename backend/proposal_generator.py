@@ -613,7 +613,7 @@ def generate_proposal_pdf(doc_data: Dict[str, Any], company: Dict[str, Any]) -> 
     story.append(ret_tbl)
     story.append(Spacer(1, 14))
 
-    disclaimer = """
+    disclaimer = f"""
     *Disclaimer: The savings shown above assume total production as mentioned in the engineering estimate at current tariff rates. 
     Assuming self-consumption of {self_consumption_pct:.1f}% and remaining {grid_export_pct:.1f}% sent back to the grid based on solar yield profiles. 
     These figures are indicative to provide a realistic projection of returns over the 25-year system lifecycle.
