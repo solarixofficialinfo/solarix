@@ -337,6 +337,22 @@ export default function SolarStudio() {
     toast.success(`Location updated to ${details.name} (${lat.toFixed(4)}, ${lng.toFixed(4)})`);
   };
 
+  // Capture the current map center as the confirmed design site
+  // Called when user clicks "Capture Location" in the LiveSatelliteMap toolbar
+  const handleCaptureLocation = useCallback(({ lat, lng }) => {
+    if (!lat || !lng || isNaN(lat) || isNaN(lng)) return;
+    updateDesignData({
+      latitude: lat,
+      longitude: lng,
+      // Update the address label to reflect the captured position
+      // (keeps the previously-searched address text; user can refine via search)
+      formatted_address: designData.formatted_address
+        ? `${designData.formatted_address} (captured)`
+        : `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+    });
+    toast.success(`Site location captured: ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+  }, [updateDesignData, designData.formatted_address]);
+
   // Select Search Result Item
   const handleSelectPrediction = async (item) => {
     setSearching(true);
@@ -1064,6 +1080,7 @@ export default function SolarStudio() {
                 longitude={Number(designData.longitude) || 72.8777}
                 zoom={designData.zoom || 19}
                 onLocationChange={(coords) => updateDesignData(coords)}
+                onCaptureLocation={handleCaptureLocation}
                 roofPolygon={designData.roof_polygon}
                 setRoofPolygon={handleSetRoofPolygon}
                 panels={designData.panels}
@@ -1149,6 +1166,7 @@ export default function SolarStudio() {
                   activeTool={activeTool}
                   setActiveTool={setActiveTool}
                   isCalibrated={isCalibrated}
+                  onCaptureLocation={handleCaptureLocation}
                 />
                 <Rooftop3DViewer
                   ref={viewer3dRef}

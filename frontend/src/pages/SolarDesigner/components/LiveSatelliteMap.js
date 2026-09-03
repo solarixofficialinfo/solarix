@@ -109,6 +109,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     longitude = 72.8777,
     zoom = 19,
     onLocationChange,
+    onCaptureLocation,        // NEW: called with { lat, lng } when user captures site
     roofPolygon = [],
     setRoofPolygon,
     panels = [],
@@ -151,6 +152,10 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const [mapError, setMapError] = useState(null);
   const [activeDrawPoints, setActiveDrawPoints] = useState([]);
   const [cursorCoords, setCursorCoords] = useState({ lat: Number(latitude) || 19.076, lng: Number(longitude) || 72.8777 });
+
+  // Capture Location state — tracks whether user has explicitly captured a site
+  const [locationCaptured, setLocationCaptured] = useState(false);
+  const [capturedCoords, setCapturedCoords] = useState(null); // { lat, lng }
 
   // Roof edit mode
   const [editingRoof, setEditingRoof] = useState(false);
@@ -205,7 +210,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     return { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 };
   }, []); // originRef is mutable, no deps needed
 
-  // Expose snapshot + panTo + invalidateSize to parent
+  // Expose snapshot + panTo + invalidateSize + getCenter to parent
   useImperativeHandle(ref, () => ({
     getSnapshotDataUrl: () => {
       const map = mapInstanceRef.current;
@@ -225,9 +230,18 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       if (!isValidLatLng(lat, lng)) return;
       const map = mapInstanceRef.current;
       if (map) {
-        map.setView([lat, lng], 19, { animate: true });
+        // Preserve current zoom level — only fly to location
+        const currentZoom = map.getZoom();
+        map.setView([lat, lng], currentZoom, { animate: true });
         if (markerRef.current) markerRef.current.setLatLng([lat, lng]);
       }
+    },
+    // NEW: returns current map center (for Capture Location in parent)
+    getCenter: () => {
+      const map = mapInstanceRef.current;
+      if (!map) return null;
+      const c = map.getCenter();
+      return isValidLatLng(c.lat, c.lng) ? { lat: c.lat, lng: c.lng } : null;
     },
     invalidateSize: () => {
       mapInstanceRef.current?.invalidateSize({ pan: false });
@@ -430,7 +444,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     }
   }, [mapType]);
 
-  // ── Pan map when location changes (preserve center on zoom/layer changes) ──
+  // ── Pan map when canonical location prop changes ─────────────────────────
+  // FIX: Threshold raised from 0.0001 to 0.003 (~330m) to avoid fighting user
+  // manual panning. The map only snaps back when a meaningfully different
+  // location is set (e.g. a new search result), not tiny precision differences.
+  // Marker is always updated to match the canonical location.
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -440,10 +458,13 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
     const currentCenter = map.getCenter();
     const dist = Math.abs(currentCenter.lat - lat) + Math.abs(currentCenter.lng - lng);
-    // Only pan if location changed significantly (avoids fighting user panning)
-    if (dist > 0.0001) {
-      map.setView([lat, lng], zoom || 19, { animate: true });
+    // Only fly to new location if it changed by >0.003 degrees (~330m)
+    // This prevents the map from fighting user's manual panning/zooming
+    if (dist > 0.003) {
+      const currentZoom = map.getZoom();
+      map.setView([lat, lng], Math.max(currentZoom, zoom || 18), { animate: true });
     }
+    // Always keep site marker at canonical location
     if (markerRef.current) {
       markerRef.current.setLatLng([lat, lng]);
     }
@@ -829,11 +850,42 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   // ── Zoom helpers ──────────────────────────────────────────────────────────
   const handleZoomIn = () => mapInstanceRef.current?.zoomIn();
   const handleZoomOut = () => mapInstanceRef.current?.zoomOut();
+  // FIX: Preserve current zoom level when recentering — was hardcoded to 19
   const handleLocateCenter = () => {
-    if (mapInstanceRef.current && isValidLatLng(Number(latitude), Number(longitude))) {
-      mapInstanceRef.current.setView([Number(latitude), Number(longitude)], 19, { animate: true });
+    const map = mapInstanceRef.current;
+    if (map && isValidLatLng(Number(latitude), Number(longitude))) {
+      const currentZoom = map.getZoom();
+      map.setView([Number(latitude), Number(longitude)], currentZoom, { animate: true });
     }
   };
+
+  // ── Capture Location ──────────────────────────────────────────────────────
+  // Reads the current map center and fires onCaptureLocation with that coordinate.
+  // This lets the user pan to exactly the right building before committing.
+  const handleCaptureLocation = useCallback(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const center = map.getCenter();
+    if (!isValidLatLng(center.lat, center.lng)) {
+      toast.error("Map center coordinates are invalid. Please pan to your site.");
+      return;
+    }
+    // Move marker to captured location
+    if (markerRef.current) {
+      markerRef.current.setLatLng([center.lat, center.lng]);
+    }
+    // Save captured coords for local state display
+    setCapturedCoords({ lat: center.lat, lng: center.lng });
+    setLocationCaptured(true);
+    // Fire callback to parent (SolarStudio) to update canonical design state
+    if (onCaptureLocation) {
+      onCaptureLocation({ lat: center.lat, lng: center.lng });
+    } else if (onLocationChange) {
+      // Fallback: use existing onLocationChange
+      onLocationChange({ latitude: center.lat, longitude: center.lng });
+    }
+    toast.success(`Site captured: ${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`);
+  }, [onCaptureLocation, onLocationChange]);
 
   // ── Derived geometry stats ────────────────────────────────────────────────
   const roofArea = getCartesianPolygonArea(roofPolygon);
@@ -863,7 +915,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       {!hasRoof && activeDrawPoints.length === 0 && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-10 bg-slate-900/90 backdrop-blur-md px-4 py-2 rounded-xl border border-blue-500/60 shadow-xl text-xs text-blue-200 pointer-events-none flex items-center gap-2">
           <Info className="w-4 h-4 text-blue-400 shrink-0" />
-          <span>Search site location, then click <b>'Draw Roof'</b> to trace the building perimeter.</span>
+          <span>Pan/zoom to your building, click <b>'Capture Location'</b>, then click <b>'Draw Roof'</b> to trace the boundary.</span>
         </div>
       )}
 
@@ -871,6 +923,43 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none gap-2 z-10">
         {/* Left: Interaction Tools */}
         <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto flex-wrap">
+          {/* ── CAPTURE LOCATION BUTTON ─────────────────────────────────────── */}
+          {locationCaptured ? (
+            <div className="flex items-center gap-1 h-7 px-2.5 rounded-lg bg-emerald-900/80 border border-emerald-600/60 text-emerald-300 text-xs font-semibold">
+              <Check className="w-3 h-3" />
+              <span>Captured</span>
+              {capturedCoords && (
+                <span className="text-emerald-400/70 text-[9px] font-normal hidden xl:inline">
+                  {capturedCoords.lat.toFixed(4)}, {capturedCoords.lng.toFixed(4)}
+                </span>
+              )}
+            </div>
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleCaptureLocation}
+              className="h-7 text-xs px-2.5 rounded-lg gap-1.5 text-blue-300 hover:text-white hover:bg-blue-700 border border-blue-600/50 animate-pulse"
+              title="Capture the current map center as the confirmed site location"
+            >
+              <MapPin className="w-3.5 h-3.5" /> Capture Location
+            </Button>
+          )}
+
+          {/* Re-capture: reset captured state to allow re-capture */}
+          {locationCaptured && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => { setLocationCaptured(false); setCapturedCoords(null); }}
+              className="h-7 px-1.5 rounded-lg text-slate-500 hover:text-amber-400"
+              title="Re-capture location"
+            >
+              <Navigation className="w-3 h-3" />
+            </Button>
+          )}
+
+          <div className="w-[1px] h-4 bg-slate-700 mx-0.5" />
           <Button
             size="sm"
             variant={activeTool === "select" ? "default" : "ghost"}
@@ -961,15 +1050,21 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           )}
         </div>
 
-        {/* Right: Map Type Selector & Controls */}
+        {/* Right: Map Type Selector & Zoom Controls */}
         <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
           <Button size="sm" variant={mapType === "satellite" ? "secondary" : "ghost"} onClick={() => setMapType("satellite")} className="h-6 text-[11px] px-2 rounded-lg">Satellite</Button>
           <Button size="sm" variant={mapType === "hybrid" ? "secondary" : "ghost"} onClick={() => setMapType("hybrid")} className="h-6 text-[11px] px-2 rounded-lg">Hybrid</Button>
           <Button size="sm" variant={mapType === "street" ? "secondary" : "ghost"} onClick={() => setMapType("street")} className="h-6 text-[11px] px-2 rounded-lg">Street</Button>
           <div className="w-[1px] h-3.5 bg-slate-700 mx-0.5" />
-          <Button size="sm" variant="ghost" onClick={handleZoomIn} className="h-6 w-6 p-0 rounded-lg text-slate-300 hover:text-white" title="Zoom In"><ZoomIn className="w-3.5 h-3.5" /></Button>
-          <Button size="sm" variant="ghost" onClick={handleZoomOut} className="h-6 w-6 p-0 rounded-lg text-slate-300 hover:text-white" title="Zoom Out"><ZoomOut className="w-3.5 h-3.5" /></Button>
-          <Button size="sm" variant="ghost" onClick={handleLocateCenter} className="h-6 w-6 p-0 rounded-lg text-blue-400 hover:text-blue-300" title="Center Site Marker"><Navigation className="w-3.5 h-3.5" /></Button>
+          {/* Zoom +/- buttons — large enough to tap easily */}
+          <Button size="sm" variant="ghost" onClick={handleZoomIn} className="h-6 w-7 p-0 rounded-lg text-slate-300 hover:text-white font-bold text-sm" title="Zoom In (+)">+</Button>
+          <Button size="sm" variant="ghost" onClick={handleZoomOut} className="h-6 w-7 p-0 rounded-lg text-slate-300 hover:text-white font-bold text-sm" title="Zoom Out (−)">−</Button>
+          <div className="w-[1px] h-3.5 bg-slate-700 mx-0.5" />
+          {/* Recenter — preserves zoom level (FIX: was hardcoded to 19) */}
+          <Button size="sm" variant="ghost" onClick={handleLocateCenter} className="h-6 px-1.5 rounded-lg text-blue-400 hover:text-blue-300 text-[10px] gap-0.5" title="Recenter on captured site">
+            <Navigation className="w-3 h-3" />
+            <span className="hidden xl:inline">Fit</span>
+          </Button>
         </div>
       </div>
 
