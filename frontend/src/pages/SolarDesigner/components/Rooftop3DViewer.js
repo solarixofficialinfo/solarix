@@ -121,14 +121,88 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const manualBraceCount = structureMembers.filter((m) => m.type === "brace").length;
   const manualSupportCount = structureNodes.filter((n) => n.type === "post_top" || n.type === "anchor").length;
 
-  // Expose snapshot export and fit-camera functions to parent
+  const gridHelperRef = useRef(null);
+  const groundMeshRef = useRef(null);
+
+  // Expose snapshot export, multi-view generation, and fit-camera functions to parent
   useImperativeHandle(ref, () => ({
     getSnapshotDataUrl: () => {
       if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return null;
       rendererRef.current.render(sceneRef.current, cameraRef.current);
       return rendererRef.current.domElement.toDataURL("image/png");
     },
+    generateAllViews: () => {
+      if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return [];
+      const renderer = rendererRef.current;
+      const scene = sceneRef.current;
+      const camera = cameraRef.current;
+      const ctr = controlsRef.current;
+
+      const savedSpherical = { ...ctr.spherical };
+      const savedTarget = ctr.target.clone();
+
+      if (rootGroupRef.current) {
+        const box = new THREE.Box3().setFromObject(rootGroupRef.current);
+        if (!box.isEmpty()) {
+          box.getCenter(ctr.target);
+          const size = new THREE.Vector3();
+          box.getSize(size);
+          const maxDim = Math.max(size.x, size.y, size.z, 8);
+          const fov = camera.fov * (Math.PI / 180);
+          ctr.spherical.radius = Math.max(12, Math.min(140, (maxDim / 2) / Math.tan(fov / 2) * 1.6));
+        }
+      }
+
+      const viewsToRender = [
+        { id: "top", name: "Top View", phi: 0.05, theta: 0 },
+        { id: "3d", name: "3D View", phi: Math.PI / 3.2, theta: Math.PI / 4 },
+        { id: "left", name: "Left View", phi: Math.PI / 2.15, theta: Math.PI / 2 },
+        { id: "right", name: "Right View", phi: Math.PI / 2.15, theta: -Math.PI / 2 },
+        { id: "front", name: "Front View", phi: Math.PI / 2.15, theta: 0 },
+      ];
+
+      const capturedViews = [];
+      const nowIso = new Date().toISOString();
+
+      for (const v of viewsToRender) {
+        ctr.spherical.phi = v.phi;
+        ctr.spherical.theta = v.theta;
+        updateCameraPosition();
+        renderer.render(scene, camera);
+        const dataUrl = renderer.domElement.toDataURL("image/png");
+        capturedViews.push({
+          id: v.id,
+          name: v.name,
+          thumbnail: dataUrl,
+          dataUrl: dataUrl,
+          timestamp: nowIso,
+        });
+      }
+
+      ctr.spherical = savedSpherical;
+      ctr.target.copy(savedTarget);
+      updateCameraPosition();
+      renderer.render(scene, camera);
+
+      return capturedViews;
+    },
+    applyViewPreset: (preset) => {
+      setCameraPreset(preset);
+    },
     fitDesign: () => fitDesignCamera(),
+    resize: () => {
+      const container = mountRef.current;
+      const renderer = rendererRef.current;
+      const camera = cameraRef.current;
+      if (!container || !renderer || !camera) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (w > 0 && h > 0) {
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+      }
+    },
   }));
 
   // ─── Camera Utilities ────────────────────────────────────────────────────────
@@ -187,10 +261,22 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const ctr = controlsRef.current;
     if (preset === "top") { ctr.spherical.phi = 0.05; ctr.spherical.theta = 0; }
     else if (preset === "front") { ctr.spherical.phi = Math.PI / 2.15; ctr.spherical.theta = 0; }
-    else if (preset === "side") { ctr.spherical.phi = Math.PI / 2.15; ctr.spherical.theta = Math.PI / 2; }
-    else if (preset === "isometric") { ctr.spherical.phi = Math.PI / 3.2; ctr.spherical.theta = Math.PI / 4; }
+    else if (preset === "side" || preset === "left") { ctr.spherical.phi = Math.PI / 2.15; ctr.spherical.theta = Math.PI / 2; }
+    else if (preset === "right") { ctr.spherical.phi = Math.PI / 2.15; ctr.spherical.theta = -Math.PI / 2; }
+    else if (preset === "isometric" || preset === "3d") { ctr.spherical.phi = Math.PI / 3.2; ctr.spherical.theta = Math.PI / 4; }
     else if (preset === "fit") { fitDesignCamera(); return; }
-    else if (preset === "reset") { ctr.spherical.radius = 32; ctr.spherical.phi = Math.PI / 3.2; ctr.spherical.theta = Math.PI / 4; ctr.target.set(0, 3, 0); }
+    else if (preset === "reset") {
+      ctr.spherical.radius = 32;
+      ctr.spherical.phi = Math.PI / 3.2;
+      ctr.spherical.theta = Math.PI / 4;
+      if (rootGroupRef.current) {
+        const box = new THREE.Box3().setFromObject(rootGroupRef.current);
+        if (!box.isEmpty()) box.getCenter(ctr.target);
+        else ctr.target.set(0, 3, 0);
+      } else {
+        ctr.target.set(0, 3, 0);
+      }
+    }
     updateCameraPosition();
   }, [updateCameraPosition, fitDesignCamera]);
 
@@ -262,13 +348,16 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
     // Ground + Grid
     const groundMat = new THREE.MeshStandardMaterial({ color: 0x131d2e, roughness: 0.95, metalness: 0.05 });
-    const groundMesh = new THREE.Mesh(new THREE.PlaneGeometry(140, 140), groundMat);
+    const groundMesh = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), groundMat);
     groundMesh.rotation.x = -Math.PI / 2;
     groundMesh.position.y = -0.02;
     groundMesh.receiveShadow = true;
+    groundMeshRef.current = groundMesh;
     scene.add(groundMesh);
-    const gridHelper = new THREE.GridHelper(120, 60, 0x3b82f6, 0x1e293b);
+
+    const gridHelper = new THREE.GridHelper(140, 70, 0x3b82f6, 0x1e293b);
     gridHelper.position.y = 0.01;
+    gridHelperRef.current = gridHelper;
     scene.add(gridHelper);
 
     // Interactive group (always in scene, updated separately)
@@ -473,6 +562,17 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
     // ── 1. Building Walls + Roof Slab ──────────────────────────────────────────
     if (roofPolygon && roofPolygon.length >= 3) {
+      const bounds = getPolygonBounds(roofPolygon);
+      const cx = (bounds.minX + bounds.maxX) / 2;
+      const cy = (bounds.minY + bounds.maxY) / 2;
+
+      if (gridHelperRef.current && isFinite(cx) && isFinite(cy)) {
+        gridHelperRef.current.position.set(cx, 0.01, -cy);
+      }
+      if (groundMeshRef.current && isFinite(cx) && isFinite(cy)) {
+        groundMeshRef.current.position.set(cx, -0.02, -cy);
+      }
+
       const shape = new THREE.Shape();
       roofPolygon.forEach((pt, idx) => {
         if (idx === 0) shape.moveTo(pt.x, -pt.y);

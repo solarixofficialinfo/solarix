@@ -3424,7 +3424,7 @@ async def register_company(data: RegisterCompanyIn, response: Response):
                     logger.warning(f"Admin password sync failed for {email}: {admin_err}")
 
     if not auth_user_id:
-        user_id = existing_user.get("id") if existing_user else str(uuid.uuid4())
+        user_id = str(existing_user.get("id")) if (existing_user and existing_user.get("id")) else str(uuid.uuid4())
         try:
             get_rpc_client().rpc("create_auth_user", {
                 "p_id": user_id,
@@ -9149,7 +9149,7 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
             "vendor_id": vendor_id_val,
             "bill_type": data.bill_type or "Product Bill",
             "serial_numbers": sns,
-            "serial_number_required": bool(data.serial_number_required or len(sns) > 0),
+            "serial_number_required": data.serial_number_required or len(sns) > 0,
             "high_value_asset": bool(data.high_value_asset or data.high_value_goods),
             "high_value_goods": bool(data.high_value_asset or data.high_value_goods),
             "created_by": user_id,
@@ -9324,7 +9324,7 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
             "attachment_filename": data.attachment_filename or "",
             "source": source,
             "serial_numbers": sns,
-            "serial_number_required": bool(data.serial_number_required or len(sns) > 0),
+            "serial_number_required": data.serial_number_required or len(sns) > 0,
             "high_value_asset": bool(data.high_value_asset or data.high_value_goods),
             "high_value_goods": bool(data.high_value_asset or data.high_value_goods),
             "created_by": user_id,
@@ -16702,7 +16702,7 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
         company_doc = await _enrich_company_doc_with_logo(company_doc)
 
         payments = await db.payments.find({"company_id": cid}, {"_id": 0}).to_list(10000)
-        inv_total = float(data.grand_total or 0.0)
+        inv_total = data.grand_total or 0.0
         inv_payments = [
             p for p in payments 
             if (p.get("status") or "Received").lower() == "received" and (
@@ -18312,12 +18312,12 @@ async def update_platform_customer_subscription(
 
     # 3. Access Type & Expiry Calculations
     access_type = (data.access_type or ("free_grant" if old_is_free else ("trial" if old_status == "trialing" else "paid"))).lower()
-    extra_days = max(0, int(data.extra_days or 0))
+    extra_days = max(0, data.extra_days or 0)
     if data.trial_days and data.trial_days > 0 and extra_days == 0:
-        extra_days = int(data.trial_days)
+        extra_days = data.trial_days
 
     if access_type == "free_grant":
-        free_days = max(1, int(data.free_grant_days or extra_days or 365))
+        free_days = max(1, data.free_grant_days or extra_days or 365)
         start_dt = _parse_dt(data.start_date) or now
         eff_expiry_dt = start_dt + timedelta(days=free_days)
 
@@ -18510,19 +18510,19 @@ async def update_platform_plan(plan_id: str, data: PlatformPlanUpdateIn, user=De
         "id": pid,
         "name": data.name,
         "tagline": data.tagline or "",
-        "monthly_price": float(data.monthly_price),
-        "yearly_price": float(data.yearly_price),
-        "max_users": int(data.max_users),
-        "max_clients": int(data.max_clients),
-        "max_products": int(data.max_products) if data.max_products is not None else default_prod,
-        "storage_gb": int(data.storage_gb) if data.storage_gb is not None else default_storage,
-        "monthly_documents": int(data.monthly_documents) if data.monthly_documents is not None else default_docs,
-        "monthly_pdf_docx": int(data.monthly_pdf_docx) if data.monthly_pdf_docx is not None else default_pdf,
-        "monthly_exports": int(data.monthly_exports) if data.monthly_exports is not None else default_exports,
-        "monthly_manual_imports": int(data.monthly_manual_imports) if data.monthly_manual_imports is not None else default_imports,
-        "monthly_material_requests": int(data.monthly_material_requests) if data.monthly_material_requests is not None else default_mr,
-        "monthly_inventory_transactions": int(data.monthly_inventory_transactions) if data.monthly_inventory_transactions is not None else default_inv,
-        "monthly_api_requests": int(data.monthly_api_requests) if data.monthly_api_requests is not None else default_api,
+        "monthly_price": data.monthly_price,
+        "yearly_price": data.yearly_price,
+        "max_users": data.max_users,
+        "max_clients": data.max_clients,
+        "max_products": data.max_products if data.max_products is not None else default_prod,
+        "storage_gb": data.storage_gb if data.storage_gb is not None else default_storage,
+        "monthly_documents": data.monthly_documents if data.monthly_documents is not None else default_docs,
+        "monthly_pdf_docx": data.monthly_pdf_docx if data.monthly_pdf_docx is not None else default_pdf,
+        "monthly_exports": data.monthly_exports if data.monthly_exports is not None else default_exports,
+        "monthly_manual_imports": data.monthly_manual_imports if data.monthly_manual_imports is not None else default_imports,
+        "monthly_material_requests": data.monthly_material_requests if data.monthly_material_requests is not None else default_mr,
+        "monthly_inventory_transactions": data.monthly_inventory_transactions if data.monthly_inventory_transactions is not None else default_inv,
+        "monthly_api_requests": data.monthly_api_requests if data.monthly_api_requests is not None else default_api,
         "active": data.active if data.active is not None else True,
         "updated_at": now_iso()
     }
@@ -18841,7 +18841,11 @@ async def create_solar_design(
         upsert=True,
         return_document=True
     )
-    seq = (counter_doc.get("seq") if counter_doc else 1) or 1
+    seq = 1
+    if isinstance(counter_doc, dict):
+        seq = counter_doc.get("seq", 1) or 1
+    elif hasattr(counter_doc, "seq"):
+        seq = getattr(counter_doc, "seq", 1) or 1
     current_year = datetime.now(timezone.utc).year
     design_number = f"SD-{current_year}-{seq:04d}"
     
@@ -18895,6 +18899,9 @@ async def create_solar_design(
         "layout_snapshot_2d": payload.get("layout_snapshot_2d") or "",
         "layout_snapshot_3d": payload.get("layout_snapshot_3d") or "",
         "satellite_snapshot": payload.get("satellite_snapshot") or "",
+        "saved_views": payload.get("saved_views") or [],
+        "structure_nodes": payload.get("structure_nodes") or [],
+        "structure_members": payload.get("structure_members") or [],
         "version": 1,
         "status": payload.get("status") or "Draft",
         "notes": payload.get("notes") or "",
@@ -18964,7 +18971,8 @@ async def update_solar_design(
         "orientation", "tilt_angle", "azimuth_angle", "row_spacing_m", "panel_spacing_m",
         "panel_count", "system_kw", "panels", "structure_type", "mounting_height_m",
         "material_estimates", "camera_state", "layout_snapshot_2d", "layout_snapshot_3d",
-        "satellite_snapshot", "status", "notes"
+        "satellite_snapshot", "saved_views", "structure_nodes", "structure_members",
+        "status", "notes"
     ]
     
     for f in allowed_fields:
@@ -19020,6 +19028,7 @@ async def export_solar_design_pdf_endpoint(
         
     company = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
     
+    from plan_config import increment_usage
     try:
         pdf_bytes = generate_solar_design_pdf(design_doc, company)
         await increment_usage(cid, "document_generations", 1, db=db)
@@ -19055,6 +19064,7 @@ async def export_solar_design_docx_endpoint(
         
     company = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
     
+    from plan_config import increment_usage
     try:
         docx_bytes = generate_solar_design_docx(design_doc, company)
         await increment_usage(cid, "document_generations", 1, db=db)

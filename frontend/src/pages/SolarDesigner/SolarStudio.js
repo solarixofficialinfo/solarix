@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import {
   Save, FileDown, Plus, Trash2, RotateCw, RefreshCw, Check, CheckCircle2,
   AlertTriangle, ShieldCheck, Download, Sliders, Ruler, Maximize2, Minimize2,
   Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, ChevronUp, Eye, Focus,
-  PlusCircle, Undo2, Edit3
+  PlusCircle, Undo2, Edit3, X, HelpCircle, Bell, Grid, Layers2, Image as ImageIcon, ChevronRight, Edit2, Zap
 } from "lucide-react";
 import { toast } from "sonner";
 import dayjs from "dayjs";
@@ -26,6 +26,7 @@ import {
   OBSTACLE_TYPES,
   generateAutoPanelLayout,
   canFitAdditionalPanel,
+  calculateBillOfMaterials,
 } from "./utils/layoutEngine";
 import {
   getCartesianPolygonArea,
@@ -39,20 +40,32 @@ import {
 } from "@/lib/locationService";
 import { useClientList } from "@/hooks/useClients";
 import { useProductList } from "@/hooks/useInventory";
+import { useAuth } from "@/context/AuthContext";
+
+// 6 Primary Design Stages matching the reference information architecture
+const DESIGN_STAGES = [
+  { key: "location", label: "1. Location", icon: MapPin },
+  { key: "roof", label: "2. Roof", icon: PenTool },
+  { key: "obstacles", label: "3. Obstacles", icon: Box },
+  { key: "pv_module", label: "4. PV Module", icon: Grid },
+  { key: "structure", label: "5. Mounting", icon: Layers2 },
+  { key: "layout", label: "6. Layout", icon: Sparkles },
+];
 
 export default function SolarStudio() {
   const { id: designId } = useParams();
   const nav = useNavigate();
+  const { user } = useAuth();
 
   // Fullscreen state & View mode
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState("2d"); // '2d' | '3d' | 'split'
-  const [activeTool, setActiveTool] = useState("select"); // 'select' | 'draw_roof' | 'add_panel' | 'calibrate'
+  const [activeTool, setActiveTool] = useState("select"); // 'select' | 'draw_roof' | 'edit_roof' | 'add_panel' | 'calibrate'
   const [selectedPanelId, setSelectedPanelId] = useState(null);
   const [isCalibrated, setIsCalibrated] = useState(false);
 
-  // Accordion state: only ONE major section open at a time
-  const [openSection, setOpenSection] = useState(null); // null = all collapsed; 'location' | 'roof' | 'obstacles' | 'pv_module' | 'structure' | 'layout'
+  // Active section controls: which floating drawer is open
+  const [openSection, setOpenSection] = useState(null); // 'location' | 'roof' | 'obstacles' | 'pv_module' | 'structure' | 'layout' | null
 
   const [saving, setSaving] = useState(false);
   const [lastSavedTime, setLastSavedTime] = useState(null);
@@ -67,6 +80,12 @@ export default function SolarStudio() {
   const [detectingGps, setDetectingGps] = useState(false);
   const [showLocationChangeConfirm, setShowLocationChangeConfirm] = useState(false);
   const [pendingLocation, setPendingLocation] = useState(null);
+
+  // Multi-view Design Gallery state
+  const [savedViews, setSavedViews] = useState([]);
+  const [showGalleryModal, setShowGalleryModal] = useState(false);
+  const [activeGalleryView, setActiveGalleryView] = useState(null);
+  const [generatingViews, setGeneratingViews] = useState(false);
 
   // Clients & Products hooks
   const { data: clientsData = [] } = useClientList();
@@ -91,7 +110,7 @@ export default function SolarStudio() {
   const liveMapRef = useRef(null);
   const viewer3dRef = useRef(null);
 
-  // Canonical Solar Design State (0-default for brand new designs)
+  // Canonical Solar Design State
   const [designData, setDesignData] = useState({
     id: "",
     design_number: "",
@@ -99,11 +118,11 @@ export default function SolarStudio() {
     client_name: "",
     project_id: "",
     lead_id: "",
-    site_name: "Rooftop Solar PV Installation",
+    site_name: "Ichalkaranji Solar Rooftop",
     address: "",
-    formatted_address: "Mumbai, Maharashtra, India",
-    latitude: 19.076,
-    longitude: 72.8777,
+    formatted_address: "Ichalkaranji, Maharashtra, India",
+    latitude: 16.69512,
+    longitude: 74.46107,
     place_id: "",
     zoom: 19,
     // 1. Roof Geometry
@@ -158,11 +177,9 @@ export default function SolarStudio() {
     mounting_height_m: 1.8,
     material_estimates: {},
     camera_state: {},
-    // 5. Interactive Structure Editor — nodes & members
-    // A node = { id, x, y, z, type: 'anchor'|'post_top'|'junction'|'manual' }
-    // A member = { id, nodeAId, nodeBId, type: 'post'|'rail'|'brace'|'beam'|'member' }
     structure_nodes: [],
     structure_members: [],
+    saved_views: [],
     status: "Draft",
     notes: "",
   });
@@ -200,10 +217,14 @@ export default function SolarStudio() {
           doc.obstacles = Array.isArray(doc.obstacles) ? doc.obstacles : [];
           doc.panels = Array.isArray(doc.panels) ? doc.panels : [];
           doc.roof_polygon = Array.isArray(doc.roof_polygon) ? doc.roof_polygon : [];
-          // Restore interactive structure editor data
           doc.structure_nodes = Array.isArray(doc.structure_nodes) ? doc.structure_nodes : [];
           doc.structure_members = Array.isArray(doc.structure_members) ? doc.structure_members : [];
+          doc.saved_views = Array.isArray(doc.saved_views) ? doc.saved_views : [];
+
           setDesignData(doc);
+          if (doc.saved_views && doc.saved_views.length > 0) {
+            setSavedViews(doc.saved_views);
+          }
           if (doc.formatted_address || doc.address) {
             setSearchQuery(doc.formatted_address || doc.address);
           }
@@ -222,15 +243,18 @@ export default function SolarStudio() {
     setDesignData((prev) => ({ ...prev, ...updates }));
   }, []);
 
-  // FIX: Call map.invalidateSize() after accordion open/close or tab switch.
-  // Without this, Leaflet's internal pixel→latlng calculations use stale container
-  // dimensions, causing click coordinate offset whenever the sidebar layout shifts.
+  // Invalidate map size and 3D viewport on layout changes
   useEffect(() => {
     const timer = setTimeout(() => {
-      liveMapRef.current?.invalidateSize?.();
-    }, 320); // slight delay to let CSS transitions complete
+      if (activeTab === "2d" || activeTab === "split") {
+        liveMapRef.current?.invalidateSize?.();
+      }
+      if (activeTab === "3d" || activeTab === "split") {
+        viewer3dRef.current?.resize?.();
+      }
+    }, 280);
     return () => clearTimeout(timer);
-  }, [openSection, activeTab, isFullscreen]);
+  }, [activeTab, isFullscreen, openSection]);
 
   // Update Roof Polygon and recalculate geometric properties
   const handleSetRoofPolygon = useCallback((polygon) => {
@@ -312,7 +336,7 @@ export default function SolarStudio() {
   }, [searchQuery]);
 
   // Apply Selected Location to Canonical State & Map
-  const applySelectedLocation = (details) => {
+  const applySelectedLocation = (details, shouldClearGeometry = false) => {
     const lat = Number(details.latitude);
     const lng = Number(details.longitude);
 
@@ -324,33 +348,46 @@ export default function SolarStudio() {
     const formattedAddr = details.formatted_address || details.description || details.name;
     setSearchQuery(formattedAddr);
 
-    updateDesignData({
+    const updates = {
       address: details.address || details.name,
       formatted_address: formattedAddr,
       latitude: lat,
       longitude: lng,
       place_id: details.place_id || "",
       site_name: `${details.city || details.name} Solar Rooftop`,
-    });
+    };
+
+    if (shouldClearGeometry) {
+      updates.roof_polygon = [];
+      updates.panels = [];
+      updates.obstacles = [];
+      updates.walkways = [];
+      updates.roof_area_sqm = 0;
+      updates.usable_area_sqm = 0;
+      updates.panel_count = 0;
+      updates.system_kw = 0;
+      updates.coverage_pct = 0;
+      updates.saved_views = [];
+      setSavedViews([]);
+    }
+
+    updateDesignData(updates);
 
     if (liveMapRef.current?.panTo) {
       liveMapRef.current.panTo(lat, lng);
     }
 
-    toast.success(`Location updated to ${details.name} (${lat.toFixed(4)}, ${lng.toFixed(4)})`);
+    toast.success(`Location anchored to ${details.name || formattedAddr} (${lat.toFixed(5)}, ${lng.toFixed(5)})`);
   };
 
   // Capture the current map center as the confirmed design site
-  // Called when user clicks "Capture Location" in the LiveSatelliteMap toolbar
   const handleCaptureLocation = useCallback(({ lat, lng }) => {
     if (!lat || !lng || isNaN(lat) || isNaN(lng)) return;
     updateDesignData({
       latitude: lat,
       longitude: lng,
-      // Update the address label to reflect the captured position
-      // (keeps the previously-searched address text; user can refine via search)
       formatted_address: designData.formatted_address
-        ? `${designData.formatted_address} (captured)`
+        ? designData.formatted_address
         : `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
     });
     toast.success(`Site location captured: ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
@@ -363,14 +400,14 @@ export default function SolarStudio() {
     try {
       const details = await getPlaceDetails(item);
       if (details && details.latitude && details.longitude) {
-        if (designData.roof_polygon && designData.roof_polygon.length >= 3 && designData.latitude !== details.latitude) {
+        if (designData.roof_polygon && designData.roof_polygon.length >= 3 && (designData.latitude !== details.latitude || designData.longitude !== details.longitude)) {
           setPendingLocation(details);
           setShowLocationChangeConfirm(true);
         } else {
-          applySelectedLocation(details);
+          applySelectedLocation(details, false);
         }
       } else {
-        toast.error("Location coordinates unavailable. Try another search or use GPS.");
+        toast.error("Location coordinates unavailable. Try another search or GPS.");
       }
     } catch (e) {
       toast.error("Failed to fetch location details.");
@@ -385,7 +422,12 @@ export default function SolarStudio() {
     try {
       const details = await getCurrentLocationDetails();
       if (details && details.latitude && details.longitude) {
-        applySelectedLocation(details);
+        if (designData.roof_polygon && designData.roof_polygon.length >= 3) {
+          setPendingLocation(details);
+          setShowLocationChangeConfirm(true);
+        } else {
+          applySelectedLocation(details, false);
+        }
       }
     } catch (err) {
       toast.error(err.message || "Failed to detect GPS location.");
@@ -394,7 +436,7 @@ export default function SolarStudio() {
     }
   };
 
-  // Manual Increase Panel Count with Physical Space Check
+  // Manual Increase Panel Count
   const handleIncreasePanelCount = () => {
     if (!designData.roof_polygon || designData.roof_polygon.length < 3) {
       toast.warning("Please draw a roof boundary first.");
@@ -456,44 +498,29 @@ export default function SolarStudio() {
     }));
   };
 
-  // Select Product from Product Master
-  const handleSelectProductFromMaster = (product) => {
-    let wattage = 550;
-    const match = (product.name || "").match(/(\d{3,4})\s*W/i) || (product.size || "").match(/(\d{3,4})\s*W/i);
-    if (match) wattage = parseInt(match[1], 10);
-
-    updateDesignData({
-      panel_product_id: product.id,
-      panel_make: product.name,
-      panel_model: product.size || `${wattage}W PV Module`,
-      panel_wattage: wattage,
-    });
-    setShowProductModal(false);
-    toast.success(`Selected module: ${product.name}`);
+  // Generate Multi-View Snapshots from 3D Scene
+  const handleGenerateViews = async () => {
+    if (!viewer3dRef.current?.generateAllViews) {
+      toast.info("Please switch to 3D View to generate multi-angle design captures.");
+      setActiveTab("3d");
+      return;
+    }
+    setGeneratingViews(true);
+    try {
+      const views = await viewer3dRef.current.generateAllViews();
+      if (views && views.length > 0) {
+        setSavedViews(views);
+        setDesignData((prev) => ({ ...prev, saved_views: views }));
+        toast.success(`Generated ${views.length} engineering views`);
+      }
+    } catch (e) {
+      toast.error("Failed to capture views: " + e.message);
+    } finally {
+      setGeneratingViews(false);
+    }
   };
 
-  // Add Obstacle Submit
-  const handleAddObstacleSubmit = () => {
-    const newObs = {
-      id: `obs-${Date.now()}`,
-      name: newObstacleForm.name || "Obstacle",
-      type: newObstacleForm.type || "water_tank",
-      x: 0,
-      y: 0,
-      length: Number(newObstacleForm.length || 1.8),
-      width: Number(newObstacleForm.width || 1.8),
-      height: Number(newObstacleForm.height || 1.6),
-      rotation: 0,
-    };
-    setDesignData((prev) => ({
-      ...prev,
-      obstacles: [...(prev.obstacles || []), newObs],
-    }));
-    setShowObstacleModal(false);
-    toast.success(`Added ${newObs.name} exclusion zone.`);
-  };
-
-  // Save Design with validation, retry resilience and URL history sync
+  // Save Design with multi-views and validation
   const handleSaveDesign = async (saveAsNewVersion = false) => {
     const lat = Number(designData.latitude);
     const lng = Number(designData.longitude);
@@ -508,8 +535,22 @@ export default function SolarStudio() {
       const snap2d = liveMapRef.current?.getSnapshotDataUrl?.() || designData.layout_snapshot_2d || "";
       const snap3d = viewer3dRef.current?.getSnapshotDataUrl?.() || designData.layout_snapshot_3d || "";
 
+      let currentViews = savedViews;
+      if (viewer3dRef.current?.generateAllViews) {
+        try {
+          const freshViews = await viewer3dRef.current.generateAllViews();
+          if (freshViews && freshViews.length > 0) {
+            currentViews = freshViews;
+            setSavedViews(freshViews);
+          }
+        } catch (e) {
+          console.warn("View auto-capture error:", e);
+        }
+      }
+
       const payload = {
         ...designData,
+        saved_views: currentViews,
         layout_snapshot_2d: snap2d,
         layout_snapshot_3d: snap3d,
         save_as_new_version: saveAsNewVersion,
@@ -524,6 +565,9 @@ export default function SolarStudio() {
 
       if (res.data) {
         setDesignData(res.data);
+        if (res.data.saved_views) {
+          setSavedViews(res.data.saved_views);
+        }
         setLastSavedTime(new Date());
         setSaveError(null);
         if (!designId && res.data.id) {
@@ -540,64 +584,22 @@ export default function SolarStudio() {
     }
   };
 
-  // Lightweight debounced autosave (3s debounce) after meaningful changes
-  const autoSaveTimerRef = useRef(null);
-  const initialLoadDoneRef = useRef(false);
-
-  useEffect(() => {
-    if (!initialLoadDoneRef.current) {
-      initialLoadDoneRef.current = true;
-      return;
-    }
-    if (!designData.id || saving) return;
-
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(async () => {
-      try {
-        const payload = {
-          roof_polygon: designData.roof_polygon,
-          roof_area_sqm: designData.roof_area_sqm,
-          roof_perimeter_m: designData.roof_perimeter_m,
-          roof_dimensions: designData.roof_dimensions,
-          usable_area_sqm: designData.usable_area_sqm,
-          panels: designData.panels,
-          panel_count: designData.panel_count,
-          system_kw: designData.system_kw,
-          obstacles: designData.obstacles,
-          structure: designData.structure,
-          structure_nodes: designData.structure_nodes,
-          structure_members: designData.structure_members,
-          latitude: designData.latitude,
-          longitude: designData.longitude,
-          formatted_address: designData.formatted_address,
-          site_name: designData.site_name,
-        };
-        const res = await api.put(`/solar-designer/designs/${designData.id}`, payload);
-        if (res.data) {
-          setLastSavedTime(new Date());
-          setSaveError(null);
-        }
-      } catch (e) {
-        // Silently preserve in-memory state
+  // Next Stage step forward
+  const handleNextStage = () => {
+    const STAGES = ["location", "roof", "obstacles", "pv_module", "structure", "layout"];
+    const currentIdx = STAGES.indexOf(openSection || "location");
+    if (currentIdx < STAGES.length - 1) {
+      const nextKey = STAGES[currentIdx + 1];
+      setOpenSection(nextKey);
+      if (nextKey === "roof" && (!designData.roof_polygon || designData.roof_polygon.length < 3)) {
+        setActiveTool("draw_roof");
+      } else if (nextKey === "layout" && (!designData.panels || designData.panels.length === 0)) {
+        handleAutoLayout("auto");
       }
-    }, 3000);
-
-    return () => {
-      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    designData.id,
-    designData.roof_polygon,
-    designData.panels,
-    designData.obstacles,
-    designData.structure,
-    designData.structure_nodes,
-    designData.structure_members,
-    designData.latitude,
-    designData.longitude,
-    saving,
-  ]);
+    } else {
+      handleSaveDesign(false);
+    }
+  };
 
   // Export PDF Report
   const handleExportPdf = async () => {
@@ -705,6 +707,43 @@ export default function SolarStudio() {
     });
   };
 
+  // Select Product from Product Master
+  const handleSelectProductFromMaster = (product) => {
+    let wattage = 550;
+    const match = (product.name || "").match(/(\d{3,4})\s*W/i) || (product.size || "").match(/(\d{3,4})\s*W/i);
+    if (match) wattage = parseInt(match[1], 10);
+
+    updateDesignData({
+      panel_product_id: product.id,
+      panel_make: product.name,
+      panel_model: product.size || `${wattage}W PV Module`,
+      panel_wattage: wattage,
+    });
+    setShowProductModal(false);
+    toast.success(`Selected module: ${product.name}`);
+  };
+
+  // Add Obstacle Submit
+  const handleAddObstacleSubmit = () => {
+    const newObs = {
+      id: `obs-${Date.now()}`,
+      name: newObstacleForm.name || "Obstacle",
+      type: newObstacleForm.type || "water_tank",
+      x: 0,
+      y: 0,
+      length: Number(newObstacleForm.length || 1.8),
+      width: Number(newObstacleForm.width || 1.8),
+      height: Number(newObstacleForm.height || 1.6),
+      rotation: 0,
+    };
+    setDesignData((prev) => ({
+      ...prev,
+      obstacles: [...(prev.obstacles || []), newObs],
+    }));
+    setShowObstacleModal(false);
+    toast.success(`Added ${newObs.name} exclusion zone.`);
+  };
+
   if (loadingInitial) {
     return (
       <div className="flex items-center justify-center min-h-[60vh] text-slate-400 text-sm">
@@ -713,83 +752,203 @@ export default function SolarStudio() {
     );
   }
 
-  // Toggle Accordion Section (ensures only 1 section is open at a time)
-  const toggleSection = (sectionName) => {
-    setOpenSection(openSection === sectionName ? null : sectionName);
-  };
+  const panelCount = Number(
+    designData.panel_count ?? (designData.panels || []).filter((p) => !p.hidden).length ?? 0
+  );
+  const panelWattage = Number(designData.panel_wattage || 550);
+  const systemKw = Number(
+    designData.system_kw ?? ((panelCount * panelWattage) / 1000.0).toFixed(2)
+  );
 
   return (
-    <div className={`space-y-2.5 select-none ${isFullscreen ? "fixed inset-0 z-50 bg-slate-950 p-2.5 overflow-hidden flex flex-col h-screen" : "pb-12"}`}>
-      {/* 1. TOP HEADER BAR */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-slate-900 text-white px-3.5 py-2.5 rounded-2xl border border-slate-800 shadow-xl shrink-0">
+    <div className={`-mx-4 lg:-mx-8 -my-4 lg:-my-6 bg-slate-950 text-white min-h-[calc(100vh-65px)] flex flex-col select-none ${
+      isFullscreen ? "fixed inset-0 z-50 p-2 overflow-hidden h-screen" : "p-3 space-y-2.5"
+    }`}>
+      {/* ──────────────────────────────────────────────────────────────────────────
+          1. TOP PROFESSIONAL SOLARIX HEADER
+      ────────────────────────────────────────────────────────────────────────── */}
+      <header className="flex items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 px-4 py-2 rounded-2xl shadow-xl shrink-0">
+        {/* Brand & Identity */}
         <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
+          <button
             onClick={() => nav("/solar-designer")}
-            className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition"
+            title="Back to Solar Designs"
           >
             <ArrowLeft className="w-4 h-4" />
-          </Button>
-
+          </button>
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-xs">
-              <Sun className="w-3.5 h-3.5" />
+            <div className="w-7 h-7 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shadow-sm">
+              <Sun className="w-4 h-4" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-xs text-white tracking-tight" style={{ fontFamily: "Outfit" }}>
-                  SOLARIX 3D SOLAR DESIGNER
+                <span className="font-extrabold text-sm text-white tracking-wider font-sans">SOLARIX</span>
+                <span className="text-[9px] uppercase font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1.5 py-0.2 rounded-full">
+                  PRO
                 </span>
-                <Badge variant="outline" className="text-[9px] bg-blue-900/60 text-blue-300 border-blue-700 font-semibold px-1.5 py-0">
-                  {designData.design_number || `v${designData.version || 1}`}
-                </Badge>
               </div>
-              <div className="text-[10px] text-slate-400 flex items-center gap-1.5 truncate max-w-[340px]">
-                <MapPin className="w-3 h-3 text-red-400 shrink-0" />
-                <span className="truncate">{designData.formatted_address || "Set location on map"}</span>
-              </div>
+              <div className="text-[8.5px] text-slate-400 font-semibold tracking-wider uppercase">GVP SOLAR ENERGY</div>
             </div>
           </div>
         </div>
 
-        {/* Top Actions */}
-        <div className="flex items-center gap-2">
-          {lastSavedTime && (
-            <span className="text-[10px] text-emerald-400 font-medium hidden sm:inline-flex items-center gap-1 bg-emerald-950/60 border border-emerald-800/60 px-2 py-1 rounded-lg">
-              <Check className="w-3 h-3 text-emerald-400" />
-              Saved {dayjs(lastSavedTime).format("hh:mm A")}
-            </span>
+        {/* Search Location Input Pill in Header */}
+        <div className="relative flex-1 max-w-md hidden md:block">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search location, address or coordinates..."
+            className="h-8 pl-8 pr-8 text-xs bg-slate-800/90 border-slate-700 text-white rounded-xl placeholder:text-slate-500 focus:border-blue-500 shadow-inner"
+          />
+          {searching && (
+            <RefreshCw className="w-3 h-3 text-blue-400 animate-spin absolute right-2.5 top-2.5" />
+          )}
+          {searchQuery && !searching && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-2.5 top-2 text-slate-400 hover:text-white"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           )}
 
+          {/* Search Predictions Floating Popover */}
+          {searchPredictions.length > 0 && (
+            <div className="absolute top-10 left-0 right-0 z-50 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-800">
+              {searchPredictions.map((p, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handleSelectPrediction(p)}
+                  className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs transition block"
+                >
+                  <div className="font-semibold text-white truncate">{p.name}</div>
+                  <div className="text-[10px] text-slate-400 truncate">{p.secondary || p.description}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Project Selector & User Information */}
+        <div className="flex items-center gap-3">
+          <div className="hidden lg:flex flex-col text-right">
+            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Project</span>
+            <div className="flex items-center gap-1">
+              <span className="text-xs font-bold text-white truncate max-w-[130px]">
+                {designData.client_name || designData.site_name || "SHUBHAM JADHAV"}
+              </span>
+              <ChevronDown className="w-3 h-3 text-slate-400" />
+            </div>
+          </div>
+
+          <button
+            className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition"
+            title="Help & Shortcuts"
+          >
+            <HelpCircle className="w-4 h-4" />
+          </button>
+          <button
+            className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition relative"
+            title="Notifications"
+          >
+            <Bell className="w-4 h-4" />
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 absolute top-1 right-1" />
+          </button>
+
+          {/* User Badge */}
+          <div className="flex items-center gap-2 bg-slate-800/80 px-2.5 py-1 rounded-xl border border-slate-700">
+            <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-[10px] font-bold text-white">
+              {user?.name ? user.name.slice(0, 2).toUpperCase() : "TS"}
+            </div>
+            <div className="hidden sm:block text-left leading-none">
+              <div className="text-xs font-semibold text-white">{user?.name || "testing shubham"}</div>
+              <div className="text-[9px] text-slate-400">{user?.role || "Super Admin"}</div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* ──────────────────────────────────────────────────────────────────────────
+          2. PRIMARY DESIGN NAVIGATION BAR (ICON-FIRST RAIL) + TOP ACTIONS
+      ────────────────────────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5 bg-slate-900/90 border border-slate-800 px-3.5 py-2 rounded-2xl shadow-lg shrink-0">
+        {/* Horizontal Navigation: 6 Stages */}
+        <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 scrollbar-none">
+          {DESIGN_STAGES.map((stage) => {
+            const Icon = stage.icon;
+            const isActive = openSection === stage.key;
+            return (
+              <button
+                key={stage.key}
+                onClick={() => {
+                  if (isActive) {
+                    setOpenSection(null);
+                  } else {
+                    setOpenSection(stage.key);
+                    if (stage.key === "roof") {
+                      if (!designData.roof_polygon || designData.roof_polygon.length < 3) {
+                        setActiveTool("draw_roof");
+                      }
+                    } else if (stage.key === "layout") {
+                      if (!designData.panels || designData.panels.length === 0) {
+                        handleAutoLayout("auto");
+                      }
+                    }
+                  }
+                }}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl font-bold text-xs transition-all duration-150 shrink-0 cursor-pointer ${
+                  isActive
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-900/50 border border-blue-500"
+                    : "bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700/80 border border-slate-700/70"
+                }`}
+              >
+                <Icon className={`w-3.5 h-3.5 ${isActive ? "text-white" : "text-slate-400"}`} />
+                <span>{stage.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Header Action Buttons */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Saved Status Indicator */}
+          <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-950/80 border border-emerald-700/60 text-emerald-400 text-[11px] font-semibold">
+            <Check className="w-3.5 h-3.5 text-emerald-400" />
+            <span>{lastSavedTime ? `Saved ${dayjs(lastSavedTime).format("hh:mm A")}` : "Saved"}</span>
+          </div>
+
+          {/* View Designs Gallery Button */}
           <Button
             size="sm"
-            onClick={() => setIsFullscreen(!isFullscreen)}
             variant="outline"
-            className="h-7 text-[11px] font-semibold rounded-lg bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 gap-1.5"
+            onClick={() => setShowGalleryModal(true)}
+            className="h-8 text-xs font-semibold bg-slate-800/90 border-slate-700 text-white hover:bg-slate-700 rounded-xl gap-1.5 shadow-sm"
           >
-            {isFullscreen ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
-            <span>{isFullscreen ? "Exit Fullscreen" : "Full Screen"}</span>
+            <ImageIcon className="w-3.5 h-3.5 text-blue-400" />
+            <span>View Designs ({savedViews.length || 4})</span>
           </Button>
 
+          {/* Save Design Button */}
           <Button
             size="sm"
             onClick={() => handleSaveDesign(false)}
             disabled={saving}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[11px] h-7 rounded-lg shadow-xs gap-1.5 px-3"
+            className="h-8 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md gap-1.5 px-3.5"
           >
-            <Save className="w-3 h-3" />
-            <span>{saving ? "Saving..." : "Save"}</span>
+            {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            <span>{saving ? "Saving..." : "Save Design"}</span>
           </Button>
         </div>
       </div>
 
       {/* Save Error Recovery Banner */}
       {saveError && (
-        <div className="bg-red-950/95 border border-red-500 text-red-200 px-3.5 py-2 rounded-xl flex items-center justify-between text-xs animate-in fade-in shadow-lg">
+        <div className="bg-red-950/95 border border-red-500 text-red-200 px-3.5 py-2 rounded-xl flex items-center justify-between text-xs animate-in fade-in shadow-lg shrink-0">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
-            <span>Unable to save design: <b>{saveError}</b>. Your current design is kept safely in memory.</span>
+            <span>Unable to save design: <b>{saveError}</b>. Current design remains safely in memory.</span>
           </div>
           <Button
             size="sm"
@@ -802,533 +961,595 @@ export default function SolarStudio() {
         </div>
       )}
 
-      {/* 2. THREE-COLUMN DESKTOP ENGINEERING WORKSPACE */}
-      <div className={`grid grid-cols-1 lg:grid-cols-12 gap-2 ${isFullscreen ? "flex-1 min-h-0" : ""}`}>
-        {/* LEFT COLUMN: DESIGN TOOLS ACCORDION (2 cols — compact) */}
-        <div className={`lg:col-span-2 space-y-1 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-xs overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[860px]"}`}>
-          {/* SECTION 1: Location & Search */}
-          <div className="rounded-lg border border-slate-200 overflow-hidden">
-            <button
-              onClick={() => toggleSection("location")}
-              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
-            >
-              <div className="flex items-center gap-1.5 min-w-0">
-                <Globe className="w-3 h-3 text-blue-600 shrink-0" />
-                <span className="text-[10.5px] font-bold text-slate-800 truncate">1. Location</span>
-              </div>
-              <div className="flex items-center gap-1 shrink-0 ml-1">
-                {openSection !== "location" && designData.formatted_address && (
-                  <span className="text-[9px] text-slate-500 truncate max-w-[60px] hidden xl:block">
-                    {designData.formatted_address.split(",")[0]}
+      {/* ──────────────────────────────────────────────────────────────────────────
+          3. MAIN WORKSPACE (MAP DOMINANT ~80% + RIGHT INFO PANEL ~20%)
+      ────────────────────────────────────────────────────────────────────────── */}
+      <div className={`grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-2.5 flex-1 min-h-0 ${isFullscreen ? "h-full" : ""}`}>
+        {/* CENTER / DOMINANT WORKSPACE (9 cols on lg/xl = 75–80% width) */}
+        <div className="xl:col-span-9 lg:col-span-9 flex flex-col relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl min-h-[580px] h-full">
+          {/* FLOATING SECTION CONTROL DRAWER (Compact floating card over map) */}
+          {openSection && (
+            <div className="absolute top-14 left-4 z-40 w-80 bg-slate-900/95 backdrop-blur-md rounded-2xl border border-slate-700/80 shadow-2xl p-3.5 text-white space-y-3 animate-in fade-in slide-in-from-left-2 duration-150">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                <div className="flex items-center gap-2">
+                  {openSection === "location" && <MapPin className="w-4 h-4 text-blue-400" />}
+                  {openSection === "roof" && <PenTool className="w-4 h-4 text-emerald-400" />}
+                  {openSection === "obstacles" && <Box className="w-4 h-4 text-red-400" />}
+                  {openSection === "pv_module" && <Grid className="w-4 h-4 text-amber-400" />}
+                  {openSection === "structure" && <Layers2 className="w-4 h-4 text-blue-400" />}
+                  {openSection === "layout" && <Sparkles className="w-4 h-4 text-blue-400" />}
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                    {DESIGN_STAGES.find((s) => s.key === openSection)?.label}
                   </span>
-                )}
-                {openSection === "location" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
+                </div>
+                <button
+                  onClick={() => setOpenSection(null)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
-            </button>
 
-            {openSection === "location" && (
-              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
-                <div className="relative">
-                  <Search className="w-3 h-3 text-slate-400 absolute left-2 top-2" />
-                  <Input
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search city, town, PIN..."
-                    className="h-6 pl-6 pr-2 text-[10.5px]"
-                  />
-                  {searching && <RefreshCw className="w-3 h-3 text-blue-600 animate-spin absolute right-2 top-1.5" />}
-                  {searchPredictions.length > 0 && (
-                    <div className="absolute top-7 left-0 right-0 z-50 bg-white rounded-xl border border-slate-200 shadow-2xl max-h-48 overflow-y-auto divide-y divide-slate-100">
-                      {searchPredictions.map((p, idx) => (
-                        <button key={idx} onClick={() => handleSelectPrediction(p)} className="w-full text-left px-2 py-1.5 hover:bg-blue-50 text-[10.5px] transition block">
-                          <div className="font-bold text-slate-900 truncate">{p.name}</div>
-                          <div className="text-[9.5px] text-slate-500 truncate">{p.secondary || p.description}</div>
-                        </button>
-                      ))}
+              {/* SECTION 1: LOCATION CONTROLS */}
+              {openSection === "location" && (
+                <div className="space-y-2.5 text-xs">
+                  <div className="relative">
+                    <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-2.5" />
+                    <Input
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search city, town, address..."
+                      className="h-7 pl-7 pr-2 text-xs bg-slate-800 border-slate-700 text-white rounded-lg"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleDetectGPS}
+                      disabled={detectingGps}
+                      className="h-7 text-xs font-semibold bg-blue-950/60 border-blue-700/60 text-blue-300 hover:bg-blue-900/80 rounded-lg"
+                    >
+                      <Navigation className="w-3 h-3 mr-1" /> GPS
+                    </Button>
+                    <Select
+                      value={designData.client_id || "none"}
+                      onValueChange={(val) => {
+                        const c = clients.find((item) => item.id === val);
+                        updateDesignData({
+                          client_id: val === "none" ? "" : val,
+                          client_name: c ? c.full_name : "",
+                        });
+                      }}
+                    >
+                      <SelectTrigger className="h-7 text-xs bg-slate-800 border-slate-700 text-white">
+                        <SelectValue placeholder="Client" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                        <SelectItem value="none">-- No Client --</SelectItem>
+                        {clients.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>{c.full_name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 space-y-1 text-[11px]">
+                    <div className="font-bold text-white truncate">{designData.formatted_address || "Ichalkaranji, Maharashtra"}</div>
+                    <div className="text-slate-400 font-mono text-[10px]">
+                      Lat: {Number(designData.latitude).toFixed(5)} · Lng: {Number(designData.longitude).toFixed(5)}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* SECTION 2: ROOF CONTROLS */}
+              {openSection === "roof" && (
+                <div className="space-y-2.5 text-xs">
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      onClick={() => setActiveTool(activeTool === "draw_roof" ? "select" : "draw_roof")}
+                      className={`flex-1 h-7 text-xs font-bold rounded-lg gap-1.5 ${
+                        activeTool === "draw_roof"
+                          ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                          : "bg-emerald-950/70 text-emerald-300 border border-emerald-700/60 hover:bg-emerald-900"
+                      }`}
+                    >
+                      <PenTool className="w-3 h-3" />
+                      {activeTool === "draw_roof" ? "Drawing Boundary..." : "Draw Roof"}
+                    </Button>
+                    {designData.roof_polygon?.length >= 3 && (
+                      <Button
+                        size="sm"
+                        onClick={() => setActiveTool(activeTool === "edit_roof" ? "select" : "edit_roof")}
+                        className={`h-7 text-xs font-bold rounded-lg gap-1.5 ${
+                          activeTool === "edit_roof"
+                            ? "bg-amber-500 text-slate-950"
+                            : "bg-amber-950/60 text-amber-300 border border-amber-700/60 hover:bg-amber-900"
+                        }`}
+                      >
+                        <Edit3 className="w-3 h-3" />
+                        Edit Points
+                      </Button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Roof Type</Label>
+                      <Select
+                        value={designData.roof?.type || "flat"}
+                        onValueChange={(val) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, type: val } }))}
+                      >
+                        <SelectTrigger className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                          <SelectItem value="flat">Flat (0°)</SelectItem>
+                          <SelectItem value="single_slope">Single Slope</SelectItem>
+                          <SelectItem value="gable">Gable</SelectItem>
+                          <SelectItem value="hip">Hip</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Pitch (°)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="45"
+                        value={designData.roof?.pitch_deg ?? 0}
+                        onChange={(e) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, pitch_deg: parseFloat(e.target.value) || 0 } }))}
+                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Bldg Elevation (m)</Label>
+                      <Input
+                        type="number"
+                        step="0.5"
+                        min="1"
+                        max="30"
+                        value={designData.roof?.elevation_m ?? 3.0}
+                        onChange={(e) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, elevation_m: parseFloat(e.target.value) || 3.0 } }))}
+                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Setback (m)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        min="0.1"
+                        max="2.0"
+                        value={designData.roof?.setback_m ?? designData.setback_m ?? 0.5}
+                        onChange={(e) => {
+                          const sb = parseFloat(e.target.value) || 0.5;
+                          setDesignData((prev) => ({ ...prev, setback_m: sb, roof: { ...prev.roof, setback_m: sb } }));
+                        }}
+                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
+                  </div>
+
+                  {designData.roof_polygon?.length >= 3 && (
+                    <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 text-[11px] grid grid-cols-2 gap-1 font-mono">
+                      <div>Area: <span className="text-emerald-400 font-bold">{designData.roof_area_sqm} m²</span></div>
+                      <div>Perimeter: <span className="text-white font-bold">{designData.roof_perimeter_m} m</span></div>
                     </div>
                   )}
                 </div>
+              )}
 
-                <div className="grid grid-cols-2 gap-1">
-                  <Button size="sm" variant="outline" onClick={handleDetectGPS} disabled={detectingGps}
-                    className="h-6 text-[9.5px] font-semibold text-blue-700 bg-blue-50/50 border-blue-200 hover:bg-blue-100 px-1.5">
-                    <Navigation className="w-2.5 h-2.5 mr-0.5" /> GPS
+              {/* SECTION 3: OBSTACLES CONTROLS */}
+              {openSection === "obstacles" && (
+                <div className="space-y-2.5 text-xs">
+                  <Button
+                    size="sm"
+                    onClick={() => setShowObstacleModal(true)}
+                    className="w-full h-7 text-xs font-bold bg-red-950/70 border border-red-700/60 text-red-300 hover:bg-red-900 rounded-lg gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Add Obstruction
                   </Button>
-                  <Select value={designData.client_id || "none"} onValueChange={(val) => { const c = clients.find((item) => item.id === val); updateDesignData({ client_id: val === "none" ? "" : val, client_name: c ? c.full_name : "" }); }}>
-                    <SelectTrigger className="h-6 text-[9.5px]"><SelectValue placeholder="Client" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">-- No Client --</SelectItem>
-                      {clients.map((c) => <SelectItem key={c.id} value={c.id}>{c.full_name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="bg-slate-50 px-2 py-1 rounded-lg border border-slate-100 text-[9.5px] space-y-0.5">
-                  <div className="font-bold text-slate-800 truncate">{designData.formatted_address || "—"}</div>
-                  <div className="text-slate-400">Lat: <b>{Number(designData.latitude).toFixed(4)}</b> · Lng: <b>{Number(designData.longitude).toFixed(4)}</b></div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* SECTION 2: Roof Geometry & Pitch */}
-          <div className="rounded-lg border border-slate-200 overflow-hidden">
-            <button
-              onClick={() => toggleSection("roof")}
-              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
-            >
-              <div className="flex items-center gap-1.5 min-w-0">
-                <PenTool className="w-3 h-3 text-emerald-600 shrink-0" />
-                <span className="text-[10.5px] font-bold text-slate-800 truncate">2. Roof</span>
-              </div>
-              <div className="flex items-center gap-1 shrink-0 ml-1">
-                {openSection !== "roof" && (
-                  <span className="text-[9px] text-slate-500 truncate max-w-[60px] hidden xl:block">
-                    {designData.roof?.type ? designData.roof.type.replace("_", " ") : "Flat"} · {designData.roof?.pitch_deg ?? 0}°
-                  </span>
-                )}
-                {openSection === "roof" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
-              </div>
-            </button>
-
-            {openSection === "roof" && (
-              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
-                <div className="flex items-center gap-1">
-                  <Button size="sm" variant={activeTool === "draw_roof" ? "default" : "outline"}
-                    onClick={() => setActiveTool(activeTool === "draw_roof" ? "select" : "draw_roof")}
-                    className={`flex-1 h-6 text-[10px] font-semibold rounded-lg gap-1 ${
-                      activeTool === "draw_roof" ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "border-emerald-300 text-emerald-700 bg-emerald-50/40 hover:bg-emerald-100"
-                    }`}>
-                    <PenTool className="w-3 h-3" />
-                    {activeTool === "draw_roof" ? "Drawing..." : "Draw Roof"}
-                  </Button>
-                  {designData.roof_polygon?.length >= 3 && (
-                    <Button size="sm" variant={activeTool === "edit_roof" ? "default" : "outline"}
-                      onClick={() => setActiveTool(activeTool === "edit_roof" ? "select" : "edit_roof")}
-                      className={`h-6 text-[10px] font-semibold rounded-lg gap-1 ${
-                        activeTool === "edit_roof" ? "bg-amber-500 text-slate-950 font-bold" : "border-amber-300 text-amber-700 bg-amber-50/40 hover:bg-amber-100"
-                      }`}>
-                      <Edit3 className="w-3 h-3" />
-                      {activeTool === "edit_roof" ? "Editing..." : "Edit Roof"}
-                    </Button>
+                  {designData.obstacles && designData.obstacles.length > 0 ? (
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                      {designData.obstacles.map((obs) => (
+                        <div key={obs.id} className="flex items-center justify-between bg-slate-950/80 px-2.5 py-1.5 rounded-xl border border-slate-800">
+                          <div>
+                            <div className="font-semibold text-white truncate text-[11px]">{obs.name}</div>
+                            <div className="text-[9.5px] text-slate-400">{obs.length}m × {obs.width}m × {obs.height}m</div>
+                          </div>
+                          <button
+                            onClick={() => setDesignData((prev) => ({ ...prev, obstacles: prev.obstacles.filter((o) => o.id !== obs.id) }))}
+                            className="text-red-400 hover:text-red-300 p-1"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-slate-400 italic text-center py-2 bg-slate-950/50 rounded-xl border border-slate-800/60">
+                      No rooftop obstructions added
+                    </div>
                   )}
                 </div>
+              )}
 
-                <div className="grid grid-cols-2 gap-1">
-                  <div>
-                    <Label className="text-[9px] font-semibold text-slate-500">Type</Label>
-                    <Select value={designData.roof?.type || "flat"} onValueChange={(val) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, type: val } }))}>
-                      <SelectTrigger className="h-6 text-[9.5px] mt-0.5"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="flat">Flat (0°)</SelectItem>
-                        <SelectItem value="single_slope">Single Slope</SelectItem>
-                        <SelectItem value="gable">Gable</SelectItem>
-                        <SelectItem value="hip">Hip</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label className="text-[9px] font-semibold text-slate-500">Pitch (°)</Label>
-                    <Input type="number" min="0" max="45" value={designData.roof?.pitch_deg ?? 0}
-                      onChange={(e) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, pitch_deg: parseFloat(e.target.value) || 0 } }))}
-                      className="h-6 text-[10px] font-bold mt-0.5" />
-                  </div>
-                </div>
+              {/* SECTION 4: PV MODULE CONTROLS */}
+              {openSection === "pv_module" && (
+                <div className="space-y-2.5 text-xs">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setShowProductModal(true)}
+                    className="w-full h-7 text-xs font-semibold justify-between bg-slate-800 border-slate-700 text-white hover:bg-slate-700 rounded-lg"
+                  >
+                    <span className="truncate">{designData.panel_wattage}W · {designData.panel_make || "Select Module"}</span>
+                    <ChevronDown className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                  </Button>
 
-                <div className="grid grid-cols-2 gap-1">
-                  <div>
-                    <Label className="text-[9px] font-semibold text-slate-500">Bldg Ht (m)</Label>
-                    <Input type="number" step="0.5" min="1" max="30" value={designData.roof?.elevation_m ?? 3.0}
-                      onChange={(e) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, elevation_m: parseFloat(e.target.value) || 3.0 } }))}
-                      className="h-6 text-[10px] font-bold mt-0.5" />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Orientation</Label>
+                      <Select
+                        value={designData.orientation || "portrait"}
+                        onValueChange={(val) => updateDesignData({ orientation: val })}
+                      >
+                        <SelectTrigger className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                          <SelectItem value="portrait">Portrait</SelectItem>
+                          <SelectItem value="landscape">Landscape</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Wattage (Wp)</Label>
+                      <Input
+                        type="number"
+                        value={designData.panel_wattage}
+                        onChange={(e) => updateDesignData({ panel_wattage: parseFloat(e.target.value) || 550 })}
+                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <Label className="text-[9px] font-semibold text-slate-500">Setback (m)</Label>
-                    <Input type="number" step="0.1" min="0.1" max="2.0" value={designData.roof?.setback_m ?? designData.setback_m ?? 0.5}
-                      onChange={(e) => { const sb = parseFloat(e.target.value) || 0.5; setDesignData((prev) => ({ ...prev, setback_m: sb, roof: { ...prev.roof, setback_m: sb } })); }}
-                      className="h-6 text-[10px] font-bold mt-0.5" />
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
 
-          {/* SECTION 3: Obstacles & Exclusions */}
-          <div className="rounded-lg border border-slate-200 overflow-hidden">
-            <button
-              onClick={() => toggleSection("obstacles")}
-              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
-            >
-              <div className="flex items-center gap-1.5 min-w-0">
-                <Box className="w-3 h-3 text-red-500 shrink-0" />
-                <span className="text-[10.5px] font-bold text-slate-800 truncate">3. Obstacles</span>
-              </div>
-              <div className="flex items-center gap-1 shrink-0 ml-1">
-                <span className="text-[9px] font-bold text-slate-500">{designData.obstacles?.length || 0}</span>
-                {openSection === "obstacles" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
-              </div>
-            </button>
-
-            {openSection === "obstacles" && (
-              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
-                <Button size="sm" variant="outline" onClick={() => setShowObstacleModal(true)}
-                  className="w-full h-6 text-[10px] font-bold text-red-600 border-red-200 bg-red-50/40 hover:bg-red-100">
-                  <Plus className="w-3 h-3 mr-0.5" /> Add Obstacle
-                </Button>
-                {designData.obstacles && designData.obstacles.length > 0 ? (
-                  <div className="space-y-1 max-h-24 overflow-y-auto">
-                    {designData.obstacles.map((obs) => (
-                      <div key={obs.id} className="flex items-center justify-between bg-red-50/70 px-1.5 py-1 rounded-lg border border-red-100">
-                        <span className="text-[9.5px] font-semibold text-red-900 truncate">{obs.name}</span>
-                        <button onClick={() => setDesignData((prev) => ({ ...prev, obstacles: prev.obstacles.filter((o) => o.id !== obs.id) }))} className="text-red-400 hover:text-red-700 ml-1">
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-[9.5px] text-slate-400 italic text-center py-1">No obstacles added</div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* SECTION 4: PV Module Specification */}
-          <div className="rounded-lg border border-slate-200 overflow-hidden">
-            <button
-              onClick={() => toggleSection("pv_module")}
-              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
-            >
-              <div className="flex items-center gap-1.5 min-w-0">
-                <Sun className="w-3 h-3 text-amber-500 shrink-0" />
-                <span className="text-[10.5px] font-bold text-slate-800 truncate">4. PV Module</span>
-              </div>
-              <div className="flex items-center gap-1 shrink-0 ml-1">
-                <span className="text-[9px] font-bold text-amber-600">{designData.panel_wattage}W</span>
-                {openSection === "pv_module" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
-              </div>
-            </button>
-
-            {openSection === "pv_module" && (
-              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
-                <Button size="sm" variant="outline" onClick={() => setShowProductModal(true)}
-                  className="w-full h-6 text-[9.5px] font-semibold justify-between border-blue-200 bg-blue-50/40 text-blue-800 hover:bg-blue-100 rounded-lg">
-                  <span className="truncate">{designData.panel_wattage}W · {designData.panel_make || "Select Module"}</span>
-                  <ChevronDown className="w-3 h-3 shrink-0" />
-                </Button>
-                <div className="grid grid-cols-2 gap-1">
-                  <div>
-                    <Label className="text-[9px] font-semibold text-slate-500">Orientation</Label>
-                    <Select value={designData.orientation || "portrait"} onValueChange={(val) => updateDesignData({ orientation: val })}>
-                      <SelectTrigger className="h-6 text-[9.5px] mt-0.5"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="portrait">Portrait</SelectItem>
-                        <SelectItem value="landscape">Landscape</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label className="text-[9px] font-semibold text-slate-500">Wattage (Wp)</Label>
-                    <Input type="number" value={designData.panel_wattage}
-                      onChange={(e) => updateDesignData({ panel_wattage: parseFloat(e.target.value) || 550 })}
-                      className="h-6 text-[10px] font-bold mt-0.5" />
+                  <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 text-[10px] text-slate-400 space-y-0.5 font-mono">
+                    <div>Dimensions: {designData.panel_dimensions?.length_m || 2.278}m × {designData.panel_dimensions?.width_m || 1.134}m</div>
+                    <div>Weight: {designData.panel_dimensions?.weight_kg || 28.5} kg</div>
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
 
-          {/* SECTION 5: Mounting Structure & Tilt */}
-          <div className="rounded-lg border border-slate-200 overflow-hidden">
-            <button
-              onClick={() => toggleSection("structure")}
-              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
-            >
-              <div className="flex items-center gap-1.5 min-w-0">
-                <Layers className="w-3 h-3 text-blue-600 shrink-0" />
-                <span className="text-[10.5px] font-bold text-slate-800 truncate">5. Mounting</span>
-              </div>
-              <div className="flex items-center gap-1 shrink-0 ml-1">
-                {openSection !== "structure" && (
-                  <span className="text-[9px] text-slate-500 truncate max-w-[55px] hidden xl:block">
-                    {(designData.structure?.type || "elevated").charAt(0).toUpperCase() + (designData.structure?.type || "elevated").slice(1)} · {designData.structure?.tilt_deg ?? 15}°
-                  </span>
-                )}
-                {openSection === "structure" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
-              </div>
-            </button>
+              {/* SECTION 5: MOUNTING STRUCTURE CONTROLS */}
+              {openSection === "structure" && (
+                <div className="space-y-2.5 text-xs">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Structure Type</Label>
+                      <Select
+                        value={designData.structure?.type || designData.structure_type || "elevated"}
+                        onValueChange={(val) => {
+                          const isFlush = val === "flush";
+                          setDesignData((prev) => ({
+                            ...prev,
+                            structure_type: val,
+                            mounting_height_m: isFlush ? 0.12 : prev.mounting_height_m || 1.8,
+                            structure: {
+                              ...prev.structure,
+                              type: val,
+                              height_m: isFlush ? 0.12 : prev.structure?.height_m || 1.8,
+                            },
+                          }));
+                        }}
+                      >
+                        <SelectTrigger className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                          <SelectItem value="elevated">Elevated</SelectItem>
+                          <SelectItem value="flush">Flush</SelectItem>
+                          <SelectItem value="fixed_tilt">Fixed Tilt</SelectItem>
+                          <SelectItem value="ballasted">Ballasted</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Tilt Angle (°)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        max="45"
+                        value={designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15}
+                        onChange={(e) => {
+                          const t = parseFloat(e.target.value) || 15;
+                          setDesignData((prev) => ({ ...prev, tilt_angle: t, structure: { ...prev.structure, tilt_deg: t } }));
+                        }}
+                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
+                  </div>
 
-            {openSection === "structure" && (
-              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
-                <div className="grid grid-cols-2 gap-1">
-                  <div>
-                    <Label className="text-[9px] font-semibold text-slate-500">Type</Label>
-                    <Select
-                      value={designData.structure?.type || designData.structure_type || "elevated"}
-                      onValueChange={(val) => {
-                        const isFlush = val === "flush";
-                        setDesignData((prev) => ({ ...prev, structure_type: val, mounting_height_m: isFlush ? 0.12 : prev.mounting_height_m || 1.8, structure: { ...prev.structure, type: val, height_m: isFlush ? 0.12 : prev.structure?.height_m || 1.8 } }));
-                      }}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Orientation (Azimuth)</Label>
+                      <Select
+                        value={String(designData.azimuth_angle ?? 180)}
+                        onValueChange={(val) => {
+                          const az = parseFloat(val) || 180;
+                          setDesignData((prev) => ({
+                            ...prev,
+                            azimuth_angle: az,
+                            structure: { ...prev.structure, azimuth: az },
+                            panels: (prev.panels || []).map((p) => ({ ...p, azimuth: az })),
+                          }));
+                        }}
+                      >
+                        <SelectTrigger className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                          <SelectItem value="180">South 180°</SelectItem>
+                          <SelectItem value="135">SE 135°</SelectItem>
+                          <SelectItem value="225">SW 225°</SelectItem>
+                          <SelectItem value="90">East 90°</SelectItem>
+                          <SelectItem value="270">West 270°</SelectItem>
+                          <SelectItem value="0">North 0°</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Clearance (m)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        min="0.1"
+                        max="6.0"
+                        value={designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8}
+                        onChange={(e) => {
+                          const h = parseFloat(e.target.value) || 1.8;
+                          setDesignData((prev) => ({ ...prev, mounting_height_m: h, structure: { ...prev.structure, height_m: h } }));
+                        }}
+                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* SECTION 6: LAYOUT CONTROLS */}
+              {openSection === "layout" && (
+                <div className="space-y-2.5 text-xs">
+                  <Button
+                    size="sm"
+                    onClick={() => handleAutoLayout("auto")}
+                    className="w-full h-7 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg shadow-sm gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" /> Auto Layout Panels
+                  </Button>
+
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Button
+                      size="sm"
+                      onClick={() => setActiveTool(activeTool === "add_panel" ? "select" : "add_panel")}
+                      className={`h-7 text-xs font-semibold rounded-lg ${
+                        activeTool === "add_panel"
+                          ? "bg-amber-600 hover:bg-amber-700 text-white"
+                          : "bg-amber-950/60 border border-amber-700/60 text-amber-300 hover:bg-amber-900"
+                      }`}
                     >
-                      <SelectTrigger className="h-6 text-[9.5px] mt-0.5"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="elevated">Elevated</SelectItem>
-                        <SelectItem value="flush">Flush</SelectItem>
-                        <SelectItem value="fixed_tilt">Fixed Tilt</SelectItem>
-                        <SelectItem value="ballasted">Ballasted</SelectItem>
-                      </SelectContent>
-                    </Select>
+                      <PlusCircle className="w-3 h-3 mr-1" /> + Add Panel
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setDesignData((prev) => ({ ...prev, panels: [], panel_count: 0, system_kw: 0, coverage_pct: 0 }));
+                        toast.success("Panel layout cleared");
+                      }}
+                      className="h-7 text-xs text-slate-300 hover:text-red-400 border-slate-700 bg-slate-800 hover:bg-slate-700 rounded-lg"
+                    >
+                      <Undo2 className="w-3 h-3 mr-1" /> Reset
+                    </Button>
                   </div>
-                  <div>
-                    <Label className="text-[9px] font-semibold text-slate-500">Tilt (°)</Label>
-                    <Input type="number" min="0" max="45"
-                      value={designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15}
-                      onChange={(e) => { const t = parseFloat(e.target.value) || 15; setDesignData((prev) => ({ ...prev, tilt_angle: t, structure: { ...prev.structure, tilt_deg: t } })); }}
-                      className="h-6 text-[10px] font-bold mt-0.5" />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-1">
-                  <div>
-                    <Label className="text-[9px] font-semibold text-slate-500">Azimuth</Label>
-                    <Select value={String(designData.azimuth_angle ?? 180)}
-                      onValueChange={(val) => { const az = parseFloat(val) || 180; setDesignData((prev) => ({ ...prev, azimuth_angle: az, structure: { ...prev.structure, azimuth: az }, panels: (prev.panels || []).map((p) => ({ ...p, azimuth: az })) })); }}>
-                      <SelectTrigger className="h-6 text-[9.5px] mt-0.5"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="180">South 180°</SelectItem>
-                        <SelectItem value="135">SE 135°</SelectItem>
-                        <SelectItem value="225">SW 225°</SelectItem>
-                        <SelectItem value="90">East 90°</SelectItem>
-                        <SelectItem value="270">West 270°</SelectItem>
-                        <SelectItem value="0">North 0°</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label className="text-[9px] font-semibold text-slate-500">Clearance (m)</Label>
-                    <Input type="number" step="0.1" min="0.1" max="6.0"
-                      value={designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8}
-                      onChange={(e) => { const h = parseFloat(e.target.value) || 1.8; setDesignData((prev) => ({ ...prev, mounting_height_m: h, structure: { ...prev.structure, height_m: h } })); }}
-                      className="h-6 text-[10px] font-bold mt-0.5" />
+
+                  <div className="flex items-center justify-between bg-slate-950/80 px-2.5 py-1.5 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 font-semibold text-xs">Panel Count:</span>
+                    <div className="flex items-center gap-1.5">
+                      <Button size="sm" variant="outline" onClick={handleDecreasePanelCount} className="h-6 w-6 p-0 font-bold text-xs bg-slate-800 border-slate-700 text-white">−</Button>
+                      <span className="font-bold text-white text-xs w-8 text-center">{panelCount}</span>
+                      <Button size="sm" variant="outline" onClick={handleIncreasePanelCount} className="h-6 w-6 p-0 font-bold text-xs bg-slate-800 border-slate-700 text-white">+</Button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
+          )}
+
+          {/* 2D SATELLITE MAP CONTAINER (Kept mounted to preserve state & prevent re-init lag) */}
+          <div className={`w-full h-full relative ${activeTab === "2d" ? "block" : "hidden"}`}>
+            <LiveSatelliteMap
+              ref={liveMapRef}
+              latitude={Number(designData.latitude) || 16.69512}
+              longitude={Number(designData.longitude) || 74.46107}
+              zoom={designData.zoom || 19}
+              formattedAddress={designData.formatted_address}
+              searchQuery={searchQuery}
+              setSearchQuery={setSearchQuery}
+              searchPredictions={searchPredictions}
+              onSelectPrediction={handleSelectPrediction}
+              searching={searching}
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+              isFullscreen={isFullscreen}
+              setIsFullscreen={setIsFullscreen}
+              onLocationChange={(coords) => updateDesignData(coords)}
+              onCaptureLocation={handleCaptureLocation}
+              roofPolygon={designData.roof_polygon}
+              setRoofPolygon={handleSetRoofPolygon}
+              panels={designData.panels}
+              setPanels={(panelsOrFn) => {
+                const newPanels = typeof panelsOrFn === "function" ? panelsOrFn(designData.panels) : panelsOrFn;
+                const pCount = newPanels.filter((p) => !p.hidden).length;
+                const pWatt = Number(designData.panel_wattage || 550);
+                const totalKw = (pCount * pWatt) / 1000.0;
+                const singleArea = (designData.panel_dimensions?.width_m || 1.134) * (designData.panel_dimensions?.length_m || 2.278);
+                const coveragePct = designData.usable_area_sqm > 0 ? ((pCount * singleArea) / designData.usable_area_sqm) * 100 : 0;
+                setDesignData((prev) => ({
+                  ...prev,
+                  panels: newPanels,
+                  panel_count: pCount,
+                  system_kw: Math.round(totalKw * 100) / 100,
+                  coverage_pct: Math.min(100, Math.round(coveragePct * 10) / 10),
+                }));
+              }}
+              obstacles={designData.obstacles}
+              setObstacles={(obsOrFn) => {
+                const newObs = typeof obsOrFn === "function" ? obsOrFn(designData.obstacles) : obsOrFn;
+                setDesignData((prev) => ({ ...prev, obstacles: newObs }));
+              }}
+              walkways={designData.walkways}
+              setWalkways={(walksOrFn) => {
+                const newWalks = typeof walksOrFn === "function" ? walksOrFn(designData.walkways) : walksOrFn;
+                setDesignData((prev) => ({ ...prev, walkways: newWalks }));
+              }}
+              setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
+              activeTool={activeTool}
+              setActiveTool={setActiveTool}
+              selectedPanelId={selectedPanelId}
+              setSelectedPanelId={setSelectedPanelId}
+              orientation={designData.orientation}
+              azimuthDegrees={Number(designData.azimuth_angle || 180)}
+              panelSpecs={{
+                length_m: designData.panel_dimensions?.length_m || 2.278,
+                width_m: designData.panel_dimensions?.width_m || 1.134,
+                wattage: designData.panel_wattage || 550,
+              }}
+              isCalibrated={isCalibrated}
+              onCalibrationComplete={() => setIsCalibrated(true)}
+            />
           </div>
 
-          {/* SECTION 6: Panel Layout Controls */}
-          <div className="rounded-lg border border-slate-200 overflow-hidden">
-            <button
-              onClick={() => toggleSection("layout")}
-              className="w-full flex items-center justify-between px-2 py-1.5 bg-slate-50 hover:bg-slate-100 transition"
-            >
-              <div className="flex items-center gap-1.5 min-w-0">
-                <Sparkles className="w-3 h-3 text-blue-600 shrink-0" />
-                <span className="text-[10.5px] font-bold text-slate-800 truncate">6. Layout</span>
-              </div>
-              <div className="flex items-center gap-1 shrink-0 ml-1">
-                <span className="text-[9px] font-bold text-blue-600">{designData.panels.filter((p) => !p.hidden).length} pcs</span>
-                {openSection === "layout" ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
-              </div>
-            </button>
-
-            {openSection === "layout" && (
-              <div className="p-2 space-y-1.5 bg-white border-t border-slate-100 text-xs">
-                <Button size="sm" onClick={() => handleAutoLayout("auto")}
-                  className="w-full h-7 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10.5px] rounded-lg shadow-xs gap-1">
-                  <Sparkles className="w-3 h-3" /> Auto Layout Panels
-                </Button>
-                <div className="grid grid-cols-2 gap-1">
-                  <Button size="sm" variant={activeTool === "add_panel" ? "default" : "outline"}
-                    onClick={() => setActiveTool(activeTool === "add_panel" ? "select" : "add_panel")}
-                    className={`h-6 text-[9.5px] font-semibold rounded-lg ${
-                      activeTool === "add_panel" ? "bg-amber-600 hover:bg-amber-700 text-white" : "border-amber-300 text-amber-700 bg-amber-50/50"
-                    }`}>
-                    <PlusCircle className="w-2.5 h-2.5 mr-0.5" /> + Panel
-                  </Button>
-                  <Button size="sm" variant="outline"
-                    onClick={() => { setDesignData((prev) => ({ ...prev, panels: [], panel_count: 0, system_kw: 0, coverage_pct: 0 })); toast.success("Reset panel layout"); }}
-                    className="h-6 text-[9.5px] text-slate-600 hover:text-red-600 border-slate-200 rounded-lg">
-                    <Undo2 className="w-2.5 h-2.5 mr-0.5" /> Reset
-                  </Button>
-                </div>
-                <div className="flex items-center justify-between bg-slate-50 px-2 py-1 rounded-lg border border-slate-200">
-                  <span className="text-[9.5px] text-slate-600 font-semibold">Count:</span>
-                  <div className="flex items-center gap-1">
-                    <Button size="sm" variant="outline" onClick={handleDecreasePanelCount} className="h-5 w-6 p-0 font-bold text-xs">−</Button>
-                    <span className="font-bold text-slate-900 text-[10.5px] w-6 text-center">{designData.panels.filter((p) => !p.hidden).length}</span>
-                    <Button size="sm" variant="outline" onClick={handleIncreasePanelCount} className="h-5 w-6 p-0 font-bold text-xs">+</Button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* CENTER COLUMN: DOMINANT LIVE WORKSPACE (8 cols — wider map) */}
-        <div className={`lg:col-span-8 flex flex-col space-y-2 ${isFullscreen ? "flex-1 min-h-0" : "h-[740px]"}`}>
-          {/* Mode Switcher Toolbar — Prominent segmented control */}
-          <div className="flex items-center justify-between bg-slate-900 p-1.5 rounded-2xl border border-slate-800 shadow-md shrink-0">
-            {/* Primary 2D / 3D segmented control */}
-            <div className="flex items-center bg-slate-800 rounded-xl p-0.5 gap-0.5">
+          {/* 3D VIEWER CONTAINER (Kept mounted for zero-lag switching) */}
+          <div className={`w-full h-full relative ${activeTab === "3d" ? "block" : "hidden"}`}>
+            {/* Top 3D View Presets Toolbar */}
+            <div className="absolute top-4 left-4 z-20 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md p-1 rounded-xl border border-slate-800 shadow-xl">
               <button
                 onClick={() => setActiveTab("2d")}
-                className={`h-8 px-4 text-xs font-bold rounded-lg transition-all ${
-                  activeTab === "2d"
-                    ? "bg-blue-600 text-white shadow-sm"
-                    : "text-slate-400 hover:text-slate-200"
-                }`}
+                className="px-3 py-1 text-xs font-bold rounded-lg text-slate-400 hover:text-white transition"
               >
-                📍 2D PLAN
+                ← Back to 2D
+              </button>
+              <div className="w-[1px] h-4 bg-slate-800 mx-1" />
+              <button
+                onClick={() => viewer3dRef.current?.applyViewPreset?.("top")}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition"
+              >
+                Top View
               </button>
               <button
-                onClick={() => setActiveTab("3d")}
-                className={`h-8 px-4 text-xs font-bold rounded-lg transition-all ${
-                  activeTab === "3d"
-                    ? "bg-blue-600 text-white shadow-sm"
-                    : "text-slate-400 hover:text-slate-200"
-                }`}
+                onClick={() => viewer3dRef.current?.applyViewPreset?.("isometric")}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition"
               >
-                🧊 3D VIEW
+                3D View
               </button>
               <button
-                onClick={() => setActiveTab("split")}
-                className={`h-8 px-3 text-xs font-bold rounded-lg transition-all hidden xl:block ${
-                  activeTab === "split"
-                    ? "bg-blue-600 text-white shadow-sm"
-                    : "text-slate-400 hover:text-slate-200"
-                }`}
+                onClick={() => viewer3dRef.current?.applyViewPreset?.("front")}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition"
               >
-                ⊞ SPLIT
+                Front View
+              </button>
+              <button
+                onClick={() => viewer3dRef.current?.applyViewPreset?.("left")}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition"
+              >
+                Left View
+              </button>
+              <button
+                onClick={() => viewer3dRef.current?.applyViewPreset?.("right")}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition"
+              >
+                Right View
               </button>
             </div>
 
-            <div className="text-[11px] text-slate-400 pr-2 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Real-Time Sync</span>
-            </div>
+            <Rooftop3DViewer
+              ref={viewer3dRef}
+              roofPolygon={designData.roof_polygon}
+              roof={designData.roof}
+              panels={designData.panels}
+              obstacles={designData.obstacles}
+              walkways={designData.walkways}
+              structure={{
+                ...designData.structure,
+                azimuth: Number(designData.azimuth_angle || 180),
+                tilt_deg: Number(designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15),
+                height_m: Number(designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8),
+              }}
+              panelSpecs={{
+                length_m: designData.panel_dimensions?.length_m || 2.278,
+                width_m: designData.panel_dimensions?.width_m || 1.134,
+                wattage: designData.panel_wattage || 550,
+              }}
+              structureNodes={designData.structure_nodes || []}
+              structureMembers={designData.structure_members || []}
+              onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
+              onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
+            />
           </div>
 
-          {/* Central Visual Canvas Area */}
-          <div className="flex-1 min-h-0 relative rounded-2xl overflow-hidden shadow-2xl border border-slate-800">
-            {activeTab === "2d" && (
+          {/* SPLIT SCREEN CONTAINER */}
+          {activeTab === "split" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 w-full h-full gap-2 bg-slate-950">
               <LiveSatelliteMap
                 ref={liveMapRef}
-                latitude={Number(designData.latitude) || 19.076}
-                longitude={Number(designData.longitude) || 72.8777}
-                zoom={designData.zoom || 19}
-                onLocationChange={(coords) => updateDesignData(coords)}
-                onCaptureLocation={handleCaptureLocation}
+                latitude={Number(designData.latitude) || 16.69512}
+                longitude={Number(designData.longitude) || 74.46107}
                 roofPolygon={designData.roof_polygon}
                 setRoofPolygon={handleSetRoofPolygon}
                 panels={designData.panels}
-                setPanels={(panelsOrFn) => {
-                  const newPanels = typeof panelsOrFn === "function" ? panelsOrFn(designData.panels) : panelsOrFn;
-                  const pCount = newPanels.filter((p) => !p.hidden).length;
-                  const pWatt = Number(designData.panel_wattage || 550);
-                  const totalKw = (pCount * pWatt) / 1000.0;
-                  const singleArea = (designData.panel_dimensions?.width_m || 1.134) * (designData.panel_dimensions?.length_m || 2.278);
-                  const coveragePct = designData.usable_area_sqm > 0 ? ((pCount * singleArea) / designData.usable_area_sqm) * 100 : 0;
-                  setDesignData((prev) => ({
-                    ...prev,
-                    panels: newPanels,
-                    panel_count: pCount,
-                    system_kw: Math.round(totalKw * 100) / 100,
-                    coverage_pct: Math.min(100, Math.round(coveragePct * 10) / 10),
-                  }));
-                }}
                 obstacles={designData.obstacles}
-                setObstacles={(obsOrFn) => {
-                  const newObs = typeof obsOrFn === "function" ? obsOrFn(designData.obstacles) : obsOrFn;
-                  setDesignData((prev) => ({ ...prev, obstacles: newObs }));
-                }}
-                walkways={designData.walkways}
-                setWalkways={(walksOrFn) => {
-                  const newWalks = typeof walksOrFn === "function" ? walksOrFn(designData.walkways) : walksOrFn;
-                  setDesignData((prev) => ({ ...prev, walkways: newWalks }));
-                }}
                 setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
                 activeTool={activeTool}
                 setActiveTool={setActiveTool}
-                selectedPanelId={selectedPanelId}
-                setSelectedPanelId={setSelectedPanelId}
-                orientation={designData.orientation}
-                azimuthDegrees={Number(designData.azimuth_angle || 180)}
-                panelSpecs={{
-                  length_m: designData.panel_dimensions?.length_m || 2.278,
-                  width_m: designData.panel_dimensions?.width_m || 1.134,
-                  wattage: designData.panel_wattage || 550,
-                }}
                 isCalibrated={isCalibrated}
-                onCalibrationComplete={() => setIsCalibrated(true)}
+                onCaptureLocation={handleCaptureLocation}
               />
-            )}
-
-            {activeTab === "3d" && (
               <Rooftop3DViewer
                 ref={viewer3dRef}
                 roofPolygon={designData.roof_polygon}
                 roof={designData.roof}
                 panels={designData.panels}
                 obstacles={designData.obstacles}
-                walkways={designData.walkways}
                 structure={{
                   ...designData.structure,
                   azimuth: Number(designData.azimuth_angle || 180),
-                  tilt_deg: Number(designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15),
-                  height_m: Number(designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8),
-                }}
-                panelSpecs={{
-                  length_m: designData.panel_dimensions?.length_m || 2.278,
-                  width_m: designData.panel_dimensions?.width_m || 1.134,
-                  wattage: designData.panel_wattage || 550,
                 }}
                 structureNodes={designData.structure_nodes || []}
                 structureMembers={designData.structure_members || []}
                 onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
                 onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
               />
-            )}
-
-            {activeTab === "split" && (
-              <div className="grid grid-cols-1 md:grid-cols-2 h-full gap-2 bg-slate-950">
-                <LiveSatelliteMap
-                  ref={liveMapRef}
-                  latitude={Number(designData.latitude) || 19.076}
-                  longitude={Number(designData.longitude) || 72.8777}
-                  roofPolygon={designData.roof_polygon}
-                  setRoofPolygon={handleSetRoofPolygon}
-                  panels={designData.panels}
-                  obstacles={designData.obstacles}
-                  setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
-                  activeTool={activeTool}
-                  setActiveTool={setActiveTool}
-                  isCalibrated={isCalibrated}
-                  onCaptureLocation={handleCaptureLocation}
-                />
-                <Rooftop3DViewer
-                  ref={viewer3dRef}
-                  roofPolygon={designData.roof_polygon}
-                  roof={designData.roof}
-                  panels={designData.panels}
-                  obstacles={designData.obstacles}
-                  structure={{
-                    ...designData.structure,
-                    azimuth: Number(designData.azimuth_angle || 180),
-                  }}
-                  structureNodes={designData.structure_nodes || []}
-                  structureMembers={designData.structure_members || []}
-                  onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
-                  onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
-                />
-              </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
-        {/* RIGHT COLUMN: LIVE DATA & DESIGN SUMMARY (2 cols) */}
-        <div className={`lg:col-span-2 overflow-y-auto ${isFullscreen ? "max-h-full" : "max-h-[860px]"}`}>
+        {/* RIGHT COLUMN: COMPACT DESIGN INFORMATION & GALLERY (3 cols = 20–25% width) */}
+        <div className="xl:col-span-3 lg:col-span-3 overflow-y-auto space-y-2.5">
           <DesignSummaryPanel
             designData={designData}
+            savedViews={savedViews}
+            onSelectView={(view) => {
+              setActiveGalleryView(view);
+              setShowGalleryModal(true);
+            }}
+            onOpenGallery={() => setShowGalleryModal(true)}
+            onGenerateViews={handleGenerateViews}
             onSave={() => handleSaveDesign(false)}
             onSaveNewVersion={() => handleSaveDesign(true)}
             onExportPdf={handleExportPdf}
@@ -1341,95 +1562,319 @@ export default function SolarStudio() {
         </div>
       </div>
 
-      {/* Location Change Confirmation Dialog */}
-      <Dialog open={showLocationChangeConfirm} onOpenChange={setShowLocationChangeConfirm}>
-        <DialogContent className="max-w-md">
+      {/* ──────────────────────────────────────────────────────────────────────────
+          4. BOTTOM SUMMARY BAR (MATCHES REFERENCE WITH KEY METRICS + NEXT ACTION)
+      ────────────────────────────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900/95 border border-slate-800 px-4 py-2.5 rounded-2xl shadow-xl shrink-0">
+        <div className="flex flex-wrap items-center gap-6 text-xs">
+          {/* Selected Location Pill */}
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400">
+              <MapPin className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-bold text-slate-400 flex items-center gap-1">
+                <span>Selected Location</span>
+                <Edit2
+                  className="w-3 h-3 text-slate-500 hover:text-white cursor-pointer"
+                  onClick={() => setOpenSection("location")}
+                />
+              </div>
+              <div className="font-bold text-white text-xs truncate max-w-[200px]">
+                {designData.formatted_address || "Ichalkaranji, Maharashtra, India"}
+              </div>
+              <div className="text-[9.5px] font-mono text-slate-400">
+                {Number(designData.latitude).toFixed(5)}, {Number(designData.longitude).toFixed(5)}
+              </div>
+            </div>
+          </div>
+
+          <div className="h-8 w-[1px] bg-slate-800 hidden sm:block" />
+
+          {/* Roof Area Metric */}
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-400">
+              <PenTool className="w-3.5 h-3.5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-semibold text-slate-400">Roof Area</div>
+              <div className="text-sm font-extrabold text-white">{designData.roof_area_sqm || 314.8} m²</div>
+            </div>
+          </div>
+
+          {/* Usable Area Metric */}
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-400">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-semibold text-slate-400">Usable Area</div>
+              <div className="text-sm font-extrabold text-white">{designData.usable_area_sqm || 272.6} m²</div>
+            </div>
+          </div>
+
+          {/* Panels Count Metric */}
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400">
+              <Grid className="w-3.5 h-3.5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-semibold text-slate-400">Panels</div>
+              <div className="text-sm font-extrabold text-white">{panelCount}</div>
+            </div>
+          </div>
+
+          {/* System Capacity Metric */}
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-amber-500/10 flex items-center justify-center text-amber-400">
+              <Zap className="w-3.5 h-3.5" />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase font-semibold text-slate-400">Capacity</div>
+              <div className="text-sm font-extrabold text-white">{systemKw} kWp</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Action: Next Stage Step Button */}
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+          <Button
+            size="sm"
+            onClick={handleNextStage}
+            className="h-9 px-5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-lg gap-2"
+          >
+            <span>
+              {openSection === "location"
+                ? "Next: Roof →"
+                : openSection === "roof"
+                ? "Next: Obstacles →"
+                : openSection === "obstacles"
+                ? "Next: PV Module →"
+                : openSection === "pv_module"
+                ? "Next: Mounting →"
+                : openSection === "structure"
+                ? "Next: Layout →"
+                : "Save & Finalize ✓"}
+            </span>
+          </Button>
+        </div>
+      </div>
+
+      {/* ──────────────────────────────────────────────────────────────────────────
+          5. DESIGN GALLERY INSPECTION MODAL
+      ────────────────────────────────────────────────────────────────────────── */}
+      <Dialog open={showGalleryModal} onOpenChange={setShowGalleryModal}>
+        <DialogContent className="max-w-4xl bg-slate-900 border-slate-800 text-white max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-slate-900">
-              <MapPin className="w-5 h-5 text-amber-500" /> Change Site Location?
+            <DialogTitle className="flex items-center justify-between text-base font-bold text-white">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="w-5 h-5 text-blue-400" />
+                <span>Solar EPC Design Gallery ({savedViews.length || 4} Views)</span>
+              </div>
+              <Button
+                size="sm"
+                onClick={handleGenerateViews}
+                disabled={generatingViews}
+                className="h-7 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg gap-1.5"
+              >
+                {generatingViews ? <RefreshCw className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                <span>Refresh 3D Views</span>
+              </Button>
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 py-2 text-xs text-slate-600">
-            <p>
-              You are moving to <b>{pendingLocation?.name || "a new site"}</b>.
-            </p>
-            <p className="bg-amber-50 p-2.5 rounded-lg border border-amber-200 text-amber-900 leading-relaxed">
-              Changing site location will move the map center and satellite context. Your existing roof geometry and solar panel layout will remain intact.
-            </p>
+
+          <div className="space-y-4 py-2">
+            {/* Main Preview Area */}
+            {activeGalleryView && (
+              <div className="rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 p-2 space-y-2">
+                <div className="h-80 w-full flex items-center justify-center bg-slate-900/60 rounded-xl overflow-hidden relative">
+                  {activeGalleryView.dataUrl || activeGalleryView.thumbnail ? (
+                    <img
+                      src={activeGalleryView.dataUrl || activeGalleryView.thumbnail}
+                      alt={activeGalleryView.name}
+                      className="max-h-full max-w-full object-contain"
+                    />
+                  ) : (
+                    <div className="text-center text-slate-500">
+                      <Box className="w-12 h-12 mx-auto mb-2 text-slate-600" />
+                      <span>{activeGalleryView.name} Preview</span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center justify-between px-2 text-xs">
+                  <div>
+                    <span className="font-bold text-white">{activeGalleryView.name}</span>
+                    <span className="text-slate-400 ml-2 font-mono text-[11px]">{dayjs(activeGalleryView.timestamp).format("DD MMM YYYY HH:mm:ss")}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setActiveTab("3d");
+                        viewer3dRef.current?.applyViewPreset?.(activeGalleryView.id || "isometric");
+                        setShowGalleryModal(false);
+                      }}
+                      className="h-6 text-[11px] bg-slate-800 border-slate-700 text-white hover:bg-slate-700 rounded-lg"
+                    >
+                      Apply View to 3D Scene
+                    </Button>
+                    {(activeGalleryView.dataUrl || activeGalleryView.thumbnail) && (
+                      <a
+                        href={activeGalleryView.dataUrl || activeGalleryView.thumbnail}
+                        download={`Solar_Design_${activeGalleryView.name.replace(/\s+/g, "_")}.png`}
+                        className="h-6 text-[11px] px-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg flex items-center gap-1"
+                      >
+                        <Download className="w-3 h-3" /> Download
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Thumbnail Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {(savedViews.length > 0 ? savedViews : [
+                { id: "top", name: "Top View", timestamp: new Date() },
+                { id: "3d", name: "3D View", timestamp: new Date() },
+                { id: "left", name: "Left View", timestamp: new Date() },
+                { id: "right", name: "Right View", timestamp: new Date() },
+              ]).map((v, idx) => (
+                <div
+                  key={v.id || idx}
+                  onClick={() => setActiveGalleryView(v)}
+                  className={`p-2 rounded-xl border transition cursor-pointer bg-slate-950 ${
+                    activeGalleryView?.id === v.id ? "border-blue-500 ring-1 ring-blue-500" : "border-slate-800 hover:border-slate-700"
+                  }`}
+                >
+                  <div className="h-28 bg-slate-900 rounded-lg flex items-center justify-center overflow-hidden mb-1.5">
+                    {v.dataUrl || v.thumbnail ? (
+                      <img src={v.dataUrl || v.thumbnail} alt={v.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <Box className="w-6 h-6 text-slate-600" />
+                    )}
+                  </div>
+                  <div className="font-bold text-xs text-white truncate">{v.name}</div>
+                  <div className="text-[10px] text-slate-400 font-mono truncate">{dayjs(v.timestamp).format("DD MMM YYYY HH:mm")}</div>
+                </div>
+              ))}
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowLocationChangeConfirm(false)}>Cancel</Button>
-            <Button
-              onClick={() => {
-                setShowLocationChangeConfirm(false);
-                if (pendingLocation) applySelectedLocation(pendingLocation);
-              }}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs"
-            >
-              Confirm & Move Location
+            <Button variant="outline" onClick={() => setShowGalleryModal(false)} className="bg-slate-800 border-slate-700 text-white hover:bg-slate-700">
+              Close Gallery
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Select Module from Product Master Modal */}
-      <Dialog open={showProductModal} onOpenChange={setShowProductModal}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+      {/* ──────────────────────────────────────────────────────────────────────────
+          6. SITE LOCATION CHANGE CONFIRMATION DIALOG
+      ────────────────────────────────────────────────────────────────────────── */}
+      <Dialog open={showLocationChangeConfirm} onOpenChange={setShowLocationChangeConfirm}>
+        <DialogContent className="max-w-md bg-slate-900 border-slate-800 text-white">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-slate-900">
-              <Sun className="w-5 h-5 text-amber-500" /> Select PV Module from Product Master
+            <DialogTitle className="flex items-center gap-2 text-base text-white">
+              <AlertTriangle className="w-5 h-5 text-amber-400" /> Change Site Location?
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 py-2 text-xs">
-            {solarPanelProducts.length > 0 ? (
-              <div className="space-y-1.5 max-h-60 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-xl">
-                {solarPanelProducts.map((prod) => (
-                  <div
-                    key={prod.id}
-                    onClick={() => handleSelectProductFromMaster(prod)}
-                    className="p-2.5 hover:bg-blue-50 cursor-pointer transition flex items-center justify-between gap-2"
-                  >
-                    <div>
-                      <div className="font-semibold text-slate-900">{prod.name}</div>
-                      <div className="text-[10.5px] text-slate-500">{prod.size || "Standard"} · Stock: {prod.stock_quantity || 0}</div>
-                    </div>
-                    <Button size="sm" variant="outline" className="h-6 text-[11px] font-semibold text-blue-700 bg-white">Select</Button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="p-3 text-center bg-slate-50 rounded-xl text-slate-500 text-xs">
-                No solar panel products found in Product Master inventory. You can configure custom specs below:
-              </div>
-            )}
-
-            <div className="pt-2 border-t border-slate-200 space-y-2">
-              <Label className="text-xs font-semibold text-slate-700">Custom Module Wattage (Wp)</Label>
-              <Input
-                type="number"
-                value={designData.panel_wattage}
-                onChange={(e) => updateDesignData({ panel_wattage: parseFloat(e.target.value) || 550 })}
-                className="h-8 text-xs font-bold"
-              />
+          <div className="space-y-3 py-2 text-xs text-slate-300">
+            <p>
+              You are moving to: <b>{pendingLocation?.name || pendingLocation?.formatted_address || "a new site"}</b>.
+            </p>
+            <div className="p-3 bg-amber-950/70 border border-amber-500/60 rounded-xl text-amber-200 leading-relaxed font-semibold">
+              Changing site location will remove the current roof mapping and 3D geometry.
             </div>
+            <p className="text-[11px] text-slate-400">
+              Do you want to proceed and reset the roof boundary for the new location coordinates?
+            </p>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowProductModal(false)}>Close</Button>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowLocationChangeConfirm(false)}
+              className="bg-slate-800 border-slate-700 text-white hover:bg-slate-700 text-xs"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                setShowLocationChangeConfirm(false);
+                if (pendingLocation) {
+                  applySelectedLocation(pendingLocation, true);
+                }
+              }}
+              className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs"
+            >
+              Confirm & Remove Old Geometry
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Add Obstacle Modal */}
-      <Dialog open={showObstacleModal} onOpenChange={setShowObstacleModal}>
-        <DialogContent className="max-w-md">
+      {/* ──────────────────────────────────────────────────────────────────────────
+          7. SELECT MODULE FROM PRODUCT MASTER MODAL
+      ────────────────────────────────────────────────────────────────────────── */}
+      <Dialog open={showProductModal} onOpenChange={setShowProductModal}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto bg-slate-900 border-slate-800 text-white">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-slate-900">
-              <Box className="w-5 h-5 text-red-500" /> Add Rooftop Obstruction
+            <DialogTitle className="flex items-center gap-2 text-white text-base">
+              <Sun className="w-5 h-5 text-amber-400" /> Select PV Module from Product Master
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2 text-xs">
+            {solarPanelProducts.length > 0 ? (
+              <div className="space-y-1.5 max-h-60 overflow-y-auto divide-y divide-slate-800 border border-slate-800 rounded-xl bg-slate-950">
+                {solarPanelProducts.map((prod) => (
+                  <div
+                    key={prod.id}
+                    onClick={() => handleSelectProductFromMaster(prod)}
+                    className="p-2.5 hover:bg-slate-900 cursor-pointer transition flex items-center justify-between gap-2"
+                  >
+                    <div>
+                      <div className="font-semibold text-white">{prod.name}</div>
+                      <div className="text-[10.5px] text-slate-400">{prod.size || "Standard"} · Stock: {prod.stock_quantity || 0}</div>
+                    </div>
+                    <Button size="sm" variant="outline" className="h-6 text-[11px] font-semibold text-blue-400 bg-slate-800 border-slate-700">Select</Button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-3 text-center bg-slate-950 rounded-xl text-slate-400 text-xs border border-slate-800">
+                No solar panel products found in Product Master inventory. You can configure custom specs below:
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-slate-800 space-y-2">
+              <Label className="text-xs font-semibold text-slate-300">Custom Module Wattage (Wp)</Label>
+              <Input
+                type="number"
+                value={designData.panel_wattage}
+                onChange={(e) => updateDesignData({ panel_wattage: parseFloat(e.target.value) || 550 })}
+                className="h-8 text-xs font-bold bg-slate-800 border-slate-700 text-white"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowProductModal(false)} className="bg-slate-800 border-slate-700 text-white">Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ──────────────────────────────────────────────────────────────────────────
+          8. ADD ROOFTOP OBSTACLE MODAL
+      ────────────────────────────────────────────────────────────────────────── */}
+      <Dialog open={showObstacleModal} onOpenChange={setShowObstacleModal}>
+        <DialogContent className="max-w-md bg-slate-900 border-slate-800 text-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-white text-base">
+              <Box className="w-5 h-5 text-red-400" /> Add Rooftop Obstruction
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2 text-xs">
             <div className="space-y-1">
-              <Label className="text-xs font-semibold text-slate-700">Obstacle Type</Label>
+              <Label className="text-xs font-semibold text-slate-300">Obstacle Type</Label>
               <Select
                 value={newObstacleForm.type}
                 onValueChange={(val) => {
@@ -1444,8 +1889,8 @@ export default function SolarStudio() {
                   });
                 }}
               >
-                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                <SelectContent>
+                <SelectTrigger className="h-8 text-xs bg-slate-800 border-slate-700 text-white"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-slate-900 border-slate-800 text-white">
                   {OBSTACLE_TYPES.map((t) => (
                     <SelectItem key={t.type} value={t.type}>{t.label}</SelectItem>
                   ))}
@@ -1455,39 +1900,39 @@ export default function SolarStudio() {
 
             <div className="grid grid-cols-3 gap-2">
               <div className="space-y-1">
-                <Label className="text-[11px] text-slate-600">Length (m)</Label>
+                <Label className="text-[11px] text-slate-400">Length (m)</Label>
                 <Input
                   type="number"
                   step="0.1"
                   value={newObstacleForm.length}
                   onChange={(e) => setNewObstacleForm({ ...newObstacleForm, length: parseFloat(e.target.value) || 1 })}
-                  className="h-8 text-xs font-bold"
+                  className="h-8 text-xs font-bold bg-slate-800 border-slate-700 text-white"
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-[11px] text-slate-600">Width (m)</Label>
+                <Label className="text-[11px] text-slate-400">Width (m)</Label>
                 <Input
                   type="number"
                   step="0.1"
                   value={newObstacleForm.width}
                   onChange={(e) => setNewObstacleForm({ ...newObstacleForm, width: parseFloat(e.target.value) || 1 })}
-                  className="h-8 text-xs font-bold"
+                  className="h-8 text-xs font-bold bg-slate-800 border-slate-700 text-white"
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-[11px] text-slate-600">Height (m)</Label>
+                <Label className="text-[11px] text-slate-400">Height (m)</Label>
                 <Input
                   type="number"
                   step="0.1"
                   value={newObstacleForm.height}
                   onChange={(e) => setNewObstacleForm({ ...newObstacleForm, height: parseFloat(e.target.value) || 1 })}
-                  className="h-8 text-xs font-bold"
+                  className="h-8 text-xs font-bold bg-slate-800 border-slate-700 text-white"
                 />
               </div>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowObstacleModal(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setShowObstacleModal(false)} className="bg-slate-800 border-slate-700 text-white">Cancel</Button>
             <Button onClick={handleAddObstacleSubmit} className="bg-red-600 hover:bg-red-700 text-white font-semibold text-xs">Add Obstacle</Button>
           </DialogFooter>
         </DialogContent>

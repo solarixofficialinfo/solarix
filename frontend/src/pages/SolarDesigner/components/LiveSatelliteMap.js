@@ -5,10 +5,11 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   MousePointer, PenTool, Ruler, Trash2, RotateCw, Copy, Plus,
   AlertTriangle, Navigation, CheckCircle2, Undo2, Redo2, MapPin, Check, Info, PlusCircle,
-  Edit3, CheckSquare, X
+  Edit3, CheckSquare, X, Search, RefreshCw, Maximize2, Minimize2, Layers as LayersIcon
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -95,6 +96,17 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     zoom = 19,
     onLocationChange,
     onCaptureLocation,
+    onZoomChange,
+    formattedAddress = "",
+    searchQuery = "",
+    setSearchQuery,
+    searchPredictions = [],
+    onSelectPrediction,
+    searching = false,
+    activeTab = "2d",
+    setActiveTab,
+    isFullscreen = false,
+    setIsFullscreen,
     roofPolygon = [],
     setRoofPolygon,
     panels = [],
@@ -553,12 +565,21 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         zoom: Math.min(zoom || 19, 20),
         maxZoom: 20,
         minZoom: 4,
+        zoomSnap: 0.5,
+        zoomDelta: 0.5,
+        wheelPxPerZoomLevel: 90,
+        wheelDebounceTime: 40,
         zoomControl: false,
         attributionControl: false,
         preferCanvas: false,
       });
 
       mapInstanceRef.current = map;
+
+      map.on("zoomend", () => {
+        const z = map.getZoom();
+        onZoomChange?.(z);
+      });
 
       tileLayerGroupRef.current = L.layerGroup().addTo(map);
       roofLayerGroupRef.current = L.layerGroup().addTo(map);
@@ -672,7 +693,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     }
   }, [mapType]);
 
-  // Pan map when canonical location prop changes
+  // Pan map when canonical location prop changes without resetting zoom
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -682,14 +703,13 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
     const currentCenter = map.getCenter();
     const dist = Math.abs(currentCenter.lat - lat) + Math.abs(currentCenter.lng - lng);
-    if (dist > 0.003) {
-      const currentZoom = map.getZoom();
-      map.setView([lat, lng], Math.max(currentZoom, zoom || 18), { animate: true });
+    if (dist > 0.0005) {
+      map.setView([lat, lng], map.getZoom(), { animate: true });
     }
     if (markerRef.current && !pendingMarkerLocation) {
       markerRef.current.setLatLng([lat, lng]);
     }
-  }, [latitude, longitude, zoom, pendingMarkerLocation]);
+  }, [latitude, longitude, pendingMarkerLocation]);
 
   // Roof Drawing Actions
   const handleUndoDrawPoint = useCallback(() => {
@@ -973,10 +993,10 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             ? [(p1.lat + p2.lat) / 2, (p1.lng + p2.lng) / 2]
             : cartesianToLatLng((p1.x + p2.x) / 2, (p1.y + p2.y) / 2);
           const dimIcon = L.divIcon({
-            className: "bg-white/95 px-1.5 py-0.5 rounded-md border border-blue-300 text-[10px] font-bold text-blue-900 shadow-sm text-center select-none pointer-events-none whitespace-nowrap",
-            html: `${lenM.toFixed(1)}m`,
-            iconSize: [44, 18],
-            iconAnchor: [22, 9],
+            className: "bg-white px-2 py-0.5 rounded-lg border border-slate-300 text-[10.5px] font-extrabold text-slate-900 shadow-md text-center select-none pointer-events-none whitespace-nowrap",
+            html: `${lenM.toFixed(1)} m`,
+            iconSize: [48, 20],
+            iconAnchor: [24, 10],
           });
           L.marker(midLatLng, { icon: dimIcon, interactive: false }).addTo(roofGroup);
         }
@@ -1262,271 +1282,328 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         </div>
       )}
 
-      {/* ── TOP SMART CONTEXTUAL TOOLBAR ───────────────────────────────────── */}
-      <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none gap-2 z-10">
-        {/* Left: Dynamic Context Tools */}
-        <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto flex-wrap">
-          {/* 1. Context: Drawing Roof */}
-          {activeTool === "draw_roof" ? (
-            <div className="flex items-center gap-1">
-              <Badge className="bg-emerald-600 text-white text-[11px] font-bold px-2.5 py-0.5 rounded-lg">
-                Point {activeDrawPoints.length + 1}
-              </Badge>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={handleUndoDrawPoint}
-                disabled={activeDrawPoints.length === 0}
-                className="h-7 text-xs px-2.5 rounded-lg text-slate-300 hover:text-white disabled:opacity-30 gap-1"
-                title="Undo last placed point"
-              >
-                <Undo2 className="w-3.5 h-3.5" /> Undo Point
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={handleCancelDrawing}
-                className="h-7 text-xs px-2 rounded-lg text-red-400 hover:text-red-300"
-                title="Cancel roof drawing"
-              >
-                <X className="w-3.5 h-3.5 mr-1" /> Cancel
-              </Button>
-              {activeDrawPoints.length >= 3 && (
-                <Button
-                  size="sm"
-                  onClick={handleFinishDrawingRoof}
-                  className="h-7 text-xs px-3 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold animate-pulse shadow-sm"
+      {/* ── 1. TOP-LEFT: FLOATING SITE SEARCH PILL & CAPTURE PIN ────────────────── */}
+      <div className="absolute top-3 left-3 z-20 flex items-center gap-2 pointer-events-auto">
+        <div className="relative flex items-center bg-slate-900/95 border border-slate-700/80 rounded-xl px-2.5 py-1.5 shadow-xl text-xs text-white min-w-[260px] max-w-[340px]">
+          <Search className="w-3.5 h-3.5 text-slate-400 mr-2 shrink-0" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery?.(e.target.value)}
+            placeholder={formattedAddress || "Search location, address or coordinates..."}
+            className="bg-transparent border-none outline-none text-white text-xs w-full placeholder:text-slate-400 font-medium truncate"
+          />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery?.("")} className="text-slate-400 hover:text-white ml-1 p-0.5">
+              <X className="w-3 h-3" />
+            </button>
+          )}
+          {searching && <RefreshCw className="w-3 h-3 text-blue-400 animate-spin ml-1 shrink-0" />}
+
+          {/* Autocomplete Predictions Dropdown */}
+          {searchPredictions && searchPredictions.length > 0 && (
+            <div className="absolute top-10 left-0 right-0 z-50 bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-800">
+              {searchPredictions.map((p, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => onSelectPrediction?.(p)}
+                  className="w-full text-left px-3 py-2 hover:bg-blue-900/40 text-xs transition block"
                 >
-                  <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Finish Roof ({activeDrawPoints.length} pts)
-                </Button>
-              )}
+                  <div className="font-bold text-white truncate">{p.name}</div>
+                  <div className="text-[10px] text-slate-400 truncate">{p.secondary || p.description}</div>
+                </button>
+              ))}
             </div>
-          ) : activeTool === "edit_roof" ? (
-            /* 2. Context: Editing Roof Vertices */
-            <div className="flex items-center gap-1">
-              <Badge className="bg-amber-600 text-white text-[11px] font-bold px-2.5 py-0.5 rounded-lg">
-                Editing Roof ({roofPolygon.length} vertices)
-              </Badge>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={handleUndoVertex}
-                disabled={vertexHistory.length === 0}
-                className="h-7 text-xs px-2 rounded-lg text-slate-300 hover:text-white disabled:opacity-30 gap-1"
-                title="Undo vertex modification"
-              >
-                <Undo2 className="w-3.5 h-3.5" /> Undo
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={handleRedoVertex}
-                disabled={vertexRedoStack.length === 0}
-                className="h-7 text-xs px-2 rounded-lg text-slate-300 hover:text-white disabled:opacity-30 gap-1"
-                title="Redo vertex modification"
-              >
-                <Redo2 className="w-3.5 h-3.5" /> Redo
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => setActiveTool("select")}
-                className="h-7 text-xs px-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold rounded-lg ml-1 shadow-sm gap-1"
-              >
-                <CheckSquare className="w-3.5 h-3.5" /> Finish Editing
-              </Button>
-            </div>
-          ) : selectedPanelId ? (
-            /* 3. Context: Panel Selected */
-            <div className="flex items-center gap-1">
-              <Badge className="bg-blue-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-lg">
-                Panel #{panels.findIndex((p) => p.id === selectedPanelId) + 1}
-              </Badge>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setPanels?.((prev) => prev.map((p) => p.id === selectedPanelId ? { ...p, rotation: (p.rotation || 0) + 90 } : p))}
-                className="h-7 text-xs px-2 rounded-lg text-white hover:bg-blue-800"
-                title="Rotate 90°"
-              >
-                <RotateCw className="w-3 h-3 mr-1" /> Rotate
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  const t = panels.find((p) => p.id === selectedPanelId);
-                  if (!t) return;
-                  const d = { ...t, id: `panel-${Date.now()}`, x: t.x + 1.2 };
-                  setPanels?.([...panels, d]);
-                  setSelectedPanelId?.(d.id);
-                  toast.success("Duplicated panel");
-                }}
-                className="h-7 text-xs px-2 rounded-lg text-white hover:bg-blue-800"
-              >
-                <Copy className="w-3 h-3 mr-1" /> Duplicate
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setPanels?.((prev) => prev.filter((p) => p.id !== selectedPanelId));
-                  setSelectedPanelId?.(null);
-                  toast.success("Removed panel");
-                }}
-                className="h-7 text-xs px-2 rounded-lg text-red-400 hover:bg-red-900"
-              >
-                <Trash2 className="w-3 h-3" />
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setSelectedPanelId?.(null)}
-                className="h-7 text-xs px-2 rounded-lg text-slate-400 hover:text-white"
-              >
-                Deselect
-              </Button>
-            </div>
-          ) : (
-            /* 4. Context: General Mode Toolbar */
-            <>
-              {/* Location Capture Indicator */}
-              {locationCaptured ? (
-                <div className="flex items-center gap-1 h-7 px-2.5 rounded-lg bg-emerald-900/80 border border-emerald-600/60 text-emerald-300 text-xs font-semibold">
-                  <Check className="w-3 h-3" />
-                  <span>Captured</span>
-                </div>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={handleCaptureLocation}
-                  className="h-7 text-xs px-2.5 rounded-lg gap-1.5 text-blue-300 hover:text-white hover:bg-blue-700 border border-blue-600/50"
-                  title="Capture map center as site coordinates"
-                >
-                  <MapPin className="w-3.5 h-3.5" /> Capture Location
-                </Button>
-              )}
-
-              <div className="w-[1px] h-4 bg-slate-700 mx-0.5" />
-
-              <Button
-                size="sm"
-                variant={activeTool === "select" ? "default" : "ghost"}
-                onClick={() => { setActiveTool("select"); setActiveDrawPoints([]); }}
-                className="h-7 text-xs px-2.5 rounded-lg gap-1.5"
-                title="Select & Move Panels"
-              >
-                <MousePointer className="w-3.5 h-3.5" /> Select
-              </Button>
-
-              <Button
-                size="sm"
-                variant={activeTool === "draw_roof" ? "default" : "ghost"}
-                onClick={() => { setActiveTool("draw_roof"); setActiveDrawPoints([]); }}
-                className={`h-7 text-xs px-2.5 rounded-lg gap-1.5 ${activeTool === "draw_roof" ? "bg-emerald-600 text-white" : "text-emerald-400 hover:text-white"}`}
-                title="Trace rooftop perimeter"
-              >
-                <PenTool className="w-3.5 h-3.5" /> Draw Roof
-              </Button>
-
-              {hasRoof && (
-                <Button
-                  size="sm"
-                  variant={activeTool === "edit_roof" ? "default" : "ghost"}
-                  onClick={() => {
-                    setActiveTool("edit_roof");
-                    setActiveDrawPoints([]);
-                  }}
-                  className={`h-7 text-xs px-2.5 rounded-lg gap-1.5 ${activeTool === "edit_roof" ? "bg-amber-500 text-slate-950 font-bold" : "text-amber-400 hover:text-white"}`}
-                  title="Drag vertices or add points on edges"
-                >
-                  <Edit3 className="w-3.5 h-3.5" /> Edit Roof
-                </Button>
-              )}
-
-              <Button
-                size="sm"
-                variant={activeTool === "add_panel" ? "default" : "ghost"}
-                onClick={() => { setActiveTool("add_panel"); setActiveDrawPoints([]); }}
-                className={`h-7 text-xs px-2.5 rounded-lg gap-1.5 ${activeTool === "add_panel" ? "bg-blue-600 text-white" : "text-blue-400 hover:text-white"}`}
-                title="Click on roof to place individual panel"
-              >
-                <Plus className="w-3.5 h-3.5" /> + Add Panel
-              </Button>
-
-              <Button
-                size="sm"
-                variant={activeTool === "calibrate" ? "default" : "ghost"}
-                onClick={() => { setActiveTool("calibrate"); setCalibratePoints([]); }}
-                className="h-7 text-xs px-2 rounded-lg gap-1.5 text-purple-400 hover:text-purple-300"
-                title="Measure distance & calibrate map scale"
-              >
-                <Ruler className="w-3.5 h-3.5" /> Calibrate
-              </Button>
-
-              {hasRoof && (
-                <>
-                  <div className="w-[1px] h-4 bg-slate-700 mx-0.5" />
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      if (window.confirm("Clear roof polygon and panels?")) {
-                        pushVertexHistory(roofPolygonRef.current);
-                        setRoofPolygon([]);
-                        setActiveDrawPoints([]);
-                        setPanels?.([]);
-                      }
-                    }}
-                    className="h-7 px-2 rounded-lg text-slate-400 hover:text-red-400"
-                    title="Clear Roof & Panels"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </Button>
-                </>
-              )}
-            </>
           )}
         </div>
 
-        {/* Right: Small Floating Map Controls (Zoom, Fit, Types) */}
-        <div className="flex items-center gap-1 bg-slate-900/95 backdrop-blur-md p-1 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto">
-          <Button size="sm" variant={mapType === "satellite" ? "secondary" : "ghost"} onClick={() => setMapType("satellite")} className="h-6 text-[11px] px-2 rounded-lg">Satellite</Button>
-          <Button size="sm" variant={mapType === "hybrid" ? "secondary" : "ghost"} onClick={() => setMapType("hybrid")} className="h-6 text-[11px] px-2 rounded-lg">Hybrid</Button>
-          <Button size="sm" variant={mapType === "street" ? "secondary" : "ghost"} onClick={() => setMapType("street")} className="h-6 text-[11px] px-2 rounded-lg">Street</Button>
-          <div className="w-[1px] h-3.5 bg-slate-700 mx-0.5" />
-          <Button size="sm" variant="ghost" onClick={handleZoomIn} className="h-6 w-6 p-0 rounded-lg text-slate-300 hover:text-white font-bold text-sm" title="Zoom In (+)">+</Button>
-          <Button size="sm" variant="ghost" onClick={handleZoomOut} className="h-6 w-6 p-0 rounded-lg text-slate-300 hover:text-white font-bold text-sm" title="Zoom Out (−)">−</Button>
-          <div className="w-[1px] h-3.5 bg-slate-700 mx-0.5" />
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={handleFitRoof}
-            disabled={!hasRoof}
-            className="h-6 px-1.5 rounded-lg text-emerald-400 hover:text-emerald-300 text-[10px] gap-0.5 disabled:opacity-30"
-            title="Fit view to roof"
+        {/* Capture Location Button matching Reference [📍] */}
+        <button
+          onClick={handleCaptureLocation}
+          className={`w-9 h-9 rounded-xl flex items-center justify-center transition shadow-xl border cursor-pointer ${
+            locationCaptured
+              ? "bg-blue-600 text-white border-blue-500 hover:bg-blue-700"
+              : "bg-blue-600 hover:bg-blue-700 text-white border-blue-500"
+          }`}
+          title="Capture Site Location (Locks geographic coordinates)"
+        >
+          <MapPin className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* ── 2. TOP-CENTER: 2D/3D TOGGLE & FLOATING ACTION TOOLBAR ─────────────── */}
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2 pointer-events-auto">
+        {/* Segmented [ 2D | 3D ] Toggle matching Reference */}
+        <div className="flex items-center bg-slate-900/95 border border-slate-700/80 rounded-xl p-0.5 shadow-xl">
+          <button
+            onClick={() => setActiveTab?.("2d")}
+            className={`h-7 px-3.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+              activeTab === "2d" ? "bg-blue-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
+            }`}
           >
-            Fit Roof
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={handleFitDesign}
-            className="h-6 px-1.5 rounded-lg text-blue-400 hover:text-blue-300 text-[10px] gap-0.5"
-            title="Fit view to all components"
+            2D
+          </button>
+          <button
+            onClick={() => setActiveTab?.("3d")}
+            className={`h-7 px-3.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+              activeTab === "3d" ? "bg-blue-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
+            }`}
           >
-            Fit Design
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={handleLocateCenter}
-            className="h-6 px-1.5 rounded-lg text-slate-400 hover:text-slate-200 text-[10px] gap-0.5"
-            title="Recenter on site marker"
-          >
-            <Navigation className="w-3 h-3" />
-          </Button>
+            3D
+          </button>
         </div>
+
+        {/* Floating Action Tools Bar matching Reference */}
+        <div className="flex items-center gap-1 bg-slate-900/95 border border-slate-700/80 rounded-xl p-1 shadow-xl text-xs text-white">
+          {/* Active Tool / In-progress context switch */}
+          {activeTool === "draw_roof" ? (
+            <div className="flex items-center gap-1">
+              <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">
+                Pt {activeDrawPoints.length + 1}
+              </span>
+              <button
+                onClick={handleUndoDrawPoint}
+                disabled={activeDrawPoints.length === 0}
+                className="h-7 px-2 text-[11px] rounded-lg text-slate-300 hover:text-white disabled:opacity-30 flex items-center gap-1 hover:bg-slate-800"
+              >
+                <Undo2 className="w-3 h-3" /> Undo
+              </button>
+              <button
+                onClick={handleCancelDrawing}
+                className="h-7 px-2 text-[11px] rounded-lg text-red-400 hover:text-red-300 hover:bg-red-950/50 flex items-center gap-1"
+              >
+                <X className="w-3 h-3" /> Cancel
+              </button>
+              {activeDrawPoints.length >= 3 && (
+                <button
+                  onClick={handleFinishDrawingRoof}
+                  className="h-7 px-3 text-[11px] rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center gap-1 shadow-sm"
+                >
+                  <CheckCircle2 className="w-3 h-3" /> Finish ({activeDrawPoints.length} pts)
+                </button>
+              )}
+            </div>
+          ) : activeTool === "edit_roof" ? (
+            <div className="flex items-center gap-1">
+              <span className="bg-amber-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">
+                Editing ({roofPolygon.length} pts)
+              </span>
+              <button
+                onClick={handleUndoVertex}
+                disabled={vertexHistory.length === 0}
+                className="h-7 px-2 text-[11px] rounded-lg text-slate-300 hover:text-white disabled:opacity-30 flex items-center gap-1 hover:bg-slate-800"
+              >
+                <Undo2 className="w-3 h-3" /> Undo
+              </button>
+              <button
+                onClick={handleRedoVertex}
+                disabled={vertexRedoStack.length === 0}
+                className="h-7 px-2 text-[11px] rounded-lg text-slate-300 hover:text-white disabled:opacity-30 flex items-center gap-1 hover:bg-slate-800"
+              >
+                <Redo2 className="w-3 h-3" /> Redo
+              </button>
+              <button
+                onClick={() => setActiveTool("select")}
+                className="h-7 px-3 text-[11px] rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold flex items-center gap-1 shadow-sm"
+              >
+                <CheckSquare className="w-3 h-3" /> Done
+              </button>
+            </div>
+          ) : (
+            <>
+              <button
+                onClick={() => { setActiveTool("select"); setActiveDrawPoints([]); }}
+                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                  activeTool === "select" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                }`}
+                title="Select & Inspect"
+              >
+                <MousePointer className="w-3.5 h-3.5" />
+                <span>Select</span>
+              </button>
+
+              <button
+                onClick={() => { setActiveTool("draw_roof"); setActiveDrawPoints([]); }}
+                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                  activeTool === "draw_roof" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                }`}
+                title="Trace rooftop perimeter"
+              >
+                <PenTool className="w-3.5 h-3.5" />
+                <span>Draw Roof</span>
+              </button>
+
+              <button
+                onClick={() => { setActiveTool("edit_roof"); setActiveDrawPoints([]); }}
+                disabled={!hasRoof}
+                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 ${
+                  activeTool === "edit_roof" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                }`}
+                title="Drag vertices or add points"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>Edit Points</span>
+              </button>
+
+              <button
+                onClick={() => { setActiveTool("add_panel"); setActiveDrawPoints([]); }}
+                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                  activeTool === "add_panel" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                }`}
+                title="Click roof to place panel"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Panel</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  if (selectedPanelId) {
+                    toast.info("Drag panel move handle to reposition");
+                  } else {
+                    toast.info("Click any panel to select and move it");
+                  }
+                }}
+                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                  selectedPanelId ? "text-amber-300 bg-slate-800" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                }`}
+                title="Move Panel"
+              >
+                <Navigation className="w-3.5 h-3.5" />
+                <span>Move</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  if (selectedPanelId) {
+                    setPanels?.((prev) => prev.map((p) => p.id === selectedPanelId ? { ...p, rotation: (p.rotation || 0) + 15 } : p));
+                    toast.success("Rotated panel +15°");
+                  } else {
+                    toast.info("Select a panel first to rotate");
+                  }
+                }}
+                className="h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                title="Rotate Selected Panel"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+                <span>Rotate</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  if (selectedPanelId) {
+                    setPanels?.((prev) => prev.filter((p) => p.id !== selectedPanelId));
+                    setSelectedPanelId?.(null);
+                    toast.success("Panel deleted");
+                  } else if (hasRoof && window.confirm("Clear roof and panels?")) {
+                    pushVertexHistory(roofPolygonRef.current);
+                    setRoofPolygon([]);
+                    setPanels?.([]);
+                    toast.success("Roof cleared");
+                  }
+                }}
+                className="h-7 px-2 rounded-lg font-semibold flex items-center gap-1 text-red-400 hover:text-red-300 hover:bg-red-950/50 transition cursor-pointer"
+                title="Delete Selected or Clear Roof"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete</span>
+              </button>
+
+              <button
+                onClick={() => { setActiveTool("calibrate"); setCalibratePoints([]); }}
+                className={`h-7 px-2 rounded-lg font-semibold flex items-center gap-1 transition cursor-pointer ${
+                  activeTool === "calibrate" ? "bg-purple-600 text-white" : "text-purple-400 hover:text-purple-300 hover:bg-slate-800"
+                }`}
+                title="Measure distance & calibrate map scale"
+              >
+                <Ruler className="w-3 h-3" />
+                <span className="text-[10.5px]">Calibrate</span>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── 3. LEFT VERTICAL CONTROLS: RECENTER, ZOOM, FIT, FULLSCREEN ───────── */}
+      <div className="absolute left-3 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-1.5 bg-slate-900/95 border border-slate-700/80 rounded-xl p-1 shadow-xl pointer-events-auto">
+        <button
+          onClick={handleLocateCenter}
+          className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+          title="Recenter on site coordinates"
+        >
+          <Navigation className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={handleZoomIn}
+          className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800 transition font-bold text-sm cursor-pointer"
+          title="Zoom In (+)"
+        >
+          +
+        </button>
+        <button
+          onClick={handleZoomOut}
+          className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800 transition font-bold text-sm cursor-pointer"
+          title="Zoom Out (−)"
+        >
+          −
+        </button>
+        <button
+          onClick={handleFitRoof}
+          disabled={!hasRoof}
+          className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-emerald-400 hover:bg-slate-800 transition disabled:opacity-30 cursor-pointer"
+          title="Fit Roof View"
+        >
+          <RotateCw className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={() => setIsFullscreen?.(!isFullscreen)}
+          className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+          title="Toggle Fullscreen"
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* ── 4. TOP-RIGHT CONTROLS: SATELLITE DROPDOWN, LAYERS, COMPASS ───────── */}
+      <div className="absolute top-3 right-3 z-20 flex items-center gap-1.5 bg-slate-900/95 border border-slate-700/80 rounded-xl p-1 shadow-xl pointer-events-auto">
+        <Select value={mapType} onValueChange={(val) => setMapType(val)}>
+          <SelectTrigger className="h-7 text-xs bg-slate-800 border-none text-slate-200 gap-1 px-2.5">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="bg-slate-900 border-slate-800 text-white">
+            <SelectItem value="satellite">Satellite</SelectItem>
+            <SelectItem value="hybrid">Hybrid</SelectItem>
+            <SelectItem value="street">Street</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <button
+          onClick={() => setLayers((prev) => ({ ...prev, dimensions: !prev.dimensions }))}
+          className={`w-7 h-7 rounded-lg flex items-center justify-center transition cursor-pointer ${
+            layers.dimensions ? "text-blue-400 bg-slate-800" : "text-slate-400 hover:text-white"
+          }`}
+          title="Toggle Edge Dimension Badges"
+        >
+          <LayersIcon className="w-3.5 h-3.5" />
+        </button>
+
+        {/* Compass Rose */}
+        <div className="w-7 h-7 flex items-center justify-center text-red-500 font-bold text-[10px]" title="True North">
+          ▲ N
+        </div>
+      </div>
+
+      {/* ── 5. BOTTOM-LEFT: SATELLITE/MAP PREVIEW TOGGLE ─────────────────────── */}
+      <div className="absolute bottom-3 left-3 z-20 pointer-events-auto flex items-center bg-slate-900/95 border border-slate-700/80 rounded-xl p-1 shadow-xl text-xs text-white">
+        <button
+          onClick={() => setMapType(mapType === "satellite" ? "street" : "satellite")}
+          className="flex items-center gap-2 px-2 py-1 hover:bg-slate-800 rounded-lg transition cursor-pointer"
+        >
+          <span className="w-4 h-4 rounded bg-blue-600 flex items-center justify-center text-[9px] font-bold">
+            {mapType === "satellite" ? "S" : "M"}
+          </span>
+          <span className="font-semibold text-xs capitalize">{mapType === "satellite" ? "Satellite" : "Map"}</span>
+        </button>
       </div>
 
       {/* Add Panel Floating Guidance */}
