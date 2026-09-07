@@ -501,6 +501,20 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         if (markerRef.current) markerRef.current.setLatLng([lat, lng]);
       }
     },
+    resetMarkerTo: (lat, lng) => {
+      const targetLat = Number(lat);
+      const targetLng = Number(lng);
+      if (markerRef.current && isValidLatLng(targetLat, targetLng)) {
+        markerRef.current.setLatLng([targetLat, targetLng]);
+      }
+      setPendingMarkerLocation(null);
+    },
+    clearDrawState: () => {
+      setActiveDrawPoints([]);
+      setVertexHistory([]);
+      setVertexRedoStack([]);
+      setPendingMarkerLocation(null);
+    },
     getCenter: () => {
       const map = mapInstanceRef.current;
       if (!map) return null;
@@ -595,8 +609,27 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       centerMarker.on("dragend", () => {
         const pos = centerMarker.getLatLng();
         if (!isValidLatLng(pos.lat, pos.lng)) return;
-        setPendingMarkerLocation({ lat: pos.lat, lng: pos.lng });
-        toast.info("Site marker moved. Click 'Update Site Location' to confirm new coordinates.");
+
+        // Cancel any active drawing or editing mode cleanly
+        if (window.__activeSolarTool === "draw_roof" || window.__activeSolarTool === "edit_roof") {
+          setActiveDrawPoints([]);
+          setActiveTool?.("select");
+        }
+
+        const currentRoof = roofPolygonRef.current;
+        if (currentRoof && currentRoof.length >= 3) {
+          // A roof geometry exists on this site: pass to parent controller to trigger confirmation flow
+          if (onLocationChange) {
+            onLocationChange({ latitude: pos.lat, longitude: pos.lng });
+          }
+        } else {
+          setPendingMarkerLocation({ lat: pos.lat, lng: pos.lng });
+          if (onLocationChange) {
+            onLocationChange({ latitude: pos.lat, longitude: pos.lng });
+          } else {
+            toast.info("Site marker moved. Click 'Update Site Location' to confirm new coordinates.");
+          }
+        }
       });
 
       markerRef.current = centerMarker;
@@ -885,10 +918,10 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       });
 
       const polyLayer = L.polygon(polyLatLngs, {
-        color: editingRoof ? "#f59e0b" : "#2563eb",
+        color: editingRoof ? "#f59e0b" : "#ef4444",
         weight: editingRoof ? 2.5 : 3,
-        fillColor: editingRoof ? "#fbbf24" : "#3b82f6",
-        fillOpacity: editingRoof ? 0.18 : 0.28,
+        fillColor: editingRoof ? "#fbbf24" : "#ef4444",
+        fillOpacity: editingRoof ? 0.18 : 0.22,
         dashArray: editingRoof ? "4, 4" : undefined,
       }).addTo(roofGroup);
 
@@ -941,7 +974,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         } else {
           const cm = L.circleMarker(latlng, {
             radius: 6,
-            fillColor: "#2563eb",
+            fillColor: "#ef4444",
             fillOpacity: 0.95,
             color: "#ffffff",
             weight: 2,
@@ -1193,6 +1226,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       toast.error("Map center coordinates are invalid. Please pan to your site.");
       return;
     }
+    // Deterministically cancel any in-progress drawing or editing
+    if (activeTool === "draw_roof" || activeTool === "edit_roof") {
+      setActiveDrawPoints([]);
+      setActiveTool?.("select");
+    }
     if (markerRef.current) {
       markerRef.current.setLatLng([center.lat, center.lng]);
     }
@@ -1204,8 +1242,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     } else if (onLocationChange) {
       onLocationChange({ latitude: center.lat, longitude: center.lng });
     }
-    toast.success(`Site captured: ${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`);
-  }, [onCaptureLocation, onLocationChange]);
+  }, [activeTool, setActiveTool, onCaptureLocation, onLocationChange]);
 
   const hasRoof = roofPolygon && roofPolygon.length >= 3;
 

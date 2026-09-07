@@ -80,7 +80,7 @@ export default function DesignSummaryPanel({
   return (
     <div className="space-y-2.5 text-white select-none">
       {/* ── SECTION 1: DESIGN GALLERY ────────────────────────────────────────── */}
-      <div className="bg-slate-900/95 rounded-2xl border border-slate-800 p-3 shadow-xl">
+      <div className="bg-slate-900/98 rounded-2xl border border-slate-800 p-3 shadow-xl">
         <div className="flex items-center justify-between mb-2.5">
           <div className="flex items-center gap-1.5">
             <Image className="w-3.5 h-3.5 text-blue-400" />
@@ -105,7 +105,7 @@ export default function DesignSummaryPanel({
               className="group relative bg-slate-950 rounded-xl overflow-hidden border border-slate-800 hover:border-blue-500 cursor-pointer transition-all shadow-sm"
             >
               {/* Thumbnail Image */}
-              <div className="h-20 w-full bg-slate-900/80 flex items-center justify-center overflow-hidden relative">
+              <div className="h-20 w-full bg-slate-950 flex items-center justify-center overflow-hidden relative border-b border-slate-800/60">
                 {view.thumbnail || view.dataUrl ? (
                   <img
                     src={view.thumbnail || view.dataUrl}
@@ -113,23 +113,23 @@ export default function DesignSummaryPanel({
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   />
                 ) : (
-                  <div className="flex flex-col items-center justify-center text-slate-500 gap-1 p-2 text-center">
-                    <Box className="w-5 h-5 text-slate-600 group-hover:text-blue-400 transition" />
-                    <span className="text-[9px] text-slate-400 font-medium">{view.name}</span>
+                  <div className="flex flex-col items-center justify-center text-slate-400 gap-1 p-2 text-center">
+                    <Box className="w-5 h-5 text-slate-500 group-hover:text-blue-400 transition" />
+                    <span className="text-[9.5px] text-slate-300 font-semibold">{view.name}</span>
                   </div>
                 )}
-                <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-transparent opacity-60 group-hover:opacity-40 transition" />
-                <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition">
-                  <span className="bg-blue-600 text-white rounded p-0.5 text-[8px] flex items-center justify-center">
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-transparent opacity-50 group-hover:opacity-25 transition" />
+                <div className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 transition">
+                  <span className="bg-blue-600 text-white rounded p-1 text-[9px] flex items-center justify-center shadow-md">
                     <Eye className="w-2.5 h-2.5" />
                   </span>
                 </div>
               </div>
 
               {/* Card Label */}
-              <div className="p-1.5 bg-slate-950/90">
-                <div className="text-[10px] font-bold text-white truncate">{view.name}</div>
-                <div className="text-[8.5px] text-slate-400 font-mono truncate">
+              <div className="p-2 bg-slate-950">
+                <div className="text-xs font-bold text-slate-100 truncate">{view.name}</div>
+                <div className="text-[10px] text-slate-400 font-mono font-medium truncate mt-0.5">
                   {view.timestamp ? dayjs(view.timestamp).format("DD MMM YYYY HH:mm") : dayjs().format("DD MMM YYYY HH:mm")}
                 </div>
               </div>
@@ -142,83 +142,93 @@ export default function DesignSummaryPanel({
             size="sm"
             variant="ghost"
             onClick={onGenerateViews}
-            className="w-full mt-2 h-6 text-[10px] font-semibold text-slate-400 hover:text-white bg-slate-800/60 hover:bg-slate-800 rounded-lg gap-1 border border-slate-700/60"
+            className="w-full mt-2.5 h-7 text-xs font-semibold text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-750 rounded-lg gap-1.5 border border-slate-700 transition"
           >
-            <RefreshCw className="w-2.5 h-2.5 text-blue-400" />
+            <RefreshCw className="w-3 h-3 text-blue-400 shrink-0" />
             <span>Update Saved Views</span>
           </Button>
         )}
       </div>
 
       {/* ── SECTION 2: DESIGN INFORMATION ────────────────────────────────────── */}
-      <div className="bg-slate-900/95 rounded-2xl border border-slate-800 p-3 shadow-xl space-y-2">
+      <div className="bg-slate-900/98 rounded-2xl border border-slate-800 p-3.5 shadow-xl space-y-2">
         <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-          <span className="text-xs font-bold text-white tracking-wide">
+          <span className="text-xs font-bold text-white tracking-wide uppercase">
             Design Information
           </span>
           <button
             onClick={() => setShowTechSpecs(!showTechSpecs)}
             className="text-slate-400 hover:text-white transition p-1 rounded-md"
-            title="Toggle Detailed Specs"
+            title="Toggle Detailed PV Module Specs"
           >
-            <Edit2 className="w-3 h-3 text-blue-400" />
+            <Edit2 className="w-3.5 h-3.5 text-blue-400" />
           </button>
         </div>
 
-        {/* Clean Engineering Metric Rows */}
-        <div className="space-y-1.5 text-xs">
-          <div className="flex items-center justify-between py-0.5">
-            <span className="text-slate-400 text-[11px]">Total Panels</span>
-            <span className="font-bold text-white text-[12px]">{panelCount}</span>
+        {/* Clean Engineering Metric Rows: Two-Column Label / Value */}
+        <div className="space-y-0.5 text-xs divide-y divide-slate-800/60">
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-slate-300 font-medium text-[12px]">Total Panels</span>
+            <span className="font-bold text-white font-mono text-[12.5px]">{panelCount}</span>
           </div>
-          <div className="flex items-center justify-between py-0.5">
-            <span className="text-slate-400 text-[11px]">System Capacity</span>
-            <span className="font-bold text-amber-400 text-[12px]">{systemKw.toFixed(2)} kWp</span>
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-slate-300 font-medium text-[12px]">System Capacity</span>
+            <span className="font-bold text-amber-400 font-mono text-[12.5px]">{systemKw.toFixed(2)} kWp</span>
           </div>
-          <div className="flex items-center justify-between py-0.5">
-            <span className="text-slate-400 text-[11px]">Roof Area</span>
-            <span className="font-bold text-white text-[12px]">
-              {roofArea > 0 ? `${roofArea.toFixed(1)} m²` : "0 m²"}
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-slate-300 font-medium text-[12px]">Roof Area</span>
+            <span className="font-bold text-slate-100 font-mono text-[12.5px]">
+              {roofArea > 0 ? `${roofArea.toFixed(1)} m²` : "0.0 m²"}
             </span>
           </div>
-          <div className="flex items-center justify-between py-0.5">
-            <span className="text-slate-400 text-[11px]">Usable Area</span>
-            <span className="font-bold text-emerald-400 text-[12px]">
-              {usableArea > 0 ? `${usableArea.toFixed(1)} m²` : "0 m²"}
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-slate-300 font-medium text-[12px]">Usable Area</span>
+            <span className="font-bold text-emerald-400 font-mono text-[12.5px]">
+              {usableArea > 0 ? `${usableArea.toFixed(1)} m²` : "0.0 m²"}
             </span>
           </div>
-          <div className="flex items-center justify-between py-0.5">
-            <span className="text-slate-400 text-[11px]">Tilt Angle</span>
-            <span className="font-bold text-white text-[12px]">{tiltAngle}°</span>
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-slate-300 font-medium text-[12px]">Tilt Angle</span>
+            <span className="font-bold text-slate-100 font-mono text-[12.5px]">{tiltAngle}°</span>
           </div>
-          <div className="flex items-center justify-between py-0.5">
-            <span className="text-slate-400 text-[11px]">Orientation (Azimuth)</span>
-            <span className="font-bold text-white text-[12px]">{azimuthAngle}°</span>
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-slate-300 font-medium text-[12px]">Orientation</span>
+            <span className="font-bold text-slate-100 font-mono text-[12.5px]">{azimuthAngle}°</span>
           </div>
-          <div className="flex items-center justify-between py-0.5">
-            <span className="text-slate-400 text-[11px]">Mounting Type</span>
-            <span className="font-bold text-blue-300 text-[11px] capitalize truncate max-w-[120px]">
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-slate-300 font-medium text-[12px]">Mounting Type</span>
+            <span
+              title={`${structType.toUpperCase()} (Mounting height: ${structHeight}m)`}
+              className="font-bold text-sky-300 text-[12px] capitalize truncate max-w-[140px] cursor-help hover:text-sky-200"
+            >
               {structType} ({structHeight}m)
             </span>
           </div>
-          <div className="flex items-center justify-between py-0.5">
-            <span className="text-slate-400 text-[11px]">Excluded Area</span>
-            <span className="font-bold text-red-400 text-[12px]">{excludedArea.toFixed(1)} m²</span>
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-slate-300 font-medium text-[12px]">Excluded Area</span>
+            <span className="font-bold text-rose-400 font-mono text-[12.5px]">{excludedArea.toFixed(1)} m²</span>
+          </div>
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-slate-300 font-medium text-[12px]">Remaining Space</span>
+            <span className="font-bold text-emerald-300 font-mono text-[12.5px]">{remainingArea.toFixed(1)} m²</span>
           </div>
         </div>
 
         {/* Extended Specs dropdown */}
         {showTechSpecs && (
-          <div className="pt-2 border-t border-slate-800 space-y-1.5 text-[10.5px] bg-slate-950/60 p-2 rounded-xl">
+          <div className="pt-2 border-t border-slate-800 space-y-1.5 text-[11px] bg-slate-950/80 p-2.5 rounded-xl">
             <div className="flex items-center justify-between">
               <span className="text-slate-400">PV Module</span>
-              <span className="font-semibold text-slate-200 truncate max-w-[110px]">
-                {designData.panel_make || "550W Module"}
+              <span
+                title={designData.panel_make || designData.panel_model || "550W Module"}
+                className="font-semibold text-slate-200 truncate max-w-[130px] cursor-help"
+              >
+                {designData.panel_make || designData.panel_model || "550W Module"}
               </span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-slate-400">Wattage</span>
-              <span className="font-semibold text-slate-200">{panelWattage} Wp</span>
+              <span className="font-semibold text-slate-200 font-mono">{panelWattage} Wp</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-slate-400">Orientation</span>
@@ -226,11 +236,7 @@ export default function DesignSummaryPanel({
             </div>
             <div className="flex items-center justify-between">
               <span className="text-slate-400">Coverage</span>
-              <span className="font-semibold text-blue-400">{coveragePct.toFixed(1)}%</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Remaining Area</span>
-              <span className="font-semibold text-emerald-400">{remainingArea.toFixed(1)} m²</span>
+              <span className="font-semibold text-blue-400 font-mono">{coveragePct.toFixed(1)}%</span>
             </div>
           </div>
         )}
@@ -240,7 +246,7 @@ export default function DesignSummaryPanel({
           variant="outline"
           size="sm"
           onClick={() => setShowBomModal(true)}
-          className="w-full text-[11px] h-7 justify-between font-semibold border-slate-700 bg-slate-800/80 text-blue-300 hover:bg-slate-700 hover:text-white rounded-xl mt-1"
+          className="w-full text-xs h-7 justify-between font-semibold border-slate-700 bg-slate-800/80 text-blue-300 hover:bg-slate-700 hover:text-white rounded-xl mt-1.5"
         >
           <div className="flex items-center gap-1.5">
             <Box className="w-3 h-3 text-blue-400" />

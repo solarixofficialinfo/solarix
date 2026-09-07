@@ -336,7 +336,7 @@ export default function SolarStudio() {
   }, [searchQuery]);
 
   // Apply Selected Location to Canonical State & Map
-  const applySelectedLocation = (details, shouldClearGeometry = false) => {
+  const applySelectedLocation = useCallback((details, shouldClearGeometry = false) => {
     const lat = Number(details.latitude);
     const lng = Number(details.longitude);
 
@@ -345,16 +345,16 @@ export default function SolarStudio() {
       return;
     }
 
-    const formattedAddr = details.formatted_address || details.description || details.name;
+    const formattedAddr = details.formatted_address || details.description || details.name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     setSearchQuery(formattedAddr);
 
     const updates = {
-      address: details.address || details.name,
+      address: details.address || details.name || formattedAddr,
       formatted_address: formattedAddr,
       latitude: lat,
       longitude: lng,
       place_id: details.place_id || "",
-      site_name: `${details.city || details.name} Solar Rooftop`,
+      site_name: `${details.city || details.name || "Site"} Solar Rooftop`,
     };
 
     if (shouldClearGeometry) {
@@ -363,12 +363,23 @@ export default function SolarStudio() {
       updates.obstacles = [];
       updates.walkways = [];
       updates.roof_area_sqm = 0;
+      updates.roof_perimeter_m = 0;
+      updates.roof_dimensions = { length_m: 0, width_m: 0 };
       updates.usable_area_sqm = 0;
       updates.panel_count = 0;
       updates.system_kw = 0;
       updates.coverage_pct = 0;
+      updates.calibration = {};
+      updates.structure_nodes = [];
+      updates.structure_members = [];
       updates.saved_views = [];
+      setIsCalibrated(false);
+      setSelectedPanelId(null);
       setSavedViews([]);
+      // Save protection: reset lastSavedTime so user must explicitly click "Save Design"
+      setLastSavedTime(null);
+      // Clear in-map transient layers
+      liveMapRef.current?.clearDrawState?.();
     }
 
     updateDesignData(updates);
@@ -376,22 +387,78 @@ export default function SolarStudio() {
     if (liveMapRef.current?.panTo) {
       liveMapRef.current.panTo(lat, lng);
     }
+    if (liveMapRef.current?.resetMarkerTo) {
+      liveMapRef.current.resetMarkerTo(lat, lng);
+    }
 
-    toast.success(`Location anchored to ${details.name || formattedAddr} (${lat.toFixed(5)}, ${lng.toFixed(5)})`);
-  };
+    if (shouldClearGeometry) {
+      toast.success(`Site location updated. Previous roof mapping cleared.`);
+    } else {
+      toast.success(`Location anchored to ${details.name || formattedAddr} (${lat.toFixed(5)}, ${lng.toFixed(5)})`);
+    }
+  }, [updateDesignData]);
+
+  // Centralized Location Change Controller
+  const requestLocationChange = useCallback((newCoords, addressInfo = {}) => {
+    const newLat = Number(newCoords.latitude ?? newCoords.lat);
+    const newLng = Number(newCoords.longitude ?? newCoords.lng);
+
+    if (isNaN(newLat) || isNaN(newLng) || newLat === 0) {
+      toast.error("Could not resolve valid GPS coordinates for this location.");
+      return;
+    }
+
+    // Edge case: Deterministically cancel any in-progress drawing or editing
+    if (activeTool === "draw_roof" || activeTool === "edit_roof") {
+      setActiveTool("select");
+      liveMapRef.current?.clearDrawState?.();
+    }
+
+    const currentLat = Number(designData.latitude);
+    const currentLng = Number(designData.longitude);
+    const hasExistingRoof = Array.isArray(designData.roof_polygon) && designData.roof_polygon.length >= 3;
+    const isDifferentLocation = Math.abs(currentLat - newLat) > 0.000015 || Math.abs(currentLng - newLng) > 0.000015;
+
+    const locationDetails = {
+      latitude: newLat,
+      longitude: newLng,
+      formatted_address: addressInfo.formatted_address || addressInfo.name || designData.formatted_address || `${newLat.toFixed(5)}, ${newLng.toFixed(5)}`,
+      address: addressInfo.address || addressInfo.name || designData.address || `${newLat.toFixed(5)}, ${newLng.toFixed(5)}`,
+      place_id: addressInfo.place_id || "",
+      city: addressInfo.city || "",
+      name: addressInfo.name || addressInfo.formatted_address || `${newLat.toFixed(5)}, ${newLng.toFixed(5)}`,
+    };
+
+    if (hasExistingRoof && isDifferentLocation) {
+      setPendingLocation(locationDetails);
+      setShowLocationChangeConfirm(true);
+    } else {
+      applySelectedLocation(locationDetails, false);
+    }
+  }, [designData.latitude, designData.longitude, designData.roof_polygon, designData.formatted_address, designData.address, activeTool, applySelectedLocation]);
+
+  const handleCancelLocationChange = useCallback(() => {
+    setShowLocationChangeConfirm(false);
+    setPendingLocation(null);
+    if (liveMapRef.current?.resetMarkerTo) {
+      liveMapRef.current.resetMarkerTo(Number(designData.latitude), Number(designData.longitude));
+    }
+    toast.info("Site location change cancelled. Existing roof design preserved.");
+  }, [designData.latitude, designData.longitude]);
+
+  const handleConfirmLocationChange = useCallback(() => {
+    setShowLocationChangeConfirm(false);
+    if (pendingLocation) {
+      applySelectedLocation(pendingLocation, true);
+    }
+    setPendingLocation(null);
+  }, [pendingLocation, applySelectedLocation]);
 
   // Capture the current map center as the confirmed design site
   const handleCaptureLocation = useCallback(({ lat, lng }) => {
     if (!lat || !lng || isNaN(lat) || isNaN(lng)) return;
-    updateDesignData({
-      latitude: lat,
-      longitude: lng,
-      formatted_address: designData.formatted_address
-        ? designData.formatted_address
-        : `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
-    });
-    toast.success(`Site location captured: ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
-  }, [updateDesignData, designData.formatted_address]);
+    requestLocationChange({ latitude: lat, longitude: lng });
+  }, [requestLocationChange]);
 
   // Select Search Result Item
   const handleSelectPrediction = async (item) => {
@@ -400,12 +467,7 @@ export default function SolarStudio() {
     try {
       const details = await getPlaceDetails(item);
       if (details && details.latitude && details.longitude) {
-        if (designData.roof_polygon && designData.roof_polygon.length >= 3 && (designData.latitude !== details.latitude || designData.longitude !== details.longitude)) {
-          setPendingLocation(details);
-          setShowLocationChangeConfirm(true);
-        } else {
-          applySelectedLocation(details, false);
-        }
+        requestLocationChange(details, details);
       } else {
         toast.error("Location coordinates unavailable. Try another search or GPS.");
       }
@@ -422,12 +484,7 @@ export default function SolarStudio() {
     try {
       const details = await getCurrentLocationDetails();
       if (details && details.latitude && details.longitude) {
-        if (designData.roof_polygon && designData.roof_polygon.length >= 3) {
-          setPendingLocation(details);
-          setShowLocationChangeConfirm(true);
-        } else {
-          applySelectedLocation(details, false);
-        }
+        requestLocationChange(details, details);
       }
     } catch (err) {
       toast.error(err.message || "Failed to detect GPS location.");
@@ -965,8 +1022,8 @@ export default function SolarStudio() {
           3. MAIN WORKSPACE (MAP DOMINANT ~80% + RIGHT INFO PANEL ~20%)
       ────────────────────────────────────────────────────────────────────────── */}
       <div className={`grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-2.5 flex-1 min-h-0 ${isFullscreen ? "h-full" : ""}`}>
-        {/* CENTER / DOMINANT WORKSPACE (9 cols on lg/xl = 75–80% width) */}
-        <div className="xl:col-span-9 lg:col-span-9 flex flex-col relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl min-h-[580px] h-full">
+        {/* CENTER / DOMINANT WORKSPACE (9 cols on xl = 75% width, 8 cols on lg = ~67%) */}
+        <div className="xl:col-span-9 lg:col-span-8 flex flex-col relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl min-h-[580px] h-full">
           {/* FLOATING SECTION CONTROL DRAWER (Compact floating card over map) */}
           {openSection && (
             <div className="absolute top-14 left-4 z-40 w-80 bg-slate-900/95 backdrop-blur-md rounded-2xl border border-slate-700/80 shadow-2xl p-3.5 text-white space-y-3 animate-in fade-in slide-in-from-left-2 duration-150">
@@ -1388,7 +1445,7 @@ export default function SolarStudio() {
               setActiveTab={setActiveTab}
               isFullscreen={isFullscreen}
               setIsFullscreen={setIsFullscreen}
-              onLocationChange={(coords) => updateDesignData(coords)}
+              onLocationChange={(coords) => requestLocationChange(coords)}
               onCaptureLocation={handleCaptureLocation}
               roofPolygon={designData.roof_polygon}
               setRoofPolygon={handleSetRoofPolygon}
@@ -1518,6 +1575,7 @@ export default function SolarStudio() {
                 activeTool={activeTool}
                 setActiveTool={setActiveTool}
                 isCalibrated={isCalibrated}
+                onLocationChange={(coords) => requestLocationChange(coords)}
                 onCaptureLocation={handleCaptureLocation}
               />
               <Rooftop3DViewer
@@ -1539,8 +1597,8 @@ export default function SolarStudio() {
           )}
         </div>
 
-        {/* RIGHT COLUMN: COMPACT DESIGN INFORMATION & GALLERY (3 cols = 20–25% width) */}
-        <div className="xl:col-span-3 lg:col-span-3 overflow-y-auto space-y-2.5">
+        {/* RIGHT COLUMN: COMPACT DESIGN INFORMATION & GALLERY (3 cols on xl = 25%, 4 cols on lg = 33%) */}
+        <div className="xl:col-span-3 lg:col-span-4 overflow-y-auto space-y-2.5">
           <DesignSummaryPanel
             designData={designData}
             savedViews={savedViews}
@@ -1598,7 +1656,7 @@ export default function SolarStudio() {
             </div>
             <div>
               <div className="text-[10px] uppercase font-semibold text-slate-400">Roof Area</div>
-              <div className="text-sm font-extrabold text-white">{designData.roof_area_sqm || 314.8} m²</div>
+              <div className="text-sm font-extrabold text-white">{Number(designData.roof_area_sqm || 0).toFixed(1)} m²</div>
             </div>
           </div>
 
@@ -1609,7 +1667,7 @@ export default function SolarStudio() {
             </div>
             <div>
               <div className="text-[10px] uppercase font-semibold text-slate-400">Usable Area</div>
-              <div className="text-sm font-extrabold text-white">{designData.usable_area_sqm || 272.6} m²</div>
+              <div className="text-sm font-extrabold text-white">{Number(designData.usable_area_sqm || 0).toFixed(1)} m²</div>
             </div>
           </div>
 
@@ -1773,41 +1831,35 @@ export default function SolarStudio() {
           6. SITE LOCATION CHANGE CONFIRMATION DIALOG
       ────────────────────────────────────────────────────────────────────────── */}
       <Dialog open={showLocationChangeConfirm} onOpenChange={setShowLocationChangeConfirm}>
-        <DialogContent className="max-w-md bg-slate-900 border-slate-800 text-white">
+        <DialogContent className="max-w-md bg-slate-900 border-slate-700 text-white shadow-2xl">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base text-white">
-              <AlertTriangle className="w-5 h-5 text-amber-400" /> Change Site Location?
+            <DialogTitle className="flex items-center gap-2 text-base text-white font-bold">
+              <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" /> Change Site Location?
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2 text-xs text-slate-300">
-            <p>
-              You are moving to: <b>{pendingLocation?.name || pendingLocation?.formatted_address || "a new site"}</b>.
-            </p>
-            <div className="p-3 bg-amber-950/70 border border-amber-500/60 rounded-xl text-amber-200 leading-relaxed font-semibold">
-              Changing site location will remove the current roof mapping and 3D geometry.
+            <div className="p-3.5 bg-amber-950/80 border border-amber-500/70 rounded-xl text-amber-200 text-xs leading-relaxed font-semibold">
+              Changing the site location will remove the current roof mapping, panel layout and location-dependent 3D design.
             </div>
-            <p className="text-[11px] text-slate-400">
-              Do you want to proceed and reset the roof boundary for the new location coordinates?
-            </p>
+            {pendingLocation && (
+              <div className="text-[11.5px] text-slate-300">
+                New Target Location: <span className="font-semibold text-white">{pendingLocation.formatted_address || pendingLocation.address || pendingLocation.name || `${pendingLocation.latitude.toFixed(5)}, ${pendingLocation.longitude.toFixed(5)}`}</span>
+              </div>
+            )}
           </div>
-          <DialogFooter className="gap-2">
+          <DialogFooter className="flex items-center justify-end gap-2.5 pt-2">
             <Button
               variant="outline"
-              onClick={() => setShowLocationChangeConfirm(false)}
-              className="bg-slate-800 border-slate-700 text-white hover:bg-slate-700 text-xs"
+              onClick={handleCancelLocationChange}
+              className="bg-slate-800 border-slate-700 text-slate-200 hover:text-white hover:bg-slate-700 text-xs font-semibold px-4"
             >
               Cancel
             </Button>
             <Button
-              onClick={() => {
-                setShowLocationChangeConfirm(false);
-                if (pendingLocation) {
-                  applySelectedLocation(pendingLocation, true);
-                }
-              }}
-              className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs"
+              onClick={handleConfirmLocationChange}
+              className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs px-4 shadow-sm"
             >
-              Confirm & Remove Old Geometry
+              Change Location
             </Button>
           </DialogFooter>
         </DialogContent>
