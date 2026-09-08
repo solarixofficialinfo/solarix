@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import dayjs from "dayjs";
-import { Field, SelectField, UNIT_OPTIONS, CATEGORY_OPTIONS, ConfirmDialog } from "./_shared";
+import { Field, SelectField, UNIT_OPTIONS, CATEGORY_OPTIONS, ConfirmDialog, formatUnit, getStandardizedUnitOptions } from "./_shared";
 import EditTransactionDialog from "./EditTransactionDialog";
 
 const STATUS_STYLES = {
@@ -39,7 +39,7 @@ export default function ProductDrawer({ product, open, onClose, onChanged }) {
   useEffect(() => {
     if (!product || !open) return;
     setTab("details");
-    setForm({ name: product.name, size: product.size || "", category: product.category || "Solar Panel", unit: product.unit || "Nos", min_stock: product.min_stock || 0, rate: product.rate || 0, status: product.status || "Active", high_value_goods: product.high_value_goods || false, serial_number_required: product.serial_number_required || false });
+    setForm({ name: product.name, size: product.size || "", category: product.category || "Solar Panel", unit: formatUnit(product.unit || "Nos"), min_stock: product.min_stock || 0, rate: product.rate || 0, status: product.status || "Active", high_value_goods: product.high_value_goods || false, serial_number_required: product.serial_number_required || false });
     loadStats();
   }, [product, open, loadStats]);
 
@@ -65,7 +65,12 @@ export default function ProductDrawer({ product, open, onClose, onChanged }) {
   const saveProduct = async () => {
     setBusy(true);
     try {
-      const payload = { ...form, min_stock: Number(form.min_stock) || 0, rate: Number(form.rate) || 0 };
+      const payload = {
+        ...form,
+        unit: formatUnit(form.unit || "Nos"),
+        min_stock: Number(form.min_stock) || 0,
+        rate: Number(form.rate) || 0
+      };
       await api.patch(`/inventory/products/${product.id}`, payload);
       toast.success("Product updated successfully.");
       onChanged?.(product.id);
@@ -121,7 +126,7 @@ export default function ProductDrawer({ product, open, onClose, onChanged }) {
               <div className="flex items-center gap-2 mt-1 text-xs">
                 <Badge variant="outline" className="bg-slate-50">{form.category || "Solar"}</Badge>
                 <Badge variant="outline" className={STATUS_STYLES[stockStatus]}>{stockStatus}</Badge>
-                <span className="text-slate-500">Balance · <span className="tabular-nums font-bold text-slate-900">{balance}</span> {form.unit}</span>
+                <span className="text-slate-500">Balance · <span className="tabular-nums font-bold text-slate-900">{balance}</span> {formatUnit(form.unit)}</span>
               </div>
             </div>
           </div>
@@ -151,7 +156,7 @@ export default function ProductDrawer({ product, open, onClose, onChanged }) {
                 <Field label="Product Name" value={form.name} onChange={(v) => setForm({ ...form, name: v.toUpperCase() })} required testid="pd-name" />
                 <Field label="Size / Specification" value={form.size} onChange={(v) => setForm({ ...form, size: v })} testid="pd-size" />
                 <SelectField label="Category" value={form.category} onChange={(v) => setForm({ ...form, category: v })} options={CATEGORY_OPTIONS} testid="pd-category" />
-                <SelectField label="Unit" value={form.unit} onChange={(v) => setForm({ ...form, unit: v })} options={UNIT_OPTIONS} testid="pd-unit" />
+                <SelectField label="Unit" value={form.unit} onChange={(v) => setForm({ ...form, unit: v })} options={getStandardizedUnitOptions(form.unit)} testid="pd-unit" />
                 <Field label="Minimum Stock Level" type="number" value={form.min_stock} onChange={(v) => setForm({ ...form, min_stock: v })} testid="pd-min" />
                 <Field label="Rate / Unit Price" type="number" value={form.rate} onChange={(v) => setForm({ ...form, rate: v })} testid="pd-rate" />
                 <SelectField label="Status" value={form.status} onChange={(v) => setForm({ ...form, status: v })} options={["Active", "Inactive"]} testid="pd-status" />
@@ -197,7 +202,7 @@ export default function ProductDrawer({ product, open, onClose, onChanged }) {
           {/* Section 2: Inventory Statistics */}
           {tab === "stats" && (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              <StatTile label="Current Stock" value={`${balance} ${form.unit}`} icon={Layers} accent="bg-blue-50 text-blue-600" />
+              <StatTile label="Current Stock" value={`${balance} ${formatUnit(form.unit)}`} icon={Layers} accent="bg-blue-50 text-blue-600" />
               <StatTile label="Total Inward" value={stats?.total_in ?? 0} icon={ArrowDownToLine} accent="bg-emerald-50 text-emerald-600" />
               <StatTile label="Total Outward" value={stats?.total_out ?? 0} icon={ArrowUpFromLine} accent="bg-amber-50 text-amber-600" />
               <StatTile label="Inward Entries" value={stats?.inward_count ?? 0} icon={ArrowDownToLine} accent="bg-emerald-50 text-emerald-600" />
@@ -262,7 +267,7 @@ export default function ProductDrawer({ product, open, onClose, onChanged }) {
                           </td>
                           <td className="px-4 py-2 text-xs">{r.type === "Inward" ? r.source_name : r.client_name || "—"}</td>
                           <td className="px-4 py-2 text-right tabular-nums font-semibold">{r.quantity}</td>
-                          <td className="px-4 py-2 text-xs text-center">{r.unit || "Nos"}</td>
+                          <td className="px-4 py-2 text-xs text-center">{formatUnit(r.unit)}</td>
                           <td className="px-4 py-2 text-[10px] text-slate-500">{r.created_by_name || "—"}</td>
                           <td className="px-2 py-2 text-center">
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditingTxn(r)} data-testid={`pd-tx-edit-${r.id}`}><Pencil className="w-3.5 h-3.5" /></Button>

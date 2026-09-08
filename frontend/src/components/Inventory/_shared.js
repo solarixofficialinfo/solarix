@@ -9,7 +9,13 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { AlertTriangle } from "lucide-react";
 import { getCachedProducts, fetchProductsDeduplicated } from "@/lib/productCache";
 import { useProductList } from "@/hooks/useInventory";
-export const UNIT_OPTIONS = ["Nos", "Pair", "Mtr", "Set", "Box", "Pcs", "Kg", "Ltr", "Roll"];
+export {
+  STANDARDIZED_UNITS,
+  UNIT_OPTIONS,
+  normalizeUnit,
+  formatUnit,
+  getStandardizedUnitOptions,
+} from "@/lib/units";
 export const CATEGORY_OPTIONS = ["Solar Panel", "Inverter", "Battery", "BoS", "Cable", "Structure", "MC4 / Connector", "Earthing", "Net Meter", "Tools", "Other"];
 export const REF_TYPES = ["Challan Number", "Invoice Number", "Book Number", "GRN Number", "Transport Number"];
 export const OUTWARD_REF_TYPES = ["Challan Number", "Book Number", "Other"];

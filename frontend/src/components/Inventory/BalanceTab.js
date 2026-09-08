@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Search, Activity, Download } from "lucide-react";
 import { toast } from "sonner";
-import { CATEGORY_OPTIONS, normalizeSizeForMatching } from "./_shared";
+import { CATEGORY_OPTIONS, normalizeSizeForMatching, formatUnit } from "./_shared";
 import { useEntitlements } from "@/hooks/useEntitlements";
 
 const STATUS_STYLES = {
@@ -65,7 +65,7 @@ export default function BalanceTab({ products, globalSearch }) {
       p.total_in || 0,
       p.total_out || 0,
       p.balance || 0,
-      `"${(p.unit || "Nos").replace(/"/g, '""')}"`,
+      `"${(formatUnit(p.unit)).replace(/"/g, '""')}"`,
       p.min_stock || 0,
       `"${(p.stock_status || "Normal").replace(/"/g, '""')}"`
     ]);
@@ -165,7 +165,7 @@ export default function BalanceTab({ products, globalSearch }) {
                     </td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-emerald-700 font-medium">{p.total_in || 0}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-amber-700 font-medium">{p.total_out || 0}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums font-bold text-slate-900">{p.balance}{" "}<span className="text-[10px] text-slate-500 font-normal">{p.unit || "Nos"}</span></td>
+                    <td className="px-4 py-2.5 text-right tabular-nums font-bold text-slate-900">{p.balance}{" "}<span className="text-[10px] text-slate-500 font-normal">{formatUnit(p.unit)}</span></td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-xs text-slate-500">{p.min_stock || 0}</td>
                     <td className="px-4 py-2.5 text-center">
                       <Badge variant="outline" className={`${STATUS_STYLES[p.stock_status] || ""} text-[10px]`}>{p.stock_status}</Badge>

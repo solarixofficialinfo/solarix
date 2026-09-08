@@ -32,6 +32,7 @@ import {
   getCartesianPolygonArea,
   getCartesianPolygonPerimeter,
   getPolygonBounds,
+  projectMetersToLatLng,
 } from "./utils/geoCalculations";
 import {
   searchLocations,
@@ -104,6 +105,26 @@ export default function SolarStudio() {
     length: 1.8,
     width: 1.8,
     height: 1.6,
+  });
+
+  // Manual 3D Roof Creator Form State
+  const [showManualRoofModal, setShowManualRoofModal] = useState(false);
+  const [manualRoofForm, setManualRoofForm] = useState({
+    type: "gable", // 'flat' | 'single_slope' | 'gable' | 'hip' | 'custom_polygon'
+    width_m: 12.0,
+    length_m: 8.0,
+    pitch_deg: 15,
+    azimuth_deg: 180,
+    eave_height_m: 3.5,
+    ridge_height_m: 5.1,
+    setback_m: 0.5,
+    customPoints: [
+      { x: -6.0, y: -4.0 },
+      { x: 6.0, y: -4.0 },
+      { x: 6.0, y: 4.0 },
+      { x: 0.0, y: 6.5 },
+      { x: -6.0, y: 4.0 },
+    ],
   });
 
   // Viewport Refs
@@ -315,6 +336,144 @@ export default function SolarStudio() {
     toast.success(`Generated layout: ${result.panelCount} panels (${result.totalKw.toFixed(2)} kWp)`);
   }, [designData]);
 
+  // Update Custom Polygon Coordinates in Manual Mode
+  const handleUpdateCustomPoint = (idx, axis, val) => {
+    setManualRoofForm((prev) => {
+      const updated = [...prev.customPoints];
+      updated[idx] = {
+        ...updated[idx],
+        [axis]: parseFloat(val) || 0,
+      };
+      return { ...prev, customPoints: updated };
+    });
+  };
+
+  const handleAddCustomPoint = () => {
+    setManualRoofForm((prev) => {
+      const pts = prev.customPoints || [];
+      const last = pts[pts.length - 1] || { x: 0, y: 0 };
+      return {
+        ...prev,
+        customPoints: [...pts, { x: Math.round((last.x + 2) * 10) / 10, y: Math.round(last.y * 10) / 10 }],
+      };
+    });
+  };
+
+  const handleDeleteCustomPoint = (idx) => {
+    setManualRoofForm((prev) => {
+      if ((prev.customPoints || []).length <= 3) {
+        toast.warning("A custom polygon roof requires at least 3 vertices.");
+        return prev;
+      }
+      return {
+        ...prev,
+        customPoints: prev.customPoints.filter((_, i) => i !== idx),
+      };
+    });
+  };
+
+  // Generate 3D Roof Mesh & Polygon from Manual Form
+  const handleGenerateManualRoof = () => {
+    const origin = {
+      lat: Number(designData.latitude) || 16.69512,
+      lng: Number(designData.longitude) || 74.46107,
+    };
+
+    let localCoords = [];
+    const { type, width_m, length_m, pitch_deg, azimuth_deg, eave_height_m, setback_m } = manualRoofForm;
+    const w = Math.max(1, Number(width_m) || 12);
+    const l = Math.max(1, Number(length_m) || 8);
+    const pitch = type === "flat" ? 0 : Math.max(0, Math.min(60, Number(pitch_deg) || 0));
+    const eave = Math.max(1, Number(eave_height_m) || 3.5);
+    const setback = Math.max(0, Number(setback_m) || 0.5);
+
+    let calculatedRidge = Number(manualRoofForm.ridge_height_m);
+    if (!calculatedRidge || calculatedRidge <= eave) {
+      if (type === "flat") {
+        calculatedRidge = eave;
+      } else if (type === "single_slope") {
+        calculatedRidge = eave + w * Math.tan((pitch * Math.PI) / 180);
+      } else {
+        calculatedRidge = eave + (w / 2) * Math.tan((pitch * Math.PI) / 180);
+      }
+    }
+
+    if (type === "custom_polygon") {
+      if (!manualRoofForm.customPoints || manualRoofForm.customPoints.length < 3) {
+        toast.error("Custom polygon roof requires at least 3 vertices.");
+        return;
+      }
+      localCoords = manualRoofForm.customPoints.map((pt) => ({
+        x: Number(pt.x) || 0,
+        y: Number(pt.y) || 0,
+      }));
+    } else {
+      // Generate centered rectangular boundary (local X = width, local Y = length)
+      const hw = w / 2;
+      const hl = l / 2;
+      localCoords = [
+        { x: -hw, y: -hl },
+        { x: hw, y: -hl },
+        { x: hw, y: hl },
+        { x: -hw, y: hl },
+      ];
+    }
+
+    // Convert local Cartesian meters to GPS Lat/Lng centered at site origin
+    const polygonWithGps = localCoords.map((pt) => {
+      const gps = projectMetersToLatLng(pt.x, pt.y, origin);
+      return {
+        x: Math.round(pt.x * 100) / 100,
+        y: Math.round(pt.y * 100) / 100,
+        lat: gps.lat,
+        lng: gps.lng,
+      };
+    });
+
+    const area = getCartesianPolygonArea(polygonWithGps);
+    const perimeter = getCartesianPolygonPerimeter(polygonWithGps);
+    const bounds = getPolygonBounds(polygonWithGps);
+
+    const newRoofObj = {
+      type,
+      pitch_deg: pitch,
+      azimuth_deg: Number(azimuth_deg) || 180,
+      elevation_m: eave,
+      eave_height_m: eave,
+      ridge_height_m: Math.round(calculatedRidge * 10) / 10,
+      setback_m: setback,
+      source: "manual",
+      dimensions: {
+        width_m: Math.round((bounds.width || w) * 10) / 10,
+        length_m: Math.round((bounds.length || l) * 10) / 10,
+      },
+    };
+
+    setDesignData((prev) => ({
+      ...prev,
+      roof_polygon: polygonWithGps,
+      roof_area_sqm: Math.round(area * 10) / 10,
+      roof_perimeter_m: Math.round(perimeter * 10) / 10,
+      roof_dimensions: newRoofObj.dimensions,
+      usable_area_sqm: Math.max(0, Math.round(area * 0.85 * 10) / 10),
+      roof: newRoofObj,
+      roof_type: type,
+      roof_pitch: pitch,
+      building_elevation_m: eave,
+      eave_height_m: eave,
+      ridge_height_m: newRoofObj.ridge_height_m,
+      roof_source: "manual",
+    }));
+
+    setShowManualRoofModal(false);
+    setActiveTab("3d");
+    toast.success(`Generated 3D ${type.replace("_", " ").toUpperCase()} roof (${Math.round(area)} m²). Switched to 3D.`);
+
+    setTimeout(() => {
+      viewer3dRef.current?.applyViewPreset?.("fit");
+    }, 200);
+  };
+
   // Address Search Autocomplete with Debounce
   useEffect(() => {
     if (!searchQuery || searchQuery.length < 2) {
@@ -512,11 +671,13 @@ export default function SolarStudio() {
         width_m: designData.panel_dimensions?.width_m || 1.134,
       },
       orientation: designData.orientation,
+      rowSpacingMeters: Number(designData.row_spacing_m || 0.35),
+      panelSpacingMeters: Number(designData.panel_spacing_m || 0.02),
       azimuthDegrees: Number(designData.azimuth_angle || 180),
     });
 
     if (!check.canFit || !check.newPanel) {
-      toast.warning("No additional panel can fit within the available roof area.");
+      toast.warning(check.reason || "No valid panel position available in the current roof area.");
       return;
     }
 
@@ -525,6 +686,7 @@ export default function SolarStudio() {
     const totalKw = (updatedPanels.length * pWatt) / 1000.0;
     const totalPanelArea = updatedPanels.length * check.newPanel.width * check.newPanel.height;
     const coveragePct = designData.usable_area_sqm > 0 ? (totalPanelArea / designData.usable_area_sqm) * 100 : 0;
+    const remainingArea = Math.max(0, (designData.usable_area_sqm || 0) - totalPanelArea);
 
     setDesignData((prev) => ({
       ...prev,
@@ -532,6 +694,7 @@ export default function SolarStudio() {
       panel_count: updatedPanels.length,
       system_kw: Math.round(totalKw * 100) / 100,
       coverage_pct: Math.min(100, Math.round(coveragePct * 10) / 10),
+      remaining_area_sqm: Math.round(remainingArea * 100) / 100,
     }));
 
     toast.success(`Added panel #${updatedPanels.length}`);
@@ -545,6 +708,7 @@ export default function SolarStudio() {
     const totalKw = (updatedPanels.length * pWatt) / 1000.0;
     const singleArea = (designData.panel_dimensions?.width_m || 1.134) * (designData.panel_dimensions?.length_m || 2.278);
     const coveragePct = designData.usable_area_sqm > 0 ? ((updatedPanels.length * singleArea) / designData.usable_area_sqm) * 100 : 0;
+    const remainingArea = Math.max(0, (designData.usable_area_sqm || 0) - (updatedPanels.length * singleArea));
 
     setDesignData((prev) => ({
       ...prev,
@@ -552,6 +716,7 @@ export default function SolarStudio() {
       panel_count: updatedPanels.length,
       system_kw: Math.round(totalKw * 100) / 100,
       coverage_pct: Math.min(100, Math.round(coveragePct * 10) / 10),
+      remaining_area_sqm: Math.round(remainingArea * 100) / 100,
     }));
   };
 
@@ -607,6 +772,11 @@ export default function SolarStudio() {
 
       const payload = {
         ...designData,
+        roof_type: designData.roof?.type || designData.roof_type || "flat",
+        roof_pitch: designData.roof?.pitch_deg ?? designData.roof_pitch ?? 0,
+        roof_source: designData.roof?.source || (designData.roof_polygon?.length ? "satellite" : "unknown"),
+        eave_height_m: designData.roof?.eave_height_m ?? designData.roof?.elevation_m ?? 3.5,
+        ridge_height_m: designData.roof?.ridge_height_m ?? 5.0,
         saved_views: currentViews,
         layout_snapshot_2d: snap2d,
         layout_snapshot_3d: snap3d,
@@ -1131,12 +1301,28 @@ export default function SolarStudio() {
                     )}
                   </div>
 
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setShowManualRoofModal(true)}
+                    className="w-full h-7 text-xs font-bold bg-indigo-950/60 border border-indigo-700/60 text-indigo-300 hover:bg-indigo-900 hover:text-white rounded-lg gap-1.5 shadow-sm transition"
+                  >
+                    <Box className="w-3.5 h-3.5 text-indigo-400" />
+                    Manual 3D Roof Engine
+                  </Button>
+
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <Label className="text-[10px] font-semibold text-slate-400">Roof Type</Label>
                       <Select
                         value={designData.roof?.type || "flat"}
-                        onValueChange={(val) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, type: val } }))}
+                        onValueChange={(val) =>
+                          setDesignData((prev) => ({
+                            ...prev,
+                            roof_type: val,
+                            roof: { ...prev.roof, type: val },
+                          }))
+                        }
                       >
                         <SelectTrigger className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white">
                           <SelectValue />
@@ -1146,6 +1332,7 @@ export default function SolarStudio() {
                           <SelectItem value="single_slope">Single Slope</SelectItem>
                           <SelectItem value="gable">Gable</SelectItem>
                           <SelectItem value="hip">Hip</SelectItem>
+                          <SelectItem value="custom_polygon">Custom Polygon</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -1154,9 +1341,16 @@ export default function SolarStudio() {
                       <Input
                         type="number"
                         min="0"
-                        max="45"
+                        max="60"
                         value={designData.roof?.pitch_deg ?? 0}
-                        onChange={(e) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, pitch_deg: parseFloat(e.target.value) || 0 } }))}
+                        onChange={(e) => {
+                          const p = parseFloat(e.target.value) || 0;
+                          setDesignData((prev) => ({
+                            ...prev,
+                            roof_pitch: p,
+                            roof: { ...prev.roof, pitch_deg: p },
+                          }));
+                        }}
                         className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
                       />
                     </div>
@@ -1164,14 +1358,22 @@ export default function SolarStudio() {
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <Label className="text-[10px] font-semibold text-slate-400">Bldg Elevation (m)</Label>
+                      <Label className="text-[10px] font-semibold text-slate-400">Eave / Base (m)</Label>
                       <Input
                         type="number"
                         step="0.5"
                         min="1"
-                        max="30"
-                        value={designData.roof?.elevation_m ?? 3.0}
-                        onChange={(e) => setDesignData((prev) => ({ ...prev, roof: { ...prev.roof, elevation_m: parseFloat(e.target.value) || 3.0 } }))}
+                        max="40"
+                        value={designData.roof?.eave_height_m ?? designData.roof?.elevation_m ?? 3.5}
+                        onChange={(e) => {
+                          const ev = parseFloat(e.target.value) || 3.5;
+                          setDesignData((prev) => ({
+                            ...prev,
+                            building_elevation_m: ev,
+                            eave_height_m: ev,
+                            roof: { ...prev.roof, elevation_m: ev, eave_height_m: ev },
+                          }));
+                        }}
                         className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
                       />
                     </div>
@@ -1185,12 +1387,58 @@ export default function SolarStudio() {
                         value={designData.roof?.setback_m ?? designData.setback_m ?? 0.5}
                         onChange={(e) => {
                           const sb = parseFloat(e.target.value) || 0.5;
-                          setDesignData((prev) => ({ ...prev, setback_m: sb, roof: { ...prev.roof, setback_m: sb } }));
+                          setDesignData((prev) => ({
+                            ...prev,
+                            setback_m: sb,
+                            roof: { ...prev.roof, setback_m: sb },
+                          }));
                         }}
                         className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
                       />
                     </div>
                   </div>
+
+                  {designData.roof?.type && designData.roof?.type !== "flat" && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-[10px] font-semibold text-slate-400">Ridge Apex (m)</Label>
+                        <Input
+                          type="number"
+                          step="0.2"
+                          min="1"
+                          max="40"
+                          value={designData.roof?.ridge_height_m ?? 5.0}
+                          onChange={(e) => {
+                            const rh = parseFloat(e.target.value) || 5.0;
+                            setDesignData((prev) => ({
+                              ...prev,
+                              ridge_height_m: rh,
+                              roof: { ...prev.roof, ridge_height_m: rh },
+                            }));
+                          }}
+                          className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-[10px] font-semibold text-slate-400">Ridge Azimuth (°)</Label>
+                        <Input
+                          type="number"
+                          step="5"
+                          min="0"
+                          max="360"
+                          value={designData.roof?.azimuth_deg ?? 180}
+                          onChange={(e) => {
+                            const az = parseFloat(e.target.value) || 180;
+                            setDesignData((prev) => ({
+                              ...prev,
+                              roof: { ...prev.roof, azimuth_deg: az },
+                            }));
+                          }}
+                          className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   {designData.roof_polygon?.length >= 3 && (
                     <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 text-[11px] grid grid-cols-2 gap-1 font-mono">
@@ -1393,12 +1641,9 @@ export default function SolarStudio() {
                   <div className="grid grid-cols-2 gap-1.5">
                     <Button
                       size="sm"
-                      onClick={() => setActiveTool(activeTool === "add_panel" ? "select" : "add_panel")}
-                      className={`h-7 text-xs font-semibold rounded-lg ${
-                        activeTool === "add_panel"
-                          ? "bg-amber-600 hover:bg-amber-700 text-white"
-                          : "bg-amber-950/60 border border-amber-700/60 text-amber-300 hover:bg-amber-900"
-                      }`}
+                      onClick={handleIncreasePanelCount}
+                      className="h-7 text-xs font-semibold rounded-lg bg-amber-950/60 border border-amber-700/60 text-amber-300 hover:bg-amber-900 shadow-sm"
+                      title="Add panel in nearest valid roof position preserving row continuation"
                     >
                       <PlusCircle className="w-3 h-3 mr-1" /> + Add Panel
                     </Button>
@@ -1482,6 +1727,9 @@ export default function SolarStudio() {
               setSelectedPanelId={setSelectedPanelId}
               orientation={designData.orientation}
               azimuthDegrees={Number(designData.azimuth_angle || 180)}
+              rowSpacingMeters={Number(designData.row_spacing_m || 0.35)}
+              panelSpacingMeters={Number(designData.panel_spacing_m || 0.02)}
+              onAddPanel={handleIncreasePanelCount}
               panelSpecs={{
                 length_m: designData.panel_dimensions?.length_m || 2.278,
                 width_m: designData.panel_dimensions?.width_m || 1.134,
@@ -1533,6 +1781,28 @@ export default function SolarStudio() {
               >
                 Right View
               </button>
+              <button
+                onClick={() => viewer3dRef.current?.applyViewPreset?.("fitDesign")}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-700/60 text-emerald-300 transition flex items-center gap-1"
+                title="Fit camera to 3D roof and structure"
+              >
+                <Focus className="w-3 h-3" /> Fit Design
+              </button>
+              <button
+                onClick={() => viewer3dRef.current?.applyViewPreset?.("fitRoof")}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-teal-950/60 hover:bg-teal-900 border border-teal-700/60 text-teal-300 transition flex items-center gap-1"
+                title="Fit camera to 3D roof geometry"
+              >
+                <Maximize2 className="w-3 h-3" /> Fit Roof
+              </button>
+              <div className="w-[1px] h-4 bg-slate-800 mx-1" />
+              <button
+                onClick={() => setShowManualRoofModal(true)}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-indigo-950/70 hover:bg-indigo-900 border border-indigo-700/60 text-indigo-300 transition flex items-center gap-1.5 shadow-sm"
+                title="Open Manual 3D Roof Creator"
+              >
+                <Box className="w-3.5 h-3.5" /> Manual Roof
+              </button>
             </div>
 
             <Rooftop3DViewer
@@ -1570,11 +1840,40 @@ export default function SolarStudio() {
                 roofPolygon={designData.roof_polygon}
                 setRoofPolygon={handleSetRoofPolygon}
                 panels={designData.panels}
+                setPanels={(panelsOrFn) => {
+                  const newPanels = typeof panelsOrFn === "function" ? panelsOrFn(designData.panels) : panelsOrFn;
+                  const pCount = newPanels.filter((p) => !p.hidden).length;
+                  const pWatt = Number(designData.panel_wattage || 550);
+                  const totalKw = (pCount * pWatt) / 1000.0;
+                  const singleArea = (designData.panel_dimensions?.width_m || 1.134) * (designData.panel_dimensions?.length_m || 2.278);
+                  const coveragePct = designData.usable_area_sqm > 0 ? ((pCount * singleArea) / designData.usable_area_sqm) * 100 : 0;
+                  setDesignData((prev) => ({
+                    ...prev,
+                    panels: newPanels,
+                    panel_count: pCount,
+                    system_kw: Math.round(totalKw * 100) / 100,
+                    coverage_pct: Math.min(100, Math.round(coveragePct * 10) / 10),
+                  }));
+                }}
                 obstacles={designData.obstacles}
+                walkways={designData.walkways}
                 setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
                 activeTool={activeTool}
                 setActiveTool={setActiveTool}
+                selectedPanelId={selectedPanelId}
+                setSelectedPanelId={setSelectedPanelId}
+                orientation={designData.orientation}
+                azimuthDegrees={Number(designData.azimuth_angle || 180)}
+                rowSpacingMeters={Number(designData.row_spacing_m || 0.35)}
+                panelSpacingMeters={Number(designData.panel_spacing_m || 0.02)}
+                onAddPanel={handleIncreasePanelCount}
+                panelSpecs={{
+                  length_m: designData.panel_dimensions?.length_m || 2.278,
+                  width_m: designData.panel_dimensions?.width_m || 1.134,
+                  wattage: designData.panel_wattage || 550,
+                }}
                 isCalibrated={isCalibrated}
+                onCalibrationComplete={() => setIsCalibrated(true)}
                 onLocationChange={(coords) => requestLocationChange(coords)}
                 onCaptureLocation={handleCaptureLocation}
               />
@@ -1839,7 +2138,7 @@ export default function SolarStudio() {
           </DialogHeader>
           <div className="space-y-3 py-2 text-xs text-slate-300">
             <div className="p-3.5 bg-amber-950/80 border border-amber-500/70 rounded-xl text-amber-200 text-xs leading-relaxed font-semibold">
-              Changing the site location will remove the current roof mapping, panel layout and location-dependent 3D design.
+              Changing site location will clear the current roof mapping and panel layout.
             </div>
             {pendingLocation && (
               <div className="text-[11.5px] text-slate-300">
@@ -1986,6 +2285,368 @@ export default function SolarStudio() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowObstacleModal(false)} className="bg-slate-800 border-slate-700 text-white">Cancel</Button>
             <Button onClick={handleAddObstacleSubmit} className="bg-red-600 hover:bg-red-700 text-white font-semibold text-xs">Add Obstacle</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ──────────────────────────────────────────────────────────────────────────
+          9. MANUAL 3D ROOF GENERATOR MODAL
+      ────────────────────────────────────────────────────────────────────────── */}
+      <Dialog open={showManualRoofModal} onOpenChange={setShowManualRoofModal}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-slate-900 border-slate-700 text-white shadow-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base text-white font-bold">
+              <Box className="w-5 h-5 text-indigo-400" /> Manual 3D Roof Generator & Engine
+            </DialogTitle>
+            <p className="text-xs text-slate-400 mt-1">
+              Create architectural 3D roofs directly by specifying dimensions or custom coordinates. Generates pitch-derived sloped surfaces, closed gable/hip wedge walls, and canonical polygon geometry.
+            </p>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2 text-xs">
+            {/* Roof Type Selection */}
+            <div>
+              <Label className="text-xs font-bold text-slate-300 mb-1.5 block">1. Select Roof Architecture</Label>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                {[
+                  { type: "flat", label: "Flat Roof", sub: "0° Horizontal" },
+                  { type: "single_slope", label: "Single Slope", sub: "Shed / Monopitch" },
+                  { type: "gable", label: "Gable", sub: "Dual Sloped Ridge" },
+                  { type: "hip", label: "Hip Roof", sub: "4-Facet Pyramid" },
+                  { type: "custom_polygon", label: "Custom Polygon", sub: "Arbitrary Points" },
+                ].map((opt) => (
+                  <button
+                    key={opt.type}
+                    type="button"
+                    onClick={() => {
+                      const newPitch = opt.type === "flat" ? 0 : manualRoofForm.pitch_deg || 15;
+                      const w = Number(manualRoofForm.width_m) || 12;
+                      const eave = Number(manualRoofForm.eave_height_m) || 3.5;
+                      const rGain =
+                        opt.type === "flat"
+                          ? 0
+                          : opt.type === "single_slope"
+                          ? w * Math.tan((newPitch * Math.PI) / 180)
+                          : (w / 2) * Math.tan((newPitch * Math.PI) / 180);
+                      setManualRoofForm((prev) => ({
+                        ...prev,
+                        type: opt.type,
+                        pitch_deg: newPitch,
+                        ridge_height_m: Math.round((eave + rGain) * 10) / 10,
+                      }));
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition ${
+                      manualRoofForm.type === opt.type
+                        ? "bg-indigo-600/20 border-indigo-500 ring-1 ring-indigo-500 text-white"
+                        : "bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-800/60 hover:text-slate-200"
+                    }`}
+                  >
+                    <div className="font-bold text-xs text-white">{opt.label}</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">{opt.sub}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Dimensions & Parameters */}
+            {manualRoofForm.type !== "custom_polygon" ? (
+              <div className="space-y-3 p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl">
+                <Label className="text-xs font-bold text-slate-300 block">2. Building Footprint & Pitch</Label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div>
+                    <Label className="text-[11px] text-slate-400">Width (X / Span) [m]</Label>
+                    <Input
+                      type="number"
+                      step="0.5"
+                      min="2"
+                      max="100"
+                      value={manualRoofForm.width_m}
+                      onChange={(e) => {
+                        const w = parseFloat(e.target.value) || 2;
+                        const eave = Number(manualRoofForm.eave_height_m) || 3.5;
+                        const pitch = Number(manualRoofForm.pitch_deg) || 0;
+                        const rGain =
+                          manualRoofForm.type === "single_slope"
+                            ? w * Math.tan((pitch * Math.PI) / 180)
+                            : (w / 2) * Math.tan((pitch * Math.PI) / 180);
+                        setManualRoofForm((prev) => ({
+                          ...prev,
+                          width_m: w,
+                          ridge_height_m: Math.round((eave + rGain) * 10) / 10,
+                        }));
+                      }}
+                      className="h-8 text-xs font-bold bg-slate-800 border-slate-700 text-white mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px] text-slate-400">Length (Y / Depth) [m]</Label>
+                    <Input
+                      type="number"
+                      step="0.5"
+                      min="2"
+                      max="100"
+                      value={manualRoofForm.length_m}
+                      onChange={(e) =>
+                        setManualRoofForm((prev) => ({ ...prev, length_m: parseFloat(e.target.value) || 2 }))
+                      }
+                      className="h-8 text-xs font-bold bg-slate-800 border-slate-700 text-white mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px] text-slate-400">Azimuth (° orientation)</Label>
+                    <Input
+                      type="number"
+                      step="5"
+                      min="0"
+                      max="360"
+                      value={manualRoofForm.azimuth_deg}
+                      onChange={(e) =>
+                        setManualRoofForm((prev) => ({ ...prev, azimuth_deg: parseFloat(e.target.value) || 0 }))
+                      }
+                      className="h-8 text-xs font-bold bg-slate-800 border-slate-700 text-white mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px] text-slate-400">Pitch Angle (°)</Label>
+                    <Input
+                      type="number"
+                      step="1"
+                      min="0"
+                      max="60"
+                      disabled={manualRoofForm.type === "flat"}
+                      value={manualRoofForm.type === "flat" ? 0 : manualRoofForm.pitch_deg}
+                      onChange={(e) => {
+                        const p = parseFloat(e.target.value) || 0;
+                        const w = Number(manualRoofForm.width_m) || 12;
+                        const eave = Number(manualRoofForm.eave_height_m) || 3.5;
+                        const rGain =
+                          manualRoofForm.type === "single_slope"
+                            ? w * Math.tan((p * Math.PI) / 180)
+                            : (w / 2) * Math.tan((p * Math.PI) / 180);
+                        setManualRoofForm((prev) => ({
+                          ...prev,
+                          pitch_deg: p,
+                          ridge_height_m: Math.round((eave + rGain) * 10) / 10,
+                        }));
+                      }}
+                      className="h-8 text-xs font-bold bg-slate-800 border-slate-700 text-white mt-1 disabled:opacity-50"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px] text-slate-400">Base / Eave Height [m]</Label>
+                    <Input
+                      type="number"
+                      step="0.5"
+                      min="1"
+                      max="50"
+                      value={manualRoofForm.eave_height_m}
+                      onChange={(e) => {
+                        const ev = parseFloat(e.target.value) || 3.5;
+                        const w = Number(manualRoofForm.width_m) || 12;
+                        const p = Number(manualRoofForm.pitch_deg) || 0;
+                        const rGain =
+                          manualRoofForm.type === "single_slope"
+                            ? w * Math.tan((p * Math.PI) / 180)
+                            : (w / 2) * Math.tan((p * Math.PI) / 180);
+                        setManualRoofForm((prev) => ({
+                          ...prev,
+                          eave_height_m: ev,
+                          ridge_height_m: Math.round((ev + rGain) * 10) / 10,
+                        }));
+                      }}
+                      className="h-8 text-xs font-bold bg-slate-800 border-slate-700 text-white mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[11px] text-slate-400">Ridge Apex Height [m]</Label>
+                    <Input
+                      type="number"
+                      step="0.2"
+                      min="1"
+                      max="60"
+                      disabled={manualRoofForm.type === "flat"}
+                      value={
+                        manualRoofForm.type === "flat"
+                          ? manualRoofForm.eave_height_m
+                          : manualRoofForm.ridge_height_m
+                      }
+                      onChange={(e) =>
+                        setManualRoofForm((prev) => ({
+                          ...prev,
+                          ridge_height_m: parseFloat(e.target.value) || prev.eave_height_m,
+                        }))
+                      }
+                      className="h-8 text-xs font-bold bg-slate-800 border-slate-700 text-white mt-1 disabled:opacity-50"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Custom Polygon Coordinate Table */
+              <div className="space-y-3 p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-bold text-slate-300">2. Polygon Vertices (Cartesian Meters from Center)</Label>
+                  <Button
+                    size="sm"
+                    type="button"
+                    onClick={handleAddCustomPoint}
+                    className="h-6 text-[11px] font-bold bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 rounded-lg gap-1"
+                  >
+                    <Plus className="w-3 h-3" /> Add Point
+                  </Button>
+                </div>
+                <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                  {manualRoofForm.customPoints.map((pt, idx) => (
+                    <div key={idx} className="flex items-center gap-2 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800">
+                      <span className="text-[11px] font-mono text-indigo-400 font-bold w-14">P{idx + 1}:</span>
+                      <div className="flex items-center gap-1.5 flex-1">
+                        <span className="text-[10px] text-slate-400">X (m):</span>
+                        <Input
+                          type="number"
+                          step="0.5"
+                          value={pt.x}
+                          onChange={(e) => handleUpdateCustomPoint(idx, "x", e.target.value)}
+                          className="h-6 text-xs font-mono font-bold bg-slate-800 border-slate-700 text-white w-20 px-1.5"
+                        />
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-1">
+                        <span className="text-[10px] text-slate-400">Y (m):</span>
+                        <Input
+                          type="number"
+                          step="0.5"
+                          value={pt.y}
+                          onChange={(e) => handleUpdateCustomPoint(idx, "y", e.target.value)}
+                          className="h-6 text-xs font-mono font-bold bg-slate-800 border-slate-700 text-white w-20 px-1.5"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCustomPoint(idx)}
+                        disabled={manualRoofForm.customPoints.length <= 3}
+                        className="text-red-400 hover:text-red-300 disabled:opacity-30 p-1"
+                        title={manualRoofForm.customPoints.length <= 3 ? "Requires >= 3 points" : "Delete vertex"}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-800/80">
+                  <div>
+                    <Label className="text-[10px] text-slate-400">Pitch Angle (°)</Label>
+                    <Input
+                      type="number"
+                      step="1"
+                      min="0"
+                      max="60"
+                      value={manualRoofForm.pitch_deg}
+                      onChange={(e) =>
+                        setManualRoofForm((prev) => ({ ...prev, pitch_deg: parseFloat(e.target.value) || 0 }))
+                      }
+                      className="h-7 text-xs font-bold bg-slate-800 border-slate-700 text-white mt-0.5"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-slate-400">Eave Height [m]</Label>
+                    <Input
+                      type="number"
+                      step="0.5"
+                      min="1"
+                      max="50"
+                      value={manualRoofForm.eave_height_m}
+                      onChange={(e) =>
+                        setManualRoofForm((prev) => ({ ...prev, eave_height_m: parseFloat(e.target.value) || 3.5 }))
+                      }
+                      className="h-7 text-xs font-bold bg-slate-800 border-slate-700 text-white mt-0.5"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-[10px] text-slate-400">Ridge Height [m]</Label>
+                    <Input
+                      type="number"
+                      step="0.5"
+                      min="1"
+                      max="60"
+                      value={manualRoofForm.ridge_height_m}
+                      onChange={(e) =>
+                        setManualRoofForm((prev) => ({ ...prev, ridge_height_m: parseFloat(e.target.value) || 5.0 }))
+                      }
+                      className="h-7 text-xs font-bold bg-slate-800 border-slate-700 text-white mt-0.5"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Calculated Engineering Preview Card */}
+            <div className="p-3 bg-indigo-950/40 border border-indigo-500/30 rounded-xl grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+              <div>
+                <div className="text-[10px] uppercase text-indigo-300 font-semibold">Footprint Area</div>
+                <div className="text-sm font-extrabold text-white">
+                  {manualRoofForm.type === "custom_polygon"
+                    ? Math.round(getCartesianPolygonArea(manualRoofForm.customPoints) * 10) / 10
+                    : Math.round(
+                        (Number(manualRoofForm.width_m) || 0) * (Number(manualRoofForm.length_m) || 0) * 10
+                      ) / 10}{" "}
+                  m²
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-indigo-300 font-semibold">Sloped Roof Area</div>
+                <div className="text-sm font-extrabold text-emerald-400">
+                  {Math.round(
+                    ((manualRoofForm.type === "custom_polygon"
+                      ? getCartesianPolygonArea(manualRoofForm.customPoints)
+                      : (Number(manualRoofForm.width_m) || 0) * (Number(manualRoofForm.length_m) || 0)) /
+                      Math.max(0.2, Math.cos(((Number(manualRoofForm.pitch_deg) || 0) * Math.PI) / 180))) *
+                      10
+                  ) / 10}{" "}
+                  m²
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-indigo-300 font-semibold">Base / Apex Height</div>
+                <div className="text-sm font-extrabold text-white">
+                  {manualRoofForm.eave_height_m}m /{" "}
+                  {manualRoofForm.type === "flat"
+                    ? manualRoofForm.eave_height_m
+                    : manualRoofForm.ridge_height_m}
+                  m
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-indigo-300 font-semibold">Estimated Capacity</div>
+                <div className="text-sm font-extrabold text-amber-300">
+                  {Math.round(
+                    (((manualRoofForm.type === "custom_polygon"
+                      ? getCartesianPolygonArea(manualRoofForm.customPoints)
+                      : (Number(manualRoofForm.width_m) || 0) * (Number(manualRoofForm.length_m) || 0)) *
+                      0.8) /
+                      2.58) *
+                      0.55 *
+                      10
+                  ) / 10}{" "}
+                  kWp
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-800">
+            <Button
+              variant="outline"
+              onClick={() => setShowManualRoofModal(false)}
+              className="bg-slate-800 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700 text-xs font-semibold px-4"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleGenerateManualRoof}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-5 shadow-lg flex items-center gap-1.5"
+            >
+              <Box className="w-4 h-4" /> Generate 3D Roof Mesh
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

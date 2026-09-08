@@ -16,7 +16,7 @@ import {
   rotatedRectanglesIntersect,
   toRad,
   getCartesianPolygonArea,
-} from "./geoCalculations";
+} from "./geoCalculations.js";
 
 /**
  * Standard Solar Panel Dimensions (Length × Width in meters, Wattage in Wp)
@@ -356,54 +356,306 @@ export function canFitAdditionalPanel({
   walkways = [],
   panelSpecs = DEFAULT_PANEL_SPECS,
   orientation = "portrait",
+  rowSpacingMeters = 0.35,
+  panelSpacingMeters = 0.02,
   azimuthDegrees = 180,
+  nearX = null,
+  nearY = null,
 }) {
   if (!roofPolygon || roofPolygon.length < 3) {
-    return { canFit: false, newPanel: null };
+    return { canFit: false, newPanel: null, reason: "No roof boundary defined." };
   }
 
   const usablePolygon = computeSetbackPolygon(roofPolygon, setbackMeters);
-  const isPortrait = orientation.toLowerCase() === "portrait";
-  const pWidth = isPortrait ? (panelSpecs.width_m || 1.134) : (panelSpecs.length_m || 2.278);
-  const pLength = isPortrait ? (panelSpecs.length_m || 2.278) : (panelSpecs.width_m || 1.134);
+  if (!usablePolygon || usablePolygon.length < 3) {
+    return { canFit: false, newPanel: null, reason: "No usable roof area inside setbacks." };
+  }
+
+  // 1. Determine Panel Dimensions, Orientation, and Azimuth
+  // Preserve configuration from existing panels if present
+  let pWidth, pLength, pRotation, pAzimuth;
+  if (panels.length > 0) {
+    const refPanel = panels[0];
+    pWidth = Number(refPanel.width || (orientation === "landscape" ? (panelSpecs.length_m || 2.278) : (panelSpecs.width_m || 1.134)));
+    pLength = Number(refPanel.height || (orientation === "landscape" ? (panelSpecs.width_m || 1.134) : (panelSpecs.length_m || 2.278)));
+    pRotation = Number(refPanel.rotation || 0);
+    pAzimuth = Number(refPanel.azimuth ?? azimuthDegrees ?? 180);
+  } else {
+    const isLandscape = (orientation || "").toLowerCase() === "landscape";
+    pWidth = isLandscape ? Number(panelSpecs.length_m || 2.278) : Number(panelSpecs.width_m || 1.134);
+    pLength = isLandscape ? Number(panelSpecs.width_m || 1.134) : Number(panelSpecs.length_m || 2.278);
+    pRotation = 0;
+    pAzimuth = Number(azimuthDegrees || 180);
+  }
+
+  // 2. Determine Spacing / Grid Step
+  const effRowSpacing = rowSpacingMeters != null ? Number(rowSpacingMeters) : 0.35;
+  const effPanelSpacing = panelSpacingMeters != null ? Number(panelSpacingMeters) : 0.02;
+  const stepX = pWidth + effPanelSpacing;
+  const stepY = pLength + effRowSpacing;
 
   const bounds = getPolygonBounds(usablePolygon);
-  const stepX = 0.25; // Fine resolution search
-  const stepY = 0.25;
+  const candidates = [];
 
-  for (let y = bounds.minY + pLength / 2; y <= bounds.maxY - pLength / 2 + 0.05; y += stepY) {
-    for (let x = bounds.minX + pWidth / 2; x <= bounds.maxX - pWidth / 2 + 0.05; x += stepX) {
-      const candidate = { x, y, width: pWidth, height: pLength, rotation: 0 };
-      const check = validatePanelPlacement({
-        candidate,
-        roofPolygon,
-        setbackMeters,
-        panels,
-        obstacles,
-        walkways,
+  // 3. Candidate Generation
+  if (panels.length > 0) {
+    // Cluster existing panels into rows by Y coordinate
+    const rowTolerance = pLength * 0.45;
+    const rows = [];
+    const sortedPanels = [...panels].sort((a, b) => {
+      if (Math.abs(b.y - a.y) > rowTolerance) return b.y - a.y; // North to South
+      return a.x - b.x; // West to East
+    });
+
+    for (const p of sortedPanels) {
+      let matchedRow = rows.find((r) => Math.abs(r.y - p.y) <= rowTolerance);
+      if (!matchedRow) {
+        matchedRow = { y: p.y, panels: [] };
+        rows.push(matchedRow);
+      }
+      matchedRow.panels.push(p);
+    }
+
+    // Centroid and sort panels within each row by X
+    rows.forEach((r) => {
+      r.panels.sort((a, b) => a.x - b.x);
+      r.y = r.panels.reduce((sum, p) => sum + p.y, 0) / r.panels.length;
+    });
+
+    // TIER 1: Row continuation (Right & Left) + Internal Gaps
+    rows.forEach((row, rowIdx) => {
+      const rowPanels = row.panels;
+      if (rowPanels.length === 0) return;
+
+      const first = rowPanels[0];
+      const last = rowPanels[rowPanels.length - 1];
+
+      // 1A. Right of last panel in row
+      candidates.push({
+        x: last.x + stepX,
+        y: row.y,
+        row: rowIdx,
+        col: (last.col != null ? last.col + 1 : rowPanels.length),
+        priority: 1,
       });
 
-      if (check.valid) {
-        return {
-          canFit: true,
-          newPanel: {
-            id: `panel-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-            x: Math.round(x * 1000) / 1000,
-            y: Math.round(y * 1000) / 1000,
-            width: pWidth,
-            height: pLength,
-            rotation: 0,
-            azimuth: azimuthDegrees,
-            wattage: panelSpecs.wattage || 550,
-            locked: false,
-            hidden: false,
-          },
-        };
+      // 1B. Left of first panel in row
+      candidates.push({
+        x: first.x - stepX,
+        y: row.y,
+        row: rowIdx,
+        col: (first.col != null ? first.col - 1 : -1),
+        priority: 2,
+      });
+
+      // 1C. Fill any gap within the row
+      for (let i = 0; i < rowPanels.length - 1; i++) {
+        const gap = rowPanels[i + 1].x - rowPanels[i].x;
+        if (gap > stepX * 1.5) {
+          const missingCount = Math.round(gap / stepX) - 1;
+          for (let k = 1; k <= missingCount; k++) {
+            candidates.push({
+              x: rowPanels[i].x + k * stepX,
+              y: row.y,
+              row: rowIdx,
+              col: (rowPanels[i].col != null ? rowPanels[i].col + k : i + k),
+              priority: 0, // Highest priority: fill gaps inside existing row!
+            });
+          }
+        }
+      }
+    });
+
+    // TIER 2: Adjacent Rows (Below and Above existing array)
+    if (rows.length > 0) {
+      // Row below lowest row
+      const lowestRow = rows[rows.length - 1];
+      const newRowY_below = lowestRow.y - stepY;
+      lowestRow.panels.forEach((p, idx) => {
+        candidates.push({
+          x: p.x,
+          y: newRowY_below,
+          row: rows.length,
+          col: p.col ?? idx,
+          priority: 3,
+        });
+      });
+
+      // Row above highest row
+      const highestRow = rows[0];
+      const newRowY_above = highestRow.y + stepY;
+      highestRow.panels.forEach((p, idx) => {
+        candidates.push({
+          x: p.x,
+          y: newRowY_above,
+          row: -1,
+          col: p.col ?? idx,
+          priority: 4,
+        });
+      });
+    }
+
+    // TIER 3: Canonical Grid Expansion across entire usablePolygon
+    const anchorX = panels[0].x;
+    const anchorY = panels[0].y;
+    const minK = Math.floor((bounds.minX + pWidth / 2 - anchorX) / stepX) - 1;
+    const maxK = Math.ceil((bounds.maxX - pWidth / 2 - anchorX) / stepX) + 1;
+    const minM = Math.floor((bounds.minY + pLength / 2 - anchorY) / stepY) - 1;
+    const maxM = Math.ceil((bounds.maxY - pLength / 2 - anchorY) / stepY) + 1;
+
+    const gridCandidates = [];
+    for (let m = maxM; m >= minM; m--) {
+      const cy = anchorY + m * stepY;
+      for (let k = minK; k <= maxK; k++) {
+        const cx = anchorX + k * stepX;
+        const alreadyOccupied = panels.some(
+          (p) => Math.abs(p.x - cx) < pWidth * 0.75 && Math.abs(p.y - cy) < pLength * 0.75
+        );
+        if (!alreadyOccupied) {
+          gridCandidates.push({
+            x: cx,
+            y: cy,
+            row: m,
+            col: k,
+            priority: 5,
+          });
+        }
+      }
+    }
+
+    // Sort grid candidates by proximity to existing panels (or nearX, nearY)
+    const centroidX = nearX != null ? Number(nearX) : panels.reduce((s, p) => s + p.x, 0) / panels.length;
+    const centroidY = nearY != null ? Number(nearY) : panels.reduce((s, p) => s + p.y, 0) / panels.length;
+
+    gridCandidates.sort((a, b) => {
+      const distA = Math.hypot(a.x - centroidX, a.y - centroidY);
+      const distB = Math.hypot(b.x - centroidX, b.y - centroidY);
+      return distA - distB;
+    });
+
+    candidates.sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      const distA = Math.hypot(a.x - centroidX, a.y - centroidY);
+      const distB = Math.hypot(b.x - centroidX, b.y - centroidY);
+      return distA - distB;
+    });
+
+    candidates.push(...gridCandidates);
+  } else {
+    // EMPTY ROOF: place the first panel on canonical grid starting at top-left of usable polygon
+    const startY = bounds.maxY - pLength / 2;
+    const startX = bounds.minX + pWidth / 2;
+    for (let y = startY; y >= bounds.minY + pLength / 2 - 0.05; y -= stepY) {
+      for (let x = startX; x <= bounds.maxX - pWidth / 2 + 0.05; x += stepX) {
+        candidates.push({
+          x,
+          y,
+          row: Math.round((startY - y) / stepY),
+          col: Math.round((x - startX) / stepX),
+          priority: 0,
+        });
       }
     }
   }
 
-  return { canFit: false, newPanel: null };
+  // 4. Test Candidates Against Collision & Boundary Constraints
+  for (const cand of candidates) {
+    const candidateObj = {
+      x: Math.round(cand.x * 1000) / 1000,
+      y: Math.round(cand.y * 1000) / 1000,
+      width: pWidth,
+      height: pLength,
+      rotation: pRotation,
+    };
+
+    // A. Must be completely inside the usable setback polygon (works for arbitrary polygons!)
+    if (!isRectInsidePolygon(candidateObj.x, candidateObj.y, pWidth, pLength, pRotation, usablePolygon)) {
+      continue;
+    }
+
+    // B. Must not collide with any existing panel
+    let collidesWithPanel = false;
+    for (const p of panels) {
+      if (p.hidden) continue;
+      const pRect = {
+        x: p.x,
+        y: p.y,
+        width: p.width,
+        height: p.height,
+        rotation: p.rotation || 0,
+      };
+      if (rotatedRectanglesIntersect(candidateObj, pRect)) {
+        collidesWithPanel = true;
+        break;
+      }
+    }
+    if (collidesWithPanel) continue;
+
+    // C. Must not collide with any obstacle
+    let collidesWithObs = false;
+    for (const obs of obstacles) {
+      const obsRect = {
+        x: Number(obs.x || 0),
+        y: Number(obs.y || 0),
+        width: Number(obs.length || 1.8),
+        height: Number(obs.width || 1.8),
+        rotation: Number(obs.rotation || 0),
+      };
+      if (rotatedRectanglesIntersect(candidateObj, obsRect)) {
+        collidesWithObs = true;
+        break;
+      }
+    }
+    if (collidesWithObs) continue;
+
+    // D. Must not collide with any walkway
+    let collidesWithWalk = false;
+    for (const walk of walkways) {
+      const walkRect = {
+        x: Number(walk.x || 0),
+        y: Number(walk.y || 0),
+        width: Number(walk.width || 0.8),
+        height: Number(walk.length || 3.0),
+        rotation: Number(walk.rotation || 0),
+      };
+      if (rotatedRectanglesIntersect(candidateObj, walkRect)) {
+        collidesWithWalk = true;
+        break;
+      }
+    }
+    if (collidesWithWalk) continue;
+
+    // Valid placement candidate found!
+    const maxId = panels.reduce((max, p) => {
+      const n = parseInt(String(p.id || "").replace(/\D/g, ""), 10);
+      return isNaN(n) ? max : Math.max(max, n);
+    }, 0);
+    const newPanelId = `panel-${maxId + 1}`;
+
+    return {
+      canFit: true,
+      newPanel: {
+        id: newPanelId,
+        x: candidateObj.x,
+        y: candidateObj.y,
+        width: pWidth,
+        height: pLength,
+        rotation: pRotation,
+        azimuth: pAzimuth,
+        row: cand.row ?? 0,
+        col: cand.col ?? 0,
+        wattage: Number(panelSpecs.wattage || 550),
+        locked: false,
+        hidden: false,
+      },
+    };
+  }
+
+  return {
+    canFit: false,
+    newPanel: null,
+    reason: "No valid panel position available in the current roof area.",
+  };
 }
 
 /**

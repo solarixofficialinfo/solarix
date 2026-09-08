@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Save, RotateCcw, Pencil, Trash2, Paperclip, FileText, FileImage, FileSpreadsheet, CheckCircle2, Wand2, Settings } from "lucide-react";
 import { toast } from "sonner";
 import dayjs from "dayjs";
-import { Field, SelectField, TextareaField, ConfirmDialog, UNIT_OPTIONS, OUTWARD_REF_TYPES, today, digitsOnly, ProductAutocompleteInput } from "./_shared";
+import { Field, SelectField, TextareaField, ConfirmDialog, UNIT_OPTIONS, OUTWARD_REF_TYPES, today, digitsOnly, ProductAutocompleteInput, formatUnit, getStandardizedUnitOptions } from "./_shared";
 import { usePermission } from "@/lib/permissions";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import ManualBulkImport from "@/components/ManualBulkImport";
@@ -151,6 +151,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
         : (form.serial_numbers || []);
       const payload = {
         ...form,
+        unit: formatUnit(form.unit || "Nos"),
         quantity: Number(form.quantity),
         serial_numbers: parsedSns,
         serial_number_required: Boolean(form.serial_number_required || parsedSns.length > 0),
@@ -239,7 +240,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
       outward_challan_no: e.outward_challan_no || "",
       reference_type: e.reference_type || "Challan Number",
       product: e.product || "", size: e.size || "", quantity: e.quantity || "",
-      unit: e.unit || "Nos",
+      unit: formatUnit(e.unit || "Nos"),
       remarks: e.remarks || "", status: e.status || "Dispatched",
       attachment_file_id: e.attachment_file_id || "", attachment_filename: e.attachment_filename || "",
       high_value_goods: e.high_value_goods || e.high_value_asset || false,
@@ -428,7 +429,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
                     if (typeof v === "object" && v !== null) {
                       pName = (v.name || "").toUpperCase();
                       sizeVal = v.size || "";
-                      unitVal = v.unit || "Nos";
+                      unitVal = formatUnit(v.unit || form.unit || "Nos");
                       isHighValue = Boolean(form.high_value_goods || v.high_value_goods || v.high_value_asset);
                       isSerialRequired = Boolean(v.serial_number_required);
                     } else {
@@ -438,7 +439,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
                         isHighValue = Boolean(form.high_value_goods || matched.high_value_goods || matched.high_value_asset);
                         isSerialRequired = Boolean(matched.serial_number_required);
                         sizeVal = matched.size || "";
-                        unitVal = matched.unit || "Nos";
+                        unitVal = formatUnit(matched.unit || form.unit || "Nos");
                       } else if (!form.high_value_goods) {
                         const highValueKeywords = ["SOLAR PANEL", "INVERTER", "ACDB", "DCDB", "NET METER", "BATTERY"];
                         isHighValue = highValueKeywords.some(keyword => pName.includes(keyword));
@@ -467,7 +468,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
             <Field label="Size / Spec" value={form.size} onChange={(v) => setForm({ ...form, size: v })} placeholder="e.g. 540W Mono PERC" testid="out-size" />
             <div className="grid grid-cols-2 gap-2">
               <Field label="Quantity" type="number" value={form.quantity} onChange={(v) => setForm({ ...form, quantity: v })} required testid="out-qty" />
-              <SelectField label="Unit" value={form.unit} onChange={(v) => setForm({ ...form, unit: v })} options={UNIT_OPTIONS} testid="out-unit" />
+              <SelectField label="Unit" value={form.unit} onChange={(v) => setForm({ ...form, unit: v })} options={getStandardizedUnitOptions(form.unit)} testid="out-unit" />
             </div>
 
             {/* High Value Goods & Serial Number Tracking Controls */}
@@ -648,7 +649,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
                       <div className="font-semibold text-slate-900 text-xs">{e.product}</div>
                       {e.size && <div className="text-[10px] text-slate-400 mt-0.5">{e.size}</div>}
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{e.quantity} <span className="text-[10px] text-slate-500 font-normal">{e.unit || "Nos"}</span></td>
+                    <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{e.quantity} <span className="text-[10px] text-slate-500 font-normal">{formatUnit(e.unit)}</span></td>
                     <td className="px-4 py-2.5 text-xs">
                       <div className="font-medium text-slate-700">{e.client_name || "—"}</div>
                       {e.project_name && e.project_name !== e.client_name && <div className="text-[10px] text-slate-400">{e.project_name}</div>}
@@ -686,7 +687,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
         open={!!confirmDel}
         onOpenChange={(v) => !v && setConfirmDel(null)}
         title="Delete outward entry?"
-        description={confirmDel ? `${confirmDel.product} × ${confirmDel.quantity} ${confirmDel.unit || "Nos"} to ${confirmDel.client_name || "—"}. Stock will be added back.` : ""}
+        description={confirmDel ? `${confirmDel.product} × ${confirmDel.quantity} ${formatUnit(confirmDel.unit)} to ${confirmDel.client_name || "—"}. Stock will be added back.` : ""}
         onConfirm={doDelete}
       />
 

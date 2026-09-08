@@ -3,7 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { useInwardList } from "@/hooks/useInventory";
 import { useClientList } from "@/hooks/useClients";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ProductAutocompleteInput, VendorAutocompleteInput, ClientAutocompleteInput, UNIT_OPTIONS } from "./_shared";
+import { ProductAutocompleteInput, VendorAutocompleteInput, ClientAutocompleteInput, UNIT_OPTIONS, formatUnit, getStandardizedUnitOptions } from "./_shared";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -181,7 +181,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
     if (typeof v === "object" && v !== null) {
       pName = (v.name || "").toUpperCase();
       sizeVal = v.size || "";
-      unitVal = v.unit || "Nos";
+      unitVal = formatUnit(v.unit || form.unit || "Nos");
       isHighValue = Boolean(form.high_value_asset || v.high_value_goods || v.high_value_asset);
     } else {
       pName = String(v || "").toUpperCase();
@@ -189,7 +189,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
       if (matched) {
         isHighValue = Boolean(form.high_value_asset || matched.high_value_goods || matched.high_value_asset);
         sizeVal = matched.size || "";
-        unitVal = matched.unit || "Nos";
+        unitVal = formatUnit(matched.unit || form.unit || "Nos");
       } else if (!form.high_value_asset) {
         const highValueKeywords = ["SOLAR PANEL", "PANEL", "INVERTER", "ACDB", "DCDB", "NET METER", "BATTERY"];
         isHighValue = highValueKeywords.some((keyword) => pName.includes(keyword));
@@ -242,7 +242,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
         product: form.product.trim(),
         size: (form.size || "").trim(),
         quantity: Number(form.quantity),
-        unit: form.unit || "Nos",
+        unit: formatUnit(form.unit || "Nos"),
         unit_price: 0.0,
         line_total: 0.0,
         total_amount: 0.0,
@@ -324,7 +324,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
       product_id: entry.product_id || "",
       size: entry.size || "",
       quantity: String(entry.quantity || ""),
-      unit: entry.unit || "Nos",
+      unit: formatUnit(entry.unit || "Nos"),
       high_value_asset: Boolean(entry.high_value_asset),
       serial_number_required: (entry.serial_numbers || []).length > 0 || Boolean(entry.serial_number_required),
       serial_numbers: entry.serial_numbers || [],
@@ -622,7 +622,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                   >
                     <SelectTrigger className="h-10 text-xs bg-white mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {UNIT_OPTIONS.map((u) => (
+                      {getStandardizedUnitOptions(form.unit).map((u) => (
                         <SelectItem key={u} value={u}>{u}</SelectItem>
                       ))}
                     </SelectContent>
@@ -806,7 +806,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                         {e.size && <div className="text-[10px] text-slate-500 font-normal">Spec: {e.size}</div>}
                       </td>
                       <td className="p-3 text-right font-bold text-slate-900 whitespace-nowrap">
-                        {`${e.quantity} ${e.unit || "Nos"}`}
+                        {`${e.quantity} ${formatUnit(e.unit)}`}
                       </td>
                       <td className="p-3 whitespace-nowrap font-semibold">
                         {e.source_name || "—"}
@@ -847,7 +847,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
             <DialogHeader>
               <DialogTitle className="text-base font-bold text-slate-900">Confirm Delete Inward Entry</DialogTitle>
               <DialogDescription className="text-xs text-slate-600">
-                Are you sure you want to delete inward entry for <strong>{confirmDel.product}</strong> ({confirmDel.quantity} {confirmDel.unit})? This will deduct the received quantity from central stock.
+                Are you sure you want to delete inward entry for <strong>{confirmDel.product}</strong> ({confirmDel.quantity} {formatUnit(confirmDel.unit)})? This will deduct the received quantity from central stock.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter className="gap-2">

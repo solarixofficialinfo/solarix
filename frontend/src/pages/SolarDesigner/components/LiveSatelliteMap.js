@@ -23,7 +23,7 @@ import {
   getRotatedRectCorners,
   isPointInPolygon,
 } from "../utils/geoCalculations";
-import { validatePanelPlacement } from "../utils/layoutEngine";
+import { validatePanelPlacement, canFitAdditionalPanel } from "../utils/layoutEngine";
 
 // Fix Leaflet default marker icons (CDN-based to avoid webpack asset issues)
 delete L.Icon.Default.prototype._getIconUrl;
@@ -116,8 +116,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     walkways = [],
     setWalkways,
     setbackMeters = 0.5,
+    rowSpacingMeters = 0.35,
+    panelSpacingMeters = 0.02,
     activeTool = "select",
     setActiveTool,
+    onAddPanel,
     selectedPanelId = null,
     setSelectedPanelId,
     onCalibrationComplete,
@@ -150,6 +153,13 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const [activeDrawPoints, setActiveDrawPoints] = useState([]);
   const [cursorCoords, setCursorCoords] = useState({ lat: Number(latitude) || 19.076, lng: Number(longitude) || 72.8777 });
 
+  // Precision Magnifier state & refs
+  const [magnifierVisible, setMagnifierVisible] = useState(false);
+  const [cursorScreenPos, setCursorScreenPos] = useState({ x: -999, y: -999 });
+  const magnifierContainerRef = useRef(null);
+  const magnifierMapRef = useRef(null);
+  const isDraggingVertexRef = useRef(false);
+
   // Location Capture & Drag confirmation states
   const [locationCaptured, setLocationCaptured] = useState(false);
   const [capturedCoords, setCapturedCoords] = useState(null);
@@ -159,6 +169,12 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const editingRoof = activeTool === "edit_roof";
   const editingRoofRef = useRef(editingRoof);
   useEffect(() => { editingRoofRef.current = editingRoof; }, [editingRoof]);
+
+  useEffect(() => {
+    if (activeTool !== "draw_roof" && activeTool !== "edit_roof") {
+      setMagnifierVisible(false);
+    }
+  }, [activeTool]);
 
   const [vertexHistory, setVertexHistory] = useState([]);
   const [vertexRedoStack, setVertexRedoStack] = useState([]);
@@ -228,6 +244,50 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     const y = (toRad(lat) - toRad(originRef.current.lat)) * 6378137;
     return { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 };
   }, []);
+
+  // Initialize and synchronize floating precision magnifier mini-map
+  useEffect(() => {
+    if (!magnifierContainerRef.current || magnifierMapRef.current) return;
+    try {
+      const mini = L.map(magnifierContainerRef.current, {
+        center: [originLat, originLng],
+        zoom: 20,
+        maxZoom: 20,
+        zoomControl: false,
+        attributionControl: false,
+        dragging: false,
+        touchZoom: false,
+        scrollWheelZoom: false,
+        doubleClickZoom: false,
+        boxZoom: false,
+        keyboard: false,
+      });
+
+      L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        { maxZoom: 20, maxNativeZoom: 18, keepBuffer: 4 }
+      ).addTo(mini);
+
+      magnifierMapRef.current = mini;
+    } catch (err) {
+      console.warn("Magnifier map initialization notice:", err);
+    }
+
+    return () => {
+      if (magnifierMapRef.current) {
+        magnifierMapRef.current.remove();
+        magnifierMapRef.current = null;
+      }
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!magnifierVisible || !magnifierMapRef.current) return;
+    const mainZoom = mapInstanceRef.current ? mapInstanceRef.current.getZoom() : 19;
+    const targetZoom = Math.min(20, Math.round(mainZoom + 2.5));
+    magnifierMapRef.current.setView([cursorCoords.lat, cursorCoords.lng], targetZoom, { animate: false });
+    magnifierMapRef.current.invalidateSize({ pan: false });
+  }, [cursorCoords, magnifierVisible]);
 
   // Check for Out-of-Bounds panels
   const outOfBoundsPanels = useMemo(() => {
@@ -526,7 +586,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     },
   }));
 
-  // Handle Add Panel click
+  // Handle Add Panel click on map with canonical placement
   const handleMapClickForAddPanel = useCallback((lat, lng) => {
     if (!roofPolygonRef.current || roofPolygonRef.current.length < 3) {
       toast.warning("Please draw a roof boundary first before adding panels.");
@@ -535,36 +595,31 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     if (!isValidLatLng(lat, lng)) return;
 
     const { x, y } = latLngToCartesian(lat, lng);
-    const isPortrait = orientation.toLowerCase() === "portrait";
-    const pWidth = isPortrait ? (panelSpecs.width_m || 1.134) : (panelSpecs.length_m || 2.278);
-    const pLength = isPortrait ? (panelSpecs.length_m || 2.278) : (panelSpecs.width_m || 1.134);
-    const candidate = { x, y, width: pWidth, height: pLength, rotation: 0 };
 
-    const check = validatePanelPlacement({
-      candidate,
+    const check = canFitAdditionalPanel({
+      panels,
       roofPolygon: roofPolygonRef.current,
       setbackMeters,
-      panels,
       obstacles,
       walkways,
+      panelSpecs,
+      orientation,
+      rowSpacingMeters,
+      panelSpacingMeters,
+      azimuthDegrees,
+      nearX: x,
+      nearY: y,
     });
 
-    if (!check.valid) {
-      toast.warning(check.reason || "Cannot place panel here.");
+    if (!check.canFit || !check.newPanel) {
+      toast.warning(check.reason || "No valid panel position available in the current roof area.");
       return;
     }
 
-    const newPanel = {
-      id: `panel-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      x, y, width: pWidth, height: pLength, rotation: 0,
-      azimuth: azimuthDegrees || 180,
-      wattage: panelSpecs.wattage || 550,
-      locked: false, hidden: false,
-    };
-    setPanels?.((prev) => [...prev, newPanel]);
-    setSelectedPanelId?.(newPanel.id);
+    setPanels?.((prev) => [...prev, check.newPanel]);
+    setSelectedPanelId?.(check.newPanel.id);
     toast.success(`Placed Panel #${panels.length + 1}`);
-  }, [latLngToCartesian, orientation, panelSpecs, setbackMeters, panels, obstacles, walkways, azimuthDegrees, setPanels, setSelectedPanelId]);
+  }, [latLngToCartesian, orientation, panelSpecs, setbackMeters, rowSpacingMeters, panelSpacingMeters, panels, obstacles, walkways, azimuthDegrees, setPanels, setSelectedPanelId]);
 
   // ── Initialize Leaflet Map ───────────────────────────────────────────────────
   useEffect(() => {
@@ -579,10 +634,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         zoom: Math.min(zoom || 19, 20),
         maxZoom: 20,
         minZoom: 4,
-        zoomSnap: 0.5,
+        zoomSnap: 0.25,
         zoomDelta: 0.5,
         wheelPxPerZoomLevel: 90,
         wheelDebounceTime: 40,
+        scrollWheelZoom: false, // Explicitly false so custom cursor-centered zoom handles wheel
         zoomControl: false,
         attributionControl: false,
         preferCanvas: false,
@@ -637,8 +693,131 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       map.on("mousemove", (e) => {
         if (isValidLatLng(e.latlng.lat, e.latlng.lng)) {
           setCursorCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
+          const container = mapContainerRef.current;
+          if (container) {
+            const rect = container.getBoundingClientRect();
+            const clientX = e.originalEvent?.clientX ?? 0;
+            const clientY = e.originalEvent?.clientY ?? 0;
+            setCursorScreenPos({ x: clientX - rect.left, y: clientY - rect.top });
+          }
+          if (window.__activeSolarTool === "draw_roof" || isDraggingVertexRef.current) {
+            setMagnifierVisible(true);
+          }
         }
       });
+
+      const handleTouchStart = (e) => {
+        if (e.touches && e.touches.length > 0) {
+          const touch = e.touches[0];
+          const container = mapContainerRef.current;
+          if (container && mapInstanceRef.current) {
+            const rect = container.getBoundingClientRect();
+            const sx = touch.clientX - rect.left;
+            const sy = touch.clientY - rect.top;
+            setCursorScreenPos({ x: sx, y: sy });
+            const latlng = mapInstanceRef.current.containerPointToLatLng([sx, sy]);
+            if (isValidLatLng(latlng.lat, latlng.lng)) {
+              setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
+            }
+            if (window.__activeSolarTool === "draw_roof" || isDraggingVertexRef.current) {
+              setMagnifierVisible(true);
+            }
+          }
+        }
+      };
+
+      const handleTouchMove = (e) => {
+        if (e.touches && e.touches.length > 0) {
+          const touch = e.touches[0];
+          const container = mapContainerRef.current;
+          if (container && mapInstanceRef.current) {
+            const rect = container.getBoundingClientRect();
+            const sx = touch.clientX - rect.left;
+            const sy = touch.clientY - rect.top;
+            setCursorScreenPos({ x: sx, y: sy });
+            const latlng = mapInstanceRef.current.containerPointToLatLng([sx, sy]);
+            if (isValidLatLng(latlng.lat, latlng.lng)) {
+              setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
+            }
+          }
+        }
+      };
+
+      const handleTouchEnd = () => {
+        if (!isDraggingVertexRef.current) {
+          setMagnifierVisible(false);
+        }
+      };
+
+      // TRUE Cursor-Centered Zoom Handler
+      const handleMapWheel = (e) => {
+        // Prevent default window scrolling when scrolling inside map
+        e.preventDefault();
+        e.stopPropagation();
+
+        const map = mapInstanceRef.current;
+        const container = mapContainerRef.current;
+        if (!map || !container) return;
+
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        if (mouseX < 0 || mouseX > rect.width || mouseY < 0 || mouseY > rect.height) {
+          return;
+        }
+
+        const containerPoint = L.point(mouseX, mouseY);
+        const currentZoom = map.getZoom();
+
+        // Small incremental zoom steps for smooth, controlled zooming
+        let zoomDelta = 0.5;
+        if (Math.abs(e.deltaY) < 40) {
+          // Trackpad pinch or fine wheel
+          zoomDelta = Math.max(0.1, Math.min(0.25, Math.abs(e.deltaY) * 0.015));
+        } else {
+          // Standard mouse wheel
+          zoomDelta = 0.5;
+        }
+
+        const direction = e.deltaY > 0 ? -1 : 1;
+        const targetZoom = Math.max(4, Math.min(20, Math.round((currentZoom + direction * zoomDelta) * 20) / 20));
+
+        if (targetZoom === currentZoom) return;
+
+        // TRUE Cursor-Centered Zoom Mathematics:
+        // 1. Capture exact geographic coordinate currently under mouse cursor
+        const targetLatLng = map.containerPointToLatLng(containerPoint);
+
+        // 2. Project targetLatLng to absolute world pixels at the NEW zoom
+        const targetWorldPoint = map.project(targetLatLng, targetZoom);
+
+        // 3. Container half-size
+        const size = map.getSize();
+        const halfSize = size.divideBy(2);
+
+        // 4. Recalculate new map center in world pixels so targetWorldPoint remains at containerPoint
+        const newCenterWorldPoint = targetWorldPoint.subtract(containerPoint).add(halfSize);
+
+        // 5. Convert world center back to LatLng
+        const newCenter = map.unproject(newCenterWorldPoint, targetZoom);
+
+        // 6. Apply new center and zoom immediately without animation drift
+        map.setView(newCenter, targetZoom, { animate: false });
+        onZoomChange?.(targetZoom);
+
+        // Sync precision magnifier if active
+        if (magnifierMapRef.current && isFinite(cursorCoords.lat)) {
+          const magZoom = Math.min(20, Math.round(targetZoom + 2.5));
+          magnifierMapRef.current.setView([cursorCoords.lat, cursorCoords.lng], magZoom, { animate: false });
+        }
+      };
+
+      const domElem = mapContainerRef.current;
+      domElem.addEventListener("touchstart", handleTouchStart, { passive: true });
+      domElem.addEventListener("touchmove", handleTouchMove, { passive: true });
+      domElem.addEventListener("touchend", handleTouchEnd, { passive: true });
+      domElem.addEventListener("wheel", handleMapWheel, { passive: false });
 
       // Map Click Handler based on active tool
       map.on("click", (e) => {
@@ -679,6 +858,10 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       setMapError(null);
 
       return () => {
+        domElem.removeEventListener("touchstart", handleTouchStart);
+        domElem.removeEventListener("touchmove", handleTouchMove);
+        domElem.removeEventListener("touchend", handleTouchEnd);
+        domElem.removeEventListener("wheel", handleMapWheel);
         resizeObserver.disconnect();
         if (mapInstanceRef.current) {
           mapInstanceRef.current.remove();
@@ -736,12 +919,15 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
     const currentCenter = map.getCenter();
     const dist = Math.abs(currentCenter.lat - lat) + Math.abs(currentCenter.lng - lng);
-    if (dist > 0.0005) {
-      map.setView([lat, lng], map.getZoom(), { animate: true });
+    if (dist > 0.00002) {
+      // Large moves should not use slow Leaflet pan animations to ensure instant tile fetch
+      map.setView([lat, lng], map.getZoom(), { animate: dist < 0.01 });
+      tileLayerGroupRef.current?.eachLayer((layer) => layer.redraw?.());
     }
     if (markerRef.current && !pendingMarkerLocation) {
       markerRef.current.setLatLng([lat, lng]);
     }
+    originRef.current = { lat, lng };
   }, [latitude, longitude, pendingMarkerLocation]);
 
   // Roof Drawing Actions
@@ -897,14 +1083,33 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       L.polyline(latLngs, { color: "#10b981", weight: 3, dashArray: "6, 6" }).addTo(roofGroup);
 
       activeDrawPoints.forEach((p, idx) => {
+        const isFirst = idx === 0;
+        const canClose = isFirst && activeDrawPoints.length >= 3;
         const cm = L.circleMarker([p.lat, p.lng], {
-          radius: idx === 0 ? 8 : 6,
-          fillColor: idx === 0 ? "#10b981" : "#2563eb",
+          radius: isFirst ? 9 : 6,
+          fillColor: canClose ? "#10b981" : isFirst ? "#059669" : "#2563eb",
           fillOpacity: 1,
           color: "#ffffff",
-          weight: 2,
+          weight: isFirst ? 3 : 2,
         }).addTo(roofGroup);
-        cm.bindTooltip(`Point ${idx + 1}`, { permanent: true, direction: "top", className: "px-1.5 py-0.5 text-[10px] font-bold" });
+
+        if (canClose) {
+          cm.on("click", (e) => {
+            L.DomEvent.stopPropagation(e);
+            handleFinishDrawingRoof();
+          });
+          cm.bindTooltip("<b>Point 1 — Click to Close Roof</b>", {
+            permanent: true,
+            direction: "top",
+            className: "bg-emerald-600 text-white font-bold px-2 py-0.5 rounded-lg shadow-md text-xs",
+          });
+        } else {
+          cm.bindTooltip(`Point ${idx + 1}`, {
+            permanent: true,
+            direction: "top",
+            className: "px-1.5 py-0.5 text-[10px] font-bold",
+          });
+        }
       });
     }
 
@@ -924,6 +1129,40 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         fillOpacity: editingRoof ? 0.18 : 0.22,
         dashArray: editingRoof ? "4, 4" : undefined,
       }).addTo(roofGroup);
+
+      polyLayer.on("click", (e) => {
+        if (editingRoof) {
+          L.DomEvent.stopPropagation(e);
+          const clickLL = e.latlng;
+          const { x, y } = latLngToCartesian(clickLL.lat, clickLL.lng);
+          const poly = roofPolygonRef.current;
+          if (!poly || poly.length < 2) return;
+          let minD = Infinity;
+          let bestIdx = 0;
+          for (let i = 0; i < poly.length; i++) {
+            const j = (i + 1) % poly.length;
+            const p1 = poly[i], p2 = poly[j];
+            const l2 = (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2;
+            let d = 0;
+            if (l2 === 0) {
+              d = Math.hypot(x - p1.x, y - p1.y);
+            } else {
+              let t = Math.max(0, Math.min(1, ((x - p1.x) * (p2.x - p1.x) + (y - p1.y) * (p2.y - p1.y)) / l2));
+              d = Math.hypot(x - (p1.x + t * (p2.x - p1.x)), y - (p1.y + t * (p2.y - p1.y)));
+            }
+            if (d < minD) {
+              minD = d;
+              bestIdx = i;
+            }
+          }
+          pushVertexHistory(poly);
+          const insertIdx = (bestIdx + 1) % poly.length;
+          const newPt = { x, y, lat: clickLL.lat, lng: clickLL.lng };
+          const updated = [...poly.slice(0, insertIdx), newPt, ...poly.slice(insertIdx)];
+          setRoofPolygonRef.current(updated);
+          toast.success(`Added Point ${insertIdx + 1} on roof edge.`);
+        }
+      });
 
       polyLayer.on("dblclick", (e) => {
         L.DomEvent.stopPropagation(e);
@@ -947,18 +1186,30 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             zIndexOffset: 1000,
           }).addTo(roofGroup);
 
-          handle.on("dragstart", () => {
+          handle.on("dragstart", (e) => {
             pushVertexHistory(roofPolygonRef.current);
+            isDraggingVertexRef.current = true;
+            setMagnifierVisible(true);
           });
 
           handle.on("drag", (e) => {
             const { lat, lng } = e.target.getLatLng();
             handleVertexDrag(idx, lat, lng);
+            if (isValidLatLng(lat, lng)) {
+              setCursorCoords({ lat, lng });
+              const container = mapContainerRef.current;
+              if (container && mapInstanceRef.current) {
+                const pt = mapInstanceRef.current.latLngToContainerPoint([lat, lng]);
+                setCursorScreenPos({ x: pt.x, y: pt.y });
+              }
+            }
           });
 
           handle.on("dragend", (e) => {
             const { lat, lng } = e.target.getLatLng();
             handleVertexDrag(idx, lat, lng);
+            isDraggingVertexRef.current = false;
+            setMagnifierVisible(false);
           });
 
           handle.on("contextmenu", (e) => {
@@ -1149,7 +1400,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     activeDrawPoints, layers, selectedPanelId, editingRoof,
     cartesianToLatLng, latLngToCartesian, handleVertexDrag, handleDeleteVertex,
     handleInsertVertexOnEdge, pushVertexHistory, setSelectedPanelId, setPanels,
-    setActiveTool
+    setActiveTool, handleFinishDrawingRoof
   ]);
 
   // Zoom & Fit Viewport Helpers
@@ -1248,7 +1499,43 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
   return (
     <div className="relative w-full h-full min-h-[580px] rounded-2xl overflow-hidden bg-slate-950 border border-slate-700 shadow-xl select-none flex flex-col">
-      <div ref={mapContainerRef} className="w-full h-full flex-1 z-0 cursor-crosshair bg-slate-950" />
+      <div
+        ref={mapContainerRef}
+        onMouseLeave={() => { if (!isDraggingVertexRef.current) setMagnifierVisible(false); }}
+        className="w-full h-full flex-1 z-0 cursor-crosshair bg-slate-950"
+      />
+
+      {/* Floating Precision Magnifier (Live Higher Zoom Satellite Lens) */}
+      <div
+        ref={magnifierContainerRef}
+        style={{
+          display: magnifierVisible ? "block" : "none",
+          position: "absolute",
+          left: `${Math.max(10, Math.min(cursorScreenPos.x - 84, (mapContainerRef.current?.clientWidth || 600) - 180))}px`,
+          top: `${Math.max(10, cursorScreenPos.y - 180)}px`,
+          width: "168px",
+          height: "168px",
+          borderRadius: "50%",
+          border: "3px solid #ffffff",
+          boxShadow: "0 14px 40px rgba(0,0,0,0.75)",
+          overflow: "hidden",
+          pointerEvents: "none",
+          zIndex: 1000,
+          backgroundColor: "#0a0f1d",
+        }}
+      >
+        {/* Hairline Crosshair Reticle */}
+        <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
+          <div className="w-2 h-2 rounded-full bg-red-500 border border-white shadow-sm" />
+          <div className="absolute left-0 right-0 h-[1px] bg-red-500/80 pointer-events-none" />
+          <div className="absolute top-0 bottom-0 w-[1px] bg-red-500/80 pointer-events-none" />
+        </div>
+
+        {/* Magnifier Zoom Badge */}
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-20 bg-slate-900/90 border border-slate-700/80 text-[9px] font-extrabold text-amber-300 px-2 py-0.5 rounded-full shadow pointer-events-none whitespace-nowrap">
+          4x Precision Zoom
+        </div>
+      </div>
 
       {/* Map error overlay */}
       {mapError && (
@@ -1416,7 +1703,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                   onClick={handleFinishDrawingRoof}
                   className="h-7 px-3 text-[11px] rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center gap-1 shadow-sm"
                 >
-                  <CheckCircle2 className="w-3 h-3" /> Finish ({activeDrawPoints.length} pts)
+                  <CheckCircle2 className="w-3 h-3" /> Finish Roof ({activeDrawPoints.length} pts)
                 </button>
               )}
             </div>
@@ -1425,6 +1712,20 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
               <span className="bg-amber-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">
                 Editing ({roofPolygon.length} pts)
               </span>
+              <button
+                onClick={() => toast.info("Click anywhere on a roof edge or click any '+' marker to insert a vertex.")}
+                className="h-7 px-2 text-[11px] rounded-lg text-sky-300 hover:text-white bg-sky-950/60 border border-sky-800/60 flex items-center gap-1"
+                title="Click roof edge to insert point"
+              >
+                <Plus className="w-3 h-3" /> Add Point
+              </button>
+              <button
+                onClick={() => toast.info("Right-click any vertex marker P1..Pn to delete it (minimum 3 points required).")}
+                className="h-7 px-2 text-[11px] rounded-lg text-red-300 hover:text-white bg-red-950/40 border border-red-800/50 flex items-center gap-1"
+                title="Right-click any vertex to delete"
+              >
+                <Trash2 className="w-3 h-3" /> Delete Point
+              </button>
               <button
                 onClick={handleUndoVertex}
                 disabled={vertexHistory.length === 0}
@@ -1483,11 +1784,18 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
               </button>
 
               <button
-                onClick={() => { setActiveTool("add_panel"); setActiveDrawPoints([]); }}
+                onClick={() => {
+                  if (onAddPanel) {
+                    onAddPanel();
+                  } else {
+                    setActiveTool(activeTool === "add_panel" ? "select" : "add_panel");
+                    setActiveDrawPoints([]);
+                  }
+                }}
                 className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
                   activeTool === "add_panel" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
                 }`}
-                title="Click roof to place panel"
+                title="Add panel following row/column layout rules"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add Panel</span>

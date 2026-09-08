@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { Briefcase, Clock, ShieldCheck, CheckCircle2, Zap, Plus, Camera, Eye, MapPin, ImageIcon, FileText, Trash2, ArrowUp, ArrowDown } from "lucide-react";
 import dayjs from "dayjs";
 import PageHeader from "@/components/PageHeader";
+import { formatUnit, getStandardizedUnitOptions } from "@/lib/units";
 
 const TASK_TYPES = [
   "Survey",
@@ -897,7 +898,7 @@ function MaterialApprovalForm({ request, onSubmit, canApproval = true, canReject
           size: it.size || "",
           quantity: requested,
           approved_quantity: approved,
-          unit: it.unit || "Nos",
+          unit: formatUnit(it.unit || "Nos"),
           variant: it.variant || "",
           available_stock: it.available_stock || 0,
         };
@@ -1057,16 +1058,12 @@ function MaterialApprovalForm({ request, onSubmit, canApproval = true, canReject
                         />
                       </td>
                       <td className="py-1.5 px-2">
-                        <Select value={it.unit || "Nos"} onValueChange={(v) => updateItem(idx, "unit", v)}>
+                        <Select value={formatUnit(it.unit || "Nos")} onValueChange={(v) => updateItem(idx, "unit", v)}>
                           <SelectTrigger className="h-8 text-xs bg-white"><SelectValue /></SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="Nos">Nos</SelectItem>
-                            <SelectItem value="Meter">Meter</SelectItem>
-                            <SelectItem value="Set">Set</SelectItem>
-                            <SelectItem value="Kg">Kg</SelectItem>
-                            <SelectItem value="Pcs">Pcs</SelectItem>
-                            <SelectItem value="Box">Box</SelectItem>
-                            <SelectItem value="Other">Other</SelectItem>
+                            {getStandardizedUnitOptions(it.unit).map((u) => (
+                              <SelectItem key={u} value={u}>{u}</SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </td>

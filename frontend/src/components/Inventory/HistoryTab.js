@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import dayjs from "dayjs";
 import { toast } from "sonner";
-import { ConfirmDialog } from "./_shared";
+import { ConfirmDialog, formatUnit } from "./_shared";
 import EditTransactionDialog from "./EditTransactionDialog";
 import { Hash } from "lucide-react";
 import { useEntitlements } from "@/hooks/useEntitlements";
@@ -113,7 +113,7 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
       const party = r.type === "Inward" ? (r.source_name || r.source || "") : (r.client_name || "");
       const row = [
         (r.date || r.created_at || "").slice(0, 10), r.type, r.product, r.size || "",
-        r.quantity || 0, r.unit || "Nos", ref, bill, party || "",
+        r.quantity || 0, formatUnit(r.unit), ref, bill, party || "",
         r.project_name || "", r.status || "", (r.remarks || "").replace(/"/g, '""'),
         r.created_by_name || "",
       ];
@@ -346,7 +346,7 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
                         <div className="font-semibold text-slate-900 text-xs">{r.product}</div>
                         {r.size && <div className="text-[10px] text-slate-400 mt-0.5">{r.size}</div>}
                       </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{r.quantity} <span className="text-[10px] text-slate-500 font-normal">{r.unit || "Nos"}</span></td>
+                      <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{r.quantity} <span className="text-[10px] text-slate-500 font-normal">{formatUnit(r.unit)}</span></td>
                       <td className="px-4 py-2.5 text-xs">{r.type === "Inward" ? (r.source_name || r.source || "—") : (r.client_name || "—")}</td>
                       <td className="px-4 py-2.5 text-xs">
                         <div className="font-mono text-slate-700">{r.reference_number || r.outward_challan_no || "—"}</div>

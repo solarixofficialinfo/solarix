@@ -17,6 +17,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import {
@@ -25,7 +35,7 @@ import {
   FileText, Eye, Navigation, Send, BarChart2, Clock, Edit, RotateCcw, XCircle, Lock
 } from "lucide-react";
 import dayjs from "dayjs";
-import { ProductAutocompleteInput } from "@/components/Inventory/_shared";
+import { ProductAutocompleteInput, formatUnit } from "@/components/Inventory/_shared";
 import { useDebounce } from "@/hooks/useDebounce";
 import PageHeader from "@/components/PageHeader";
 
@@ -150,7 +160,7 @@ export default function TaskPortal() {
       if (t.status === "pending") row.pending += 1;
       else if (t.status === "in_progress") row.in_progress += 1;
       else if (t.status === "completed") row.completed += 1;
-      if (t.status !== "completed" && t.deadline && t.deadline < today) row.overdue += 1;
+      if (t.status !== "completed" && t.status !== "cancelled" && t.deadline && t.deadline < today) row.overdue += 1;
     });
     return Array.from(byEmp.values())
       .map((r) => ({ ...r, progress: r.total ? Math.round((r.completed / r.total) * 100) : 0 }))
@@ -165,7 +175,7 @@ export default function TaskPortal() {
 
   const teamCards = useMemo(() => {
     const completed = tasks.filter(t => t.status === "completed").length;
-    const overdue = tasks.filter(t => t.status !== "completed" && t.deadline && t.deadline < today).length;
+    const overdue = tasks.filter(t => t.status !== "completed" && t.status !== "cancelled" && t.deadline && t.deadline < today).length;
     return [
       { label: "Total Tasks", v: tasks.length, icon: ClipboardList, color: "blue" },
       { label: "Pending", v: tasks.filter(t => t.status === "pending").length, icon: AlertTriangle, color: "amber" },
@@ -353,6 +363,7 @@ export default function TaskPortal() {
               <SelectItem value="pending">Pending</SelectItem>
               <SelectItem value="in_progress">In Progress</SelectItem>
               <SelectItem value="completed">Completed</SelectItem>
+              <SelectItem value="cancelled">Cancelled</SelectItem>
             </SelectContent>
           </Select>
           {isAdmin ? (
@@ -550,11 +561,14 @@ export default function TaskPortal() {
       {selected && (
         <TaskDetail
           task={tasks.find((t) => t.id === selected.id) || selected}
-          canMutate={scope === "mine" || !isAdmin || selected.assigned_to === user?.id}
+          canMutate={isAdmin || selected.assigned_to === user?.id || user?.permissions?.includes("task_portal.edit") || user?.permissions?.includes("task_portal.all")}
           onClose={handleCloseDetail}
           onMutate={() => {
             markMutated();
-            queryClient.invalidateQueries(["tasks"]);
+            invalidateTasks();
+            queryClient.invalidateQueries({ queryKey: ["tasks"] });
+            queryClient.invalidateQueries({ queryKey: ["projects"] });
+            queryClient.invalidateQueries({ queryKey: ["dashboard"] });
           }}
         />
       )}
@@ -817,7 +831,7 @@ function MyMaterialRequestsList({ requests, onEdit }) {
 }
 
 const TaskRow = React.memo(function TaskRow({ t, showAssignee = false, onSelect }) {
-  const overdue = t.status !== "completed" && t.deadline && t.deadline < dayjs().format("YYYY-MM-DD");
+  const overdue = t.status !== "completed" && t.status !== "cancelled" && t.deadline && t.deadline < dayjs().format("YYYY-MM-DD");
   const workflow = getWorkflow(t.task_type);
   const workflowLabel = t.task_type || "Task";
 
@@ -840,15 +854,28 @@ const TaskRow = React.memo(function TaskRow({ t, showAssignee = false, onSelect 
           Assigned by {t.assigned_by_name} · Deadline {t.deadline || "—"} · {t.priority}
         </div>
       </div>
-      <Badge variant="outline" className={`shrink-0 ${t.status === "completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : t.status === "in_progress" ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>
-        {t.status === "in_progress" ? "In Progress" : t.status}
+      <Badge variant="outline" className={`shrink-0 ${
+        t.status === "completed" 
+          ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
+          : t.status === "cancelled"
+          ? "bg-slate-100 text-slate-700 border-slate-300 font-semibold"
+          : t.status === "in_progress" 
+          ? "bg-blue-50 text-blue-700 border-blue-200" 
+          : "bg-amber-50 text-amber-700 border-amber-200"
+      }`}>
+        {t.status === "cancelled" ? "CANCELLED" : t.status === "in_progress" ? "In Progress" : t.status}
       </Badge>
     </div>
   );
 });
 
-function TaskDetail({ task, onClose, onMutate, canMutate = true }) {
+function TaskDetail({ task: initialTask, onClose, onMutate, canMutate = true }) {
   const { user } = useAuth();
+  const [task, setTask] = useState(initialTask);
+  useEffect(() => {
+    setTask(initialTask);
+  }, [initialTask]);
+
   const { data: fetchedClient } = useClientDetail(task.client_id);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
@@ -877,6 +904,7 @@ function TaskDetail({ task, onClose, onMutate, canMutate = true }) {
     try {
       await api.patch(`/tasks/${task.id}`, { status, ...payload });
       toast.success(`Task ${status}`);
+      setTask((prev) => ({ ...prev, status, ...payload }));
       onMutate?.();
       onClose();
     } catch (e) {
@@ -887,13 +915,15 @@ function TaskDetail({ task, onClose, onMutate, canMutate = true }) {
   const handleCancelTask = async () => {
     setCancelling(true);
     try {
-      await api.patch(`/tasks/${task.id}`, {
+      const cancelPayload = {
         status: "cancelled",
         cancellation_reason: cancelReason,
         cancelled_by: user?.name || "Admin",
         cancelled_at: new Date().toISOString()
-      });
-      toast.success("Task has been cancelled");
+      };
+      await api.patch(`/tasks/${task.id}`, cancelPayload);
+      toast.success("Task cancelled successfully");
+      setTask((prev) => ({ ...prev, ...cancelPayload }));
       onMutate?.();
       setCancelDialogOpen(false);
       onClose();
@@ -911,132 +941,135 @@ function TaskDetail({ task, onClose, onMutate, canMutate = true }) {
   const isCancellable = canMutate && task.status !== "completed" && task.status !== "closed" && task.status !== "cancelled";
 
   return (
-    <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center justify-between gap-2 pr-6">
-            <div className="flex items-center gap-2">
-              <span>{task.task_type}</span>
-              <span className="text-slate-400">—</span>
-              <span className="text-slate-600 font-normal truncate">{task.client_name}</span>
-            </div>
-            {isCancellable && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 font-semibold text-xs h-8 shrink-0"
-                onClick={() => setCancelDialogOpen(true)}
-                data-testid="cancel-task-btn"
-              >
-                <XCircle className="w-3.5 h-3.5 mr-1" /> Cancel Task
-              </Button>
-            )}
-          </DialogTitle>
-        </DialogHeader>
-
-        {client && (
-          <div className="space-y-4 mt-2">
-            {/* Cancelled Banner */}
-            {task.status === "cancelled" && (
-              <div className="text-xs bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 space-y-1">
-                <div className="font-bold flex items-center gap-1.5">
-                  <XCircle className="w-4 h-4 text-red-600" /> Task Cancelled
-                </div>
-                <div>Cancelled by <span className="font-semibold">{task.cancelled_by || "Admin"}</span> {task.cancelled_at ? `on ${dayjs(task.cancelled_at).format('DD MMM YYYY, HH:mm')}` : ""}</div>
-                {task.cancellation_reason && <div>Reason: <span className="italic">{task.cancellation_reason}</span></div>}
+    <>
+      <Dialog open onOpenChange={onClose}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between gap-2 pr-6">
+              <div className="flex items-center gap-2">
+                <span>{task.task_type}</span>
+                <span className="text-slate-400">—</span>
+                <span className="text-slate-600 font-normal truncate">{task.client_name}</span>
               </div>
-            )}
+              {isCancellable && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 font-semibold text-xs h-8 shrink-0"
+                  onClick={() => setCancelDialogOpen(true)}
+                  data-testid="cancel-task-btn"
+                >
+                  <XCircle className="w-3.5 h-3.5 mr-1" /> Cancel Task
+                </Button>
+              )}
+            </DialogTitle>
+          </DialogHeader>
 
-            {/* Client info card */}
-            <Card className="border-slate-200">
-              <CardContent className="p-4 grid md:grid-cols-2 gap-3 text-sm">
-                <div><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Client</span><div className="font-medium">{client.full_name}</div></div>
-                <div><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Assigned to</span><div className="font-medium">{task.assigned_to_name || "—"}</div></div>
-                <div><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Mobile</span>
-                  <div className="flex items-center gap-2"><Phone className="w-3.5 h-3.5 text-slate-400" /><a href={`tel:${client.mobile}`} className="text-blue-600">{client.mobile}</a></div>
-                </div>
-                <div className="md:col-span-2"><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Address</span>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span>{[client.address, client.city, client.state, client.pincode].filter(Boolean).join(", ") || "—"}</span>
-                    <a href={mapsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 text-xs hover:underline" data-testid="maps-link">
-                      <MapPin className="w-3.5 h-3.5" /> Open in Maps
-                    </a>
+          {client && (
+            <div className="space-y-4 mt-2">
+              {/* Cancelled Banner */}
+              {task.status === "cancelled" && (
+                <div className="text-xs bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <XCircle className="w-4 h-4 text-red-600" /> Task Cancelled
                   </div>
+                  <div>Cancelled by <span className="font-semibold">{task.cancelled_by || "Admin"}</span> {task.cancelled_at ? `on ${dayjs(task.cancelled_at).format('DD MMM YYYY, HH:mm')}` : ""}</div>
+                  {task.cancellation_reason && <div>Reason: <span className="italic">{task.cancellation_reason}</span></div>}
                 </div>
-                <div><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">System</span><div>{client.system_kw} kW · {client.phase_type}</div></div>
-                <div><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Panel / Inverter</span><div className="text-xs">{(client.panel_brand || client.panel_make)} {client.panel_wattage}W × {client.num_panels} / {(client.inverter_brand || client.inverter_make)} {client.inverter_capacity}</div></div>
-                {task.remarks && <div className="md:col-span-2"><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Admin Instructions</span><div className="text-slate-700">{task.remarks}</div></div>}
-              </CardContent>
-            </Card>
+              )}
 
-            {/* ── Workflow panel: driven by task_type ── */}
-            {(!canMutate || task.status === "completed" || task.status === "cancelled") && (
-              <div className="text-xs text-slate-500 italic bg-slate-50 border border-slate-200 rounded-lg p-3">
-                {task.status === "completed" ? "This task is completed and locked." : task.status === "cancelled" ? "This task has been cancelled." : "Read-only — you are viewing another employee's task."}
-              </div>
-            )}
+              {/* Client info card */}
+              <Card className="border-slate-200">
+                <CardContent className="p-4 grid md:grid-cols-2 gap-3 text-sm">
+                  <div><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Client</span><div className="font-medium">{client.full_name}</div></div>
+                  <div><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Assigned to</span><div className="font-medium">{task.assigned_to_name || "—"}</div></div>
+                  <div><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Mobile</span>
+                    <div className="flex items-center gap-2"><Phone className="w-3.5 h-3.5 text-slate-400" /><a href={`tel:${client.mobile}`} className="text-blue-600">{client.mobile}</a></div>
+                  </div>
+                  <div className="md:col-span-2"><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Address</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span>{[client.address, client.city, client.state, client.pincode].filter(Boolean).join(", ") || "—"}</span>
+                      <a href={mapsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 text-xs hover:underline" data-testid="maps-link">
+                        <MapPin className="w-3.5 h-3.5" /> Open in Maps
+                      </a>
+                    </div>
+                  </div>
+                  <div><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">System</span><div>{client.system_kw} kW · {client.phase_type}</div></div>
+                  <div><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Panel / Inverter</span><div className="text-xs">{(client.panel_brand || client.panel_make)} {client.panel_wattage}W × {client.num_panels} / {(client.inverter_brand || client.inverter_make)} {client.inverter_capacity}</div></div>
+                  {task.remarks && <div className="md:col-span-2"><span className="text-xs uppercase tracking-wider text-slate-500 font-semibold">Admin Instructions</span><div className="text-slate-700">{task.remarks}</div></div>}
+                </CardContent>
+              </Card>
 
-            {(() => {
-              const activeCanMutate = canMutate && task.status !== "completed" && task.status !== "cancelled";
-              return (
-                <>
-                  {workflow === "survey" && <SurveyWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
-                  {workflow === "installation" && <InstallationWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} clientId={task.client_id} onDone={onClose} />}
-                  {workflow === "document_making" && <DocumentMakingWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
-                  {workflow === "msedcl_upload" && <MSEDCLUploadWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
-                  {workflow === "pm_surya_ghar" && <PMSuryaGharWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
-                  {workflow === "document_signed" && <DocumentSignedWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} onDone={onClose} />}
-                  {workflow === "meter_testing" && <MeterTestingWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} onDone={onClose} />}
-                  {workflow === "material_dispatch" && <MaterialDispatchWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
-                  {workflow === "site_visit" && <SiteVisitWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
-                  {workflow === "verification" && <VerificationWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} clientId={task.client_id} onDone={onClose} />}
-                  {workflow === "handover" && <HandoverWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
-                  {workflow === "complaint" && <ComplaintWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
-                </>
-              );
-            })()}
-          </div>
-        )}
+              {/* ── Workflow panel: driven by task_type ── */}
+              {(!canMutate || task.status === "completed" || task.status === "cancelled") && (
+                <div className="text-xs text-slate-500 italic bg-slate-50 border border-slate-200 rounded-lg p-3">
+                  {task.status === "completed" ? "This task is completed and locked." : task.status === "cancelled" ? "This task has been cancelled." : "Read-only — you are viewing another employee's task."}
+                </div>
+              )}
 
-        {/* Cancel Task Confirmation Dialog */}
-        <Dialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
-          <DialogContent className="max-w-md p-6 space-y-4">
-            <DialogHeader>
-              <DialogTitle className="text-lg font-bold text-slate-900">Cancel Task</DialogTitle>
-              <DialogDescription className="text-xs text-slate-500">
-                Are you sure you want to cancel this task?
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="space-y-2 py-2">
-              <Label className="text-xs font-semibold text-slate-700">Cancellation Reason (Optional)</Label>
-              <Textarea
-                placeholder="Enter reason for cancelling this task..."
-                value={cancelReason}
-                onChange={(e) => setCancelReason(e.target.value)}
-                className="text-xs h-20"
-                data-testid="cancel-reason-input"
-              />
+              {(() => {
+                const activeCanMutate = canMutate && task.status !== "completed" && task.status !== "cancelled";
+                return (
+                  <>
+                    {workflow === "survey" && <SurveyWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
+                    {workflow === "installation" && <InstallationWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} clientId={task.client_id} onDone={onClose} />}
+                    {workflow === "document_making" && <DocumentMakingWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
+                    {workflow === "msedcl_upload" && <MSEDCLUploadWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
+                    {workflow === "pm_surya_ghar" && <PMSuryaGharWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
+                    {workflow === "document_signed" && <DocumentSignedWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} onDone={onClose} />}
+                    {workflow === "meter_testing" && <MeterTestingWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} onDone={onClose} />}
+                    {workflow === "material_dispatch" && <MaterialDispatchWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
+                    {workflow === "site_visit" && <SiteVisitWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
+                    {workflow === "verification" && <VerificationWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} clientId={task.client_id} onDone={onClose} />}
+                    {workflow === "handover" && <HandoverWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
+                    {workflow === "complaint" && <ComplaintWorkflow task={task} canMutate={activeCanMutate} updateStatus={updateStatus} />}
+                  </>
+                );
+              })()}
             </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
-            <DialogFooter className="flex justify-end gap-2 pt-2 border-t">
-              <Button variant="outline" size="sm" onClick={() => setCancelDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={cancelling}
-                onClick={handleCancelTask}
-                data-testid="confirm-cancel-task-btn"
-              >
-                {cancelling ? "Cancelling..." : "Yes, Cancel Task"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </DialogContent>
-    </Dialog>
+      {/* Cancel Task Confirmation AlertDialog */}
+      <AlertDialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
+        <AlertDialogContent className="max-w-md p-6 space-y-4">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-lg font-bold text-slate-900">
+              Cancel this task?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs text-slate-500">
+              Are you sure you want to cancel this task? This will mark the task as CANCELLED while preserving all audit history.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="space-y-2 py-2">
+            <Label className="text-xs font-semibold text-slate-700">Cancellation Reason (Optional)</Label>
+            <Textarea
+              placeholder="Enter reason for cancelling this task..."
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              className="text-xs h-20"
+              data-testid="cancel-reason-input"
+            />
+          </div>
+
+          <AlertDialogFooter className="flex justify-end gap-2 pt-2 border-t">
+            <AlertDialogCancel disabled={cancelling} onClick={() => setCancelDialogOpen(false)}>
+              Keep Task
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={cancelling}
+              onClick={handleCancelTask}
+              className="bg-red-600 hover:bg-red-700 text-white font-semibold"
+              data-testid="confirm-cancel-task-btn"
+            >
+              {cancelling ? "Cancelling..." : "Cancel Task"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
@@ -2000,7 +2033,7 @@ function MaterialDispatchWorkflow({ task, canMutate, updateStatus }) {
           product: item.product,
           size: item.size || "",
           quantity: item.quantity,
-          unit: item.unit || "Nos",
+          unit: formatUnit(item.unit || "Nos"),
           client_id: item.client_id,
           client_name: item.client_name,
           project_id: item.project_id,
@@ -2667,17 +2700,20 @@ export function MaterialRequest({ clientId, onDone, editRequest = null }) {
   const handleProductChange = (i, v) => {
     let pName = "";
     let sizeVal = items[i].size || "";
+    let unitVal = items[i].unit || "Nos";
     if (typeof v === "object" && v !== null) {
       pName = (v.name || "").toUpperCase();
       sizeVal = v.size || "";
+      unitVal = formatUnit(v.unit || "Nos");
     } else {
       pName = v.toUpperCase();
       const matched = products.find((p) => p.name.toUpperCase() === pName);
       if (matched) {
         sizeVal = matched.size || "";
+        unitVal = formatUnit(matched.unit || "Nos");
       }
     }
-    setItems(items.map((x, idx) => idx === i ? { ...x, product: pName, size: sizeVal } : x));
+    setItems(items.map((x, idx) => idx === i ? { ...x, product: pName, size: sizeVal, unit: unitVal } : x));
   };
 
   // Add a new empty row and focus its Product field after render
@@ -2708,6 +2744,7 @@ export function MaterialRequest({ clientId, onDone, editRequest = null }) {
         ...it,
         product: (it.product || "").trim().toUpperCase(),
         size: (it.size || "").trim(),
+        unit: formatUnit(it.unit || "Nos"),
         quantity: Number(it.quantity) || 0,
         remarks: it.remarks || "",
       }));

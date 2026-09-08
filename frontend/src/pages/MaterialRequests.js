@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
+import { UNIT_OPTIONS, formatUnit, getStandardizedUnitOptions } from "@/lib/units";
 import {
   PackageSearch,
   CheckCircle2,
@@ -556,19 +557,19 @@ function MaterialRequestItem({
                       {it.product} {it.variant ? `(${it.variant})` : ""}
                     </td>
                     <td className="py-2 px-2 text-slate-600">{it.size || "—"}</td>
-                    <td className="py-2 px-2 text-right font-medium">{requested} {it.unit || "Nos"}</td>
+                    <td className="py-2 px-2 text-right font-medium">{requested} {formatUnit(it.unit)}</td>
                     <td className="py-2 px-2 text-right">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
                         available >= requested ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
                       }`}>
-                        {available} {it.unit || "Nos"}
+                        {available} {formatUnit(it.unit)}
                       </span>
                     </td>
                     <td className="py-2 px-2 text-right font-bold text-emerald-700">
-                      {approved > 0 ? `${approved} ${it.unit || "Nos"}` : "—"}
+                      {approved > 0 ? `${approved} ${formatUnit(it.unit)}` : "—"}
                     </td>
                     <td className="py-2 px-3 text-right font-medium text-slate-600">
-                      {pending > 0 ? `${pending} ${it.unit || "Nos"}` : "—"}
+                      {pending > 0 ? `${pending} ${formatUnit(it.unit)}` : "—"}
                     </td>
                   </tr>
                 );
@@ -691,7 +692,7 @@ function MaterialApprovalDialog({ request, onSubmit }) {
     (request?.items || []).map((it) => ({
       product: it.product || "",
       size: it.size || "",
-      unit: it.unit || "Nos",
+      unit: formatUnit(it.unit || "Nos"),
       variant: it.variant || "",
       quantity: Number(it.quantity || 1),
       approved_quantity: it.approved_quantity != null ? Number(it.approved_quantity) : Number(it.quantity || 1),
@@ -722,7 +723,7 @@ function MaterialApprovalDialog({ request, onSubmit }) {
     const formatted = items.map((it) => ({
       product: String(it.product || "").trim(),
       size: String(it.size || "").trim(),
-      unit: String(it.unit || "Nos").trim(),
+      unit: formatUnit(it.unit || "Nos"),
       variant: String(it.variant || "").trim(),
       quantity: Number(it.quantity || 0),
       approved_quantity: Number(it.approved_quantity || 0),
@@ -813,15 +814,12 @@ function MaterialApprovalDialog({ request, onSubmit }) {
                           />
                         </td>
                         <td className="py-1.5 px-2">
-                          <Select value={it.unit} onValueChange={(v) => updateItem(idx, "unit", v)}>
+                          <Select value={formatUnit(it.unit || "Nos")} onValueChange={(v) => updateItem(idx, "unit", v)}>
                             <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="Nos">Nos</SelectItem>
-                              <SelectItem value="Meter">Meter</SelectItem>
-                              <SelectItem value="Set">Set</SelectItem>
-                              <SelectItem value="Kg">Kg</SelectItem>
-                              <SelectItem value="Pcs">Pcs</SelectItem>
-                              <SelectItem value="Box">Box</SelectItem>
+                              {getStandardizedUnitOptions(it.unit).map((u) => (
+                                <SelectItem key={u} value={u}>{u}</SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                         </td>

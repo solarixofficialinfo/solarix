@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Search, ShieldCheck, ArrowUpRight, ArrowDownLeft, RotateCcw, Package, Download, Filter } from "lucide-react";
+import { formatUnit } from "@/lib/units";
 
 export default function HighValueAssets() {
   const [search, setSearch] = useState("");
@@ -67,7 +68,7 @@ export default function HighValueAssets() {
         row.returned || 0,
         row.available_qty || 0,
         row.minimum_stock || 0,
-        `"${(row.unit || "Nos").replace(/"/g, '""')}"`,
+        `"${formatUnit(row.unit).replace(/"/g, '""')}"`,
         `"${(row.last_movement || "").replace(/"/g, '""')}"`,
         `"${(row.status || "").replace(/"/g, '""')}"`
       ]);
@@ -82,7 +83,7 @@ export default function HighValueAssets() {
         `"${(row.product || "").replace(/"/g, '""')}"`,
         `"${(row.size || "").replace(/"/g, '""')}"`,
         row.available_qty || 0,
-        `"${(row.unit || "Nos").replace(/"/g, '""')}"`,
+        `"${formatUnit(row.unit).replace(/"/g, '""')}"`,
         `"${(row.last_inward || "").replace(/"/g, '""')}"`,
         `"${(row.challan_vendor || "").replace(/"/g, '""')}"`,
         `"${(row.status || "Available").replace(/"/g, '""')}"`
@@ -99,7 +100,7 @@ export default function HighValueAssets() {
         `"${(row.product || "").replace(/"/g, '""')}"`,
         `"${(row.size || "").replace(/"/g, '""')}"`,
         row.quantity || 0,
-        `"${(row.unit || "Nos").replace(/"/g, '""')}"`,
+        `"${formatUnit(row.unit).replace(/"/g, '""')}"`,
         `"${(row.challan_number || "").replace(/"/g, '""')}"`,
         `"${(row.client_name || "").replace(/"/g, '""')}"`,
         `"${(row.site || "").replace(/"/g, '""')}"`,
@@ -119,7 +120,7 @@ export default function HighValueAssets() {
         `"${(row.product || "").replace(/"/g, '""')}"`,
         `"${(row.size || "").replace(/"/g, '""')}"`,
         row.quantity || 0,
-        `"${(row.unit || "Nos").replace(/"/g, '""')}"`,
+        `"${formatUnit(row.unit).replace(/"/g, '""')}"`,
         `"${(row.client_name || "").replace(/"/g, '""')}"`,
         `"${(row.site || "").replace(/"/g, '""')}"`,
         `"${(row.original_challan || "").replace(/"/g, '""')}"`,
@@ -269,15 +270,15 @@ export default function HighValueAssets() {
                             <span>{row.product}</span>
                           </td>
                           <td className="p-4 text-slate-700 text-xs font-mono">{row.size || "—"}</td>
-                          <td className="p-4 text-center font-medium text-slate-800">{row.total_in} {row.unit}</td>
-                          <td className="p-4 text-center font-medium text-slate-800">{row.total_out} {row.unit}</td>
-                          <td className="p-4 text-center font-medium text-emerald-700">{row.returned} {row.unit}</td>
+                          <td className="p-4 text-center font-medium text-slate-800">{row.total_in} {formatUnit(row.unit)}</td>
+                          <td className="p-4 text-center font-medium text-slate-800">{row.total_out} {formatUnit(row.unit)}</td>
+                          <td className="p-4 text-center font-medium text-emerald-700">{row.returned} {formatUnit(row.unit)}</td>
                           <td className="p-4 text-center font-bold text-base">
                             <span className={isOut ? "text-red-600" : isLow ? "text-amber-600" : "text-emerald-700"}>
-                              {row.available_qty} {row.unit}
+                              {row.available_qty} {formatUnit(row.unit)}
                             </span>
                           </td>
-                          <td className="p-4 text-center text-xs text-slate-500">{row.minimum_stock || 0} {row.unit}</td>
+                          <td className="p-4 text-center text-xs text-slate-500">{row.minimum_stock || 0} {formatUnit(row.unit)}</td>
                           <td className="p-4 text-xs text-slate-600">
                             <div className="flex items-center gap-1.5">
                               {row.last_movement.includes("Outward") ? (
@@ -334,7 +335,7 @@ export default function HighValueAssets() {
                           <span>{row.product}</span>
                         </td>
                         <td className="p-4 text-slate-700 text-xs font-mono">{row.size || "—"}</td>
-                        <td className="p-4 text-center font-bold text-emerald-700 text-base">{row.available_qty} {row.unit}</td>
+                        <td className="p-4 text-center font-bold text-emerald-700 text-base">{row.available_qty} {formatUnit(row.unit)}</td>
                         <td className="p-4 text-xs text-slate-700">{row.last_inward || "—"}</td>
                         <td className="p-4 text-xs text-slate-700 font-medium">{row.challan_vendor}</td>
                         <td className="p-4 text-right">
@@ -390,7 +391,7 @@ export default function HighValueAssets() {
                           )}
                         </td>
                         <td className="p-4 text-slate-700 text-xs font-mono">{row.size || "—"}</td>
-                        <td className="p-4 text-center font-bold text-blue-700">{row.quantity} {row.unit}</td>
+                        <td className="p-4 text-center font-bold text-blue-700">{row.quantity} {formatUnit(row.unit)}</td>
                         <td className="p-4 text-xs font-mono text-slate-700">{row.challan_number}</td>
                         <td className="p-4 text-xs font-medium text-slate-900">{row.client_name}</td>
                         <td className="p-4 text-xs text-slate-600">{row.site}</td>
@@ -438,7 +439,7 @@ export default function HighValueAssets() {
                         <td className="p-4 text-xs font-mono text-slate-600">{row.return_date}</td>
                         <td className="p-4 font-semibold text-slate-900">{row.product}</td>
                         <td className="p-4 text-slate-700 text-xs font-mono">{row.size || "—"}</td>
-                        <td className="p-4 text-center font-bold text-emerald-700">{row.quantity} {row.unit}</td>
+                        <td className="p-4 text-center font-bold text-emerald-700">{row.quantity} {formatUnit(row.unit)}</td>
                         <td className="p-4 text-xs font-medium text-slate-900">{row.client_name}</td>
                         <td className="p-4 text-xs font-mono text-slate-700">{row.original_challan}</td>
                         <td className="p-4 text-xs text-slate-600">{row.return_reason}</td>

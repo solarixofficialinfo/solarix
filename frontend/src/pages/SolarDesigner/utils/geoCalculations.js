@@ -379,30 +379,57 @@ export function rotatedRectanglesIntersect(rectA, rectB) {
 
 /**
  * Calculates 3D Roof Surface Elevation (Y in Three.js coordinates) at any (x, y) location
- * taking into account building elevation, roof slope/pitch, and slope azimuth.
+ * taking into account building elevation, roof slope/pitch, bounds, gable ridge, hip facets, and slope azimuth.
  */
-export function calculateRoofElevationAtPoint(x, y, { type = "flat", pitch_deg = 0, azimuth_deg = 180, elevation_m = 3.0 } = {}) {
-  const baseElevation = Number(elevation_m || 3.0);
-  const pitchRad = toRad(Number(pitch_deg || 0));
-  const azRad = toRad(Number(azimuth_deg || 180) - 180);
+export function calculateRoofElevationAtPoint(x, y, roof = {}) {
+  const type = roof?.type || "flat";
+  const pitch_deg = Number(roof?.pitch_deg || 0);
+  const azimuth_deg = Number(roof?.azimuth_deg ?? 180);
+  const elevation_m = Number(roof?.elevation_m || 3.0);
+  const eave_height_m = roof?.eave_height_m != null ? Number(roof.eave_height_m) : elevation_m;
+  const ridge_height_m = roof?.ridge_height_m != null ? Number(roof.ridge_height_m) : null;
+  const bounds = roof?.bounds || null;
+
+  const baseElevation = eave_height_m;
+  const pitchRad = toRad(pitch_deg);
 
   if (pitch_deg <= 0 || type === "flat") {
     return baseElevation;
   }
 
+  const cx = bounds?.centerX ?? 0;
+  const cy = bounds?.centerY ?? 0;
+  const relX = x - cx;
+  const relY = y - cy;
+
   if (type === "single_slope") {
-    const projectedDistance = x * Math.sin(azRad) + y * Math.cos(azRad);
-    return baseElevation + projectedDistance * Math.tan(pitchRad);
+    const azRad = toRad(azimuth_deg);
+    const projDist = relX * Math.sin(azRad) + relY * Math.cos(azRad);
+    return Math.max(0.5, baseElevation + projDist * Math.tan(pitchRad));
   }
 
   if (type === "gable") {
-    const projectedDistance = Math.abs(x * Math.sin(azRad) + y * Math.cos(azRad));
-    return baseElevation - projectedDistance * Math.tan(pitchRad);
+    const azRad = toRad(azimuth_deg);
+    // Perpendicular distance to central ridge
+    const distToRidge = Math.abs(relX * Math.cos(azRad) - relY * Math.sin(azRad));
+    const halfWidth = bounds?.width ? bounds.width / 2 : 5;
+    const calculatedRidgeH = ridge_height_m != null ? ridge_height_m : baseElevation + halfWidth * Math.tan(pitchRad);
+    return Math.max(baseElevation, calculatedRidgeH - distToRidge * Math.tan(pitchRad));
   }
 
   if (type === "hip") {
-    const dist = Math.max(Math.abs(x), Math.abs(y));
-    return baseElevation - dist * Math.tan(pitchRad);
+    const hw = bounds?.width ? bounds.width / 2 : 5;
+    const hl = bounds?.length ? bounds.length / 2 : 7.5;
+    const distFromEdgeX = Math.max(0, hw - Math.abs(relX));
+    const distFromEdgeY = Math.max(0, hl - Math.abs(relY));
+    const distFromEdge = Math.min(distFromEdgeX, distFromEdgeY);
+    return baseElevation + distFromEdge * Math.tan(pitchRad);
+  }
+
+  if (type === "custom_polygon") {
+    const azRad = toRad(azimuth_deg);
+    const projDist = relX * Math.sin(azRad) + relY * Math.cos(azRad);
+    return Math.max(0.5, baseElevation + projDist * Math.tan(pitchRad));
   }
 
   return baseElevation;

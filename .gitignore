@@ -24,3 +24,4 @@ backend/local_storage/*.json
 backend/storage_cache/
 *.csv
 rzp-key.csv
+scratch/

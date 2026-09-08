@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Upload, FileSpreadsheet, FileText, ArrowLeft, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { CATEGORY_OPTIONS, UNIT_OPTIONS } from "./_shared";
+import { CATEGORY_OPTIONS, UNIT_OPTIONS, formatUnit, getStandardizedUnitOptions } from "./_shared";
 
 export default function ProductImportModal({ open, onOpenChange, initialType = "pdf", existingProducts = [], onChanged }) {
   const [step, setStep] = useState("select");
@@ -50,7 +50,7 @@ export default function ProductImportModal({ open, onOpenChange, initialType = "
         const res = await api.post("/inventory/products/parse-pdf", formData, {
           headers: { "Content-Type": "multipart/form-data" },
         });
-        parsed = res.data?.rows || [];
+        parsed = (res.data?.rows || []).map(r => ({ ...r, unit: formatUnit(r.unit || "Nos") }));
       } else if (["xls", "xlsx", "csv", "txt"].includes(ext)) {
         const XLSX = await import("xlsx");
         const data = await file.arrayBuffer();
@@ -64,7 +64,7 @@ export default function ProductImportModal({ open, onOpenChange, initialType = "
           category: row["Category"] || row["category"] || "Solar Panel",
           brand: row["Brand"] || row["brand"] || row["Make"] || "",
           size: row["Size"] || row["size"] || row["Specification"] || "",
-          unit: row["Unit"] || row["unit"] || "Nos",
+          unit: formatUnit(row["Unit"] || row["unit"] || "Nos"),
           hsn: row["HSN"] || row["hsn"] || "",
           gst: row["GST"] || row["gst"] || "",
           min_stock: Number(row["Min Stock"] || row["min_stock"] || 0),
@@ -134,7 +134,7 @@ export default function ProductImportModal({ open, onOpenChange, initialType = "
           category: r.category || "Solar Panel",
           brand: r.brand || "",
           size: r.size || "",
-          unit: r.unit || "Nos",
+          unit: formatUnit(r.unit || "Nos"),
           hsn: r.hsn || "",
           gst: r.gst || "",
           min_stock: Number(r.min_stock) || 0,
@@ -261,7 +261,7 @@ export default function ProductImportModal({ open, onOpenChange, initialType = "
                         </td>
                         <td className="p-2.5">
                           <select value={r.unit} onChange={(e) => updateRow(idx, "unit", e.target.value)} className="h-7 text-xs border rounded w-full px-1">
-                            {UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}
+                            {getStandardizedUnitOptions(r.unit).map((u) => <option key={u} value={u}>{u}</option>)}
                           </select>
                         </td>
                         <td className="p-2.5">

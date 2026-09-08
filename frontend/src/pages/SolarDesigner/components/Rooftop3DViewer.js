@@ -190,6 +190,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       setCameraPreset(preset);
     },
     fitDesign: () => fitDesignCamera(),
+    fitRoof: () => fitRoofCamera(),
     resize: () => {
       const container = mountRef.current;
       const renderer = rendererRef.current;
@@ -245,10 +246,39 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     box.getSize(size);
     const maxDim = Math.max(size.x, size.y, size.z, 8);
     const fov = cameraRef.current.fov * (Math.PI / 180);
-    const distance = (maxDim / 2) / Math.tan(fov / 2) * 1.6;
+    const distance = (maxDim / 2) / Math.tan(fov / 2) * 1.5;
     if (isFinite(distance) && isFinite(center.x)) {
       controlsRef.current.target.copy(center);
-      controlsRef.current.spherical.radius = Math.max(10, Math.min(160, distance));
+      controlsRef.current.spherical.radius = Math.max(8, Math.min(160, distance));
+      controlsRef.current.spherical.phi = Math.PI / 3.2;
+      controlsRef.current.spherical.theta = Math.PI / 4;
+      setActivePreset("isometric");
+      updateCameraPosition();
+    }
+  }, [updateCameraPosition]);
+
+  const fitRoofCamera = useCallback(() => {
+    if (!rootGroupRef.current || !cameraRef.current) return;
+    const box = new THREE.Box3();
+    rootGroupRef.current.traverse((child) => {
+      if (child.name === "building_roof_mesh" || child.name === "building_wall_mesh") {
+        box.expandByObject(child);
+      }
+    });
+    if (box.isEmpty()) {
+      box.setFromObject(rootGroupRef.current);
+    }
+    if (box.isEmpty()) return;
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z, 6);
+    const fov = cameraRef.current.fov * (Math.PI / 180);
+    const distance = (maxDim / 2) / Math.tan(fov / 2) * 1.5;
+    if (isFinite(distance) && isFinite(center.x)) {
+      controlsRef.current.target.copy(center);
+      controlsRef.current.spherical.radius = Math.max(6, Math.min(160, distance));
       controlsRef.current.spherical.phi = Math.PI / 3.2;
       controlsRef.current.spherical.theta = Math.PI / 4;
       setActivePreset("isometric");
@@ -259,12 +289,19 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const setCameraPreset = useCallback((preset) => {
     setActivePreset(preset);
     const ctr = controlsRef.current;
+    if (rootGroupRef.current) {
+      const box = new THREE.Box3().setFromObject(rootGroupRef.current);
+      if (!box.isEmpty()) {
+        box.getCenter(ctr.target);
+      }
+    }
     if (preset === "top") { ctr.spherical.phi = 0.05; ctr.spherical.theta = 0; }
     else if (preset === "front") { ctr.spherical.phi = Math.PI / 2.15; ctr.spherical.theta = 0; }
     else if (preset === "side" || preset === "left") { ctr.spherical.phi = Math.PI / 2.15; ctr.spherical.theta = Math.PI / 2; }
     else if (preset === "right") { ctr.spherical.phi = Math.PI / 2.15; ctr.spherical.theta = -Math.PI / 2; }
     else if (preset === "isometric" || preset === "3d") { ctr.spherical.phi = Math.PI / 3.2; ctr.spherical.theta = Math.PI / 4; }
-    else if (preset === "fit") { fitDesignCamera(); return; }
+    else if (preset === "fit" || preset === "fit_design" || preset === "fitDesign") { fitDesignCamera(); return; }
+    else if (preset === "fit_roof" || preset === "fitRoof") { fitRoofCamera(); return; }
     else if (preset === "reset") {
       ctr.spherical.radius = 32;
       ctr.spherical.phi = Math.PI / 3.2;
@@ -278,7 +315,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       }
     }
     updateCameraPosition();
-  }, [updateCameraPosition, fitDesignCamera]);
+  }, [updateCameraPosition, fitDesignCamera, fitRoofCamera]);
 
   // ─── Snap Helper ─────────────────────────────────────────────────────────────
   const snapToNearest = useCallback((rawX, rawY, rawZ) => {
@@ -399,8 +436,75 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const onMouseUp = () => { controlsRef.current.isDragging = false; controlsRef.current.isPanning = false; };
     const onWheel = (e) => {
       e.preventDefault();
-      const zoomFactor = e.deltaY > 0 ? 1.08 : 0.92;
-      controlsRef.current.spherical.radius = Math.max(4, Math.min(180, controlsRef.current.spherical.radius * zoomFactor));
+      const ctr = controlsRef.current;
+      if (!cameraRef.current || !ctr) return;
+
+      const rect = dom.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      if (mouseX < 0 || mouseX > rect.width || mouseY < 0 || mouseY > rect.height) {
+        return;
+      }
+
+      // Normalized Device Coordinates (-1 to +1)
+      const ndcX = (mouseX / rect.width) * 2 - 1;
+      const ndcY = -(mouseY / rect.height) * 2 + 1;
+
+      // Pointer-directed 3D zoom using raycasting
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera({ x: ndcX, y: ndcY }, cameraRef.current);
+
+      let targetHitPoint = null;
+      if (rootGroupRef.current) {
+        const intersects = raycaster.intersectObjects(rootGroupRef.current.children, true);
+        if (intersects && intersects.length > 0) {
+          targetHitPoint = intersects[0].point;
+        }
+      }
+
+      // If ray doesn't intersect a rooftop mesh, intersect with a horizontal plane at current target height
+      if (!targetHitPoint) {
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -ctr.target.y);
+        const planeHit = new THREE.Vector3();
+        if (raycaster.ray.intersectPlane(plane, planeHit)) {
+          targetHitPoint = planeHit;
+        }
+      }
+
+      const isZoomIn = e.deltaY < 0;
+      // Controlled, smooth zoom factor
+      const zoomFactor = isZoomIn ? 0.90 : 1.10;
+
+      if (targetHitPoint && isFinite(targetHitPoint.x) && isFinite(targetHitPoint.z)) {
+        if (isZoomIn) {
+          // Bias target towards cursor hit point (0.16 bias factor)
+          ctr.target.lerp(targetHitPoint, 0.16);
+        } else {
+          // When zooming out, gently pull target back towards model center
+          if (rootGroupRef.current) {
+            const box = new THREE.Box3().setFromObject(rootGroupRef.current);
+            if (!box.isEmpty()) {
+              const modelCenter = box.getCenter(new THREE.Vector3());
+              ctr.target.lerp(modelCenter, 0.08);
+            }
+          }
+        }
+      }
+
+      // Safety bounds for target: prevent drifting infinitely far away
+      if (rootGroupRef.current) {
+        const box = new THREE.Box3().setFromObject(rootGroupRef.current);
+        if (!box.isEmpty()) {
+          const margin = 25;
+          ctr.target.x = Math.max(box.min.x - margin, Math.min(box.max.x + margin, ctr.target.x));
+          ctr.target.z = Math.max(box.min.z - margin, Math.min(box.max.z + margin, ctr.target.z));
+          ctr.target.y = Math.max(0, Math.min(box.max.y + 15, ctr.target.y));
+        }
+      }
+
+      // Safe camera distance range (5m to 160m)
+      ctr.spherical.radius = Math.max(5, Math.min(160, ctr.spherical.radius * zoomFactor));
+
       updateCameraPosition();
     };
     const onContextMenu = (e) => e.preventDefault();
@@ -565,6 +669,17 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       const bounds = getPolygonBounds(roofPolygon);
       const cx = (bounds.minX + bounds.maxX) / 2;
       const cy = (bounds.minY + bounds.maxY) / 2;
+      const roofBounds = { ...bounds, centerX: cx, centerY: cy };
+      const fullRoof = {
+        ...roof,
+        type: roofType,
+        bounds: roofBounds,
+        elevation_m: buildingElevationM,
+        eave_height_m: roof?.eave_height_m != null ? Number(roof.eave_height_m) : buildingElevationM,
+        ridge_height_m: roof?.ridge_height_m != null ? Number(roof.ridge_height_m) : null,
+        pitch_deg: roofPitchDeg,
+        azimuth_deg: roofAzimuthDeg,
+      };
 
       if (gridHelperRef.current && isFinite(cx) && isFinite(cy)) {
         gridHelperRef.current.position.set(cx, 0.01, -cy);
@@ -573,36 +688,240 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         groundMeshRef.current.position.set(cx, -0.02, -cy);
       }
 
-      const shape = new THREE.Shape();
-      roofPolygon.forEach((pt, idx) => {
-        if (idx === 0) shape.moveTo(pt.x, -pt.y);
-        else shape.lineTo(pt.x, -pt.y);
-      });
-      shape.closePath();
+      const wallMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.9, metalness: 0.05, side: THREE.DoubleSide });
+      const roofMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.75, metalness: 0.12, side: THREE.DoubleSide });
+      const edgeMat = new THREE.LineBasicMaterial({ color: 0x475569, linewidth: 1.5 });
 
-      if (showBuilding && buildingElevationM > 0) {
-        const wallGeom = new THREE.ExtrudeGeometry(shape, { steps: 1, depth: buildingElevationM, bevelEnabled: false });
-        wallGeom.rotateX(Math.PI / 2);
-        const wallMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.9, metalness: 0.05 });
-        const wallMesh = new THREE.Mesh(wallGeom, wallMat);
-        wallMesh.position.y = 0;
-        wallMesh.castShadow = true; wallMesh.receiveShadow = true;
-        rootGroup.add(wallMesh);
-      }
+      if (roofType === "gable" && roofPitchDeg > 0) {
+        // Construct Gable Roof with central ridge and 2 sloping planes + triangular gable end walls
+        const isLengthX = bounds.width >= bounds.length;
+        const eaveH = Number(fullRoof.eave_height_m);
+        const halfSpan = isLengthX ? bounds.length / 2 : bounds.width / 2;
+        const ridgeH = Number(fullRoof.ridge_height_m ?? (eaveH + halfSpan * Math.tan(roofPitchRad)));
 
-      if (showRoof) {
-        const roofExtrudeSettings = { steps: 1, depth: 0.35, bevelEnabled: true, bevelThickness: 0.06, bevelSize: 0.06, bevelSegments: 2 };
-        const roofGeom = new THREE.ExtrudeGeometry(shape, roofExtrudeSettings);
-        roofGeom.rotateX(Math.PI / 2);
-        const roofMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.8, metalness: 0.1 });
-        const roofMesh = new THREE.Mesh(roofGeom, roofMat);
-        roofMesh.position.y = buildingElevationM;
-        roofMesh.receiveShadow = true; roofMesh.castShadow = true;
-        if (roofPitchDeg > 0 && roofType === "single_slope") roofMesh.rotation.x = -roofPitchRad;
-        rootGroup.add(roofMesh);
-        const edgeGeom = new THREE.EdgesGeometry(roofGeom);
-        const edgeMat = new THREE.LineBasicMaterial({ color: 0x64748b, linewidth: 1.5 });
-        roofMesh.add(new THREE.LineSegments(edgeGeom, edgeMat));
+        const shape = new THREE.Shape();
+        roofPolygon.forEach((pt, idx) => {
+          if (idx === 0) shape.moveTo(pt.x, -pt.y);
+          else shape.lineTo(pt.x, -pt.y);
+        });
+        shape.closePath();
+
+        if (showBuilding && eaveH > 0) {
+          const wallGeom = new THREE.ExtrudeGeometry(shape, { steps: 1, depth: eaveH, bevelEnabled: false });
+          wallGeom.rotateX(Math.PI / 2);
+          const wallMesh = new THREE.Mesh(wallGeom, wallMat);
+          wallMesh.castShadow = true; wallMesh.receiveShadow = true;
+          rootGroup.add(wallMesh);
+        }
+
+        if (showRoof) {
+          const gableGeom = new THREE.BufferGeometry();
+          const vertices = [];
+
+          if (isLengthX) {
+            const x0 = bounds.minX, x1 = bounds.maxX;
+            const y0 = -bounds.maxY, y1 = -bounds.minY; // note: THREE.z = -y
+            const zRidge = -cy;
+
+            // Plane 1: from y0 (North eave) to zRidge (apex)
+            vertices.push(
+              x0, eaveH, y0,  x1, eaveH, y0,  x1, ridgeH, zRidge,
+              x0, eaveH, y0,  x1, ridgeH, zRidge,  x0, ridgeH, zRidge
+            );
+            // Plane 2: from zRidge (apex) to y1 (South eave)
+            vertices.push(
+              x0, ridgeH, zRidge,  x1, ridgeH, zRidge,  x1, eaveH, y1,
+              x0, ridgeH, zRidge,  x1, eaveH, y1,  x0, eaveH, y1
+            );
+            // Gable triangular end wall caps
+            vertices.push(x0, eaveH, y0,  x0, ridgeH, zRidge,  x0, eaveH, y1);
+            vertices.push(x1, eaveH, y0,  x1, eaveH, y1,  x1, ridgeH, zRidge);
+          } else {
+            const x0 = bounds.minX, x1 = bounds.maxX;
+            const y0 = -bounds.maxY, y1 = -bounds.minY;
+            const xRidge = cx;
+
+            // Plane 1: from x0 (West eave) to xRidge (apex)
+            vertices.push(
+              x0, eaveH, y0,  xRidge, ridgeH, y0,  xRidge, ridgeH, y1,
+              x0, eaveH, y0,  xRidge, ridgeH, y1,  x0, eaveH, y1
+            );
+            // Plane 2: from xRidge (apex) to x1 (East eave)
+            vertices.push(
+              xRidge, ridgeH, y0,  x1, eaveH, y0,  x1, eaveH, y1,
+              xRidge, ridgeH, y0,  x1, eaveH, y1,  xRidge, ridgeH, y1
+            );
+            // Gable triangular end wall caps
+            vertices.push(x0, eaveH, y0,  xRidge, ridgeH, y0,  x1, eaveH, y0);
+            vertices.push(x0, eaveH, y1,  x1, eaveH, y1,  xRidge, ridgeH, y1);
+          }
+
+          gableGeom.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+          gableGeom.computeVertexNormals();
+          const gableMesh = new THREE.Mesh(gableGeom, roofMat);
+          gableMesh.castShadow = true; gableMesh.receiveShadow = true;
+          rootGroup.add(gableMesh);
+
+          const wireframe = new THREE.LineSegments(new THREE.EdgesGeometry(gableGeom), edgeMat);
+          gableMesh.add(wireframe);
+        }
+      } else if (roofType === "hip" && roofPitchDeg > 0) {
+        // Construct Hip Roof with 4 sloped planes meeting at central ridge
+        const isLengthX = bounds.width >= bounds.length;
+        const eaveH = Number(fullRoof.eave_height_m);
+        const halfSpan = isLengthX ? bounds.length / 2 : bounds.width / 2;
+        const ridgeH = Number(fullRoof.ridge_height_m ?? (eaveH + halfSpan * Math.tan(roofPitchRad)));
+
+        const shape = new THREE.Shape();
+        roofPolygon.forEach((pt, idx) => {
+          if (idx === 0) shape.moveTo(pt.x, -pt.y);
+          else shape.lineTo(pt.x, -pt.y);
+        });
+        shape.closePath();
+
+        if (showBuilding && eaveH > 0) {
+          const wallGeom = new THREE.ExtrudeGeometry(shape, { steps: 1, depth: eaveH, bevelEnabled: false });
+          wallGeom.rotateX(Math.PI / 2);
+          const wallMesh = new THREE.Mesh(wallGeom, wallMat);
+          wallMesh.castShadow = true; wallMesh.receiveShadow = true;
+          rootGroup.add(wallMesh);
+        }
+
+        if (showRoof) {
+          const hipGeom = new THREE.BufferGeometry();
+          const vertices = [];
+          const x0 = bounds.minX, x1 = bounds.maxX;
+          const y0 = -bounds.maxY, y1 = -bounds.minY;
+
+          if (isLengthX) {
+            const zRidge = -cy;
+            const rX0 = Math.min(cx, x0 + halfSpan);
+            const rX1 = Math.max(cx, x1 - halfSpan);
+
+            // Trapezoid 1: North slope (y0) to ridge
+            vertices.push(
+              x0, eaveH, y0,  x1, eaveH, y0,  rX1, ridgeH, zRidge,
+              x0, eaveH, y0,  rX1, ridgeH, zRidge,  rX0, ridgeH, zRidge
+            );
+            // Trapezoid 2: South slope (y1) to ridge
+            vertices.push(
+              x0, eaveH, y1,  rX0, ridgeH, zRidge,  rX1, ridgeH, zRidge,
+              x0, eaveH, y1,  rX1, ridgeH, zRidge,  x1, eaveH, y1
+            );
+            // Triangle 3: West end
+            vertices.push(x0, eaveH, y0,  rX0, ridgeH, zRidge,  x0, eaveH, y1);
+            // Triangle 4: East end
+            vertices.push(x1, eaveH, y0,  x1, eaveH, y1,  rX1, ridgeH, zRidge);
+          } else {
+            const xRidge = cx;
+            const rY0 = Math.min(-cy, y0 + halfSpan);
+            const rY1 = Math.max(-cy, y1 - halfSpan);
+
+            // Trapezoid 1: West slope (x0) to ridge
+            vertices.push(
+              x0, eaveH, y0,  xRidge, ridgeH, rY0,  xRidge, ridgeH, rY1,
+              x0, eaveH, y0,  xRidge, ridgeH, rY1,  x0, eaveH, y1
+            );
+            // Trapezoid 2: East slope (x1) to ridge
+            vertices.push(
+              x1, eaveH, y0,  x1, eaveH, y1,  xRidge, ridgeH, rY1,
+              x1, eaveH, y0,  xRidge, ridgeH, rY1,  xRidge, ridgeH, rY0
+            );
+            // Triangle 3: North end
+            vertices.push(x0, eaveH, y0,  x1, eaveH, y0,  xRidge, ridgeH, rY0);
+            // Triangle 4: South end
+            vertices.push(x0, eaveH, y1,  xRidge, ridgeH, rY1,  x1, eaveH, y1);
+          }
+
+          hipGeom.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+          hipGeom.computeVertexNormals();
+          const hipMesh = new THREE.Mesh(hipGeom, roofMat);
+          hipMesh.castShadow = true; hipMesh.receiveShadow = true;
+          rootGroup.add(hipMesh);
+
+          const wireframe = new THREE.LineSegments(new THREE.EdgesGeometry(hipGeom), edgeMat);
+          hipMesh.add(wireframe);
+        }
+      } else if (roofPitchDeg > 0) {
+        // Single Slope or Custom Polygon sloped roof with continuous perimeter wedge walls
+        if (showBuilding) {
+          const wallGeom = new THREE.BufferGeometry();
+          const wallVertices = [];
+          for (let i = 0; i < roofPolygon.length; i++) {
+            const j = (i + 1) % roofPolygon.length;
+            const p1 = roofPolygon[i], p2 = roofPolygon[j];
+            const h1 = calculateRoofElevationAtPoint(p1.x, p1.y, fullRoof);
+            const h2 = calculateRoofElevationAtPoint(p2.x, p2.y, fullRoof);
+            const z1 = -p1.y, z2 = -p2.y;
+
+            // 2 triangles per perimeter wall segment
+            wallVertices.push(
+              p1.x, 0, z1,  p2.x, 0, z2,  p2.x, h2, z2,
+              p1.x, 0, z1,  p2.x, h2, z2,  p1.x, h1, z1
+            );
+          }
+          wallGeom.setAttribute("position", new THREE.Float32BufferAttribute(wallVertices, 3));
+          wallGeom.computeVertexNormals();
+          const wallMesh = new THREE.Mesh(wallGeom, wallMat);
+          wallMesh.castShadow = true; wallMesh.receiveShadow = true;
+          rootGroup.add(wallMesh);
+        }
+
+        if (showRoof) {
+          const shape = new THREE.Shape();
+          roofPolygon.forEach((pt, idx) => {
+            if (idx === 0) shape.moveTo(pt.x, -pt.y);
+            else shape.lineTo(pt.x, -pt.y);
+          });
+          shape.closePath();
+
+          const flatGeom = new THREE.ShapeGeometry(shape);
+          const posAttr = flatGeom.getAttribute("position");
+          for (let i = 0; i < posAttr.count; i++) {
+            const px = posAttr.getX(i);
+            const pz = posAttr.getY(i);
+            const py = calculateRoofElevationAtPoint(px, -pz, fullRoof);
+            posAttr.setXYZ(i, px, py, pz);
+          }
+          flatGeom.computeVertexNormals();
+
+          const pitchedMesh = new THREE.Mesh(flatGeom, roofMat);
+          pitchedMesh.castShadow = true; pitchedMesh.receiveShadow = true;
+          rootGroup.add(pitchedMesh);
+
+          const wireframe = new THREE.LineSegments(new THREE.EdgesGeometry(flatGeom), edgeMat);
+          pitchedMesh.add(wireframe);
+        }
+      } else {
+        // Flat Roof (0° pitch)
+        const shape = new THREE.Shape();
+        roofPolygon.forEach((pt, idx) => {
+          if (idx === 0) shape.moveTo(pt.x, -pt.y);
+          else shape.lineTo(pt.x, -pt.y);
+        });
+        shape.closePath();
+
+        if (showBuilding && buildingElevationM > 0) {
+          const wallGeom = new THREE.ExtrudeGeometry(shape, { steps: 1, depth: buildingElevationM, bevelEnabled: false });
+          wallGeom.rotateX(Math.PI / 2);
+          const wallMesh = new THREE.Mesh(wallGeom, wallMat);
+          wallMesh.position.y = 0;
+          wallMesh.castShadow = true; wallMesh.receiveShadow = true;
+          rootGroup.add(wallMesh);
+        }
+
+        if (showRoof) {
+          const roofExtrudeSettings = { steps: 1, depth: 0.35, bevelEnabled: true, bevelThickness: 0.06, bevelSize: 0.06, bevelSegments: 2 };
+          const roofGeom = new THREE.ExtrudeGeometry(shape, roofExtrudeSettings);
+          roofGeom.rotateX(Math.PI / 2);
+          const roofMesh = new THREE.Mesh(roofGeom, roofMat);
+          roofMesh.position.y = buildingElevationM;
+          roofMesh.receiveShadow = true; roofMesh.castShadow = true;
+          rootGroup.add(roofMesh);
+          const edgeGeom = new THREE.EdgesGeometry(roofGeom);
+          const edgeMatSegments = new THREE.LineBasicMaterial({ color: 0x64748b, linewidth: 1.5 });
+          roofMesh.add(new THREE.LineSegments(edgeGeom, edgeMatSegments));
+        }
       }
     }
 
@@ -640,7 +959,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const panelAzimuth = Number(p.azimuth ?? structAzimuth);
           const transform = calculatePanel3DPosition({
             panel: { ...p, azimuth: panelAzimuth },
-            roof: { type: roofType, pitch_deg: roofPitchDeg, azimuth_deg: roofAzimuthDeg, elevation_m: buildingElevationM },
+            roof: fullRoof,
             structure: { type: structType, tilt_deg: panelTiltDeg, height_m: baseClearance, azimuth: panelAzimuth },
           });
           const panelGroup = new THREE.Group();
@@ -662,9 +981,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         rows.forEach((row) => {
           const tiltRad = toRad(panelTiltDeg);
           const azYawRad = toRad(structAzimuth - 180);
-          const rowRoofY = calculateRoofElevationAtPoint(row.centerX, row.centerY, {
-            type: roofType, pitch_deg: roofPitchDeg, azimuth_deg: roofAzimuthDeg, elevation_m: buildingElevationM,
-          });
+          const rowRoofY = calculateRoofElevationAtPoint(row.centerX, row.centerY, fullRoof);
           const frameCenterY = rowRoofY + baseClearance + (row.pl / 2) * Math.sin(tiltRad);
 
           const rowMountGroup = new THREE.Group();
@@ -797,10 +1114,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         const ow = Number(obs.width || 1.8);
         const oh = Number(obs.height || 1.6);
         const type = obs.type || "water_tank";
-        const roofElevation = calculateRoofElevationAtPoint(ox, Number(obs.y || 0), {
-          type: roof?.type || "flat", pitch_deg: Number(roof?.pitch_deg || 0),
-          azimuth_deg: Number(roof?.azimuth_deg || 180), elevation_m: Number(roof?.elevation_m || 3.0),
-        });
+        const roofElevation = calculateRoofElevationAtPoint(ox, Number(obs.y || 0), fullRoof);
         if (type === "water_tank") {
           const tankRadius = Math.min(ol, ow) / 2;
           const tankMesh = new THREE.Mesh(

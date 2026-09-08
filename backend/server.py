@@ -6820,9 +6820,22 @@ async def update_task(task_id: str, data: TaskUpdate, user=Depends(get_current_u
     user_id_val = (user.get("id") if isinstance(user, dict) else None) or "usr_admin"
     user_name_val = (user.get("name") if isinstance(user, dict) else None) or "User"
 
-    existing_task = await db.tasks.find_one({"id": task_id, "company_id": user_cid})
+    existing_task = await db.tasks.find_one({"$or": [{"id": task_id}, {"_id": task_id}], "company_id": user_cid})
+    if not existing_task and is_super_admin_user(user):
+        existing_task = await db.tasks.find_one({"$or": [{"id": task_id}, {"_id": task_id}]})
     if not existing_task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    is_admin_user = (
+        is_owner(user) or
+        is_super_admin_user(user) or
+        (isinstance(user, dict) and user.get("role") in ["Admin", "Supervisor"]) or
+        has_perm(user, "task_portal", "edit") or
+        has_perm(user, "task_portal", "approve")
+    )
+    is_assignee = (existing_task.get("assigned_to") == user_id_val) or (existing_task.get("created_by") == user_id_val)
+    if not (is_admin_user or is_assignee):
+        raise HTTPException(status_code=403, detail="Not authorized to update or cancel this task")
 
     target_task_id = existing_task.get("id") or task_id
 
@@ -6839,8 +6852,8 @@ async def update_task(task_id: str, data: TaskUpdate, user=Depends(get_current_u
         if data.cancellation_reason:
             update["cancellation_reason"] = data.cancellation_reason
 
-    res = await db.tasks.update_one({"id": target_task_id}, {"$set": update})
-    t = await db.tasks.find_one({"id": target_task_id}, {"_id": 0})
+    res = await db.tasks.update_one({"$or": [{"id": target_task_id}, {"_id": target_task_id}]}, {"$set": update})
+    t = await db.tasks.find_one({"$or": [{"id": target_task_id}, {"_id": target_task_id}]}, {"_id": 0})
     if not t:
         t = dict(existing_task)
         t.update(update)
@@ -7987,19 +8000,44 @@ def norm_product_name(s: Optional[str]) -> str:
         return ""
     return s.strip().upper()
 
+UNIT_CODE_MAP = {
+    "NOS": "Nos", "NO": "Nos", "NO.": "Nos", "NOS.": "Nos", "NUMBER": "Nos", "NUMBERS": "Nos", "N0S": "Nos",
+    "MTR": "Mtr", "MTRS": "Mtr", "METER": "Mtr", "METERS": "Mtr", "METRE": "Mtr", "METRES": "Mtr", "M": "Mtr",
+    "KG": "Kg", "KGS": "Kg", "KILOGRAM": "Kg", "KILOGRAMS": "Kg",
+    "SET": "Set", "SETS": "Set",
+    "PCK": "Pack", "PACK": "Pack", "PACKS": "Pack", "PKT": "Pack", "PKTS": "Pack", "PACKET": "Pack", "PACKETS": "Pack", "PKG": "Pack", "PKGS": "Pack",
+    "BOX": "Box", "BOXES": "Box", "BX": "Box",
+    "PAIR": "Pair", "PAIRS": "Pair", "PR": "Pair",
+    "LTR": "Ltr", "LTRS": "Ltr", "LITER": "Ltr", "LITERS": "Ltr", "LITRE": "Ltr", "LITRES": "Ltr", "L": "Ltr",
+    "PCS": "Pcs", "PIECE": "Pcs", "PIECES": "Pcs", "PC": "Pcs",
+    "ROLL": "Roll", "ROLLS": "Roll", "RL": "Roll",
+    "UNIT": "Unit", "UNITS": "Unit",
+}
+
+LABEL_TO_CANONICAL_CODE = {
+    "Nos": "NOS", "Mtr": "MTR", "Kg": "KG", "Set": "SET",
+    "Pack": "PCK", "Box": "BOX", "Pair": "PAIR", "Ltr": "LTR",
+    "Pcs": "PCS", "Roll": "ROLL", "Unit": "UNIT"
+}
+
 def norm_unit(u: Optional[str]) -> str:
     if not u:
         return "Nos"
-    val = u.strip().upper()
-    if val in ["MTR", "MTRS", "METER", "METERS"]:
-        return "Mtr"
-    if val in ["NOS", "NO", "NUMBERS", "NUMBER"]:
-        return "Nos"
-    if val in ["SET", "SETS"]:
-        return "Set"
-    if val in ["KG", "KGS", "KILOGRAM"]:
-        return "Kg"
-    return u.strip().capitalize() or "Nos"
+    clean = str(u).strip()
+    val = clean.upper()
+    if val in UNIT_CODE_MAP:
+        return UNIT_CODE_MAP[val]
+    return clean or "Nos"
+
+def norm_unit_code(u: Optional[str]) -> str:
+    if not u:
+        return "NOS"
+    clean = str(u).strip()
+    val = clean.upper()
+    label = UNIT_CODE_MAP.get(val)
+    if label:
+        return LABEL_TO_CANONICAL_CODE.get(label, val)
+    return val
 
 async def ensure_product(company_id: str, name: str, size: str = "", category: str = "", unit: str = "Nos", min_stock: float = 0, brand: str = "", high_value_goods: bool = False):
     n = norm_product_name(name)
@@ -11933,6 +11971,15 @@ class BulkRow(BaseModel):
     client_name: Optional[str] = ""
     bill_number: Optional[str] = ""
     remarks: Optional[str] = ""
+    challan_number: Optional[str] = ""
+    challan_no: Optional[str] = ""
+    outward_challan_no: Optional[str] = ""
+    project_id: Optional[str] = ""
+    project_name: Optional[str] = ""
+    status: Optional[str] = ""
+    attachment_file_id: Optional[str] = ""
+    attachment_filename: Optional[str] = ""
+    attachment_file_ids: Optional[List[str]] = []
     high_value_asset: Optional[bool] = False
     high_value_goods: Optional[bool] = False
     serial_number_required: Optional[bool] = False
@@ -11942,6 +11989,9 @@ class BulkInwardIn(BaseModel):
     rows: List[BulkRow]
     batch_label: Optional[str] = ""
     global_defaults: Optional[Dict] = {}
+    attachment_file_id: Optional[str] = ""
+    attachment_filename: Optional[str] = ""
+    attachment_file_ids: Optional[List[str]] = []
 
 
 
@@ -12045,9 +12095,15 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
                 remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
 
         entry_id = str(uuid.uuid4())
-        ref_num = r.reference_number or gd.get("reference_number", "")
+        ref_num = r.reference_number or r.challan_number or getattr(r, 'challan_no', None) or gd.get("reference_number") or gd.get("challan_number", "")
         bill_num = r.bill_number or gd.get("bill_number", "")
         date_val = r.date or gd.get("date", "") or now_iso()
+        clean_ref = str(ref_num or "").strip()
+        clean_bill = str(bill_num or "").strip()
+
+        att_id = r.attachment_file_id or gd.get("attachment_file_id", "") or data.attachment_file_id or (data.attachment_file_ids[0] if getattr(data, "attachment_file_ids", None) else "")
+        att_name = r.attachment_filename or gd.get("attachment_filename", "") or data.attachment_filename or ""
+        att_ids = getattr(r, "attachment_file_ids", None) or gd.get("attachment_file_ids") or data.attachment_file_ids or ([att_id] if att_id else [])
         
         doc = {
             "id": entry_id,
@@ -12056,16 +12112,19 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
             "size": ps,
             "quantity": qty,
             "unit": pu,
-            "reference_number": numeric_only(ref_num),
+            "reference_number": clean_ref,
+            "challan_no": clean_ref,
+            "challan_number": clean_ref,
             "reference_type": r.reference_type or gd.get("reference_type", "Challan Number"),
-            "bill_number": numeric_only(bill_num),
+            "bill_number": clean_bill,
             "source_type": source_type_val,
             "source_name": source_name_val,
             "date": date_val,
             "remarks": remarks_val,
-            "attachment_file_id": "",
-            "attachment_filename": "",
-            "source": "ai-bulk-import",
+            "attachment_file_id": att_id,
+            "attachment_filename": att_name,
+            "attachment_file_ids": att_ids,
+            "source": "manual-bulk-import",
             "created_by": user["id"],
             "created_by_name": user["name"],
             "created_at": now_iso()
@@ -12221,10 +12280,16 @@ async def bulk_inward_high_value(data: BulkInwardIn, user=Depends(get_current_us
         brand_val = (getattr(r, 'brand', None) or r.source_name or gd.get("vendor") or gd.get("source_name") or "Unknown").strip()
         source_name_val = (r.source_name or getattr(r, 'vendor', None) or gd.get("vendor") or gd.get("source_name") or "").strip()
         source_type_val = r.source_type or gd.get("source_type", "Supplier")
-        ref_num = r.reference_number or r.bill_number or gd.get("bill_number") or gd.get("reference_number", "")
+        ref_num = r.reference_number or r.challan_number or getattr(r, 'challan_no', None) or r.bill_number or gd.get("bill_number") or gd.get("reference_number", "")
         bill_num = r.bill_number or r.reference_number or gd.get("bill_number", "")
         date_val = r.date or gd.get("date", "") or now_iso()
         remarks_val = r.remarks or gd.get("remarks", "")
+        clean_ref = str(ref_num or "").strip()
+        clean_bill = str(bill_num or "").strip()
+
+        att_id = r.attachment_file_id or gd.get("attachment_file_id", "") or data.attachment_file_id or (data.attachment_file_ids[0] if getattr(data, "attachment_file_ids", None) else "")
+        att_name = r.attachment_filename or gd.get("attachment_filename", "") or data.attachment_filename or ""
+        att_ids = getattr(r, "attachment_file_ids", None) or gd.get("attachment_file_ids") or data.attachment_file_ids or ([att_id] if att_id else [])
 
         entry_id = str(uuid.uuid4())
         doc = {
@@ -12234,17 +12299,20 @@ async def bulk_inward_high_value(data: BulkInwardIn, user=Depends(get_current_us
             "size": ps,
             "quantity": qty,
             "unit": pu,
-            "reference_number": numeric_only(ref_num),
+            "reference_number": clean_ref,
+            "challan_no": clean_ref,
+            "challan_number": clean_ref,
             "reference_type": r.reference_type or gd.get("reference_type", "Challan Number"),
-            "bill_number": numeric_only(bill_num),
+            "bill_number": clean_bill,
             "source_type": source_type_val,
             "source_name": source_name_val,
             "date": date_val,
             "remarks": remarks_val,
             "high_value_goods": True,
             "high_value_asset": True,
-            "attachment_file_id": "",
-            "attachment_filename": "",
+            "attachment_file_id": att_id,
+            "attachment_filename": att_name,
+            "attachment_file_ids": att_ids,
             "source": "high-value-manual-import",
             "created_by": user["id"],
             "created_by_name": user["name"],
@@ -12267,9 +12335,9 @@ async def bulk_inward_high_value(data: BulkInwardIn, user=Depends(get_current_us
                     "size_model": ps,
                     "quantity": 1.0,
                     "serial_number": sn,
-                    "vendor": source_name_val or brand_val,
+                    "vendor": source_name_val or "",
                     "purchase_date": date_val[:10],
-                    "challan_number": ref_num,
+                    "challan_number": clean_ref,
                     "client_id": None,
                     "client_name": None,
                     "installation_date": None,
@@ -12287,9 +12355,9 @@ async def bulk_inward_high_value(data: BulkInwardIn, user=Depends(get_current_us
                 "size_model": ps,
                 "quantity": qty,
                 "serial_number": "",
-                "vendor": source_name_val or brand_val,
+                "vendor": source_name_val or "",
                 "purchase_date": date_val[:10],
-                "challan_number": ref_num,
+                "challan_number": clean_ref,
                 "client_id": None,
                 "client_name": None,
                 "installation_date": None,
@@ -12323,14 +12391,21 @@ class BulkOutwardRow(BaseModel):
     unit: Optional[str] = "Nos"
     date: Optional[str] = ""
     outward_challan_no: Optional[str] = ""
+    challan_number: Optional[str] = ""
+    challan_no: Optional[str] = ""
     reference_number: Optional[str] = ""
     reference_type: Optional[str] = "Challan Number"
     client_id: Optional[str] = ""
     client_name: Optional[str] = ""
     project_id: Optional[str] = ""
     project_name: Optional[str] = ""
+    source_name: Optional[str] = ""
+    source_type: Optional[str] = ""
     status: Optional[str] = "Dispatched"
     remarks: Optional[str] = ""
+    attachment_file_id: Optional[str] = ""
+    attachment_filename: Optional[str] = ""
+    attachment_file_ids: Optional[List[str]] = []
     high_value_asset: Optional[bool] = False
     high_value_goods: Optional[bool] = False
     serial_numbers: Optional[List[str]] = []
@@ -12342,6 +12417,9 @@ class BulkOutwardIn(BaseModel):
     rows: List[BulkOutwardRow]
     batch_label: Optional[str] = ""
     global_defaults: Optional[Dict] = {}
+    attachment_file_id: Optional[str] = ""
+    attachment_filename: Optional[str] = ""
+    attachment_file_ids: Optional[List[str]] = []
 
 
 
@@ -12442,9 +12520,14 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
             status_val = "Dispatched"
 
         entry_id = str(uuid.uuid4())
-        ref_num = r.reference_number or r.outward_challan_no or gd.get("reference_number", "")
-        challan_no = r.outward_challan_no or ref_num
+        ref_num = r.reference_number or r.outward_challan_no or r.challan_number or getattr(r, 'challan_no', None) or gd.get("reference_number") or gd.get("outward_challan_no", "")
+        challan_no = r.outward_challan_no or r.challan_number or getattr(r, 'challan_no', None) or ref_num
+        clean_ch = str(challan_no or "").strip()
         date_val = r.date or gd.get("date", "") or now_iso()
+
+        att_id = r.attachment_file_id or gd.get("attachment_file_id", "") or data.attachment_file_id or (data.attachment_file_ids[0] if getattr(data, "attachment_file_ids", None) else "")
+        att_name = r.attachment_filename or gd.get("attachment_filename", "") or data.attachment_filename or ""
+        att_ids = getattr(r, "attachment_file_ids", None) or gd.get("attachment_file_ids") or data.attachment_file_ids or ([att_id] if att_id else [])
 
         doc = {
             "id": entry_id,
@@ -18915,6 +18998,10 @@ async def create_solar_design(
         "longitude": payload.get("longitude"),
         "place_id": payload.get("place_id") or "",
         "zoom": payload.get("zoom") or 19,
+        "roof": payload.get("roof") or {},
+        "roof_source": payload.get("roof_source") or "satellite",
+        "roof_type": payload.get("roof_type") or (payload.get("roof") or {}).get("type") or "flat",
+        "roof_pitch": float(payload.get("roof_pitch") or (payload.get("roof") or {}).get("pitch_deg") or 0),
         "roof_polygon": payload.get("roof_polygon") or [],
         "roof_area_sqm": float(payload.get("roof_area_sqm") or payload.get("roof_area") or 0),
         "roof_perimeter_m": float(payload.get("roof_perimeter_m") or 0),
@@ -19012,6 +19099,7 @@ async def update_solar_design(
     allowed_fields = [
         "client_id", "client_name", "project_id", "lead_id", "site_name",
         "address", "formatted_address", "latitude", "longitude", "place_id", "zoom",
+        "roof", "roof_source", "roof_type", "roof_pitch", "eave_height_m", "ridge_height_m",
         "roof_polygon", "roof_area_sqm", "roof_perimeter_m", "roof_dimensions",
         "calibration", "setback_m", "edge_clearance_m", "walkway_m", "walkways",
         "usable_area_sqm", "coverage_pct", "obstacles", "panel_product_id",

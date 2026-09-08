@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
+import { formatUnit } from "@/lib/units";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -959,7 +960,7 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
                         <td className="px-3 py-2 font-medium text-slate-900">{sm.product}</td>
                         <td className="px-2 py-2 text-slate-600">{sm.category}</td>
                         <td className="px-2 py-2 text-right tabular-nums font-bold text-slate-800">
-                          {Number(sm.available_qty).toLocaleString()} {sm.unit}
+                          {Number(sm.available_qty).toLocaleString()} {formatUnit(sm.unit)}
                         </td>
                         <td className="px-2 py-2 text-center text-amber-700 font-semibold">{sm.days_since_movement} days</td>
                         <td className="px-2 py-2 text-center">

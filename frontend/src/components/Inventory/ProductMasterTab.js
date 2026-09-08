@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Pencil, Trash2, Plus, Boxes, Search, Download, FileSpreadsheet, FileText, Upload, Settings } from "lucide-react";
 import { toast } from "sonner";
-import { Field, SelectField, ConfirmDialog, UNIT_OPTIONS, CATEGORY_OPTIONS, normalizeSizeForMatching } from "./_shared";
+import { Field, SelectField, ConfirmDialog, UNIT_OPTIONS, CATEGORY_OPTIONS, normalizeSizeForMatching, formatUnit, getStandardizedUnitOptions } from "./_shared";
 import ProductDrawer from "./ProductDrawer";
 import ProductImportModal from "./ProductImportModal";
 import { useEntitlements } from "@/hooks/useEntitlements";
@@ -55,7 +55,12 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
     if (!form.name?.trim()) { toast.error("Product name required"); return; }
     setBusy(true);
     try {
-      const payload = { ...form, min_stock: Number(form.min_stock) || 0, rate: Number(form.rate) || 0 };
+      const payload = {
+        ...form,
+        unit: formatUnit(form.unit || "Nos"),
+        min_stock: Number(form.min_stock) || 0,
+        rate: Number(form.rate) || 0
+      };
       if (editing) {
         await api.patch(`/inventory/products/${editing.id}`, payload);
         toast.success("Product updated successfully.");
@@ -121,8 +126,8 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
     const data = filtered.map((p) => ({
       "Product Name": p.name || "",
       "Size": p.size || "",
-      "Category": p.category || "Solar",
-      "Unit": p.unit || "Nos",
+      "Category": p.category || "—",
+      "Unit": formatUnit(p.unit),
       "Min Stock": p.min_stock || 0,
       "Rate": p.rate || 0,
       "Current Stock": p.balance || 0,
@@ -272,7 +277,7 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
                       <td className="px-4 py-2.5 text-xs">
                         <Badge variant="outline" className="bg-slate-50 text-slate-700 border-slate-200 text-[10px]">{p.category || "Solar"}</Badge>
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-center text-slate-600">{p.unit || "Nos"}</td>
+                      <td className="px-4 py-2.5 text-xs text-center text-slate-600">{formatUnit(p.unit)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-xs text-slate-600">{p.min_stock || 0}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-xs text-slate-600">₹ {p.rate || 0}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{p.balance}</td>
@@ -315,7 +320,7 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
             <Field label="Product Name" value={form.name} onChange={(v) => setForm({ ...form, name: v.toUpperCase() })} placeholder="e.g. WAAREE PANEL 540W" testid="pm-name" full required />
             <Field label="Size / Spec" value={form.size} onChange={(v) => setForm({ ...form, size: v })} placeholder="e.g. 540W Mono PERC" testid="pm-size" full />
             <SelectField label="Category" value={form.category} onChange={(v) => setForm({ ...form, category: v })} options={CATEGORY_OPTIONS} testid="pm-category" />
-            <SelectField label="Unit" value={form.unit} onChange={(v) => setForm({ ...form, unit: v })} options={UNIT_OPTIONS} testid="pm-unit" />
+            <SelectField label="Unit" value={form.unit} onChange={(v) => setForm({ ...form, unit: v })} options={getStandardizedUnitOptions(form.unit)} testid="pm-unit" />
             <Field label="Min Stock (alert level)" type="number" value={form.min_stock} onChange={(v) => setForm({ ...form, min_stock: v })} testid="pm-min" />
             <Field label="Rate / Unit Price" type="number" value={form.rate} onChange={(v) => setForm({ ...form, rate: v })} testid="pm-rate" />
             <SelectField label="Status" value={form.status} onChange={(v) => setForm({ ...form, status: v })} options={["Active", "Inactive"]} testid="pm-status" />
@@ -460,7 +465,7 @@ export default function ProductMasterTab({ products, onChanged, globalSearch }) 
                       <td className="px-3 py-2">
                         <Badge variant="outline" className="text-[10px] bg-slate-50">{p.category || "Solar"}</Badge>
                       </td>
-                      <td className="px-3 py-2 text-center">{p.unit || "Nos"}</td>
+                      <td className="px-3 py-2 text-center">{formatUnit(p.unit)}</td>
                       <td className="px-3 py-2 text-right">{p.min_stock || 0}</td>
                       <td className="px-3 py-2 text-right font-medium">₹ {p.rate || 0}</td>
                       <td className="px-3 py-2 text-center">
