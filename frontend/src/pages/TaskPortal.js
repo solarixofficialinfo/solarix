@@ -77,7 +77,19 @@ function getWorkflow(taskType) {
 export default function TaskPortal() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const isAdmin = user?.role === "Admin" || user?.role === "Supervisor";
+  const isAdmin =
+    user?.role === "Admin" ||
+    user?.role === "Super Admin" ||
+    user?.role === "Supervisor" ||
+    user?.role === "Owner" ||
+    user?.user_type === "owner" ||
+    user?.user_type === "platform_owner" ||
+    user?.user_type === "super_admin" ||
+    user?.is_super_admin ||
+    user?.is_platform_owner ||
+    user?.is_owner ||
+    (user?.email || "").trim().toLowerCase() === "solarixofficial.info@gmail.com" ||
+    (user?.email || "").trim().toLowerCase() === "solarixoffcial.info@gmail.com";
 
   const [scope, setScope] = useState("mine");
   const [selected, setSelected] = useState(null);
@@ -561,7 +573,14 @@ export default function TaskPortal() {
       {selected && (
         <TaskDetail
           task={tasks.find((t) => t.id === selected.id) || selected}
-          canMutate={isAdmin || selected.assigned_to === user?.id || user?.permissions?.includes("task_portal.edit") || user?.permissions?.includes("task_portal.all")}
+          canMutate={
+            isAdmin ||
+            selected.assigned_to === user?.id ||
+            user?.permissions?.task_portal?.edit === true ||
+            user?.permissions?.task_portal?.all === true ||
+            user?.permissions?.tasks?.edit === true ||
+            (Array.isArray(user?.permissions) && (user.permissions.includes("task_portal.edit") || user.permissions.includes("task_portal.all")))
+          }
           onClose={handleCloseDetail}
           onMutate={() => {
             markMutated();
@@ -1891,7 +1910,17 @@ function DocumentSignedWorkflow({ task, canMutate, updateStatus, onDone }) {
 
 function MaterialDispatchWorkflow({ task, canMutate, updateStatus }) {
   const { user } = useAuth();
-  const isAdmin = user?.role === "Admin" || user?.role === "Supervisor";
+  const isAdmin =
+    user?.role === "Admin" ||
+    user?.role === "Super Admin" ||
+    user?.role === "Supervisor" ||
+    user?.role === "Owner" ||
+    user?.user_type === "owner" ||
+    user?.user_type === "platform_owner" ||
+    user?.user_type === "super_admin" ||
+    user?.is_super_admin ||
+    user?.is_platform_owner ||
+    user?.is_owner;
 
   const [matReq, setMatReq] = useState(null);
   const [outwards, setOutwards] = useState([]);
