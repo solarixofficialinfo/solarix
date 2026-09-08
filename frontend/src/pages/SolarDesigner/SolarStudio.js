@@ -33,6 +33,8 @@ import {
   getCartesianPolygonPerimeter,
   getPolygonBounds,
   projectMetersToLatLng,
+  computeSetbackPolygon,
+  isRectInsidePolygon,
 } from "./utils/geoCalculations";
 import {
   searchLocations,
@@ -177,8 +179,8 @@ export default function SolarStudio() {
     orientation: "portrait",
     tilt_angle: 15,
     azimuth_angle: 180, // Default South
-    row_spacing_m: 0.35,
-    panel_spacing_m: 0.02,
+    row_spacing_m: 0.03,
+    panel_spacing_m: 0.03,
     panel_count: 0,
     system_kw: 0,
     panels: [],
@@ -279,22 +281,64 @@ export default function SolarStudio() {
 
   // Update Roof Polygon and recalculate geometric properties
   const handleSetRoofPolygon = useCallback((polygon) => {
+    if (!polygon || polygon.length < 3) {
+      setDesignData((prev) => ({
+        ...prev,
+        roof_polygon: polygon || [],
+        roof_area_sqm: 0,
+        roof_perimeter_m: 0,
+        usable_area_sqm: 0,
+      }));
+      return;
+    }
+
     const area = getCartesianPolygonArea(polygon);
+    if (isNaN(area) || area < 0.5) {
+      toast.warning("Roof boundary is invalid: corners overlap or area is zero.");
+      return;
+    }
+
     const perimeter = getCartesianPolygonPerimeter(polygon);
     const bounds = getPolygonBounds(polygon);
+    const setback = Number(designData.roof?.setback_m || designData.setback_m || 0.5);
+    const usablePoly = computeSetbackPolygon(polygon, setback);
+    const usableArea = Math.round(getCartesianPolygonArea(usablePoly) * 10) / 10;
 
-    setDesignData((prev) => ({
-      ...prev,
-      roof_polygon: polygon,
-      roof_area_sqm: Math.round(area * 10) / 10,
-      roof_perimeter_m: Math.round(perimeter * 10) / 10,
-      roof_dimensions: {
-        length_m: Math.round(bounds.length * 10) / 10,
-        width_m: Math.round(bounds.width * 10) / 10,
-      },
-      usable_area_sqm: Math.max(0, Math.round((area * 0.85) * 10) / 10),
-    }));
-  }, []);
+    setDesignData((prev) => {
+      // Revalidate existing panels against new roof polygon without random auto-regeneration
+      const currentPanels = prev.panels || [];
+      const validPanels = currentPanels.filter((p) => {
+        if (p.hidden) return false;
+        return isRectInsidePolygon(p.x, p.y, p.width || 1.134, p.height || 2.278, p.rotation || 0, usablePoly);
+      });
+
+      const removedCount = currentPanels.length - validPanels.length;
+      if (removedCount > 0) {
+        toast.info(`Pruned ${removedCount} panel(s) outside new roof boundary.`);
+      }
+
+      const pWatt = Number(prev.panel_wattage || 550);
+      const totalKw = (validPanels.length * pWatt) / 1000.0;
+      const singleArea = (prev.panel_dimensions?.width_m || 1.134) * (prev.panel_dimensions?.length_m || 2.278);
+      const coveragePct = usableArea > 0 ? Math.min(100, Math.round(((validPanels.length * singleArea) / usableArea) * 1000) / 10) : 0;
+
+      return {
+        ...prev,
+        roof_polygon: polygon,
+        roof_area_sqm: Math.round(area * 10) / 10,
+        roof_perimeter_m: Math.round(perimeter * 10) / 10,
+        roof_dimensions: {
+          length_m: Math.round(bounds.length * 10) / 10,
+          width_m: Math.round(bounds.width * 10) / 10,
+        },
+        usable_area_sqm: usableArea,
+        panels: validPanels,
+        panel_count: validPanels.length,
+        system_kw: Math.round(totalKw * 100) / 100,
+        coverage_pct: coveragePct,
+      };
+    });
+  }, [designData.roof?.setback_m, designData.setback_m]);
 
   // Trigger Automatic Panel Layout
   const handleAutoLayout = useCallback((customStrategy = "auto") => {
@@ -318,8 +362,8 @@ export default function SolarStudio() {
         width_m: designData.panel_dimensions?.width_m || 1.134,
       },
       orientation: designData.orientation || "portrait",
-      rowSpacingMeters: Number(designData.row_spacing_m || 0.35),
-      panelSpacingMeters: Number(designData.panel_spacing_m || 0.02),
+      rowSpacingMeters: Number(designData.row_spacing_m || designData.panel_spacing_m || 0.03),
+      panelSpacingMeters: Number(designData.panel_spacing_m || 0.03),
       azimuthDegrees: Number(designData.azimuth_angle || 180),
       strategy: customStrategy,
     });
@@ -671,8 +715,8 @@ export default function SolarStudio() {
         width_m: designData.panel_dimensions?.width_m || 1.134,
       },
       orientation: designData.orientation,
-      rowSpacingMeters: Number(designData.row_spacing_m || 0.35),
-      panelSpacingMeters: Number(designData.panel_spacing_m || 0.02),
+      rowSpacingMeters: Number(designData.row_spacing_m || designData.panel_spacing_m || 0.03),
+      panelSpacingMeters: Number(designData.panel_spacing_m || 0.03),
       azimuthDegrees: Number(designData.azimuth_angle || 180),
     });
 
@@ -1524,8 +1568,16 @@ export default function SolarStudio() {
                     </div>
                   </div>
 
-                  <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 text-[10px] text-slate-400 space-y-0.5 font-mono">
-                    <div>Dimensions: {designData.panel_dimensions?.length_m || 2.278}m × {designData.panel_dimensions?.width_m || 1.134}m</div>
+                  <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 text-[10px] text-slate-400 space-y-1 font-mono">
+                    <div className="flex items-center justify-between text-amber-300 font-bold">
+                      <span>{designData.panel_wattage || 550}W Module</span>
+                      <span className="capitalize text-slate-300 font-sans text-[9px] bg-slate-800 px-1.5 py-0.5 rounded">{designData.orientation || "portrait"}</span>
+                    </div>
+                    <div className="text-slate-300">
+                      Footprint: {designData.orientation === "landscape"
+                        ? `${designData.panel_dimensions?.length_m || 2.278}m (W) × ${designData.panel_dimensions?.width_m || 1.134}m (H)`
+                        : `${designData.panel_dimensions?.width_m || 1.134}m (W) × ${designData.panel_dimensions?.length_m || 2.278}m (H)`}
+                    </div>
                     <div>Weight: {designData.panel_dimensions?.weight_kg || 28.5} kg</div>
                   </div>
                 </div>
@@ -1638,6 +1690,26 @@ export default function SolarStudio() {
                     <Sparkles className="w-3.5 h-3.5" /> Auto Layout Panels
                   </Button>
 
+                  <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-[10px] font-semibold text-slate-400">Panel Gap (m)</Label>
+                      <span className="text-[10px] font-mono text-amber-300 font-bold">{Number(designData.panel_spacing_m || 0.03).toFixed(2)} m</span>
+                    </div>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      max="0.5"
+                      value={designData.panel_spacing_m ?? 0.03}
+                      onChange={(e) => {
+                        const gap = Math.max(0.01, parseFloat(e.target.value) || 0.03);
+                        updateDesignData({ panel_spacing_m: gap, row_spacing_m: gap });
+                      }}
+                      className="h-7 text-xs font-bold bg-slate-800 border-slate-700 text-white"
+                      placeholder="0.03"
+                    />
+                  </div>
+
                   <div className="grid grid-cols-2 gap-1.5">
                     <Button
                       size="sm"
@@ -1727,8 +1799,8 @@ export default function SolarStudio() {
               setSelectedPanelId={setSelectedPanelId}
               orientation={designData.orientation}
               azimuthDegrees={Number(designData.azimuth_angle || 180)}
-              rowSpacingMeters={Number(designData.row_spacing_m || 0.35)}
-              panelSpacingMeters={Number(designData.panel_spacing_m || 0.02)}
+              rowSpacingMeters={Number(designData.row_spacing_m || designData.panel_spacing_m || 0.03)}
+              panelSpacingMeters={Number(designData.panel_spacing_m || 0.03)}
               onAddPanel={handleIncreasePanelCount}
               panelSpecs={{
                 length_m: designData.panel_dimensions?.length_m || 2.278,
@@ -1864,8 +1936,8 @@ export default function SolarStudio() {
                 setSelectedPanelId={setSelectedPanelId}
                 orientation={designData.orientation}
                 azimuthDegrees={Number(designData.azimuth_angle || 180)}
-                rowSpacingMeters={Number(designData.row_spacing_m || 0.35)}
-                panelSpacingMeters={Number(designData.panel_spacing_m || 0.02)}
+                rowSpacingMeters={Number(designData.row_spacing_m || designData.panel_spacing_m || 0.03)}
+                panelSpacingMeters={Number(designData.panel_spacing_m || 0.03)}
                 onAddPanel={handleIncreasePanelCount}
                 panelSpecs={{
                   length_m: designData.panel_dimensions?.length_m || 2.278,

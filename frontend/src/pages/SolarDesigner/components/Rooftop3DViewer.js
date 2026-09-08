@@ -967,7 +967,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           });
           const panelGroup = new THREE.Group();
           panelGroup.position.set(transform.x, transform.y, transform.z);
-          panelGroup.rotation.y = transform.yawRad;
+          panelGroup.rotation.y = transform.yawRad + toRad(p.rotation || 0);
           const panelMesh = new THREE.Mesh(panelGeom, moduleMaterials);
           panelMesh.scale.set(pw, 1, pl);
           panelMesh.rotation.x = -transform.tiltRad;

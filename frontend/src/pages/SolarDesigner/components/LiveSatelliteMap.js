@@ -1524,11 +1524,19 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           backgroundColor: "#0a0f1d",
         }}
       >
-        {/* Hairline Crosshair Reticle */}
-        <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center">
-          <div className="w-2 h-2 rounded-full bg-red-500 border border-white shadow-sm" />
-          <div className="absolute left-0 right-0 h-[1px] bg-red-500/80 pointer-events-none" />
-          <div className="absolute top-0 bottom-0 w-[1px] bg-red-500/80 pointer-events-none" />
+        {/* Hairline Crosshair Reticle & POINT TARGET label */}
+        <div className="absolute inset-0 pointer-events-none z-10 flex flex-col items-center justify-center">
+          <div className="relative flex items-center justify-center">
+            <div className="w-2.5 h-2.5 rounded-full bg-red-500 border-2 border-white shadow-md z-20" />
+            <div className="absolute w-7 h-7 rounded-full border border-red-500/60 pointer-events-none" />
+          </div>
+          <div className="absolute left-0 right-0 h-[1px] bg-red-500/70 pointer-events-none" />
+          <div className="absolute top-0 bottom-0 w-[1px] bg-red-500/70 pointer-events-none" />
+
+          {/* Precision Target Label */}
+          <div className="absolute top-2 bg-black/85 border border-slate-700/80 text-[8px] font-bold tracking-wider text-emerald-400 px-1.5 py-0.5 rounded shadow pointer-events-none uppercase">
+            POINT TARGET
+          </div>
         </div>
 
         {/* Magnifier Zoom Badge */}
@@ -1536,6 +1544,22 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           4x Precision Zoom
         </div>
       </div>
+
+      {/* On-ground Cursor Target Indicator (Before Click) */}
+      {(activeTool === "draw_roof" || activeTool === "edit_roof") && magnifierVisible && cursorScreenPos && (
+        <div
+          className="pointer-events-none absolute z-20"
+          style={{
+            left: `${cursorScreenPos.x}px`,
+            top: `${cursorScreenPos.y}px`,
+            transform: "translate(-50%, -50%)",
+          }}
+        >
+          <div className="w-4 h-4 rounded-full border-2 border-emerald-400 bg-emerald-500/25 flex items-center justify-center shadow-lg animate-pulse">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+          </div>
+        </div>
+      )}
 
       {/* Map error overlay */}
       {mapError && (

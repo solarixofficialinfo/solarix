@@ -49,43 +49,70 @@ export const OBSTACLE_TYPES = [
 ];
 
 /**
- * Packs panels on a grid given orientation and grid shift offset
+ * Packs panels on a predictable, geometry-based grid within usable roof polygon
  */
 function packPanelsOnGrid({
   usablePolygon,
-  obstacles,
-  walkways,
+  obstacles = [],
+  walkways = [],
   pWidth,
   pLength,
-  stepX,
-  stepY,
-  offsetX,
-  offsetY,
-  azimuthDegrees,
-  wattage,
+  panelGap = 0.03,
+  azimuthDegrees = 180,
+  wattage = 550,
 }) {
   const bounds = getPolygonBounds(usablePolygon);
   const panels = [];
   let panelIdCounter = 1;
-  let rowIdx = 0;
 
-  const startY = bounds.minY + offsetY + pLength / 2;
-  const startX = bounds.minX + offsetX + pWidth / 2;
+  const stepX = pWidth + panelGap;
+  const stepY = pLength + panelGap;
 
-  for (let y = startY; y <= bounds.maxY - pLength / 2 + 0.05; y += stepY) {
-    let colIdx = 0;
-    for (let x = startX; x <= bounds.maxX - pWidth / 2 + 0.05; x += stepX) {
+  // Calculate actual remaining horizontal and vertical distances
+  const availableWidth = bounds.width;
+  const availableLength = bounds.length;
+
+  if (availableWidth < pWidth || availableLength < pLength) {
+    return [];
+  }
+
+  // Maximum complete columns and rows that can physically fit
+  const maxCols = Math.max(1, Math.floor((availableWidth + panelGap + 1e-6) / stepX));
+  const maxRows = Math.max(1, Math.floor((availableLength + panelGap + 1e-6) / stepY));
+
+  // Center the grid symmetrically within the usable bounding box
+  const totalOccupiedX = maxCols * pWidth + (maxCols - 1) * panelGap;
+  const totalOccupiedY = maxRows * pLength + (maxRows - 1) * panelGap;
+  const marginX = Math.max(0, (availableWidth - totalOccupiedX) / 2);
+  const marginY = Math.max(0, (availableLength - totalOccupiedY) / 2);
+
+  const startX = bounds.minX + marginX + pWidth / 2;
+  const startY = bounds.minY + marginY + pLength / 2;
+
+  for (let r = 0; r < maxRows; r++) {
+    const cy = startY + r * stepY;
+    // Row boundary verification: entire footprint must fit vertically
+    if (cy - pLength / 2 < bounds.minY - 1e-4 || cy + pLength / 2 > bounds.maxY + 1e-4) {
+      continue;
+    }
+
+    for (let c = 0; c < maxCols; c++) {
+      const cx = startX + c * stepX;
+      // Column boundary verification: entire footprint must fit horizontally
+      if (cx - pWidth / 2 < bounds.minX - 1e-4 || cx + pWidth / 2 > bounds.maxX + 1e-4) {
+        continue;
+      }
+
       const candidate = {
-        x: Math.round(x * 1000) / 1000,
-        y: Math.round(y * 1000) / 1000,
+        x: Math.round(cx * 1000) / 1000,
+        y: Math.round(cy * 1000) / 1000,
         width: pWidth,
         height: pLength,
         rotation: 0,
       };
 
-      // 1. Must be completely inside the usable setback polygon
+      // 1. Must be completely inside the usable setback polygon (works for arbitrary & irregular shapes)
       if (!isRectInsidePolygon(candidate.x, candidate.y, candidate.width, candidate.height, candidate.rotation, usablePolygon)) {
-        colIdx++;
         continue;
       }
 
@@ -105,7 +132,6 @@ function packPanelsOnGrid({
         }
       }
       if (collidesWithObstacle) {
-        colIdx++;
         continue;
       }
 
@@ -125,7 +151,6 @@ function packPanelsOnGrid({
         }
       }
       if (collidesWithWalkway) {
-        colIdx++;
         continue;
       }
 
@@ -138,16 +163,13 @@ function packPanelsOnGrid({
         height: pLength,
         rotation: 0,
         azimuth: azimuthDegrees,
-        row: rowIdx,
-        col: colIdx,
+        row: r,
+        col: c,
         wattage,
         locked: false,
         hidden: false,
       });
-
-      colIdx++;
     }
-    rowIdx++;
   }
 
   return panels;
@@ -163,8 +185,8 @@ export function generateAutoPanelLayout({
   walkways = [],
   panelSpecs = DEFAULT_PANEL_SPECS,
   orientation = "portrait",
-  rowSpacingMeters = 0.35,
-  panelSpacingMeters = 0.02,
+  rowSpacingMeters = 0.03,
+  panelSpacingMeters = 0.03,
   azimuthDegrees = 180,
   strategy = "auto",
 }) {
@@ -199,15 +221,8 @@ export function generateAutoPanelLayout({
   const stdLength = Number(panelSpecs.length_m || 2.278);
   const stdWidth = Number(panelSpecs.width_m || 1.134);
 
-  // Strategy adjustments
-  let effectiveRowSpacing = rowSpacingMeters;
-  let effectivePanelSpacing = panelSpacingMeters;
-  if (strategy === "optimize_usage" || strategy === "optimize_capacity") {
-    effectiveRowSpacing = Math.max(0.2, rowSpacingMeters * 0.85);
-    effectivePanelSpacing = Math.max(0.015, panelSpacingMeters * 0.75);
-  } else if (strategy === "optimize_access") {
-    effectiveRowSpacing = Math.max(0.6, rowSpacingMeters * 1.5);
-  }
+  // Single unified panel gap in meters
+  const panelGap = Math.max(0.01, Number(panelSpacingMeters ?? rowSpacingMeters ?? 0.03));
 
   // Orientations to evaluate
   const orientationsToTry = [];
@@ -225,32 +240,19 @@ export function generateAutoPanelLayout({
 
   for (const orient of orientationsToTry) {
     const { pWidth, pLength } = orient;
-    const stepX = pWidth + effectivePanelSpacing;
-    const stepY = pLength + effectiveRowSpacing;
+    const candidatePanels = packPanelsOnGrid({
+      usablePolygon,
+      obstacles,
+      walkways,
+      pWidth,
+      pLength,
+      panelGap,
+      azimuthDegrees,
+      wattage,
+    });
 
-    // Multi-phase grid shift search to maximize panel density
-    const shiftFractions = [0, 0.25, 0.5, 0.75];
-
-    for (const fx of shiftFractions) {
-      for (const fy of shiftFractions) {
-        const candidatePanels = packPanelsOnGrid({
-          usablePolygon,
-          obstacles,
-          walkways,
-          pWidth,
-          pLength,
-          stepX,
-          stepY,
-          offsetX: fx * stepX,
-          offsetY: fy * stepY,
-          azimuthDegrees,
-          wattage,
-        });
-
-        if (candidatePanels.length > bestPanels.length) {
-          bestPanels = candidatePanels;
-        }
-      }
+    if (candidatePanels.length > bestPanels.length) {
+      bestPanels = candidatePanels;
     }
   }
 
@@ -356,8 +358,8 @@ export function canFitAdditionalPanel({
   walkways = [],
   panelSpecs = DEFAULT_PANEL_SPECS,
   orientation = "portrait",
-  rowSpacingMeters = 0.35,
-  panelSpacingMeters = 0.02,
+  rowSpacingMeters = 0.03,
+  panelSpacingMeters = 0.03,
   azimuthDegrees = 180,
   nearX = null,
   nearY = null,
@@ -388,11 +390,10 @@ export function canFitAdditionalPanel({
     pAzimuth = Number(azimuthDegrees || 180);
   }
 
-  // 2. Determine Spacing / Grid Step
-  const effRowSpacing = rowSpacingMeters != null ? Number(rowSpacingMeters) : 0.35;
-  const effPanelSpacing = panelSpacingMeters != null ? Number(panelSpacingMeters) : 0.02;
-  const stepX = pWidth + effPanelSpacing;
-  const stepY = pLength + effRowSpacing;
+  // 2. Determine Spacing / Grid Step (using unified panelGap)
+  const panelGap = Math.max(0.01, Number(panelSpacingMeters ?? rowSpacingMeters ?? 0.03));
+  const stepX = pWidth + panelGap;
+  const stepY = pLength + panelGap;
 
   const bounds = getPolygonBounds(usablePolygon);
   const candidates = [];
