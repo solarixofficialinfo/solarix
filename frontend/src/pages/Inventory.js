@@ -122,14 +122,14 @@ export default function Inventory() {
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
         <div className="sticky top-2 z-10 w-full overflow-x-auto scrollbar-none touch-pan-x bg-slate-100/95 backdrop-blur rounded-lg p-1 shadow-sm border border-slate-200/60">
           <TabsList className="bg-transparent p-0 h-auto w-max min-w-full flex items-center justify-start flex-nowrap gap-1">
-            <TabsTrigger value="inward" data-testid="tab-inward" className="shrink-0 whitespace-nowrap"><ArrowDownToLine className="w-3.5 h-3.5 mr-1.5" /> Inward</TabsTrigger>
-            <TabsTrigger value="outward" data-testid="tab-outward" className="shrink-0 whitespace-nowrap"><ArrowUpFromLine className="w-3.5 h-3.5 mr-1.5" /> Outward</TabsTrigger>
-            <TabsTrigger value="products" data-testid="tab-products" className="shrink-0 whitespace-nowrap"><Boxes className="w-3.5 h-3.5 mr-1.5" /> Product Master</TabsTrigger>
-            <TabsTrigger value="balance" data-testid="tab-balance" className="shrink-0 whitespace-nowrap"><Activity className="w-3.5 h-3.5 mr-1.5" /> Balance Report</TabsTrigger>
-            <TabsTrigger value="history" data-testid="tab-history" className="shrink-0 whitespace-nowrap"><History className="w-3.5 h-3.5 mr-1.5" /> History</TabsTrigger>
-            <TabsTrigger value="high-value-goods" data-testid="tab-high-value-goods" className="shrink-0 whitespace-nowrap"><ClipboardList className="w-3.5 h-3.5 mr-1.5" /> High Value Goods</TabsTrigger>
-            <TabsTrigger value="serial-tracking" data-testid="tab-serial-tracking" className="shrink-0 whitespace-nowrap"><Hash className="w-3.5 h-3.5 mr-1.5" /> Serial No. Tracking</TabsTrigger>
-            <TabsTrigger value="intelligence" data-testid="tab-intelligence" className="shrink-0 whitespace-nowrap"><TrendingUp className="w-3.5 h-3.5 mr-1.5 text-amber-500" /> Inventory Intelligence</TabsTrigger>
+            <TabsTrigger value="inward" data-testid="tab-inward" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><ArrowDownToLine className="w-3.5 h-3.5 mr-1.5" /> Inward</TabsTrigger>
+            <TabsTrigger value="outward" data-testid="tab-outward" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><ArrowUpFromLine className="w-3.5 h-3.5 mr-1.5" /> Outward</TabsTrigger>
+            <TabsTrigger value="products" data-testid="tab-products" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Boxes className="w-3.5 h-3.5 mr-1.5" /> Product Master</TabsTrigger>
+            <TabsTrigger value="balance" data-testid="tab-balance" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Activity className="w-3.5 h-3.5 mr-1.5" /> Balance Report</TabsTrigger>
+            <TabsTrigger value="history" data-testid="tab-history" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><History className="w-3.5 h-3.5 mr-1.5" /> History</TabsTrigger>
+            <TabsTrigger value="high-value-goods" data-testid="tab-high-value-goods" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><ClipboardList className="w-3.5 h-3.5 mr-1.5" /> High Value Goods</TabsTrigger>
+            <TabsTrigger value="serial-tracking" data-testid="tab-serial-tracking" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Hash className="w-3.5 h-3.5 mr-1.5" /> Serial No. Tracking</TabsTrigger>
+            <TabsTrigger value="intelligence" data-testid="tab-intelligence" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><TrendingUp className="w-3.5 h-3.5 mr-1.5 text-blue-600" /> Inventory Intelligence</TabsTrigger>
           </TabsList>
         </div>
 

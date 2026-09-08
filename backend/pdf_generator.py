@@ -1241,7 +1241,12 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
     if not isinstance(company, dict):
         company = {}
 
+    custom_title = (data.get("custom_title") or data.get("doc_title") or data.get("document_title") or data.get("invoice_title") or data.get("title") or "").strip()
     if "lineItems" in data and "financials" in data and "seller" in data:
+        if custom_title:
+            data["title_text"] = custom_title.upper()
+            data["custom_title"] = custom_title
+            data["doc_title"] = custom_title
         return data
 
     comp_name = (company.get("company_name") or company.get("name") or company.get("legal_business_name") or "GVP SOLAR ENERGY").strip()
@@ -1274,7 +1279,6 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
     c_consumer = (client_raw.get("consumer_number") or "").strip()
 
     doc_type = (data.get("doc_type") or data.get("invoice_type") or "tax_invoice").lower().strip()
-    custom_title = (data.get("doc_title") or data.get("document_title") or data.get("title") or "").strip()
     title_map = {
         "tax_invoice": "TAX INVOICE",
         "customer_invoice": "CUSTOMER INVOICE",
@@ -1385,6 +1389,8 @@ def _normalize_invoice_document_data(data: dict, company: dict) -> dict:
     return {
         "doc_type": doc_type,
         "title_text": title_text,
+        "custom_title": custom_title,
+        "doc_title": custom_title,
         "seller": {
             "name": comp_name,
             "address": comp_addr,
@@ -1556,8 +1562,8 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
                 img = img.crop(bbox)
             orig_w, orig_h = img.size
             if orig_w > 0 and orig_h > 0:
-                # Approximately 1.8–2x visual size while strictly preserving original aspect ratio
-                max_w, max_h = 6.8 * cm, 3.2 * cm
+                # Scaled to be approximately 15% smaller (5.78cm x 2.72cm) while strictly preserving aspect ratio
+                max_w, max_h = 5.78 * cm, 2.72 * cm
                 aspect = orig_w / float(orig_h or 1)
                 target_w = max_w
                 target_h = max_w / aspect
@@ -1622,8 +1628,9 @@ def generate_invoice_pdf(data: dict, company: dict) -> bytes:
     )
     hdr_right_flow: list[Any] = [Paragraph(title_text, inv_title_style), Spacer(1, 0.18 * cm)]
 
+    inv_label = f"{title_text} NO." if len(title_text) <= 16 else "INVOICE NO."
     meta_table_data = [
-        [Paragraph(f"<b>{title_text} NO.</b>", BOLD_SMALL), Paragraph(inv["number"] or "—", SMALL)],
+        [Paragraph(f"<b>{inv_label}</b>", BOLD_SMALL), Paragraph(inv["number"] or "—", SMALL)],
         [Paragraph("<b>DATE</b>", BOLD_SMALL), Paragraph(inv["date"] or "—", SMALL)],
     ]
     if inv["due_date"]:
@@ -1921,8 +1928,8 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
             orig_w, orig_h = img.size
             if orig_w > 0 and orig_h > 0:
                 aspect = orig_h / float(orig_w or 1)
-                max_w_in = 2.68
-                max_h_in = 1.26
+                max_w_in = 2.28
+                max_h_in = 1.07
                 target_w_in = max_w_in
                 target_h_in = target_w_in * aspect
                 if target_h_in > max_h_in:
@@ -1983,8 +1990,9 @@ def generate_invoice_docx(data: dict, company: dict) -> bytes:
     r_title.font.size = Pt(14.5)
     r_title.font.color.rgb = RGBColor(0x1e, 0x3a, 0x8a)
 
+    inv_label = f"{title_text} NO." if len(title_text) <= 16 else "INVOICE NO."
     meta_items = [
-        (f"{title_text} NO.", inv["number"] or "—"),
+        (inv_label, inv["number"] or "—"),
         ("DATE", inv["date"] or "—")
     ]
     if inv["due_date"]: meta_items.append(("DUE DATE", inv["due_date"]))

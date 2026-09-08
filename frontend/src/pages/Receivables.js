@@ -1,10 +1,10 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api, { formatApiError, fileUrl, downloadFile } from "../lib/api";
 import {
   DollarSign, ArrowDownLeft, Clock, Filter, Search, Plus, RefreshCw, Eye, Edit3, Trash2,
   TrendingUp, FolderPlus, Layers, User, Truck, Landmark, FileText, CheckCircle2, AlertCircle,
-  XCircle, PieChart, ShieldCheck, ChevronRight, Download, CreditCard, Building, Check
+  XCircle, PieChart, ShieldCheck, ChevronRight, Download, CreditCard, Building, Check, Loader2
 } from "lucide-react";
 import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -64,6 +64,7 @@ export default function Receivables() {
   const [createInvoiceOpen, setCreateInvoiceOpen] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState({
     doc_type: "tax_invoice",
+    custom_title: "",
     project_id: "",
     client_id: "",
     client_name: "",
@@ -99,6 +100,10 @@ export default function Receivables() {
     status: "Sent",
     allocated_payment_ids: []
   });
+
+  // Authoritative Recorded Payments Auto-Fetch State
+  const [previouslyReceived, setPreviouslyReceived] = useState(0);
+  const [paymentFetchStatus, setPaymentFetchStatus] = useState("idle"); // "idle" | "loading" | "success" | "error"
 
   // Invoice Details & Apply Payment Modal State
   const [selectedInvoice, setSelectedInvoice] = useState(null);
@@ -648,6 +653,7 @@ export default function Receivables() {
       setInvoiceForm({
         id: existingInvoice.id,
         doc_type: existingInvoice.doc_type || docType,
+        custom_title: existingInvoice.custom_title || existingInvoice.doc_title || "",
         project_id: existingInvoice.project_id || targetProjId || "",
         client_id: existingInvoice.client_id || client?.id || cid || "",
         client_name: existingInvoice.client_name || client?.full_name || proj?.client_name || "",
@@ -706,7 +712,7 @@ export default function Receivables() {
     const projVal = proj?.project_value || proj?.quotation_value || 100000;
     const defaultRate = projVal;
 
-    const prefixMap = { tax_invoice: "INV", proforma: "PI", payment_receipt: "REC", credit_note: "CN", debit_note: "DN" };
+    const prefixMap = { tax_invoice: "INV", customer_invoice: "INV", proforma: "PI", payment_receipt: "REC", credit_note: "CN", debit_note: "DN" };
     const prefix = prefixMap[docType] || "INV";
     const invNum = `${prefix}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -730,6 +736,7 @@ export default function Receivables() {
 
     setInvoiceForm({
       doc_type: docType,
+      custom_title: "",
       project_id: proj?.project_id || targetProjId || "",
       client_id: client?.id || cid || "",
       client_name: client?.full_name || proj?.client_name || "",
@@ -759,6 +766,69 @@ export default function Receivables() {
     });
     setCreateInvoiceOpen(true);
   };
+
+  // Authoritative payment auto-fetch from Receivables & Collection
+  const fetchProjectPayments = useCallback((clientId, projId, currentInvId, currentInvNum) => {
+    if (!clientId && !projId) {
+      setPreviouslyReceived(0);
+      setPaymentFetchStatus("idle");
+      return;
+    }
+
+    setPaymentFetchStatus("loading");
+    const targetId = (projId && !projId.startsWith("proj_")) ? projId : (clientId ? `proj_${clientId}` : projId);
+
+    api.get(`/finance/projects/${encodeURIComponent(targetId)}`)
+      .then((res) => {
+        const projectData = res.data || {};
+        const payments = projectData.payments || [];
+
+        if (currentInvId) {
+          // Editing existing invoice: only count payments already allocated to this invoice
+          const matching = payments.filter((p) => {
+            const stat = (p.status || "Received").toLowerCase();
+            return stat === "received" && (
+              p.invoice_id === currentInvId ||
+              p.invoice_no === currentInvNum ||
+              (currentInvNum && p.invoice_number === currentInvNum)
+            );
+          });
+          const totalAllocated = matching.reduce((sum, p) => sum + Number(p.allocated_amount || p.amount || 0), 0);
+          setPreviouslyReceived(totalAllocated);
+        } else {
+          // Creating new invoice:
+          // Strictly exclude payments already allocated to other invoices to prevent double counting
+          const unallocated = payments.filter((p) => {
+            const stat = (p.status || "Received").toLowerCase();
+            const hasOtherInvoice = p.invoice_id && p.invoice_id.trim() !== "";
+            return stat === "received" && !hasOtherInvoice;
+          });
+          const totalUnallocated = unallocated.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+          setPreviouslyReceived(totalUnallocated);
+
+          if (unallocated.length > 0) {
+            setInvoiceForm((prev) => ({
+              ...prev,
+              allocated_payment_ids: unallocated.map((p) => p.id)
+            }));
+          }
+        }
+        setPaymentFetchStatus("success");
+      })
+      .catch((err) => {
+        console.warn("Could not fetch authoritative project payments for invoice:", err);
+        setPaymentFetchStatus("error");
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!createInvoiceOpen) {
+      setPreviouslyReceived(0);
+      setPaymentFetchStatus("idle");
+      return;
+    }
+    fetchProjectPayments(invoiceForm.client_id, invoiceForm.project_id, invoiceForm.id, invoiceForm.invoice_number);
+  }, [createInvoiceOpen, invoiceForm.client_id, invoiceForm.project_id, invoiceForm.id, invoiceForm.invoice_number, fetchProjectPayments]);
 
   const updateInvoiceFormCalculations = (
     newItems,
@@ -1828,6 +1898,26 @@ export default function Receivables() {
                   </button>
                 ))}
               </div>
+
+              {/* CUSTOM INVOICE TITLE CONFIGURATION */}
+              {(invoiceForm.doc_type === "customer_invoice" || invoiceForm.custom_title) && (
+                <div className="pt-2 flex flex-col sm:flex-row sm:items-center gap-2 bg-blue-50/70 p-2.5 rounded-lg border border-blue-100">
+                  <div className="sm:w-48 shrink-0">
+                    <Label className="text-xs font-bold text-blue-900 flex items-center gap-1">
+                      Custom Invoice Title <span className="text-blue-500 font-normal text-[11px]">(Optional)</span>
+                    </Label>
+                    <div className="text-[10px] text-slate-500">
+                      Defaults to &quot;{invoiceForm.doc_type === "customer_invoice" ? "CUSTOMER INVOICE" : invoiceForm.doc_type.replace("_", " ").toUpperCase()}&quot;
+                    </div>
+                  </div>
+                  <Input
+                    value={invoiceForm.custom_title || ""}
+                    onChange={(e) => setInvoiceForm({ ...invoiceForm, custom_title: e.target.value })}
+                    placeholder="e.g. Solar Installation Invoice, Advance Payment Invoice..."
+                    className="h-8 text-xs bg-white border-blue-200 focus:border-blue-400 placeholder:text-slate-400 font-medium"
+                  />
+                </div>
+              )}
             </DialogHeader>
 
             <form
@@ -1852,13 +1942,17 @@ export default function Receivables() {
                   return;
                 }
 
-                if (cleanAmountReceived > invoiceForm.grand_total) {
-                  toast.error(`Amount received (₹${cleanAmountReceived.toLocaleString("en-IN")}) cannot exceed Grand Total (₹${invoiceForm.grand_total.toLocaleString("en-IN")}).`);
+                const effectivePrevRec = paymentFetchStatus === "success" ? previouslyReceived : 0;
+                const totalPaidCandidate = effectivePrevRec + cleanAmountReceived;
+                if (totalPaidCandidate > invoiceForm.grand_total) {
+                  toast.error(`Total received (₹${totalPaidCandidate.toLocaleString("en-IN")}) cannot exceed Grand Total (₹${invoiceForm.grand_total.toLocaleString("en-IN")}).`);
                   return;
                 }
 
                 const payload = {
                   ...invoiceForm,
+                  custom_title: (invoiceForm.custom_title || "").trim(),
+                  doc_title: (invoiceForm.custom_title || "").trim(),
                   amount_received: cleanAmountReceived,
                   status: "Sent"
                 };
@@ -2452,14 +2546,50 @@ export default function Receivables() {
                     <span className="shrink-0 text-right">₹{invoiceForm.grand_total.toLocaleString("en-IN")}</span>
                   </div>
 
-                  {/* INITIAL AMOUNT RECEIVED & BALANCE DUE BREAKDOWN */}
-                  <div className="pt-3 border-t border-slate-200 mt-2 space-y-2">
+                  {/* AUTHORITATIVE RECORDED PAYMENTS & AMOUNT RECEIVED BREAKDOWN */}
+                  <div className="pt-3 border-t border-slate-200 mt-2 space-y-2.5">
+                    {/* 1. PREVIOUS PAYMENTS ALREADY RECORDED */}
+                    <div className="flex items-center justify-between py-1 border-b border-slate-100 gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-sans text-slate-700 font-medium">Previously Received</span>
+                        {paymentFetchStatus === "loading" && (
+                          <span className="text-[10px] text-blue-600 animate-pulse font-sans flex items-center gap-1">
+                            <Loader2 className="w-3 h-3 animate-spin" /> Fetching...
+                          </span>
+                        )}
+                        {paymentFetchStatus === "error" && (
+                          <span className="text-[10px] text-rose-600 font-medium flex items-center gap-1">
+                            ⚠️ Failed to load
+                            <button
+                              type="button"
+                              onClick={() => fetchProjectPayments(invoiceForm.client_id, invoiceForm.project_id, invoiceForm.id, invoiceForm.invoice_number)}
+                              className="underline hover:text-rose-800 ml-0.5"
+                            >
+                              Retry
+                            </button>
+                          </span>
+                        )}
+                        {paymentFetchStatus === "success" && previouslyReceived > 0 && (
+                          <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] px-1.5 py-0 font-medium font-sans">
+                            Recorded
+                          </Badge>
+                        )}
+                      </div>
+                      <span className={`shrink-0 text-right font-bold ${paymentFetchStatus === "error" ? "text-slate-400 font-sans text-[11px]" : "text-emerald-700"}`}>
+                        {paymentFetchStatus === "loading" ? "—" : paymentFetchStatus === "error" ? "Unavailable" : `₹${previouslyReceived.toLocaleString("en-IN")}`}
+                      </span>
+                    </div>
+
+                    {/* 2. AMOUNT RECEIVED NOW */}
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-2">
-                      <Label className="text-xs font-semibold text-slate-700 font-sans">Amount Received Now (₹)</Label>
+                      <div>
+                        <Label className="text-xs font-semibold text-slate-700 font-sans">Amount Received Now (₹)</Label>
+                        <div className="text-[10px] text-slate-400">Payment collected during invoice creation</div>
+                      </div>
                       <Input
                         type="number"
                         min="0"
-                        max={invoiceForm.grand_total}
+                        max={Math.max(0, invoiceForm.grand_total - (paymentFetchStatus === "success" ? previouslyReceived : 0))}
                         step="any"
                         value={invoiceForm.amount_received !== undefined && invoiceForm.amount_received !== null ? invoiceForm.amount_received : 0}
                         onChange={(e) => setInvoiceForm({ ...invoiceForm, amount_received: e.target.value })}
@@ -2468,10 +2598,21 @@ export default function Receivables() {
                       />
                     </div>
 
-                    <div className="flex items-center justify-between py-1 text-xs font-bold text-amber-800 bg-amber-50 p-2 rounded border border-amber-200 gap-2">
-                      <span className="font-sans">Balance Due</span>
-                      <span className="shrink-0 text-right">
-                        ₹{Math.max(0, invoiceForm.grand_total - (parseFloat(String(invoiceForm.amount_received || "0").replace(/[^0-9.]/g, "")) || 0)).toLocaleString("en-IN")}
+                    {/* 3. TOTAL RECEIVED (SHOWN WHEN EITHER OR BOTH PAYMENTS EXIST) */}
+                    {(previouslyReceived > 0 || (parseFloat(String(invoiceForm.amount_received || "0").replace(/[^0-9.]/g, "")) || 0) > 0) && (
+                      <div className="flex items-center justify-between py-1 border-t border-dashed border-slate-200 text-slate-700 gap-2">
+                        <span className="font-sans text-xs font-semibold">Total Received</span>
+                        <span className="shrink-0 text-right font-bold text-emerald-800">
+                          ₹{((paymentFetchStatus === "success" ? previouslyReceived : 0) + (parseFloat(String(invoiceForm.amount_received || "0").replace(/[^0-9.]/g, "")) || 0)).toLocaleString("en-IN")}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* 4. BALANCE DUE / OUTSTANDING */}
+                    <div className="flex items-center justify-between py-1.5 text-xs font-bold text-amber-900 bg-amber-50 p-2.5 rounded-lg border border-amber-200 gap-2">
+                      <span className="font-sans">Balance Due / Outstanding</span>
+                      <span className="shrink-0 text-right text-sm">
+                        ₹{Math.max(0, invoiceForm.grand_total - ((paymentFetchStatus === "success" ? previouslyReceived : 0) + (parseFloat(String(invoiceForm.amount_received || "0").replace(/[^0-9.]/g, "")) || 0))).toLocaleString("en-IN")}
                       </span>
                     </div>
                   </div>
@@ -2491,6 +2632,8 @@ export default function Receivables() {
 
                     const payload = {
                       ...invoiceForm,
+                      custom_title: (invoiceForm.custom_title || "").trim(),
+                      doc_title: (invoiceForm.custom_title || "").trim(),
                       amount_received: cleanAmountReceived,
                       status: "Draft"
                     };

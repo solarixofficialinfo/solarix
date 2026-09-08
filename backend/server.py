@@ -15335,6 +15335,8 @@ class InvoiceItemPayload(BaseModel):
 class InvoiceCreatePayload(BaseModel):
     id: Optional[str] = None
     doc_type: Optional[str] = "tax_invoice"
+    custom_title: Optional[str] = ""
+    doc_title: Optional[str] = ""
     project_id: Optional[str] = ""
     client_id: Optional[str] = ""
     invoice_number: Optional[str] = ""
@@ -16653,10 +16655,13 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
             "amount": amt
         })
 
+    custom_inv_title = (data.custom_title or data.doc_title or "").strip()
     invoice_doc = {
         "id": invoice_id,
         "company_id": cid,
         "doc_type": doc_type,
+        "custom_title": custom_inv_title,
+        "doc_title": custom_inv_title,
         "client_id": client_id or "",
         "project_id": project_id or "",
         "invoice_number": inv_num,
@@ -16703,31 +16708,38 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
 
         payments = await db.payments.find({"company_id": cid}, {"_id": 0}).to_list(10000)
         inv_total = data.grand_total or 0.0
+        alloc_ids = set(data.allocated_payment_ids or [])
         inv_payments = [
             p for p in payments 
             if (p.get("status") or "Received").lower() == "received" and (
                 p.get("invoice_id") == invoice_id or 
                 p.get("invoice_no") == inv_num or 
-                (inv_num and p.get("invoice_number") == inv_num)
+                (inv_num and p.get("invoice_number") == inv_num) or
+                (p.get("id") in alloc_ids)
             )
         ]
-        inv_paid = sum(float(p.get("allocated_amount") or p.get("amount") or 0) for p in inv_payments)
-        if inv_paid == 0:
+        inv_prev_paid = sum(float(p.get("allocated_amount") or p.get("amount") or 0) for p in inv_payments)
+        amount_rec_now = float(data.amount_received or 0.0)
+        inv_paid = inv_prev_paid + amount_rec_now
+
+        if inv_paid == 0 and not alloc_ids:
             c_ids = {x for x in [invoice_doc.get("client_id"), client.get("id") if client else None, client.get("sol_id") if client else None] if x}
             p_ids = {x for x in [invoice_doc.get("project_id"), f"proj_{invoice_doc.get('client_id')}"] if x}
-            general_payments = [
+            unallocated_payments = [
                 p for p in payments
-                if (p.get("status") or "Received").lower() == "received" and (
-                    p.get("client_id") in c_ids or p.get("project_id") in p_ids
-                )
+                if (p.get("status") or "Received").lower() == "received" and 
+                   (not p.get("invoice_id")) and
+                   (p.get("client_id") in c_ids or p.get("project_id") in p_ids)
             ]
-            inv_paid = sum(float(p.get("amount") or 0) for p in general_payments)
+            inv_paid = sum(float(p.get("amount") or 0) for p in unallocated_payments)
 
         inv_paid = min(inv_paid, inv_total) if inv_total > 0 else inv_paid
         inv_outstanding = max(0.0, inv_total - inv_paid)
 
         doc_data_pdf = {
             **invoice_doc,
+            "custom_title": custom_inv_title,
+            "doc_title": custom_inv_title,
             "paid_amount": inv_paid,
             "received_amount": inv_paid,
             "outstanding_amount": inv_outstanding,
@@ -16777,6 +16789,36 @@ async def create_invoice(data: InvoiceCreatePayload, user=Depends(get_current_us
                 {"id": p_id, "company_id": cid},
                 {"$set": {"invoice_id": invoice_id, "invoice_no": inv_num, "updated_at": now_iso()}}
             )
+
+    # Persist authoritative new payment received during invoice creation
+    amount_rec_val = float(data.amount_received or 0.0)
+    if amount_rec_val > 0 and data.status != "Draft":
+        existing_pay = await db.payments.find_one({
+            "invoice_id": invoice_id,
+            "company_id": cid,
+            "amount": amount_rec_val
+        })
+        if not existing_pay:
+            new_pay_doc = {
+                "id": f"pay_{uuid.uuid4().hex[:12]}",
+                "company_id": cid,
+                "client_id": invoice_doc.get("client_id") or "",
+                "project_id": invoice_doc.get("project_id") or (f"proj_{invoice_doc.get('client_id')}" if invoice_doc.get('client_id') else ""),
+                "invoice_id": invoice_id,
+                "invoice_no": inv_num,
+                "amount": amount_rec_val,
+                "allocated_amount": amount_rec_val,
+                "payment_mode": data.payment_mode or "Bank Transfer",
+                "ref_number": data.ref_number or "",
+                "payment_date": invoice_doc.get("invoice_date") or now_iso()[:10],
+                "status": "Received",
+                "payment_type": "Invoice Payment",
+                "remarks": f"Received upon {doc_type.replace('_', ' ').title()} #{inv_num}",
+                "created_by": user["name"],
+                "created_at": now_iso(),
+                "updated_at": now_iso()
+            }
+            await db.payments.insert_one(new_pay_doc)
 
     action_label = "Updated" if existing_invoice else "Created"
     await log_activity(cid, user["id"], user["name"], f"{action_label} {doc_type.replace('_', ' ').title()}", f"Invoice #{inv_num} ({data.status}) for ₹{data.grand_total}")
@@ -16853,23 +16895,29 @@ async def generate_invoice_doc(invoice_id: str, payload: Dict[str, Any], user=De
         )
     ]
     inv_paid = sum(float(p.get("allocated_amount") or p.get("amount") or 0) for p in inv_payments)
+    amount_rec_on_inv = float(invoice.get("amount_received") or 0)
+    if amount_rec_on_inv > 0 and not any(p.get("invoice_id") == inv_id for p in inv_payments):
+        inv_paid += amount_rec_on_inv
 
     if inv_paid == 0:
         c_ids = {x for x in [invoice.get("client_id"), client_doc.get("id") if client_doc else None, client_doc.get("sol_id") if client_doc else None] if x}
         p_ids = {x for x in [invoice.get("project_id"), f"proj_{invoice.get('client_id')}"] if x}
-        general_payments = [
+        unallocated_payments = [
             p for p in payments
-            if (p.get("status") or "Received").lower() == "received" and (
-                p.get("client_id") in c_ids or p.get("project_id") in p_ids
-            )
+            if (p.get("status") or "Received").lower() == "received" and 
+               (not p.get("invoice_id")) and
+               (p.get("client_id") in c_ids or p.get("project_id") in p_ids)
         ]
-        inv_paid = sum(float(p.get("amount") or 0) for p in general_payments)
+        inv_paid = sum(float(p.get("amount") or 0) for p in unallocated_payments)
 
     inv_paid = min(inv_paid, inv_total) if inv_total > 0 else inv_paid
     inv_outstanding = max(0.0, inv_total - inv_paid)
 
+    custom_inv_title = (invoice.get("custom_title") or invoice.get("doc_title") or "").strip()
     doc_data = {
         **invoice,
+        "custom_title": custom_inv_title,
+        "doc_title": custom_inv_title,
         "paid_amount": inv_paid,
         "received_amount": inv_paid,
         "outstanding_amount": inv_outstanding,

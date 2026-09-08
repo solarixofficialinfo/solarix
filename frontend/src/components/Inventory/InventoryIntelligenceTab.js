@@ -22,6 +22,7 @@ import {
   Building2,
   Sparkles,
   RefreshCw,
+  TrendingUp,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -213,30 +214,35 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
 
   return (
     <div className="space-y-6 pb-12" data-testid="inventory-intelligence-tab">
-      {/* Header Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-xl p-5 shadow-sm border border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="bg-amber-400/20 text-amber-300 border border-amber-400/30 text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-amber-300" /> Pro Enterprise Feature
-            </span>
-            <span className="text-xs text-slate-400">· Real-Time Operational Intelligence</span>
+      {/* Header Card */}
+      <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-200 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="flex items-start gap-3.5">
+          <div className="w-10 h-10 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0 mt-0.5">
+            <TrendingUp className="w-5 h-5" />
           </div>
-          <h2 className="text-xl font-bold mt-1 text-white tracking-tight" style={{ fontFamily: "Outfit" }}>
-            Inventory Intelligence & Asset Analytics
-          </h2>
-          <p className="text-xs text-slate-300 mt-0.5">
-            Turn inventory movements and serial data into actionable operational insights for solar EPC operations.
-          </p>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="bg-blue-50 text-blue-700 border border-blue-200 text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full flex items-center gap-1">
+                <Sparkles className="w-3 h-3 text-blue-600" /> Pro Enterprise Feature
+              </span>
+              <span className="text-xs text-slate-500">· Real-Time Operational Intelligence</span>
+            </div>
+            <h2 className="text-xl font-bold mt-1 text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>
+              Inventory Intelligence & Asset Analytics
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Turn inventory movements and serial data into actionable operational insights for solar EPC operations.
+            </p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 shrink-0">
           <Button
             variant="outline"
             size="sm"
             onClick={fetchAnalytics}
             disabled={loading}
-            className="bg-white/10 hover:bg-white/20 text-white border-white/20 h-8 text-xs"
+            className="bg-white hover:bg-slate-50 text-slate-700 border-slate-200 h-8 text-xs shadow-xs"
             data-testid="refresh-intelligence-btn"
           >
             <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? "animate-spin" : ""}`} />
@@ -248,7 +254,7 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
             size="sm"
             onClick={handleExportCsv}
             disabled={exporting || !hasFeature("export")}
-            className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-semibold h-8 text-xs shadow-sm"
+            className="bg-blue-600 hover:bg-blue-700 text-white font-medium h-8 text-xs shadow-xs"
             data-testid="export-intelligence-csv-btn"
           >
             <Download className="w-3.5 h-3.5 mr-1.5" />
@@ -262,10 +268,10 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
         <CardContent className="p-3.5 space-y-3">
           <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
-              <Filter className="w-3.5 h-3.5 text-indigo-600" />
+              <Filter className="w-3.5 h-3.5 text-blue-600" />
               <span>Multi-Dimensional Analytics Filters</span>
               {hasActiveFilters && (
-                <Badge variant="secondary" className="bg-indigo-50 text-indigo-700 text-[10px] ml-1">
+                <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-[10px] ml-1">
                   Active Filters
                 </Badge>
               )}
@@ -424,9 +430,11 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
         {/* Total Products */}
         <Card className="border-slate-200 hover:border-slate-300 transition-all bg-white shadow-sm">
           <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium uppercase tracking-wider">Master Items</span>
-              <Boxes className="w-4 h-4 text-blue-600" />
+            <div className="flex items-start justify-between mb-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Master Items</span>
+              <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                <Boxes className="w-3.5 h-3.5" />
+              </div>
             </div>
             <div className="text-2xl font-bold text-slate-900 tabular-nums" style={{ fontFamily: "Outfit" }}>
               {summary.total_products ?? 0}
@@ -438,9 +446,11 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
         {/* Current Available Stock Units */}
         <Card className="border-slate-200 hover:border-slate-300 transition-all bg-white shadow-sm">
           <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium uppercase tracking-wider">Available Stock</span>
-              <Layers className="w-4 h-4 text-emerald-600" />
+            <div className="flex items-start justify-between mb-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Available Stock</span>
+              <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <Layers className="w-3.5 h-3.5" />
+              </div>
             </div>
             <div className="text-2xl font-bold text-emerald-700 tabular-nums" style={{ fontFamily: "Outfit" }}>
               {Number(summary.total_units || 0).toLocaleString()}
@@ -452,9 +462,11 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
         {/* Total Issued in Period */}
         <Card className="border-slate-200 hover:border-slate-300 transition-all bg-white shadow-sm">
           <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium uppercase tracking-wider">Issued / Outward</span>
-              <ArrowUpFromLine className="w-4 h-4 text-amber-600" />
+            <div className="flex items-start justify-between mb-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Issued / Outward</span>
+              <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+                <ArrowUpFromLine className="w-3.5 h-3.5" />
+              </div>
             </div>
             <div className="text-2xl font-bold text-amber-700 tabular-nums" style={{ fontFamily: "Outfit" }}>
               {Number(summary.total_issued || 0).toLocaleString()}
@@ -466,11 +478,13 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
         {/* Utilization Rate */}
         <Card className="border-slate-200 hover:border-slate-300 transition-all bg-white shadow-sm">
           <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium uppercase tracking-wider">Utilization %</span>
-              <Percent className="w-4 h-4 text-indigo-600" />
+            <div className="flex items-start justify-between mb-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Utilization %</span>
+              <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                <Percent className="w-3.5 h-3.5" />
+              </div>
             </div>
-            <div className="text-2xl font-bold text-indigo-700 tabular-nums" style={{ fontFamily: "Outfit" }}>
+            <div className="text-2xl font-bold text-blue-700 tabular-nums" style={{ fontFamily: "Outfit" }}>
               {summary.utilization_pct ?? 0}%
             </div>
             <div className="text-[11px] text-slate-500 mt-0.5">Dispatched vs received</div>
@@ -480,11 +494,13 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
         {/* Serialized Assets */}
         <Card className="border-slate-200 hover:border-slate-300 transition-all bg-white shadow-sm">
           <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium uppercase tracking-wider">Tracked Serials</span>
-              <Hash className="w-4 h-4 text-violet-600" />
+            <div className="flex items-start justify-between mb-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Tracked Serials</span>
+              <div className="w-7 h-7 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center">
+                <Hash className="w-3.5 h-3.5" />
+              </div>
             </div>
-            <div className="text-2xl font-bold text-violet-700 tabular-nums" style={{ fontFamily: "Outfit" }}>
+            <div className="text-2xl font-bold text-slate-900 tabular-nums" style={{ fontFamily: "Outfit" }}>
               {summary.total_serialized_assets ?? 0}
             </div>
             <div className="text-[11px] text-slate-500 mt-0.5">
@@ -496,9 +512,11 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
         {/* Stock Alerts / Low Stock */}
         <Card className="border-slate-200 hover:border-slate-300 transition-all bg-white shadow-sm">
           <CardContent className="p-3.5">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-[11px] font-medium uppercase tracking-wider">Attention Needed</span>
-              <AlertTriangle className="w-4 h-4 text-red-600" />
+            <div className="flex items-start justify-between mb-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Attention Needed</span>
+              <div className="w-7 h-7 rounded-lg bg-red-50 text-red-600 flex items-center justify-center">
+                <AlertTriangle className="w-3.5 h-3.5" />
+              </div>
             </div>
             <div className="text-2xl font-bold text-red-700 tabular-nums" style={{ fontFamily: "Outfit" }}>
               {(summary.low_stock_count || 0) + (summary.serials_damaged || 0)}
@@ -565,7 +583,14 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
                     <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#64748b" }} tickLine={false} />
                     <YAxis tick={{ fontSize: 10, fill: "#64748b" }} tickLine={false} axisLine={false} />
                     <Tooltip
-                      contentStyle={{ backgroundColor: "#0f172a", borderRadius: "8px", border: "none", color: "#fff", fontSize: "11px" }}
+                      contentStyle={{
+                        backgroundColor: "#ffffff",
+                        borderRadius: "8px",
+                        border: "1px solid #e2e8f0",
+                        color: "#0f172a",
+                        fontSize: "11px",
+                        boxShadow: "0 1px 3px rgba(0, 0, 0, 0.08)",
+                      }}
                     />
                     <Legend wrapperStyle={{ fontSize: "11px", paddingTop: "8px" }} />
                     <Area type="monotone" dataKey="received" name="Received (Inward)" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#inwardGrad)" />
@@ -598,13 +623,13 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
                   <div key={mu.category} className="p-2 rounded-lg bg-slate-50/70 border border-slate-100">
                     <div className="flex items-center justify-between text-xs mb-1">
                       <span className="font-semibold text-slate-800">{mu.category}</span>
-                      <span className="font-bold text-indigo-700">{mu.utilization_pct}% utilized</span>
+                      <span className="font-bold text-blue-700">{mu.utilization_pct}% utilized</span>
                     </div>
                     {/* Progress bar */}
                     <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
                       <div
                         className={`h-1.5 rounded-full ${
-                          mu.utilization_pct >= 75 ? "bg-emerald-500" : mu.utilization_pct >= 35 ? "bg-indigo-500" : "bg-amber-500"
+                          mu.utilization_pct >= 75 ? "bg-emerald-500" : mu.utilization_pct >= 35 ? "bg-blue-600" : "bg-amber-500"
                         }`}
                         style={{ width: `${Math.min(mu.utilization_pct, 100)}%` }}
                       />
@@ -667,7 +692,7 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
                       <tr
                         key={p.id || p.product}
                         onClick={() => setDrilldownProduct(p)}
-                        className="hover:bg-indigo-50/50 cursor-pointer transition-colors"
+                        className="hover:bg-slate-50/80 cursor-pointer transition-colors"
                         data-testid={`product-perf-row-${p.id}`}
                       >
                         <td className="px-3 py-2">
@@ -680,7 +705,7 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
                         <td className="px-2 py-2 text-right tabular-nums font-semibold text-amber-700">{Number(p.total_issued).toLocaleString()}</td>
                         <td className="px-2 py-2 text-right tabular-nums font-bold text-emerald-700">{Number(p.available).toLocaleString()}</td>
                         <td className="px-2 py-2 text-center tabular-nums">
-                          <span className="font-semibold text-indigo-700">{p.utilization_pct}%</span>
+                          <span className="font-semibold text-blue-700">{p.utilization_pct}%</span>
                         </td>
                         <td className="px-2 py-2 text-center text-slate-600">{p.projects_count}</td>
                         <td className="px-2 py-2 text-center">
@@ -741,7 +766,14 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
                         ))}
                       </Pie>
                       <Tooltip
-                        contentStyle={{ backgroundColor: "#0f172a", borderRadius: "8px", border: "none", color: "#fff", fontSize: "11px" }}
+                        contentStyle={{
+                          backgroundColor: "#ffffff",
+                          borderRadius: "8px",
+                          border: "1px solid #e2e8f0",
+                          color: "#0f172a",
+                          fontSize: "11px",
+                          boxShadow: "0 1px 3px rgba(0, 0, 0, 0.08)",
+                        }}
                       />
                     </PieChart>
                   </ResponsiveContainer>
@@ -830,7 +862,7 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
                     sitePerformance.map((sp) => (
                       <tr key={sp.site_name} className="hover:bg-slate-50/70 transition-colors">
                         <td className="px-3 py-2 font-semibold text-slate-900 flex items-center gap-1.5">
-                          <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                          <Building2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                           <span className="truncate">{sp.site_name}</span>
                         </td>
                         <td className="px-2 py-2 text-slate-600 truncate">{sp.client_name}</td>
@@ -879,7 +911,7 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
               <div className="text-xs font-semibold text-slate-800">Fast Moving vs Stagnant Posture</div>
               <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-between text-xs">
                 <span className="text-slate-600">Fast Moving Products</span>
-                <span className="font-bold text-indigo-700">{topRankings.fastest_moving_products?.length || 0} active</span>
+                <span className="font-bold text-blue-700">{topRankings.fastest_moving_products?.length || 0} active</span>
               </div>
               <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-between text-xs">
                 <span className="text-slate-600">Slow Moving / Idle Material</span>
@@ -1035,7 +1067,7 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
                             sa.status === "In Stock"
                               ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                               : sa.status === "Installed"
-                              ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                              ? "bg-blue-50 text-blue-700 border border-blue-200"
                               : sa.status === "Damaged"
                               ? "bg-red-50 text-red-700 border border-red-200"
                               : sa.status === "Returned"
@@ -1066,7 +1098,7 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
           <DialogContent className="max-w-2xl bg-white">
             <DialogHeader>
               <div className="flex items-center gap-2">
-                <Badge variant="outline" className="text-xs text-indigo-700 bg-indigo-50">
+                <Badge variant="outline" className="text-xs text-blue-700 bg-blue-50 border-blue-200">
                   {drilldownProduct.category}
                 </Badge>
                 {drilldownProduct.brand && drilldownProduct.brand !== "—" && (
@@ -1106,7 +1138,7 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
                 </div>
                 <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
                   <div className="text-slate-500 text-[10px] uppercase font-medium">Utilization</div>
-                  <div className="text-base font-bold text-indigo-700 tabular-nums">
+                  <div className="text-base font-bold text-blue-700 tabular-nums">
                     {drilldownProduct.utilization_pct}%
                   </div>
                 </div>
@@ -1127,7 +1159,7 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
                     </div>
                     <div className="p-2 bg-white rounded border border-slate-100 flex items-center justify-between">
                       <span className="text-slate-600">Installed:</span>
-                      <span className="font-bold text-indigo-700">{drilldownProduct.serials_breakdown?.installed || 0}</span>
+                      <span className="font-bold text-blue-700">{drilldownProduct.serials_breakdown?.installed || 0}</span>
                     </div>
                     <div className="p-2 bg-white rounded border border-slate-100 flex items-center justify-between">
                       <span className="text-slate-600">Returned:</span>
