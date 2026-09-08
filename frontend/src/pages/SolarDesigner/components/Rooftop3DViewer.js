@@ -664,30 +664,33 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const buildingElevationM = Number(roof?.elevation_m || 3.0);
     const roofPitchRad = toRad(roofPitchDeg);
 
+    const hasValidRoofPolygon = Boolean(roofPolygon && roofPolygon.length >= 3);
+    const bounds = hasValidRoofPolygon
+      ? getPolygonBounds(roofPolygon)
+      : { minX: 0, maxX: 10, minY: 0, maxY: 10, width: 10, length: 10 };
+    const cx = (bounds.minX + bounds.maxX) / 2;
+    const cy = (bounds.minY + bounds.maxY) / 2;
+    const roofBounds = { ...bounds, centerX: cx, centerY: cy };
+    const fullRoof = {
+      ...roof,
+      type: roofType,
+      bounds: roofBounds,
+      elevation_m: buildingElevationM,
+      eave_height_m: roof?.eave_height_m != null ? Number(roof.eave_height_m) : buildingElevationM,
+      ridge_height_m: roof?.ridge_height_m != null ? Number(roof.ridge_height_m) : null,
+      pitch_deg: roofPitchDeg,
+      azimuth_deg: roofAzimuthDeg,
+    };
+
+    if (gridHelperRef.current && isFinite(cx) && isFinite(cy)) {
+      gridHelperRef.current.position.set(cx, 0.01, -cy);
+    }
+    if (groundMeshRef.current && isFinite(cx) && isFinite(cy)) {
+      groundMeshRef.current.position.set(cx, -0.02, -cy);
+    }
+
     // ── 1. Building Walls + Roof Slab ──────────────────────────────────────────
-    if (roofPolygon && roofPolygon.length >= 3) {
-      const bounds = getPolygonBounds(roofPolygon);
-      const cx = (bounds.minX + bounds.maxX) / 2;
-      const cy = (bounds.minY + bounds.maxY) / 2;
-      const roofBounds = { ...bounds, centerX: cx, centerY: cy };
-      const fullRoof = {
-        ...roof,
-        type: roofType,
-        bounds: roofBounds,
-        elevation_m: buildingElevationM,
-        eave_height_m: roof?.eave_height_m != null ? Number(roof.eave_height_m) : buildingElevationM,
-        ridge_height_m: roof?.ridge_height_m != null ? Number(roof.ridge_height_m) : null,
-        pitch_deg: roofPitchDeg,
-        azimuth_deg: roofAzimuthDeg,
-      };
-
-      if (gridHelperRef.current && isFinite(cx) && isFinite(cy)) {
-        gridHelperRef.current.position.set(cx, 0.01, -cy);
-      }
-      if (groundMeshRef.current && isFinite(cx) && isFinite(cy)) {
-        groundMeshRef.current.position.set(cx, -0.02, -cy);
-      }
-
+    if (hasValidRoofPolygon) {
       const wallMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.9, metalness: 0.05, side: THREE.DoubleSide });
       const roofMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.75, metalness: 0.12, side: THREE.DoubleSide });
       const edgeMat = new THREE.LineBasicMaterial({ color: 0x475569, linewidth: 1.5 });
