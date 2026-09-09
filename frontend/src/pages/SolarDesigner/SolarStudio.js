@@ -1327,7 +1327,7 @@ export default function SolarStudio() {
                       }`}
                     >
                       <PenTool className="w-3 h-3" />
-                      {activeTool === "draw_roof" ? "Drawing Boundary..." : "Draw Roof"}
+                      {activeTool === "draw_roof" ? "Marking Boundary..." : "Mark Roof Boundary"}
                     </Button>
                     {designData.roof_polygon?.length >= 3 && (
                       <Button
