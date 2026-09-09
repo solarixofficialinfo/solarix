@@ -9,7 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   MousePointer, PenTool, Ruler, Trash2, RotateCw, Copy, Plus,
   AlertTriangle, Navigation, CheckCircle2, Undo2, Redo2, MapPin, Check, Info, PlusCircle,
-  Edit3, CheckSquare, X, Search, RefreshCw, Maximize2, Minimize2, Layers as LayersIcon
+  Edit3, CheckSquare, X, Search, RefreshCw, Maximize2, Minimize2, Layers as LayersIcon,
+  Target
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -171,7 +172,21 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   useEffect(() => { editingRoofRef.current = editingRoof; }, [editingRoof]);
 
   useEffect(() => {
-    if (activeTool !== "draw_roof" && activeTool !== "edit_roof") {
+    if (activeTool === "draw_roof") {
+      setMagnifierVisible(true);
+      const map = mapInstanceRef.current;
+      if (map) {
+        const center = map.getCenter();
+        if (isValidLatLng(center.lat, center.lng)) {
+          setCursorCoords({ lat: center.lat, lng: center.lng });
+          if (magnifierMapRef.current) {
+            const targetZoom = Math.min(20, Math.round(map.getZoom() + 2.5));
+            magnifierMapRef.current.setView([center.lat, center.lng], targetZoom, { animate: false });
+            magnifierMapRef.current.invalidateSize({ pan: false });
+          }
+        }
+      }
+    } else if (activeTool !== "edit_roof") {
       setMagnifierVisible(false);
     }
   }, [activeTool]);
@@ -692,7 +707,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
       map.on("mousemove", (e) => {
         if (isValidLatLng(e.latlng.lat, e.latlng.lng)) {
-          setCursorCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
+          if (window.__activeSolarTool !== "draw_roof") {
+            setCursorCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
+          }
           const container = mapContainerRef.current;
           if (container) {
             const rect = container.getBoundingClientRect();
@@ -706,6 +723,25 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         }
       });
 
+      const syncFinderCenter = () => {
+        if (window.__activeSolarTool === "draw_roof") {
+          const map = mapInstanceRef.current;
+          if (!map) return;
+          const center = map.getCenter();
+          if (isValidLatLng(center.lat, center.lng)) {
+            setCursorCoords({ lat: center.lat, lng: center.lng });
+            if (magnifierMapRef.current) {
+              const targetZoom = Math.min(20, Math.round(map.getZoom() + 2.5));
+              magnifierMapRef.current.setView([center.lat, center.lng], targetZoom, { animate: false });
+            }
+          }
+        }
+      };
+
+      map.on("move", syncFinderCenter);
+      map.on("zoom", syncFinderCenter);
+      map.on("zoomend", syncFinderCenter);
+
       const handleTouchStart = (e) => {
         if (e.touches && e.touches.length > 0) {
           const touch = e.touches[0];
@@ -717,7 +753,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             setCursorScreenPos({ x: sx, y: sy });
             const latlng = mapInstanceRef.current.containerPointToLatLng([sx, sy]);
             if (isValidLatLng(latlng.lat, latlng.lng)) {
-              setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
+              if (window.__activeSolarTool !== "draw_roof") {
+                setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
+              }
             }
             if (window.__activeSolarTool === "draw_roof" || isDraggingVertexRef.current) {
               setMagnifierVisible(true);
@@ -737,14 +775,16 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             setCursorScreenPos({ x: sx, y: sy });
             const latlng = mapInstanceRef.current.containerPointToLatLng([sx, sy]);
             if (isValidLatLng(latlng.lat, latlng.lng)) {
-              setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
+              if (window.__activeSolarTool !== "draw_roof") {
+                setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
+              }
             }
           }
         }
       };
 
       const handleTouchEnd = () => {
-        if (!isDraggingVertexRef.current) {
+        if (window.__activeSolarTool !== "draw_roof" && !isDraggingVertexRef.current) {
           setMagnifierVisible(false);
         }
       };
@@ -826,13 +866,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
         const tool = window.__activeSolarTool;
         if (tool === "draw_roof") {
-          setActiveDrawPoints((prev) => {
-            if (prev.length > 0) {
-              const last = prev[prev.length - 1];
-              if (Math.abs(last.lat - lat) < 0.000001 && Math.abs(last.lng - lng) < 0.000001) return prev;
-            }
-            return [...prev, { lat, lng }];
-          });
+          // Pan map so clicked location centers directly under the fixed finder
+          map.panTo([lat, lng], { animate: true, duration: 0.25 });
         } else if (tool === "add_panel") {
           window.__handleSolarMapClickAddPanel?.(lat, lng);
         } else if (tool === "calibrate") {
@@ -931,6 +966,28 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   }, [latitude, longitude, pendingMarkerLocation]);
 
   // Roof Drawing Actions
+  const handleMarkFinderPoint = useCallback(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const center = map.getCenter();
+    if (!isValidLatLng(center.lat, center.lng)) {
+      toast.error("Invalid map center coordinates.");
+      return;
+    }
+
+    const newPt = { lat: center.lat, lng: center.lng };
+    setActiveDrawPoints((prev) => {
+      if (prev.length > 0) {
+        const last = prev[prev.length - 1];
+        if (Math.abs(last.lat - newPt.lat) < 1e-7 && Math.abs(last.lng - newPt.lng) < 1e-7) {
+          return prev;
+        }
+      }
+      return [...prev, newPt];
+    });
+    toast.success(`Marked Point ${activeDrawPoints.length + 1}`);
+  }, [activeDrawPoints.length]);
+
   const handleUndoDrawPoint = useCallback(() => {
     setActiveDrawPoints((prev) => prev.slice(0, -1));
   }, []);
@@ -1505,61 +1562,139 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         className="w-full h-full flex-1 z-0 cursor-crosshair bg-slate-950"
       />
 
-      {/* Floating Precision Magnifier (Live Higher Zoom Satellite Lens) */}
+      {/* Precision Finder & Magnifier Tool */}
       <div
-        ref={magnifierContainerRef}
         style={{
-          display: magnifierVisible ? "block" : "none",
+          display: (activeTool === "draw_roof" || (activeTool === "edit_roof" && magnifierVisible)) ? "flex" : "none",
           position: "absolute",
-          left: `${Math.max(10, Math.min(cursorScreenPos.x - 84, (mapContainerRef.current?.clientWidth || 600) - 180))}px`,
-          top: `${Math.max(10, cursorScreenPos.y - 180)}px`,
-          width: "168px",
-          height: "168px",
-          borderRadius: "50%",
-          border: "3px solid #ffffff",
-          boxShadow: "0 14px 40px rgba(0,0,0,0.75)",
-          overflow: "hidden",
-          pointerEvents: "none",
           zIndex: 1000,
-          backgroundColor: "#0a0f1d",
+          pointerEvents: "none",
+          flexDirection: "column",
+          alignItems: "center",
+          ...(activeTool === "draw_roof"
+            ? {
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+              }
+            : {
+                left: `${Math.max(10, Math.min(cursorScreenPos.x - 90, (mapContainerRef.current?.clientWidth || 600) - 190))}px`,
+                top: `${Math.max(10, cursorScreenPos.y - 190)}px`,
+              }),
         }}
+        className="select-none"
       >
-        {/* Hairline Crosshair Reticle & POINT TARGET label */}
-        <div className="absolute inset-0 pointer-events-none z-10 flex flex-col items-center justify-center">
-          <div className="relative flex items-center justify-center">
-            <div className="w-2.5 h-2.5 rounded-full bg-red-500 border-2 border-white shadow-md z-20" />
-            <div className="absolute w-7 h-7 rounded-full border border-red-500/60 pointer-events-none" />
+        {/* Floating Mark Point Action Capsule immediately ABOVE the Finder (activeTool === "draw_roof") */}
+        {activeTool === "draw_roof" && (
+          <div className="pointer-events-auto flex flex-col items-center mb-2 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-1.5 bg-slate-900/98 backdrop-blur-md border border-slate-700/90 rounded-xl p-1.5 shadow-2xl">
+              {/* Point Index Pill */}
+              <span className="bg-emerald-600 text-white text-[11px] font-extrabold px-2.5 py-1 rounded-lg flex items-center gap-1.5 shadow-sm">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-200 animate-ping" />
+                Pt {activeDrawPoints.length + 1}
+              </span>
+
+              {/* PRIMARY ACTION: Mark Point */}
+              <button
+                type="button"
+                onClick={handleMarkFinderPoint}
+                className="h-8 px-3.5 text-xs rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-extrabold flex items-center gap-1.5 shadow-md transition cursor-pointer"
+                title="Mark point at finder centre"
+              >
+                <Target className="w-4 h-4 text-emerald-100" />
+                <span>Mark Point</span>
+              </button>
+
+              {/* Undo Button */}
+              <button
+                type="button"
+                onClick={handleUndoDrawPoint}
+                disabled={activeDrawPoints.length === 0}
+                className="h-8 px-2.5 text-[11px] rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent flex items-center gap-1 transition cursor-pointer"
+                title="Undo last marked point"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+                <span>Undo</span>
+              </button>
+
+              {/* Finish Roof (Available when >= 3 points marked) */}
+              {activeDrawPoints.length >= 3 && (
+                <button
+                  type="button"
+                  onClick={handleFinishDrawingRoof}
+                  className="h-8 px-3 text-[11px] rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold flex items-center gap-1.5 shadow-md transition cursor-pointer animate-pulse"
+                  title="Complete and close roof polygon"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-blue-100" />
+                  <span>Finish Roof ({activeDrawPoints.length} pts)</span>
+                </button>
+              )}
+
+              {/* Cancel Button */}
+              <button
+                type="button"
+                onClick={handleCancelDrawing}
+                className="h-8 px-2.5 text-[11px] rounded-lg text-red-400 hover:text-red-300 hover:bg-red-950/50 flex items-center gap-1 transition cursor-pointer"
+                title="Cancel roof drawing"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Cancel</span>
+              </button>
+            </div>
+
+            {/* Connecting pointer stem directly to finder center */}
+            <div className="w-[2px] h-3 bg-gradient-to-b from-emerald-500 to-white shadow" />
           </div>
-          <div className="absolute left-0 right-0 h-[1px] bg-red-500/70 pointer-events-none" />
-          <div className="absolute top-0 bottom-0 w-[1px] bg-red-500/70 pointer-events-none" />
+        )}
 
-          {/* Precision Target Label */}
-          <div className="absolute top-2 bg-black/85 border border-slate-700/80 text-[8px] font-bold tracking-wider text-emerald-400 px-1.5 py-0.5 rounded shadow pointer-events-none uppercase">
-            POINT TARGET
-          </div>
-        </div>
-
-        {/* Magnifier Zoom Badge */}
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-20 bg-slate-900/90 border border-slate-700/80 text-[9px] font-extrabold text-amber-300 px-2 py-0.5 rounded-full shadow pointer-events-none whitespace-nowrap">
-          4x Precision Zoom
-        </div>
-      </div>
-
-      {/* On-ground Cursor Target Indicator (Before Click) */}
-      {(activeTool === "draw_roof" || activeTool === "edit_roof") && magnifierVisible && cursorScreenPos && (
+        {/* Circular Magnifier Map Viewport */}
         <div
-          className="pointer-events-none absolute z-20"
+          ref={magnifierContainerRef}
           style={{
-            left: `${cursorScreenPos.x}px`,
-            top: `${cursorScreenPos.y}px`,
-            transform: "translate(-50%, -50%)",
+            width: "180px",
+            height: "180px",
+            borderRadius: "50%",
+            border: "3px solid #ffffff",
+            boxShadow: "0 16px 48px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.2)",
+            overflow: "hidden",
+            pointerEvents: "none",
+            backgroundColor: "#0a0f1d",
+            position: "relative",
           }}
         >
-          <div className="w-4 h-4 rounded-full border-2 border-emerald-400 bg-emerald-500/25 flex items-center justify-center shadow-lg animate-pulse">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+          {/* Hairline Crosshair Reticle & Exact Center Target */}
+          <div className="absolute inset-0 pointer-events-none z-10 flex flex-col items-center justify-center">
+            {/* Horizontal Hairline */}
+            <div className="absolute left-0 right-0 h-[1px] bg-red-500/80 pointer-events-none" />
+            {/* Vertical Hairline */}
+            <div className="absolute top-0 bottom-0 w-[1px] bg-red-500/80 pointer-events-none" />
+
+            {/* Exact Center Target (No offset) */}
+            <div className="relative flex items-center justify-center pointer-events-none">
+              <div className="w-6 h-6 rounded-full border border-red-500/70 pointer-events-none flex items-center justify-center">
+                <div className="w-2 h-2 rounded-full bg-red-500 border border-white shadow-md" />
+              </div>
+            </div>
+
+            {/* Precision Target Top Label */}
+            <div className="absolute top-2.5 bg-black/85 border border-slate-700/80 text-[8px] font-extrabold tracking-wider text-emerald-400 px-2 py-0.5 rounded shadow pointer-events-none uppercase">
+              POINT TARGET
+            </div>
+
+            {/* Magnifier Zoom Bottom Badge */}
+            <div className="absolute bottom-2.5 bg-slate-900/90 border border-slate-700/80 text-[8px] font-extrabold text-amber-300 px-2 py-0.5 rounded-full shadow pointer-events-none whitespace-nowrap">
+              4x Precision Zoom
+            </div>
           </div>
         </div>
-      )}
+
+        {/* Micro Guidance Hint below finder (only in draw_roof mode) */}
+        {activeTool === "draw_roof" && (
+          <div className="mt-2 bg-slate-950/85 backdrop-blur-sm border border-slate-800 text-[10px] text-slate-300 px-3 py-0.5 rounded-full shadow pointer-events-none whitespace-nowrap">
+            Pan map to align roof corner • Click <span className="font-bold text-emerald-400">Mark Point</span>
+          </div>
+        )}
+      </div>
 
       {/* Map error overlay */}
       {mapError && (
@@ -1705,31 +1840,17 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         <div className="flex items-center gap-1 bg-slate-900/95 border border-slate-700/80 rounded-xl p-1 shadow-xl text-xs text-white">
           {/* Active Tool / In-progress context switch */}
           {activeTool === "draw_roof" ? (
-            <div className="flex items-center gap-1">
-              <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">
-                Pt {activeDrawPoints.length + 1}
+            <div className="flex items-center gap-2 px-2 text-xs">
+              <span className="flex items-center gap-1.5 text-emerald-400 font-semibold">
+                <Target className="w-3.5 h-3.5 animate-pulse" />
+                Marking Roof Boundary ({activeDrawPoints.length} {activeDrawPoints.length === 1 ? "point" : "points"})
               </span>
               <button
-                onClick={handleUndoDrawPoint}
-                disabled={activeDrawPoints.length === 0}
-                className="h-7 px-2 text-[11px] rounded-lg text-slate-300 hover:text-white disabled:opacity-30 flex items-center gap-1 hover:bg-slate-800"
-              >
-                <Undo2 className="w-3 h-3" /> Undo
-              </button>
-              <button
                 onClick={handleCancelDrawing}
-                className="h-7 px-2 text-[11px] rounded-lg text-red-400 hover:text-red-300 hover:bg-red-950/50 flex items-center gap-1"
+                className="h-7 px-2.5 text-[11px] rounded-lg text-red-400 hover:text-red-300 hover:bg-red-950/50 flex items-center gap-1 border border-red-900/40 transition cursor-pointer"
               >
                 <X className="w-3 h-3" /> Cancel
               </button>
-              {activeDrawPoints.length >= 3 && (
-                <button
-                  onClick={handleFinishDrawingRoof}
-                  className="h-7 px-3 text-[11px] rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center gap-1 shadow-sm"
-                >
-                  <CheckCircle2 className="w-3 h-3" /> Finish Roof ({activeDrawPoints.length} pts)
-                </button>
-              )}
             </div>
           ) : activeTool === "edit_roof" ? (
             <div className="flex items-center gap-1">
