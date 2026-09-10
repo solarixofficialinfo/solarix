@@ -255,6 +255,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   useEffect(() => {
     if (!magnifierContainerRef.current || magnifierMapRef.current) return;
     try {
+      if (magnifierContainerRef.current._leaflet_id) {
+        delete magnifierContainerRef.current._leaflet_id;
+      }
       const mini = L.map(magnifierContainerRef.current, {
         center: [originLat, originLng],
         zoom: 20,
@@ -632,6 +635,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
     try {
+      if (mapContainerRef.current._leaflet_id) {
+        delete mapContainerRef.current._leaflet_id;
+      }
       const initialLat = Number(latitude) || 19.076;
       const initialLng = Number(longitude) || 72.8777;
 
@@ -876,6 +882,10 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             if (next.length === 2) setShowCalibrateModal(true);
             return next;
           });
+        } else if (tool === "select") {
+          if (!roofPolygonRef.current || roofPolygonRef.current.length < 3) {
+            toast.info("Click 'Mark Roof Boundary' above to trace your building roof corners.", { id: "roof-hint" });
+          }
         }
       });
 
@@ -915,29 +925,48 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     window.__handleSolarMapClickRoof = handleMapClickRoof;
   }, [activeTool, handleMapClickForAddPanel, handleMapClickRoof]);
 
-  // Tile Layers with maxNativeZoom: 18 to prevent white-screen on deep zoom
+  // Tile Layers with maxNativeZoom: 20 to prevent white-screen on deep zoom
   useEffect(() => {
     const tileGroup = tileLayerGroupRef.current;
     if (!tileGroup) return;
     tileGroup.clearLayers();
 
     if (mapType === "satellite") {
-      L.tileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 20, maxNativeZoom: 18, keepBuffer: 6, errorTileUrl: "" }
-      ).addTo(tileGroup);
+      const satLayer = L.tileLayer(
+        "https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        {
+          maxZoom: 20,
+          maxNativeZoom: 20,
+          subdomains: ["0", "1", "2", "3"],
+          keepBuffer: 6,
+          errorTileUrl: "",
+        }
+      );
+      satLayer.on("tileerror", () => {
+        // Fallback to ArcGIS if Google tiles ever encounter rate limits
+        if (tileGroup && mapInstanceRef.current) {
+          L.tileLayer(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            { maxZoom: 20, maxNativeZoom: 18, keepBuffer: 6, errorTileUrl: "" }
+          ).addTo(tileGroup);
+        }
+      });
+      satLayer.addTo(tileGroup);
     } else if (mapType === "hybrid") {
       L.tileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 20, maxNativeZoom: 18, keepBuffer: 6, errorTileUrl: "" }
-      ).addTo(tileGroup);
-      L.tileLayer(
-        "https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 20, maxNativeZoom: 18, keepBuffer: 6, errorTileUrl: "" }
+        "https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+        {
+          maxZoom: 20,
+          maxNativeZoom: 20,
+          subdomains: ["0", "1", "2", "3"],
+          keepBuffer: 6,
+          errorTileUrl: "",
+        }
       ).addTo(tileGroup);
     } else {
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 20, maxNativeZoom: 19,
+        maxZoom: 20,
+        maxNativeZoom: 19,
         subdomains: ["a", "b", "c"],
         keepBuffer: 6,
         errorTileUrl: "",
@@ -1576,24 +1605,44 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const containerW = mapContainerRef.current?.clientWidth || 800;
   const containerH = mapContainerRef.current?.clientHeight || 600;
 
-  let lensLeft = cursorScreenPos.x + 28;
-  let lensTop = cursorScreenPos.y - (lensSize + 20);
+  // Default: offset top-right from cursor
+  let lensLeft = cursorScreenPos.x + 30;
+  let lensTop = cursorScreenPos.y - (lensSize + 25);
 
   // If too close to top edge, flip below cursor
-  if (lensTop < 10) {
-    lensTop = cursorScreenPos.y + 28;
+  if (lensTop < 15) {
+    lensTop = cursorScreenPos.y + 35;
   }
   // If too close to right edge, shift to left of cursor
-  if (lensLeft + lensSize > containerW - 10) {
-    lensLeft = cursorScreenPos.x - lensSize - 28;
+  if (lensLeft + lensSize > containerW - 15) {
+    lensLeft = cursorScreenPos.x - lensSize - 30;
   }
 
-  // Final bounds clamping within map container
+  // Clamping within map container
   lensLeft = Math.max(10, Math.min(lensLeft, containerW - lensSize - 10));
   lensTop = Math.max(10, Math.min(lensTop, containerH - lensSize - 10));
 
+  // Non-overlap safety buffer: Ensure the lens never directly covers the cursor
+  const cursorInsideX = cursorScreenPos.x >= lensLeft - 15 && cursorScreenPos.x <= lensLeft + lensSize + 15;
+  const cursorInsideY = cursorScreenPos.y >= lensTop - 15 && cursorScreenPos.y <= lensTop + lensSize + 15;
+  if (cursorInsideX && cursorInsideY) {
+    if (cursorScreenPos.x > containerW / 2) {
+      lensLeft = Math.max(10, cursorScreenPos.x - lensSize - 35);
+    } else {
+      lensLeft = Math.min(containerW - lensSize - 10, cursorScreenPos.x + 35);
+    }
+  }
+
   return (
     <div className="relative w-full h-full min-h-[580px] rounded-2xl overflow-hidden bg-slate-950 border border-slate-700 shadow-xl select-none flex flex-col">
+      {/* Scoped CSS rule ensuring magnifier lens and ALL child elements never intercept mouse events */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        .magnifier-lens-wrapper, .magnifier-lens-wrapper * {
+          pointer-events: none !important;
+          user-select: none !important;
+        }
+      ` }} />
+
       <div
         ref={mapContainerRef}
         onMouseEnter={() => {
@@ -1620,23 +1669,24 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             pointerEvents: "none",
             zIndex: 1001,
           }}
-          className="select-none flex items-center justify-center pointer-events-none"
+          className="select-none flex items-center justify-center pointer-events-none [&_*]:!pointer-events-none"
         >
           {/* Outer Reticle Ring */}
-          <div className="relative w-5 h-5 rounded-full border border-emerald-400/90 flex items-center justify-center shadow-sm">
+          <div className="relative w-5 h-5 rounded-full border border-emerald-400/90 flex items-center justify-center shadow-sm pointer-events-none">
             {/* Center Precision Dot */}
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 border border-black shadow" />
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 border border-black shadow pointer-events-none" />
             {/* 4 Directional Crosshair Ticks */}
-            <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-[1px] h-1.5 bg-emerald-400" />
-            <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-[1px] h-1.5 bg-emerald-400" />
-            <div className="absolute top-1/2 -left-1.5 -translate-y-1/2 h-[1px] w-1.5 bg-emerald-400" />
-            <div className="absolute top-1/2 -right-1.5 -translate-y-1/2 h-[1px] w-1.5 bg-emerald-400" />
+            <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-[1px] h-1.5 bg-emerald-400 pointer-events-none" />
+            <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-[1px] h-1.5 bg-emerald-400 pointer-events-none" />
+            <div className="absolute top-1/2 -left-1.5 -translate-y-1/2 h-[1px] w-1.5 bg-emerald-400 pointer-events-none" />
+            <div className="absolute top-1/2 -right-1.5 -translate-y-1/2 h-[1px] w-1.5 bg-emerald-400 pointer-events-none" />
           </div>
         </div>
       )}
 
       {/* 2. Circular Precision Magnifier Lens (Pointer-Following with Offset) */}
       <div
+        id="magnifier-lens-root"
         style={{
           display: (activeTool === "draw_roof" && magnifierVisible && cursorScreenPos.x >= 0 && cursorScreenPos.y >= 0) ? "block" : "none",
           position: "absolute",
@@ -1652,17 +1702,17 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           overflow: "hidden",
           backgroundColor: "#0a0f1d",
         }}
-        className="select-none"
+        className="magnifier-lens-wrapper select-none pointer-events-none [&_*]:!pointer-events-none"
       >
         {/* Circular Magnifier Map Viewport */}
-        <div ref={magnifierContainerRef} className="w-full h-full" />
+        <div ref={magnifierContainerRef} className="w-full h-full pointer-events-none [&_*]:!pointer-events-none" />
 
         {/* Hairline Crosshair Reticle & Exact Center Target inside lens */}
-        <div className="absolute inset-0 pointer-events-none z-10 flex flex-col items-center justify-center">
+        <div className="absolute inset-0 pointer-events-none z-10 flex flex-col items-center justify-center [&_*]:!pointer-events-none">
           <div className="absolute left-0 right-0 h-[1px] bg-red-500/80 pointer-events-none" />
           <div className="absolute top-0 bottom-0 w-[1px] bg-red-500/80 pointer-events-none" />
           <div className="w-4 h-4 rounded-full border border-red-500/80 pointer-events-none flex items-center justify-center">
-            <div className="w-1.5 h-1.5 rounded-full bg-red-500 border border-white" />
+            <div className="w-1.5 h-1.5 rounded-full bg-red-500 border border-white pointer-events-none" />
           </div>
           {/* Zoom Label Badge */}
           <div className="absolute bottom-2 bg-slate-950/90 border border-slate-700/80 text-[8px] font-extrabold text-amber-300 px-2 py-0.5 rounded-full shadow pointer-events-none">
@@ -2123,6 +2173,14 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           <span className="font-semibold text-xs capitalize">{mapType === "satellite" ? "Satellite" : "Map"}</span>
         </button>
       </div>
+
+      {/* 2D Initial Roof Guidance Pill */}
+      {!hasRoof && activeTool === "select" && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-slate-900/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-blue-500/60 shadow-xl text-xs text-slate-200 pointer-events-auto flex items-center gap-2 animate-in fade-in">
+          <PenTool className="w-3.5 h-3.5 text-blue-400 shrink-0 animate-pulse" />
+          <span>Click <button type="button" onClick={() => { setActiveTool("draw_roof"); setActiveDrawPoints([]); }} className="text-blue-400 font-bold underline hover:text-blue-300 cursor-pointer">Mark Roof Boundary</button> to trace your rooftop corners</span>
+        </div>
+      )}
 
       {/* Add Panel Floating Guidance */}
       {activeTool === "add_panel" && (

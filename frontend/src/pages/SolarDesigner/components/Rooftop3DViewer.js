@@ -51,6 +51,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     structureMembers = [],
     onStructureNodesChange,
     onStructureMembersChange,
+    onSwitchTo2D,
+    onApplyTemplateRoof,
   },
   ref
 ) {
@@ -517,11 +519,19 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const handleResize = () => {
       if (!container || !renderer || !camera) return;
       const w = container.clientWidth, h = container.clientHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      if (w > 0 && h > 0) {
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+      }
     };
     window.addEventListener("resize", handleResize);
+
+    // ResizeObserver ensures Three.js canvas auto-adapts when tab switches from hidden to visible
+    const resizeObserver = new ResizeObserver(() => {
+      handleResize();
+    });
+    resizeObserver.observe(container);
 
     let animId;
     const animate = () => { animId = requestAnimationFrame(animate); renderer.render(scene, camera); };
@@ -529,6 +539,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
     return () => {
       cancelAnimationFrame(animId);
+      resizeObserver.disconnect();
       dom.removeEventListener("mousedown", onMouseDown);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
@@ -926,6 +937,46 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           roofMesh.add(new THREE.LineSegments(edgeGeom, edgeMatSegments));
         }
       }
+    } else {
+      // ── Blueprint Building Ghost Template (Rendered when no custom roof is traced yet) ──
+      // Prevents 3D scene from appearing as a pitch-black void with just an arrow
+      const defaultW = 14;
+      const defaultL = 10;
+      const defaultH = 3.5;
+      const ghostMat = new THREE.MeshStandardMaterial({
+        color: 0x1e293b,
+        roughness: 0.85,
+        metalness: 0.15,
+        transparent: true,
+        opacity: 0.45,
+      });
+      const ghostRoofMat = new THREE.MeshStandardMaterial({
+        color: 0x334155,
+        roughness: 0.7,
+        metalness: 0.2,
+        transparent: true,
+        opacity: 0.6,
+      });
+      const ghostWireMat = new THREE.LineBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.5,
+      });
+
+      const buildingMesh = new THREE.Mesh(new THREE.BoxGeometry(defaultW, defaultH, defaultL), ghostMat);
+      buildingMesh.position.set(0, defaultH / 2, 0);
+      rootGroup.add(buildingMesh);
+
+      const wireMesh = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(defaultW, defaultH, defaultL)),
+        ghostWireMat
+      );
+      wireMesh.position.set(0, defaultH / 2, 0);
+      rootGroup.add(wireMesh);
+
+      const slabMesh = new THREE.Mesh(new THREE.BoxGeometry(defaultW + 0.4, 0.25, defaultL + 0.4), ghostRoofMat);
+      slabMesh.position.set(0, defaultH + 0.125, 0);
+      rootGroup.add(slabMesh);
     }
 
     // ── 2. Solar PV Modules + Row-Based Mounting Structure ────────────────────
@@ -1154,7 +1205,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
     // ── 4. Compass Indicator ──────────────────────────────────────────────────
     const compassGroup = new THREE.Group();
-    compassGroup.position.set(-18, 0.05, -18);
+    if (hasValidRoofPolygon) {
+      const compassDist = Math.max(12, Math.max(bounds.width || 12, bounds.length || 10) * 0.75);
+      compassGroup.position.set(cx - compassDist, 0.05, -cy - compassDist);
+    } else {
+      compassGroup.position.set(-12, 0.05, -10);
+    }
     const northArrow = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.4, 16), new THREE.MeshBasicMaterial({ color: 0xef4444 }));
     northArrow.rotation.x = -Math.PI / 2; northArrow.position.z = -0.9;
     compassGroup.add(northArrow);
@@ -1347,16 +1403,38 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         onClick={handleCanvasClick}
       />
 
-      {/* Empty State Banner */}
+      {/* Empty State Guidance Card */}
       {!hasRoof && (
-        <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center text-white pointer-events-none z-10">
-          <div className="w-12 h-12 rounded-2xl bg-blue-900/60 border border-blue-700 flex items-center justify-center text-blue-400 mb-3 shadow-lg">
-            <Box className="w-6 h-6" />
+        <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center text-white z-10 pointer-events-auto">
+          <div className="bg-slate-900/90 border border-slate-700/80 rounded-2xl p-6 shadow-2xl max-w-md w-full text-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-blue-900/60 border border-blue-700 flex items-center justify-center text-blue-400 mx-auto shadow-lg">
+              <Box className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold tracking-tight text-white">3D Simulation Awaiting Roof Geometry</h3>
+              <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                Trace your rooftop perimeter on the <b>2D Satellite Map</b>, or generate a standard 3D solar rooftop instantly:
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={onSwitchTo2D}
+                className="w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl bg-blue-600 hover:bg-blue-500 text-white shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                ← Trace on 2D Map
+              </button>
+              {onApplyTemplateRoof && (
+                <button
+                  type="button"
+                  onClick={onApplyTemplateRoof}
+                  className="w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" /> Use 12m × 8m Roof
+                </button>
+              )}
+            </div>
           </div>
-          <h3 className="text-base font-bold tracking-tight">3D Preview Awaiting Roof Geometry</h3>
-          <p className="text-xs text-slate-400 max-w-sm my-1.5 leading-relaxed">
-            3D rooftop simulation will appear after you draw the roof boundary in the <b>2D Satellite Plan</b> tab.
-          </p>
         </div>
       )}
 

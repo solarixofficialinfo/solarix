@@ -274,8 +274,9 @@ export default function SolarStudio() {
       }
       if (activeTab === "3d" || activeTab === "split") {
         viewer3dRef.current?.resize?.();
+        viewer3dRef.current?.applyViewPreset?.("fitDesign");
       }
-    }, 280);
+    }, 120);
     return () => clearTimeout(timer);
   }, [activeTab, isFullscreen, openSection]);
 
@@ -517,6 +518,26 @@ export default function SolarStudio() {
       viewer3dRef.current?.applyViewPreset?.("fit");
     }, 200);
   };
+
+  // Generate 12m x 8m Standard Template Roof directly from 3D Empty State
+  const handleApplyDefaultRoofTemplate = useCallback(() => {
+    const halfW = 6.0;
+    const halfL = 4.0;
+    const templatePolygon = [
+      { x: -halfW, y: -halfL },
+      { x: halfW, y: -halfL },
+      { x: halfW, y: halfL },
+      { x: -halfW, y: halfL },
+    ];
+
+    handleSetRoofPolygon(templatePolygon);
+    toast.success("Applied standard 12m × 8m roof template.");
+
+    setTimeout(() => {
+      handleAutoLayout("auto");
+      viewer3dRef.current?.applyViewPreset?.("fitDesign");
+    }, 150);
+  }, [handleSetRoofPolygon, handleAutoLayout]);
 
   // Address Search Autocomplete with Debounce
   useEffect(() => {
@@ -1899,6 +1920,11 @@ export default function SolarStudio() {
               structureMembers={designData.structure_members || []}
               onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
               onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
+              onSwitchTo2D={() => {
+                setActiveTab("2d");
+                setActiveTool("draw_roof");
+              }}
+              onApplyTemplateRoof={handleApplyDefaultRoofTemplate}
             />
           </div>
 
@@ -1963,6 +1989,11 @@ export default function SolarStudio() {
                 structureMembers={designData.structure_members || []}
                 onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
                 onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
+                onSwitchTo2D={() => {
+                  setActiveTab("2d");
+                  setActiveTool("draw_roof");
+                }}
+                onApplyTemplateRoof={handleApplyDefaultRoofTemplate}
               />
             </div>
           )}
