@@ -44,7 +44,7 @@ class MapErrorBoundary extends React.Component {
     return { hasError: true, errorMessage: err?.message || "Unknown map error" };
   }
   componentDidCatch(err, info) {
-    console.error("MapErrorBoundary caught:", err, info);
+    console.error("[MapErrorBoundary caught error]:", err?.message, err?.stack, info?.componentStack);
   }
   render() {
     if (this.state.hasError) {
@@ -171,6 +171,15 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const editingRoof = activeTool === "edit_roof";
   const editingRoofRef = useRef(editingRoof);
   useEffect(() => { editingRoofRef.current = editingRoof; }, [editingRoof]);
+
+  const activeToolRef = useRef(activeTool);
+  const handleMapClickForAddPanelRef = useRef(null);
+  const handleMapClickRoofRef = useRef(null);
+
+  useEffect(() => {
+    activeToolRef.current = activeTool;
+    window.__activeSolarTool = activeTool;
+  }, [activeTool]);
 
   useEffect(() => {
     if (activeTool === "draw_roof") {
@@ -630,6 +639,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     toast.success(`Placed Panel #${panels.length + 1}`);
   }, [latLngToCartesian, orientation, panelSpecs, setbackMeters, rowSpacingMeters, panelSpacingMeters, panels, obstacles, walkways, azimuthDegrees, setPanels, setSelectedPanelId]);
 
+  useEffect(() => {
+    handleMapClickForAddPanelRef.current = handleMapClickForAddPanel;
+    window.__handleSolarMapClickAddPanel = handleMapClickForAddPanel;
+  }, [handleMapClickForAddPanel]);
+
   // ── Initialize Leaflet Map ───────────────────────────────────────────────────
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
@@ -679,7 +693,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         if (!isValidLatLng(pos.lat, pos.lng)) return;
 
         // Cancel any active drawing or editing mode cleanly
-        if (window.__activeSolarTool === "draw_roof" || window.__activeSolarTool === "edit_roof") {
+        const currentTool = activeToolRef.current ?? window.__activeSolarTool;
+        if (currentTool === "draw_roof" || currentTool === "edit_roof") {
           setActiveDrawPoints([]);
           setActiveTool?.("select");
         }
@@ -715,7 +730,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             setCursorScreenPos({ x: sx, y: sy });
             cursorScreenPosRef.current = { x: sx, y: sy };
           }
-          if (window.__activeSolarTool === "draw_roof") {
+          if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
             setMagnifierVisible(true);
             if (magnifierMapRef.current) {
               const targetZoom = Math.min(20, Math.round(map.getZoom() + 2.5));
@@ -726,7 +741,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       });
 
       const syncMagnifierOnMapMove = () => {
-        if (window.__activeSolarTool === "draw_roof" && mapInstanceRef.current && magnifierMapRef.current) {
+        if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof" && mapInstanceRef.current && magnifierMapRef.current) {
           const { x, y } = cursorScreenPosRef.current;
           if (x >= 0 && y >= 0) {
             const latlng = mapInstanceRef.current.containerPointToLatLng([x, y]);
@@ -756,12 +771,12 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             const latlng = mapInstanceRef.current.containerPointToLatLng([sx, sy]);
             if (isValidLatLng(latlng.lat, latlng.lng)) {
               setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
-              if (magnifierMapRef.current && window.__activeSolarTool === "draw_roof") {
+              if (magnifierMapRef.current && (activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
                 const targetZoom = Math.min(20, Math.round(mapInstanceRef.current.getZoom() + 2.5));
                 magnifierMapRef.current.setView([latlng.lat, latlng.lng], targetZoom, { animate: false });
               }
             }
-            if (window.__activeSolarTool === "draw_roof") {
+            if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
               setMagnifierVisible(true);
             }
           }
@@ -781,7 +796,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             const latlng = mapInstanceRef.current.containerPointToLatLng([sx, sy]);
             if (isValidLatLng(latlng.lat, latlng.lng)) {
               setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
-              if (magnifierMapRef.current && window.__activeSolarTool === "draw_roof") {
+              if (magnifierMapRef.current && (activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
                 const targetZoom = Math.min(20, Math.round(mapInstanceRef.current.getZoom() + 2.5));
                 magnifierMapRef.current.setView([latlng.lat, latlng.lng], targetZoom, { animate: false });
               }
@@ -791,7 +806,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       };
 
       const handleTouchEnd = () => {
-        if (window.__activeSolarTool !== "draw_roof") {
+        if ((activeToolRef.current ?? window.__activeSolarTool) !== "draw_roof") {
           setMagnifierVisible(false);
         }
       };
@@ -871,11 +886,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         const { lat, lng } = e.latlng;
         if (!isValidLatLng(lat, lng)) return;
 
-        const tool = window.__activeSolarTool;
+        const tool = activeToolRef.current ?? window.__activeSolarTool;
         if (tool === "draw_roof") {
-          window.__handleSolarMapClickRoof?.(lat, lng);
+          (handleMapClickRoofRef.current ?? window.__handleSolarMapClickRoof)?.(lat, lng);
         } else if (tool === "add_panel") {
-          window.__handleSolarMapClickAddPanel?.(lat, lng);
+          (handleMapClickForAddPanelRef.current ?? window.__handleSolarMapClickAddPanel)?.(lat, lng);
         } else if (tool === "calibrate") {
           setCalibratePoints((prev) => {
             const next = [...prev, { lat, lng }];
@@ -918,12 +933,6 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       setMapError("Satellite map initialization failed: " + err.message);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    window.__activeSolarTool = activeTool;
-    window.__handleSolarMapClickAddPanel = handleMapClickForAddPanel;
-    window.__handleSolarMapClickRoof = handleMapClickRoof;
-  }, [activeTool, handleMapClickForAddPanel, handleMapClickRoof]);
 
   // Tile Layers with maxNativeZoom: 20 to prevent white-screen on deep zoom
   useEffect(() => {
@@ -1068,6 +1077,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     });
     toast.success(`Point ${activeDrawPoints.length + 1} marked`);
   }, [activeDrawPoints, handleFinishDrawingRoof]);
+
+  useEffect(() => {
+    handleMapClickRoofRef.current = handleMapClickRoof;
+    window.__handleSolarMapClickRoof = handleMapClickRoof;
+  }, [handleMapClickRoof]);
 
   const handleMarkFinderPoint = useCallback(() => {
     if (!isValidLatLng(cursorCoords.lat, cursorCoords.lng)) {
