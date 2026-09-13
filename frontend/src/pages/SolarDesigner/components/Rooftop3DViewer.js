@@ -3,7 +3,7 @@ import * as THREE from "three";
 import {
   RotateCcw, Eye, Layers, Compass, ZoomIn, ZoomOut, Maximize2, Minimize2,
   Box, Camera, Sun, Info, Focus, Sliders, Check, Plus, Trash2, Copy,
-  Move, AlertTriangle, Grid, Magnet, Triangle
+  Move, AlertTriangle, Grid, Magnet, Triangle, Sparkles
 } from "lucide-react";
 import {
   toRad,
