@@ -46,7 +46,7 @@ import {
   DEFAULT_TERMS,
 } from "./utils/defaultProposalData";
 
-import ProposalDocumentViewer from "./components/ProposalDocumentViewer";
+const ProposalDocumentViewer = React.lazy(() => import("./components/ProposalDocumentViewer"));
 
 const DRAFT_STORAGE_KEY = "solarix_proposal_generator_draft_v2";
 
@@ -2300,18 +2300,25 @@ export default function ProposalGenerator() {
       <Dialog open={showFullViewerModal} onOpenChange={setShowFullViewerModal}>
         <DialogContent className="max-w-6xl w-[95vw] h-[90vh] p-0 bg-slate-950 border-slate-800 text-white overflow-hidden flex flex-col">
           {showFullViewerModal && (
-            <ProposalDocumentViewer
-              proposalData={form}
-              companyData={companyData}
-              metrics={metrics}
-              onClose={() => setShowFullViewerModal(false)}
-              onDownloadPdf={handleGenerateProposal}
-              onSelectTemplate={(tid) => {
-                setForm((prev) => ({ ...prev, template_id: tid }));
-                setIsSavedDraft(false);
-              }}
-              downloading={generating}
-            />
+            <React.Suspense fallback={
+              <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-2">
+                <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs">Loading Document Viewer…</span>
+              </div>
+            }>
+              <ProposalDocumentViewer
+                proposalData={form}
+                companyData={companyData}
+                metrics={metrics}
+                onClose={() => setShowFullViewerModal(false)}
+                onDownloadPdf={handleGenerateProposal}
+                onSelectTemplate={(tid) => {
+                  setForm((prev) => ({ ...prev, template_id: tid }));
+                  setIsSavedDraft(false);
+                }}
+                downloading={generating}
+              />
+            </React.Suspense>
           )}
         </DialogContent>
       </Dialog>

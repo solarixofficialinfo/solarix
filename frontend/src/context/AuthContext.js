@@ -6,64 +6,10 @@ import { supabase } from "@/lib/supabase";
 
 const AuthContext = createContext(null);
 
-// Fire background prefetches so first navigation to critical pages is instant.
-// Keep this list SMALL — each item is a Supabase round-trip.
-// Heavy/less-visited pages (inventory history, assets, templates) load on demand.
-function _prefetchCommonData(queryClient) {
-  const token = localStorage.getItem("solarix_token");
-  if (!token) return;
-
-  const runPrefetch = () => {
-    const prefetchList = [
-      {
-        key: queryKeys.clients.list(),
-        fn: () => api.get("/clients").then((r) => r.data || []),
-        stale: 5 * 60 * 1000,
-      },
-      {
-        key: queryKeys.clients.stats(),
-        fn: () => api.get("/clients/stats").then((r) => r.data),
-        stale: 5 * 60 * 1000,
-      },
-      {
-        key: queryKeys.projects.list(),
-        fn: () => api.get("/projects").then((r) => r.data || []),
-        stale: 5 * 60 * 1000,
-      },
-      {
-        key: queryKeys.team.list(),
-        fn: () => api.get("/employees").then((r) => r.data || []),
-        stale: 10 * 60 * 1000,
-      },
-      {
-        key: queryKeys.company.detail(),
-        fn: () => api.get("/company").then((r) => r.data),
-        stale: 10 * 60 * 1000,
-      },
-      {
-        key: queryKeys.materialRequests.list(),
-        fn: () => api.get("/material-requests").then((r) => r.data || []),
-        stale: 5 * 60 * 1000,
-      },
-    ];
-
-    prefetchList.forEach(({ key, fn, stale }) => {
-      // Skip if already cached and fresh — don't fire unnecessary network requests
-      const existing = queryClient.getQueryData(key);
-      if (existing !== undefined) return;
-
-      queryClient.prefetchQuery({
-        queryKey: key,
-        queryFn: fn,
-        staleTime: stale,
-      }).catch(() => { /* Background prefetch failed — non-critical, data will load on demand */ });
-    });
-  };
-
-  // Schedule prefetch 2.5s after initial paint to prevent network contention during LCP
-  if (typeof window !== "undefined") {
-    setTimeout(runPrefetch, 2500);
-  }
+// On-demand data loading: pages load their respective data when navigated to.
+// Disabling eager prefetch prevents a 6-endpoint storm immediately after login.
+function _prefetchCommonData(_queryClient) {
+  // Data loads on-demand per page via React Query hooks with automatic caching.
 }
 
 export const AuthProvider = ({ children }) => {

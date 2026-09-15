@@ -14,11 +14,11 @@ import ProductMasterTab from "@/components/Inventory/ProductMasterTab";
 import BalanceTab from "@/components/Inventory/BalanceTab";
 import HistoryTab from "@/components/Inventory/HistoryTab";
 import SerialTrackingTab from "@/components/Inventory/SerialTrackingTab";
-import InventoryIntelligenceTab from "@/components/Inventory/InventoryIntelligenceTab";
 import PageHeader from "@/components/PageHeader";
 import useEntitlements from "@/hooks/useEntitlements";
 import LockedFeatureCard from "@/components/LockedFeatureCard";
 const HighValueAssets = React.lazy(() => import("@/pages/HighValueAssets"));
+const InventoryIntelligenceTab = React.lazy(() => import("@/components/Inventory/InventoryIntelligenceTab"));
 
 const StatCard = ({ label, value, sub, icon: Ic, accent }) => (
   <Card className="border-slate-200 card-lift">
@@ -276,7 +276,9 @@ export default function Inventory() {
                 ]}
               />
             ) : (
-              <InventoryIntelligenceTab globalSearch={search} />
+              <Suspense fallback={<div className="py-12 flex justify-center text-slate-400 text-sm">Loading inventory intelligence...</div>}>
+                <InventoryIntelligenceTab globalSearch={search} />
+              </Suspense>
             )
           )}
         </div>

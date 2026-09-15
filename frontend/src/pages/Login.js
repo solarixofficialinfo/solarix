@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { formatApiError } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import {
-  Sun, Eye, EyeOff, CheckCircle2, ArrowRight, Package, FileText, Wallet, Building2
+  Sun, Eye, EyeOff, CheckCircle2, ArrowRight, Package, FileText, Wallet, Building2, AlertCircle
 } from "lucide-react";
 
 export default function Login() {
@@ -22,6 +22,7 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
 
   // Detect Supabase Google OAuth callback on mount and on auth state change
   useEffect(() => {
@@ -55,7 +56,9 @@ export default function Login() {
         }
       } catch (err) {
         if (mounted) {
-          toast.error(formatApiError(err));
+          const formatted = formatApiError(err);
+          setErrorMsg(formatted);
+          toast.error(formatted);
           setGoogleLoading(false);
         }
       } finally {
@@ -72,7 +75,9 @@ export default function Login() {
       if (hash.includes("error_description=") || search.includes("error_description=")) {
         const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : search);
         const desc = params.get("error_description") || params.get("error") || "Authentication failed";
-        toast.error(decodeURIComponent(desc.replace(/\+/g, " ")));
+        const cleanDesc = decodeURIComponent(desc.replace(/\+/g, " "));
+        setErrorMsg(cleanDesc);
+        toast.error(cleanDesc);
         window.history.replaceState(null, "", window.location.pathname);
         return;
       }
@@ -82,7 +87,9 @@ export default function Login() {
     if (hasOAuthParams()) {
       supabase.auth.getSession().then(({ data: { session }, error }) => {
         if (error) {
-          toast.error(error.message || "Google authentication failed");
+          const msg = error.message || "Google authentication failed";
+          setErrorMsg(msg);
+          toast.error(msg);
           if (window.location.hash) {
             window.history.replaceState(null, "", window.location.pathname);
           }
@@ -109,13 +116,14 @@ export default function Login() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setErrorMsg("");
     const cleanId = identifier ? identifier.trim() : "";
     if (!cleanId) {
-      toast.error("Please enter your Email, Mobile, or Employee ID");
+      setErrorMsg("Please enter your Email, Mobile, or Employee ID");
       return;
     }
     if (!password) {
-      toast.error("Please enter your password");
+      setErrorMsg("Please enter your password");
       return;
     }
 
@@ -126,7 +134,9 @@ export default function Login() {
       toast.success("Welcome back!");
       nav("/dashboard");
     } catch (err) {
-      toast.error(formatApiError(err));
+      const msg = formatApiError(err);
+      setErrorMsg(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -134,188 +144,120 @@ export default function Login() {
 
   const handleGoogleAuth = async () => {
     if (googleLoading) return;
+    setErrorMsg("");
     setGoogleLoading(true);
     try {
       await googleLogin();
     } catch (err) {
       const msg = formatApiError(err);
+      let displayMsg = "Google sign-in could not be completed. Please try again.";
       if (msg.includes("provider is not enabled") || msg.includes("disabled")) {
-        toast.error("Google login is not enabled in Supabase Dashboard. Please enable Google under Authentication > Providers.");
-      } else {
-        toast.error("Google sign-in could not be completed. Please try again.");
+        displayMsg = "Google login is not enabled in Supabase Dashboard. Please enable Google under Authentication > Providers.";
       }
+      setErrorMsg(displayMsg);
+      toast.error(displayMsg);
       setGoogleLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col lg:flex-row text-slate-900 font-sans selection:bg-blue-600 selection:text-white">
-      {/* ─── LEFT SIDE — WHITE BACKGROUND WITH SUBTLE BLUE GLASS CARDS (58% DESKTOP) ────────── */}
-      <div className="relative lg:w-[58%] min-h-[440px] lg:min-h-screen flex flex-col justify-between p-6 sm:p-10 lg:p-12 bg-gradient-to-br from-blue-50/20 via-white to-slate-50/40 border-b lg:border-b-0 lg:border-r border-slate-200">
+    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row text-slate-900 font-sans selection:bg-blue-600 selection:text-white">
+      {/* ─── LEFT SIDE — BRAND IDENTITY & VALUE PROPOSITION (58% DESKTOP) ────────── */}
+      <div className="relative lg:w-[58%] min-h-[460px] lg:min-h-screen flex flex-col justify-between p-6 sm:p-10 lg:p-12 bg-white border-b lg:border-b-0 lg:border-r border-slate-200">
         
         {/* Brand Header */}
         <div className="relative z-10 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
-              <Sun className="w-6 h-6 text-white" />
+              <Sun className="w-5 h-5 text-white" />
             </div>
             <div>
-              <span className="text-xl font-bold tracking-tight text-slate-900 font-mono" style={{ fontFamily: "Outfit" }}>
+              <span className="text-xl font-bold tracking-tight text-slate-900" style={{ fontFamily: "Outfit, sans-serif" }}>
                 SOLARIX
               </span>
-              <span className="block text-[11px] font-semibold text-blue-600 uppercase tracking-widest">
-                Solar EPC Business OS
+              <span className="block text-[10px] font-extrabold text-blue-600 uppercase tracking-widest">
+                SOLAR EPC BUSINESS OS
               </span>
             </div>
           </div>
-          <Badge variant="outline" className="border-blue-200 text-blue-700 bg-blue-50 text-xs font-mono px-3 py-1">
+          <Badge variant="outline" className="border-blue-200 text-blue-700 bg-blue-50/80 text-[11px] font-medium px-2.5 py-0.5 rounded-full">
             Enterprise Workspace
           </Badge>
         </div>
 
         {/* Center Content & Value Proposition */}
-        <div className="relative z-10 my-8 lg:my-auto space-y-6 max-w-2xl">
-          <div className="space-y-3">
-            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-slate-900 tracking-tight leading-[1.15]" style={{ fontFamily: "Outfit" }}>
+        <div className="relative z-10 my-6 lg:my-auto space-y-6 max-w-xl">
+          <div className="space-y-2.5">
+            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-slate-900 tracking-tight leading-[1.2]" style={{ fontFamily: "Outfit, sans-serif" }}>
               Run Your Solar EPC Business From One Place.
             </h1>
-            <p className="text-sm sm:text-base text-slate-600 leading-relaxed font-normal">
-              Manage projects, inventory, documents, payments and daily operations without jumping between spreadsheets, WhatsApp and separate tools.
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed font-normal">
+              Manage projects, inventory, documents, payments, and daily operations without jumping between spreadsheets, WhatsApp, and separate tools.
             </p>
           </div>
 
-          {/* 4 Core Value Points (Subtle Glass Cards) */}
-          <div className="grid grid-cols-2 gap-3 pt-1 font-medium text-xs sm:text-sm">
-            <div
-              className="flex items-center gap-2.5 p-3 rounded-xl transition-shadow"
-              style={{
-                background: "rgba(255, 255, 255, 0.75)",
-                backdropFilter: "blur(12px)",
-                WebkitBackdropFilter: "blur(12px)",
-                border: "1px solid rgba(37, 99, 235, 0.12)",
-                boxShadow: "0 8px 25px rgba(30, 64, 175, 0.06)",
-                borderRadius: "12px"
-              }}
-            >
+          {/* 4 Core Value Points (Clean 2-Column Grid) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 font-medium text-xs">
+            <div className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-50/80 border border-slate-200/80 transition-shadow">
               <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-              <span className="text-slate-900 font-medium">Project & Client Management</span>
+              <span className="text-slate-900 font-semibold">Project & Client Management</span>
             </div>
 
-            <div
-              className="flex items-center gap-2.5 p-3 rounded-xl transition-shadow"
-              style={{
-                background: "rgba(255, 255, 255, 0.75)",
-                backdropFilter: "blur(12px)",
-                WebkitBackdropFilter: "blur(12px)",
-                border: "1px solid rgba(37, 99, 235, 0.12)",
-                boxShadow: "0 8px 25px rgba(30, 64, 175, 0.06)",
-                borderRadius: "12px"
-              }}
-            >
+            <div className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-50/80 border border-slate-200/80 transition-shadow">
               <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-              <span className="text-slate-900 font-medium">Inward / Outward Inventory</span>
+              <span className="text-slate-900 font-semibold">Inward / Outward Inventory</span>
             </div>
 
-            <div
-              className="flex items-center gap-2.5 p-3 rounded-xl transition-shadow"
-              style={{
-                background: "rgba(255, 255, 255, 0.75)",
-                backdropFilter: "blur(12px)",
-                WebkitBackdropFilter: "blur(12px)",
-                border: "1px solid rgba(37, 99, 235, 0.12)",
-                boxShadow: "0 8px 25px rgba(30, 64, 175, 0.06)",
-                borderRadius: "12px"
-              }}
-            >
+            <div className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-50/80 border border-slate-200/80 transition-shadow">
               <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-              <span className="text-slate-900 font-medium">Quotations & Documents</span>
+              <span className="text-slate-900 font-semibold">Quotations & Documents</span>
             </div>
 
-            <div
-              className="flex items-center gap-2.5 p-3 rounded-xl transition-shadow"
-              style={{
-                background: "rgba(255, 255, 255, 0.75)",
-                backdropFilter: "blur(12px)",
-                WebkitBackdropFilter: "blur(12px)",
-                border: "1px solid rgba(37, 99, 235, 0.12)",
-                boxShadow: "0 8px 25px rgba(30, 64, 175, 0.06)",
-                borderRadius: "12px"
-              }}
-            >
+            <div className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-50/80 border border-slate-200/80 transition-shadow">
               <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
-              <span className="text-slate-900 font-medium">Payments & Receivables</span>
+              <span className="text-slate-900 font-semibold">Payments & Receivables</span>
             </div>
           </div>
 
-          {/* Real Problem-Solving Section */}
-          <div className="pt-4 border-t border-slate-200 space-y-3">
-            <div className="text-xs font-bold uppercase tracking-wider text-blue-600 font-mono flex items-center gap-1.5">
-              <Building2 className="w-4 h-4 text-blue-600" /> Built around the problems solar teams actually face
+          {/* Real Problem-Solving Section (Tightened 3-Card Grid) */}
+          <div className="pt-4 border-t border-slate-200 space-y-2.5">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-blue-600 flex items-center gap-1.5">
+              <Building2 className="w-3.5 h-3.5 text-blue-600" /> Built around the problems solar teams actually face
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-              <div
-                className="p-3 rounded-xl space-y-1"
-                style={{
-                  background: "rgba(255, 255, 255, 0.85)",
-                  backdropFilter: "blur(10px)",
-                  WebkitBackdropFilter: "blur(10px)",
-                  border: "1px solid rgba(37, 99, 235, 0.1)",
-                  boxShadow: "0 4px 15px rgba(30, 64, 175, 0.04)",
-                  borderRadius: "12px"
-                }}
-              >
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+              <div className="p-3 rounded-xl bg-slate-50/60 border border-slate-200/80 space-y-1">
                 <div className="font-bold text-slate-900 flex items-center gap-1 text-[11px]">
                   <Package className="w-3.5 h-3.5 text-amber-600 shrink-0" /> Stock tracking
                 </div>
-                <p className="text-[11px] text-slate-600 leading-tight">
-                  Material comes in through purchases and goes out to projects.
+                <p className="text-[11px] text-slate-500 leading-snug">
+                  Material comes in via purchases and leaves to projects.
                 </p>
-                <div className="text-[10px] font-bold text-blue-700 pt-1">
-                  SOLARIX: Track inward, outward & balance.
+                <div className="text-[10px] font-semibold text-blue-600 pt-0.5">
+                  Track inward, outward & balance.
                 </div>
               </div>
 
-              <div
-                className="p-3 rounded-xl space-y-1"
-                style={{
-                  background: "rgba(255, 255, 255, 0.85)",
-                  backdropFilter: "blur(10px)",
-                  WebkitBackdropFilter: "blur(10px)",
-                  border: "1px solid rgba(37, 99, 235, 0.1)",
-                  boxShadow: "0 4px 15px rgba(30, 64, 175, 0.04)",
-                  borderRadius: "12px"
-                }}
-              >
+              <div className="p-3 rounded-xl bg-slate-50/60 border border-slate-200/80 space-y-1">
                 <div className="font-bold text-slate-900 flex items-center gap-1 text-[11px]">
                   <FileText className="w-3.5 h-3.5 text-sky-600 shrink-0" /> Repetitive docs
                 </div>
-                <p className="text-[11px] text-slate-600 leading-tight">
-                  Quotation & delivery docs require repetitive client data entry.
+                <p className="text-[11px] text-slate-500 leading-snug">
+                  Quotation & delivery docs require repetitive client data.
                 </p>
-                <div className="text-[10px] font-bold text-blue-700 pt-1">
-                  SOLARIX: Mapped data generates docs faster.
+                <div className="text-[10px] font-semibold text-blue-600 pt-0.5">
+                  Mapped data generates docs faster.
                 </div>
               </div>
 
-              <div
-                className="p-3 rounded-xl space-y-1"
-                style={{
-                  background: "rgba(255, 255, 255, 0.85)",
-                  backdropFilter: "blur(10px)",
-                  WebkitBackdropFilter: "blur(10px)",
-                  border: "1px solid rgba(37, 99, 235, 0.1)",
-                  boxShadow: "0 4px 15px rgba(30, 64, 175, 0.04)",
-                  borderRadius: "12px"
-                }}
-              >
+              <div className="p-3 rounded-xl bg-slate-50/60 border border-slate-200/80 space-y-1">
                 <div className="font-bold text-slate-900 flex items-center gap-1 text-[11px]">
                   <Wallet className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> Scattered payments
                 </div>
-                <p className="text-[11px] text-slate-600 leading-tight">
+                <p className="text-[11px] text-slate-500 leading-snug">
                   Milestone & final payments need project tracking.
                 </p>
-                <div className="text-[10px] font-bold text-blue-700 pt-1">
-                  SOLARIX: Full project financial status.
+                <div className="text-[10px] font-semibold text-blue-600 pt-0.5">
+                  Full project financial status.
                 </div>
               </div>
             </div>
@@ -323,44 +265,40 @@ export default function Login() {
         </div>
 
         {/* Left Side Footer */}
-        <div className="relative z-10 pt-4 border-t border-slate-200 text-xs text-slate-500 flex items-center justify-between font-mono">
+        <div className="relative z-10 pt-3 border-t border-slate-200 text-[11px] text-slate-400 flex items-center justify-between font-mono">
           <span>Enterprise Solar EPC Operating Platform</span>
           <span>SOLARIX v2.0</span>
         </div>
       </div>
 
-      {/* ─── RIGHT SIDE — SOPHISTICATED SOLRIX BLUE GRADIENT WITH WHITE CARD (42% DESKTOP) ────────── */}
+      {/* ─── RIGHT SIDE — SOPHISTICATED DEEP BLUE GRADIENT WITH COMPACT WHITE CARD (42% DESKTOP) ────────── */}
       <div
-        className="relative lg:w-[42%] flex flex-col justify-center p-6 sm:p-8 lg:p-12 overflow-hidden"
+        className="relative lg:w-[42%] flex flex-col justify-center p-6 sm:p-8 lg:p-10 overflow-hidden"
         style={{
-          background: "linear-gradient(145deg, #2563EB 0%, #1D4ED8 45%, #172554 100%)"
+          background: "linear-gradient(150deg, #1D4ED8 0%, #1E40AF 40%, #0F172A 100%)"
         }}
       >
         {/* Ambient Subtle Depth Shapes */}
-        <div className="absolute -top-24 -right-24 w-96 h-96 rounded-full bg-blue-400/10 blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-24 -left-24 w-96 h-96 rounded-full bg-blue-600/20 blur-3xl pointer-events-none" />
+        <div className="absolute -top-24 -right-24 w-80 h-80 rounded-full bg-blue-400/15 blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-24 -left-24 w-80 h-80 rounded-full bg-blue-600/20 blur-3xl pointer-events-none" />
 
-        <div className="relative z-10 w-full max-w-[460px] mx-auto space-y-6">
+        <div className="relative z-10 w-full max-w-[420px] mx-auto space-y-5">
           {/* Pure Solid White Authentication Card */}
           <Card
-            className="border border-white/50 bg-white text-slate-900 overflow-hidden"
-            style={{
-              borderRadius: "18px",
-              boxShadow: "0 24px 60px rgba(7, 25, 70, 0.25)"
-            }}
+            className="border border-slate-200/60 bg-white text-slate-900 overflow-hidden shadow-2xl rounded-2xl"
           >
-            <CardContent className="p-6 sm:p-8 space-y-5">
+            <CardContent className="p-6 sm:p-7 space-y-4">
               {/* Header Branding Inside Card */}
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
-                    <Sun className="w-5 h-5 text-white" />
+                  <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+                    <Sun className="w-4 h-4 text-white" />
                   </div>
-                  <span className="font-bold text-lg text-slate-900 font-mono" style={{ fontFamily: "Outfit" }}>
+                  <span className="font-bold text-base text-slate-900" style={{ fontFamily: "Outfit, sans-serif" }}>
                     SOLARIX
                   </span>
                 </div>
-                <h2 className="text-2xl font-bold text-slate-900 tracking-tight pt-3" style={{ fontFamily: "Outfit" }}>
+                <h2 className="text-xl font-bold text-slate-900 tracking-tight pt-2" style={{ fontFamily: "Outfit, sans-serif" }}>
                   Welcome back
                 </h2>
                 <p className="text-xs text-slate-500">
@@ -368,18 +306,29 @@ export default function Login() {
                 </p>
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-4" data-testid="unified-login-form">
+              {/* Inline Error Message Display */}
+              {errorMsg && (
+                <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium flex items-center gap-2 animate-fadeIn">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span className="leading-tight">{errorMsg}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="space-y-3.5" data-testid="unified-login-form">
                 {/* Identifier Field */}
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-slate-800">
+                <div className="space-y-1">
+                  <Label className="text-xs font-semibold text-slate-700">
                     Email / Mobile / Employee ID
                   </Label>
                   <Input
                     type="text"
                     value={identifier}
-                    onChange={(e) => setIdentifier(e.target.value)}
+                    onChange={(e) => {
+                      setIdentifier(e.target.value);
+                      if (errorMsg) setErrorMsg("");
+                    }}
                     placeholder="Enter email, mobile or EMP ID"
-                    className="h-11 text-xs bg-white border-[#D7DEEA] text-[#0F172A] placeholder-[#64748B] focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 rounded-xl"
+                    className="h-10 text-xs bg-slate-50/70 border-slate-200 text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 rounded-xl transition [&:-webkit-autofill]:[-webkit-text-fill-color:#0f172a] [&:-webkit-autofill]:[-webkit-box-shadow:0_0_0px_1000px_white_inset]"
                     data-testid="admin-email-input"
                     autoComplete="username"
                     required
@@ -387,14 +336,14 @@ export default function Login() {
                 </div>
 
                 {/* Password Field */}
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   <div className="flex items-center justify-between">
-                    <Label className="text-xs font-semibold text-slate-800">
+                    <Label className="text-xs font-semibold text-slate-700">
                       Password
                     </Label>
                     <Link
                       to="/forgot-password"
-                      className="text-xs font-semibold text-blue-600 hover:text-blue-700 hover:underline"
+                      className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 hover:underline"
                       data-testid="forgot-password-link"
                     >
                       Forgot password?
@@ -404,9 +353,12 @@ export default function Login() {
                     <Input
                       type={showPassword ? "text" : "password"}
                       value={password}
-                      onChange={(e) => setPassword(e.target.value)}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        if (errorMsg) setErrorMsg("");
+                      }}
                       placeholder="••••••••"
-                      className="h-11 text-xs bg-white border-[#D7DEEA] text-[#0F172A] placeholder-[#64748B] focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 rounded-xl pr-10 font-medium"
+                      className="h-10 text-xs bg-slate-50/70 border-slate-200 text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 rounded-xl pr-10 font-medium transition [&:-webkit-autofill]:[-webkit-text-fill-color:#0f172a] [&:-webkit-autofill]:[-webkit-box-shadow:0_0_0px_1000px_white_inset]"
                       data-testid="admin-password-input"
                       autoComplete="current-password"
                       required
@@ -414,7 +366,7 @@ export default function Login() {
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition p-1"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition p-1 cursor-pointer"
                       aria-label={showPassword ? "Hide password" : "Show password"}
                     >
                       {showPassword ? (
@@ -430,17 +382,24 @@ export default function Login() {
                 <Button
                   type="submit"
                   disabled={loading}
-                  className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-md transition hover:-translate-y-0.5"
+                  className="w-full h-10 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-md transition active:scale-[0.99] cursor-pointer"
                   data-testid="admin-login-btn"
                 >
-                  {loading ? "Signing in…" : "Sign In"}
+                  {loading ? (
+                    <span className="flex items-center justify-center gap-1.5">
+                      <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Signing in…
+                    </span>
+                  ) : (
+                    "Sign In"
+                  )}
                 </Button>
               </form>
 
               {/* Divider */}
-              <div className="relative flex items-center justify-center">
+              <div className="relative flex items-center justify-center py-1">
                 <div className="border-t border-slate-200 w-full" />
-                <span className="bg-white px-3 text-[11px] text-slate-400 font-mono uppercase tracking-wider absolute">
+                <span className="bg-white px-3 text-[10px] text-slate-400 font-mono uppercase tracking-wider absolute">
                   or
                 </span>
               </div>
@@ -451,10 +410,10 @@ export default function Login() {
                 variant="outline"
                 onClick={handleGoogleAuth}
                 disabled={googleLoading}
-                className="w-full h-11 border-[#D7DEEA] bg-white hover:bg-slate-50 text-slate-800 font-semibold text-xs rounded-xl gap-2 shadow-2xs transition"
+                className="w-full h-10 border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl gap-2 shadow-2xs transition cursor-pointer"
                 data-testid="google-login-btn"
               >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                   <path
                     fill="#4285F4"
                     d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -476,11 +435,11 @@ export default function Login() {
               </Button>
 
               {/* Sign Up Link Box */}
-              <div className="pt-3 text-center border-t border-slate-200 flex items-center justify-between text-xs">
-                <span className="text-slate-500">New to SOLARIX?</span>
+              <div className="pt-2 text-center border-t border-slate-200/80 flex items-center justify-between text-xs">
+                <span className="text-slate-500 text-[11px]">New to SOLARIX?</span>
                 <Link
                   to="/register"
-                  className="font-bold text-blue-600 hover:text-blue-700 hover:underline flex items-center gap-1"
+                  className="font-bold text-blue-600 hover:text-blue-700 hover:underline flex items-center gap-1 text-[11px]"
                   data-testid="login-register-link"
                 >
                   Sign Up <ArrowRight className="w-3.5 h-3.5" />
@@ -490,9 +449,9 @@ export default function Login() {
           </Card>
 
           {/* Microcopy Security Footer below White Card */}
-          <div className="text-center text-[10px] font-mono space-y-0.5" style={{ color: "rgba(255, 255, 255, 0.75)" }}>
+          <div className="text-center text-[10px] font-mono space-y-0.5 text-white/70">
             <p>Authorized workspace access only.</p>
-            <p>Your workspace access is controlled by your company administrator.</p>
+            <p>Your access is managed by your company administrator.</p>
           </div>
         </div>
       </div>

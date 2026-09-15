@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import dayjs from "dayjs";
 
 import LiveSatelliteMap from "./components/LiveSatelliteMap";
-import Rooftop3DViewer from "./components/Rooftop3DViewer";
+const Rooftop3DViewer = lazy(() => import("./components/Rooftop3DViewer"));
 import DesignSummaryPanel from "./components/DesignSummaryPanel";
 import {
   DEFAULT_PANEL_SPECS,
@@ -63,6 +63,14 @@ export default function SolarStudio() {
   // Fullscreen state & View mode
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState("2d"); // '2d' | '3d' | 'split'
+  const [hasOpened3D, setHasOpened3D] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === "3d" || activeTab === "split") {
+      setHasOpened3D(true);
+    }
+  }, [activeTab]);
+
   const [activeTool, setActiveTool] = useState("select"); // 'select' | 'draw_roof' | 'edit_roof' | 'add_panel' | 'calibrate'
   const [selectedPanelId, setSelectedPanelId] = useState(null);
   const [isCalibrated, setIsCalibrated] = useState(false);
@@ -1898,34 +1906,43 @@ export default function SolarStudio() {
               </button>
             </div>
 
-            <Rooftop3DViewer
-              ref={viewer3dRef}
-              roofPolygon={designData.roof_polygon}
-              roof={designData.roof}
-              panels={designData.panels}
-              obstacles={designData.obstacles}
-              walkways={designData.walkways}
-              structure={{
-                ...designData.structure,
-                azimuth: Number(designData.azimuth_angle || 180),
-                tilt_deg: Number(designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15),
-                height_m: Number(designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8),
-              }}
-              panelSpecs={{
-                length_m: designData.panel_dimensions?.length_m || 2.278,
-                width_m: designData.panel_dimensions?.width_m || 1.134,
-                wattage: designData.panel_wattage || 550,
-              }}
-              structureNodes={designData.structure_nodes || []}
-              structureMembers={designData.structure_members || []}
-              onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
-              onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
-              onSwitchTo2D={() => {
-                setActiveTab("2d");
-                setActiveTool("draw_roof");
-              }}
-              onApplyTemplateRoof={handleApplyDefaultRoofTemplate}
-            />
+            {hasOpened3D && (
+              <Suspense fallback={
+                <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-2">
+                  <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-xs">Initializing 3D Visualizer…</span>
+                </div>
+              }>
+                <Rooftop3DViewer
+                  ref={viewer3dRef}
+                  roofPolygon={designData.roof_polygon}
+                  roof={designData.roof}
+                  panels={designData.panels}
+                  obstacles={designData.obstacles}
+                  walkways={designData.walkways}
+                  structure={{
+                    ...designData.structure,
+                    azimuth: Number(designData.azimuth_angle || 180),
+                    tilt_deg: Number(designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15),
+                    height_m: Number(designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8),
+                  }}
+                  panelSpecs={{
+                    length_m: designData.panel_dimensions?.length_m || 2.278,
+                    width_m: designData.panel_dimensions?.width_m || 1.134,
+                    wattage: designData.panel_wattage || 550,
+                  }}
+                  structureNodes={designData.structure_nodes || []}
+                  structureMembers={designData.structure_members || []}
+                  onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
+                  onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
+                  onSwitchTo2D={() => {
+                    setActiveTab("2d");
+                    setActiveTool("draw_roof");
+                  }}
+                  onApplyTemplateRoof={handleApplyDefaultRoofTemplate}
+                />
+              </Suspense>
+            )}
           </div>
 
           {/* SPLIT SCREEN CONTAINER */}
@@ -1975,26 +1992,35 @@ export default function SolarStudio() {
                 onLocationChange={(coords) => requestLocationChange(coords)}
                 onCaptureLocation={handleCaptureLocation}
               />
-              <Rooftop3DViewer
-                ref={viewer3dRef}
-                roofPolygon={designData.roof_polygon}
-                roof={designData.roof}
-                panels={designData.panels}
-                obstacles={designData.obstacles}
-                structure={{
-                  ...designData.structure,
-                  azimuth: Number(designData.azimuth_angle || 180),
-                }}
-                structureNodes={designData.structure_nodes || []}
-                structureMembers={designData.structure_members || []}
-                onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
-                onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
-                onSwitchTo2D={() => {
-                  setActiveTab("2d");
-                  setActiveTool("draw_roof");
-                }}
-                onApplyTemplateRoof={handleApplyDefaultRoofTemplate}
-              />
+              {hasOpened3D && (
+                <Suspense fallback={
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-2">
+                    <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-xs">Initializing 3D Visualizer…</span>
+                  </div>
+                }>
+                  <Rooftop3DViewer
+                    ref={viewer3dRef}
+                    roofPolygon={designData.roof_polygon}
+                    roof={designData.roof}
+                    panels={designData.panels}
+                    obstacles={designData.obstacles}
+                    structure={{
+                      ...designData.structure,
+                      azimuth: Number(designData.azimuth_angle || 180),
+                    }}
+                    structureNodes={designData.structure_nodes || []}
+                    structureMembers={designData.structure_members || []}
+                    onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
+                    onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
+                    onSwitchTo2D={() => {
+                      setActiveTab("2d");
+                      setActiveTool("draw_roof");
+                    }}
+                    onApplyTemplateRoof={handleApplyDefaultRoofTemplate}
+                  />
+                </Suspense>
+              )}
             </div>
           )}
         </div>

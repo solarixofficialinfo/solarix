@@ -2333,7 +2333,14 @@ async def _deferred_startup_tasks():
         logger.warning(f"Plan config cache warmup error: {e}")
 
     try:
-        await recover_and_sync_financial_data()
+        mig_key = "financial_data_recovery_v1"
+        should_force = os.environ.get("RUN_FINANCIAL_RECOVERY", "false").lower() in ("true", "1", "yes")
+        if should_force or not _is_migration_completed(mig_key):
+            await recover_and_sync_financial_data()
+            _mark_migration_completed(mig_key)
+            logger.info("Financial recovery task completed.")
+        else:
+            logger.info("Financial recovery startup task skipped (already completed)")
     except Exception as e:
         logger.warning(f"Financial recovery startup task error: {e}")
 

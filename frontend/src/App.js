@@ -258,6 +258,12 @@ function MainTabShell({ activeTab }) {
   );
 }
 
+function AuthenticatedSubscriptionGuard() {
+  const { user } = useAuth();
+  if (!user) return null;
+  return <SubscriptionGuardModal />;
+}
+
 function App() {
   return (
     <AuthProvider>
@@ -339,7 +345,7 @@ function App() {
 
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
-          <SubscriptionGuardModal />
+          <AuthenticatedSubscriptionGuard />
         </Suspense>
       </BrowserRouter>
     </AuthProvider>

@@ -62,6 +62,27 @@ let webpackConfig = {
             cacheGroups: {
               default: false,
               vendors: false,
+              threeVendor: {
+                name: 'vendor-three',
+                test: /[\\/]node_modules[\\/]three[\\/]/,
+                chunks: 'async',
+                priority: 50,
+                enforce: true,
+              },
+              leafletVendor: {
+                name: 'vendor-leaflet',
+                test: /[\\/]node_modules[\\/]leaflet[\\/]/,
+                chunks: 'async',
+                priority: 50,
+                enforce: true,
+              },
+              chartVendor: {
+                name: 'vendor-charts',
+                test: /[\\/]node_modules[\\/](recharts|d3-.*)[\\/]/,
+                chunks: 'async',
+                priority: 50,
+                enforce: true,
+              },
               reactVendor: {
                 name: 'vendor-react',
                 test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/,
