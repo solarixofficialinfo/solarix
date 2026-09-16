@@ -35,6 +35,7 @@ import {
   projectMetersToLatLng,
   computeSetbackPolygon,
   isRectInsidePolygon,
+  toRad,
 } from "./utils/geoCalculations";
 import {
   searchLocations,
@@ -301,16 +302,32 @@ export default function SolarStudio() {
       return;
     }
 
-    const area = getCartesianPolygonArea(polygon);
+    let validPolygon = polygon;
+    if (validPolygon.length > 0 && (validPolygon[0].x === undefined || isNaN(validPolygon[0].x))) {
+      // Re-hydrate local cartesian coordinates if loaded from DB
+      const origin = validPolygon[0];
+      const baseLatRad = toRad(origin.lat);
+      validPolygon = validPolygon.map((pt) => {
+        const x = (toRad(pt.lng) - toRad(origin.lng)) * Math.cos(baseLatRad) * 6378137;
+        const y = (toRad(pt.lat) - toRad(origin.lat)) * 6378137;
+        return {
+          ...pt,
+          x: Math.round(x * 100) / 100,
+          y: Math.round(y * 100) / 100,
+        };
+      });
+    }
+
+    const area = getCartesianPolygonArea(validPolygon);
     if (isNaN(area) || area < 0.5) {
       toast.warning("Roof boundary is invalid: corners overlap or area is zero.");
       return;
     }
 
-    const perimeter = getCartesianPolygonPerimeter(polygon);
-    const bounds = getPolygonBounds(polygon);
+    const perimeter = getCartesianPolygonPerimeter(validPolygon);
+    const bounds = getPolygonBounds(validPolygon);
     const setback = Number(designData.roof?.setback_m || designData.setback_m || 0.5);
-    const usablePoly = computeSetbackPolygon(polygon, setback);
+    const usablePoly = computeSetbackPolygon(validPolygon, setback);
     const usableArea = Math.round(getCartesianPolygonArea(usablePoly) * 10) / 10;
 
     setDesignData((prev) => {
@@ -333,7 +350,7 @@ export default function SolarStudio() {
 
       return {
         ...prev,
-        roof_polygon: polygon,
+        roof_polygon: validPolygon,
         roof_area_sqm: Math.round(area * 10) / 10,
         roof_perimeter_m: Math.round(perimeter * 10) / 10,
         roof_dimensions: {

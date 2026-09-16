@@ -160,8 +160,15 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const [cursorScreenPos, setCursorScreenPos] = useState({ x: -999, y: -999 });
   const cursorScreenPosRef = useRef({ x: -999, y: -999 });
   const magnifierContainerRef = useRef(null);
-  const magnifierMapRef = useRef(null);
   const isDraggingVertexRef = useRef(false);
+
+  // Handle magnifier map movement and sync
+  const updateMagnifierPosition = useCallback(
+    (cursorCoords, targetZoom = 21) => {
+      // Intentionally left blank as we removed the second map instance
+    },
+    [magnifierVisible]
+  );
 
   // Location Capture & Drag confirmation states
   const [locationCaptured, setLocationCaptured] = useState(false);
@@ -260,53 +267,6 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     const y = (toRad(lat) - toRad(originRef.current.lat)) * 6378137;
     return { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 };
   }, []);
-
-  // Initialize and synchronize floating precision magnifier mini-map
-  useEffect(() => {
-    if (!magnifierContainerRef.current || magnifierMapRef.current) return;
-    try {
-      if (magnifierContainerRef.current._leaflet_id) {
-        delete magnifierContainerRef.current._leaflet_id;
-      }
-      const mini = L.map(magnifierContainerRef.current, {
-        center: [originLat, originLng],
-        zoom: 20,
-        maxZoom: 20,
-        zoomControl: false,
-        attributionControl: false,
-        dragging: false,
-        touchZoom: false,
-        scrollWheelZoom: false,
-        doubleClickZoom: false,
-        boxZoom: false,
-        keyboard: false,
-      });
-
-      L.tileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 20, maxNativeZoom: 18, keepBuffer: 4 }
-      ).addTo(mini);
-
-      magnifierMapRef.current = mini;
-    } catch (err) {
-      console.warn("Magnifier map initialization notice:", err);
-    }
-
-    return () => {
-      if (magnifierMapRef.current) {
-        magnifierMapRef.current.remove();
-        magnifierMapRef.current = null;
-      }
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!magnifierVisible || !magnifierMapRef.current) return;
-    const mainZoom = mapInstanceRef.current ? mapInstanceRef.current.getZoom() : 19;
-    const targetZoom = Math.min(20, Math.round(mainZoom + 2.5));
-    magnifierMapRef.current.setView([cursorCoords.lat, cursorCoords.lng], targetZoom, { animate: false });
-    magnifierMapRef.current.invalidateSize({ pan: false });
-  }, [cursorCoords, magnifierVisible]);
 
   // Check for Out-of-Bounds panels
   const outOfBoundsPanels = useMemo(() => {
@@ -733,23 +693,22 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           }
           if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
             setMagnifierVisible(true);
-            if (magnifierMapRef.current) {
-              const targetZoom = Math.min(20, Math.round(map.getZoom() + 2.5));
-              magnifierMapRef.current.setView([e.latlng.lat, e.latlng.lng], targetZoom, { animate: false });
-            }
+            try {
+              updateMagnifierPosition(e.latlng, Math.min(20, Math.round(map.getZoom() + 2.5)));
+            } catch (err) {}
           }
         }
       });
 
       const syncMagnifierOnMapMove = () => {
-        if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof" && mapInstanceRef.current && magnifierMapRef.current) {
+        if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof" && mapInstanceRef.current) {
           const { x, y } = cursorScreenPosRef.current;
           if (x >= 0 && y >= 0) {
             const latlng = mapInstanceRef.current.containerPointToLatLng([x, y]);
             if (isValidLatLng(latlng.lat, latlng.lng)) {
               setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
               const targetZoom = Math.min(20, Math.round(mapInstanceRef.current.getZoom() + 2.5));
-              magnifierMapRef.current.setView([latlng.lat, latlng.lng], targetZoom, { animate: false });
+              updateMagnifierPosition(latlng, targetZoom);
             }
           }
         }
@@ -772,9 +731,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             const latlng = mapInstanceRef.current.containerPointToLatLng([sx, sy]);
             if (isValidLatLng(latlng.lat, latlng.lng)) {
               setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
-              if (magnifierMapRef.current && (activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
+              if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
                 const targetZoom = Math.min(20, Math.round(mapInstanceRef.current.getZoom() + 2.5));
-                magnifierMapRef.current.setView([latlng.lat, latlng.lng], targetZoom, { animate: false });
+                updateMagnifierPosition(latlng, targetZoom);
               }
             }
             if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
@@ -797,9 +756,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             const latlng = mapInstanceRef.current.containerPointToLatLng([sx, sy]);
             if (isValidLatLng(latlng.lat, latlng.lng)) {
               setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
-              if (magnifierMapRef.current && (activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
+              if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
                 const targetZoom = Math.min(20, Math.round(mapInstanceRef.current.getZoom() + 2.5));
-                magnifierMapRef.current.setView([latlng.lat, latlng.lng], targetZoom, { animate: false });
+                updateMagnifierPosition(latlng, targetZoom);
               }
             }
           }
@@ -870,10 +829,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         onZoomChange?.(targetZoom);
 
         // Sync precision magnifier if active
-        if (magnifierMapRef.current && isFinite(cursorCoords.lat)) {
-          const magZoom = Math.min(20, Math.round(targetZoom + 2.5));
-          magnifierMapRef.current.setView([cursorCoords.lat, cursorCoords.lng], magZoom, { animate: false });
-        }
+        // Removed secondary map manipulation
       };
 
       const domElem = mapContainerRef.current;

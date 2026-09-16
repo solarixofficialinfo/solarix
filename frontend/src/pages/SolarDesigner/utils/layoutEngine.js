@@ -543,7 +543,17 @@ export function canFitAdditionalPanel({
 
     candidates.push(...gridCandidates);
   } else {
-    // EMPTY ROOF: place the first panel on canonical grid starting at top-left of usable polygon
+    // EMPTY ROOF: place the first panel near the clicked location if provided, else on canonical grid
+    if (nearX != null && nearY != null) {
+      candidates.push({
+        x: Number(nearX),
+        y: Number(nearY),
+        row: 0,
+        col: 0,
+        priority: -1, // Highest priority: exactly where the user clicked
+      });
+    }
+
     const startY = bounds.maxY - pLength / 2;
     const startX = bounds.minX + pWidth / 2;
     for (let y = startY; y >= bounds.minY + pLength / 2 - 0.05; y -= stepY) {
@@ -556,6 +566,15 @@ export function canFitAdditionalPanel({
           priority: 0,
         });
       }
+    }
+
+    if (nearX != null && nearY != null) {
+      candidates.sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        const distA = Math.hypot(a.x - Number(nearX), a.y - Number(nearY));
+        const distB = Math.hypot(b.x - Number(nearX), b.y - Number(nearY));
+        return distA - distB;
+      });
     }
   }
 
