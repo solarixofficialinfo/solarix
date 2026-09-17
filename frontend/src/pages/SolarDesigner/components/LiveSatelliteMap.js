@@ -153,22 +153,82 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const [mapType, setMapType] = useState("satellite");
   const [mapError, setMapError] = useState(null);
   const [activeDrawPoints, setActiveDrawPoints] = useState([]);
-  const [cursorCoords, setCursorCoords] = useState({ lat: Number(latitude) || 19.076, lng: Number(longitude) || 72.8777 });
+  const cursorCoordsRef = useRef({ lat: Number(latitude) || 19.076, lng: Number(longitude) || 72.8777 });
 
-  // Precision Magnifier state & refs
-  const [magnifierVisible, setMagnifierVisible] = useState(false);
-  const [cursorScreenPos, setCursorScreenPos] = useState({ x: -999, y: -999 });
+  // Precision Magnifier configuration, refs & state (Visual overlay, exactly ONE Leaflet map)
+  const MAGNIFIER_SIZE = 160;
+  const MAGNIFIER_RADIUS = MAGNIFIER_SIZE / 2;
+  const MAGNIFIER_ZOOM = 4;
+
   const cursorScreenPosRef = useRef({ x: -999, y: -999 });
-  const magnifierContainerRef = useRef(null);
+  const magnifierLensRef = useRef(null);
+  const magnifierContentRef = useRef(null);
+  const rafIdRef = useRef(null);
   const isDraggingVertexRef = useRef(false);
 
-  // Handle magnifier map movement and sync
-  const updateMagnifierPosition = useCallback(
-    (cursorCoords, targetZoom = 21) => {
-      // Intentionally left blank as we removed the second map instance
-    },
-    []
-  );
+  // Synchronize rendered tile layer DOM from primary Leaflet map into the precision magnifier lens
+  const syncMagnifierTiles = useCallback(() => {
+    const container = mapContainerRef.current;
+    const contentWrapper = magnifierContentRef.current;
+    if (!container || !contentWrapper) return;
+
+    const mapPane = container.querySelector(".leaflet-map-pane");
+    if (!mapPane) return;
+
+    const w = container.clientWidth;
+    const h = container.clientHeight;
+    if (w <= 0 || h <= 0) return;
+
+    contentWrapper.style.width = `${w}px`;
+    contentWrapper.style.height = `${h}px`;
+
+    // Clone rendered map pane containing all loaded satellite tiles
+    contentWrapper.innerHTML = "";
+    const clone = mapPane.cloneNode(true);
+
+    // Strip tooltips/popups to keep magnified viewport clean
+    const overlays = clone.querySelectorAll(".leaflet-tooltip-pane, .leaflet-popup-pane");
+    overlays.forEach((el) => el.remove());
+
+    contentWrapper.appendChild(clone);
+  }, []);
+
+  // Update magnifier position and high-magnification transform at display refresh rate via requestAnimationFrame
+  const updateMagnifierTransform = useCallback(() => {
+    rafIdRef.current = null;
+    const lensEl = magnifierLensRef.current;
+    const contentEl = magnifierContentRef.current;
+    const container = mapContainerRef.current;
+    if (!lensEl || !contentEl || !container) return;
+
+    const { x: cx, y: cy } = cursorScreenPosRef.current;
+    if (cx < 0 || cy < 0) {
+      lensEl.style.display = "none";
+      return;
+    }
+
+    const containerW = container.clientWidth;
+    const containerH = container.clientHeight;
+
+    if (cx < 0 || cx > containerW || cy < 0 || cy > containerH) {
+      lensEl.style.display = "none";
+      return;
+    }
+
+    lensEl.style.display = "block";
+
+    // Center magnifier lens on cursor, clamped to avoid clipping outside container
+    const lensLeft = Math.max(8, Math.min(cx - MAGNIFIER_RADIUS, containerW - MAGNIFIER_SIZE - 8));
+    const lensTop = Math.max(8, Math.min(cy - MAGNIFIER_RADIUS, containerH - MAGNIFIER_SIZE - 8));
+
+    lensEl.style.transform = `translate3d(${lensLeft}px, ${lensTop}px, 0px)`;
+
+    // Translate magnified content so the cursor point (cx, cy) is centered inside the lens (MAGNIFIER_RADIUS, MAGNIFIER_RADIUS)
+    const tx = MAGNIFIER_RADIUS - MAGNIFIER_ZOOM * cx;
+    const ty = MAGNIFIER_RADIUS - MAGNIFIER_ZOOM * cy;
+
+    contentEl.style.transform = `translate3d(${tx}px, ${ty}px, 0px) scale(${MAGNIFIER_ZOOM})`;
+  }, [MAGNIFIER_RADIUS, MAGNIFIER_SIZE, MAGNIFIER_ZOOM]);
 
   // Location Capture & Drag confirmation states
   const [locationCaptured, setLocationCaptured] = useState(false);
@@ -191,13 +251,37 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
   useEffect(() => {
     if (activeTool === "draw_roof") {
-      setMagnifierVisible(false); // Only becomes visible when cursor enters the map canvas
+      syncMagnifierTiles();
+      if (magnifierLensRef.current) magnifierLensRef.current.style.display = "none";
     } else {
-      setMagnifierVisible(false);
-      setCursorScreenPos({ x: -999, y: -999 });
+      if (magnifierLensRef.current) magnifierLensRef.current.style.display = "none";
       cursorScreenPosRef.current = { x: -999, y: -999 };
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
     }
-  }, [activeTool]);
+  }, [activeTool, syncMagnifierTiles]);
+
+  // Keep magnifier tiles synchronized when roof points or polygon changes
+  useEffect(() => {
+    if (activeTool === "draw_roof") {
+      const timer = setTimeout(() => {
+        syncMagnifierTiles();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [activeDrawPoints, roofPolygon, activeTool, syncMagnifierTiles]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+    };
+  }, []);
 
   const [vertexHistory, setVertexHistory] = useState([]);
   const [vertexRedoStack, setVertexRedoStack] = useState([]);
@@ -680,7 +764,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
       map.on("mousemove", (e) => {
         if (isValidLatLng(e.latlng.lat, e.latlng.lng)) {
-          setCursorCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
+          cursorCoordsRef.current = { lat: e.latlng.lat, lng: e.latlng.lng };
           const container = mapContainerRef.current;
           if (container) {
             const rect = container.getBoundingClientRect();
@@ -688,28 +772,21 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             const clientY = e.originalEvent?.clientY ?? 0;
             const sx = clientX - rect.left;
             const sy = clientY - rect.top;
-            setCursorScreenPos({ x: sx, y: sy });
             cursorScreenPosRef.current = { x: sx, y: sy };
           }
           if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
-            setMagnifierVisible(true);
-            try {
-              updateMagnifierPosition(e.latlng, Math.min(20, Math.round(map.getZoom() + 2.5)));
-            } catch (err) {}
+            if (!rafIdRef.current) {
+              rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
+            }
           }
         }
       });
 
       const syncMagnifierOnMapMove = () => {
-        if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof" && mapInstanceRef.current) {
-          const { x, y } = cursorScreenPosRef.current;
-          if (x >= 0 && y >= 0) {
-            const latlng = mapInstanceRef.current.containerPointToLatLng([x, y]);
-            if (isValidLatLng(latlng.lat, latlng.lng)) {
-              setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
-              const targetZoom = Math.min(20, Math.round(mapInstanceRef.current.getZoom() + 2.5));
-              updateMagnifierPosition(latlng, targetZoom);
-            }
+        if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
+          syncMagnifierTiles();
+          if (!rafIdRef.current) {
+            rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
           }
         }
       };
@@ -717,6 +794,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       map.on("move", syncMagnifierOnMapMove);
       map.on("zoom", syncMagnifierOnMapMove);
       map.on("zoomend", syncMagnifierOnMapMove);
+      map.on("resize", syncMagnifierOnMapMove);
 
       const handleTouchStart = (e) => {
         if (e.touches && e.touches.length > 0) {
@@ -726,18 +804,16 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             const rect = container.getBoundingClientRect();
             const sx = touch.clientX - rect.left;
             const sy = touch.clientY - rect.top;
-            setCursorScreenPos({ x: sx, y: sy });
             cursorScreenPosRef.current = { x: sx, y: sy };
             const latlng = mapInstanceRef.current.containerPointToLatLng([sx, sy]);
             if (isValidLatLng(latlng.lat, latlng.lng)) {
-              setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
-              if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
-                const targetZoom = Math.min(20, Math.round(mapInstanceRef.current.getZoom() + 2.5));
-                updateMagnifierPosition(latlng, targetZoom);
-              }
+              cursorCoordsRef.current = { lat: latlng.lat, lng: latlng.lng };
             }
             if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
-              setMagnifierVisible(true);
+              syncMagnifierTiles();
+              if (!rafIdRef.current) {
+                rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
+              }
             }
           }
         }
@@ -751,14 +827,14 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             const rect = container.getBoundingClientRect();
             const sx = touch.clientX - rect.left;
             const sy = touch.clientY - rect.top;
-            setCursorScreenPos({ x: sx, y: sy });
             cursorScreenPosRef.current = { x: sx, y: sy };
             const latlng = mapInstanceRef.current.containerPointToLatLng([sx, sy]);
             if (isValidLatLng(latlng.lat, latlng.lng)) {
-              setCursorCoords({ lat: latlng.lat, lng: latlng.lng });
-              if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
-                const targetZoom = Math.min(20, Math.round(mapInstanceRef.current.getZoom() + 2.5));
-                updateMagnifierPosition(latlng, targetZoom);
+              cursorCoordsRef.current = { lat: latlng.lat, lng: latlng.lng };
+            }
+            if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
+              if (!rafIdRef.current) {
+                rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
               }
             }
           }
@@ -766,8 +842,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       };
 
       const handleTouchEnd = () => {
-        if ((activeToolRef.current ?? window.__activeSolarTool) !== "draw_roof") {
-          setMagnifierVisible(false);
+        cursorScreenPosRef.current = { x: -999, y: -999 };
+        if (magnifierLensRef.current) {
+          magnifierLensRef.current.style.display = "none";
         }
       };
 
@@ -948,7 +1025,15 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         errorTileUrl: "",
       }).addTo(tileGroup);
     }
-  }, [mapType]);
+
+    tileGroup.eachLayer((layer) => {
+      layer.on("load", () => {
+        if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
+          syncMagnifierTiles();
+        }
+      });
+    });
+  }, [mapType, syncMagnifierTiles]);
 
   // Pan map when canonical location prop changes without resetting zoom
   useEffect(() => {
@@ -1025,7 +1110,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     setRoofPolygon(deduped);
     setActiveDrawPoints([]);
     setActiveTool("select");
-    setMagnifierVisible(false);
+    if (magnifierLensRef.current) {
+      magnifierLensRef.current.style.display = "none";
+    }
     toast.success(`Roof drawn: ${deduped.length} vertices. Click "Edit Roof" to adjust.`);
   }, [activeDrawPoints, pushVertexHistory, setRoofPolygon, setActiveTool]);
 
@@ -1063,12 +1150,13 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   }, [handleMapClickRoof]);
 
   const handleMarkFinderPoint = useCallback(() => {
-    if (!isValidLatLng(cursorCoords.lat, cursorCoords.lng)) {
+    const coords = cursorCoordsRef.current;
+    if (!coords || !isValidLatLng(coords.lat, coords.lng)) {
       toast.error("Move cursor over the map to mark a point.");
       return;
     }
-    handleMapClickRoof(cursorCoords.lat, cursorCoords.lng);
-  }, [cursorCoords, handleMapClickRoof]);
+    handleMapClickRoof(coords.lat, coords.lng);
+  }, [handleMapClickRoof]);
 
   const handleUndoDrawPoint = useCallback(() => {
     setActiveDrawPoints((prev) => prev.slice(0, -1));
@@ -1077,7 +1165,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const handleCancelDrawing = useCallback(() => {
     setActiveDrawPoints([]);
     setActiveTool("select");
-    setMagnifierVisible(false);
+    if (magnifierLensRef.current) {
+      magnifierLensRef.current.style.display = "none";
+    }
   }, [setActiveTool]);
 
   // Vertex Drag Handlers
@@ -1285,18 +1375,21 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           handle.on("dragstart", (e) => {
             pushVertexHistory(roofPolygonRef.current);
             isDraggingVertexRef.current = true;
-            setMagnifierVisible(true);
+            syncMagnifierTiles();
           });
 
           handle.on("drag", (e) => {
             const { lat, lng } = e.target.getLatLng();
             handleVertexDrag(idx, lat, lng);
             if (isValidLatLng(lat, lng)) {
-              setCursorCoords({ lat, lng });
+              cursorCoordsRef.current = { lat, lng };
               const container = mapContainerRef.current;
               if (container && mapInstanceRef.current) {
                 const pt = mapInstanceRef.current.latLngToContainerPoint([lat, lng]);
-                setCursorScreenPos({ x: pt.x, y: pt.y });
+                cursorScreenPosRef.current = { x: pt.x, y: pt.y };
+                if (!rafIdRef.current) {
+                  rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
+                }
               }
             }
           });
@@ -1305,7 +1398,10 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             const { lat, lng } = e.target.getLatLng();
             handleVertexDrag(idx, lat, lng);
             isDraggingVertexRef.current = false;
-            setMagnifierVisible(false);
+            cursorScreenPosRef.current = { x: -999, y: -999 };
+            if (magnifierLensRef.current) {
+              magnifierLensRef.current.style.display = "none";
+            }
           });
 
           handle.on("contextmenu", (e) => {
@@ -1496,7 +1592,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     activeDrawPoints, layers, selectedPanelId, editingRoof,
     cartesianToLatLng, latLngToCartesian, handleVertexDrag, handleDeleteVertex,
     handleInsertVertexOnEdge, pushVertexHistory, setSelectedPanelId, setPanels,
-    setActiveTool, handleFinishDrawingRoof
+    setActiveTool, handleFinishDrawingRoof, syncMagnifierTiles, updateMagnifierTransform
   ]);
 
   // Zoom & Fit Viewport Helpers
@@ -1593,42 +1689,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
   const hasRoof = roofPolygon && roofPolygon.length >= 3;
 
-  // Pointer-following Magnifier Lens position calculations (offset from cursor so target is unobstructed)
-  const lensSize = 140;
-  const containerW = mapContainerRef.current?.clientWidth || 800;
-  const containerH = mapContainerRef.current?.clientHeight || 600;
-
-  // Default: offset top-right from cursor
-  let lensLeft = cursorScreenPos.x + 30;
-  let lensTop = cursorScreenPos.y - (lensSize + 25);
-
-  // If too close to top edge, flip below cursor
-  if (lensTop < 15) {
-    lensTop = cursorScreenPos.y + 35;
-  }
-  // If too close to right edge, shift to left of cursor
-  if (lensLeft + lensSize > containerW - 15) {
-    lensLeft = cursorScreenPos.x - lensSize - 30;
-  }
-
-  // Clamping within map container
-  lensLeft = Math.max(10, Math.min(lensLeft, containerW - lensSize - 10));
-  lensTop = Math.max(10, Math.min(lensTop, containerH - lensSize - 10));
-
-  // Non-overlap safety buffer: Ensure the lens never directly covers the cursor
-  const cursorInsideX = cursorScreenPos.x >= lensLeft - 15 && cursorScreenPos.x <= lensLeft + lensSize + 15;
-  const cursorInsideY = cursorScreenPos.y >= lensTop - 15 && cursorScreenPos.y <= lensTop + lensSize + 15;
-  if (cursorInsideX && cursorInsideY) {
-    if (cursorScreenPos.x > containerW / 2) {
-      lensLeft = Math.max(10, cursorScreenPos.x - lensSize - 35);
-    } else {
-      lensLeft = Math.min(containerW - lensSize - 10, cursorScreenPos.x + 35);
-    }
-  }
-
   return (
     <div className="relative w-full h-full min-h-[580px] rounded-2xl overflow-hidden bg-slate-950 border border-slate-700 shadow-xl select-none flex flex-col">
-      {/* Scoped CSS rule ensuring magnifier lens never intercepts mouse events and crosshair cursor is applied reliably */}
+      {/* Scoped CSS rule ensuring magnifier lens never intercepts mouse events, crosshair cursor is applied reliably, and tile images inside magnifier are positioned and visible */}
       <style dangerouslySetInnerHTML={{ __html: `
         .magnifier-lens-wrapper, .magnifier-lens-wrapper * {
           pointer-events: none !important;
@@ -1637,6 +1700,17 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         .drawing-roof-cursor, .drawing-roof-cursor * {
           cursor: crosshair !important;
         }
+        .magnifier-lens-wrapper .leaflet-pane,
+        .magnifier-lens-wrapper .leaflet-tile-pane,
+        .magnifier-lens-wrapper .leaflet-layer,
+        .magnifier-lens-wrapper .leaflet-tile-container,
+        .magnifier-lens-wrapper .leaflet-tile {
+          position: absolute !important;
+          left: 0 !important;
+          top: 0 !important;
+          visibility: visible !important;
+          opacity: 1 !important;
+        }
       ` }} />
 
       <div
@@ -1644,12 +1718,17 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           activeTool === "draw_roof" ? "drawing-roof-cursor" : "cursor-grab"
         }`}
         onMouseEnter={() => {
-          if (activeTool === "draw_roof") setMagnifierVisible(true);
+          if (activeTool === "draw_roof") syncMagnifierTiles();
         }}
         onMouseLeave={() => {
-          setMagnifierVisible(false);
-          setCursorScreenPos({ x: -999, y: -999 });
           cursorScreenPosRef.current = { x: -999, y: -999 };
+          if (magnifierLensRef.current) {
+            magnifierLensRef.current.style.display = "none";
+          }
+          if (rafIdRef.current) {
+            cancelAnimationFrame(rafIdRef.current);
+            rafIdRef.current = null;
+          }
         }}
       >
         <div
@@ -1659,42 +1738,17 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         />
       </div>
 
-      {/* 1. Precision Crosshair Target at Exact Cursor Screen Coordinate */}
-      {activeTool === "draw_roof" && magnifierVisible && cursorScreenPos.x >= 0 && cursorScreenPos.y >= 0 && (
-        <div
-          style={{
-            position: "absolute",
-            left: `${cursorScreenPos.x}px`,
-            top: `${cursorScreenPos.y}px`,
-            transform: "translate(-50%, -50%)",
-            pointerEvents: "none",
-            zIndex: 1001,
-          }}
-          className="select-none flex items-center justify-center pointer-events-none [&_*]:!pointer-events-none"
-        >
-          {/* Outer Reticle Ring */}
-          <div className="relative w-5 h-5 rounded-full border border-emerald-400/90 flex items-center justify-center shadow-sm pointer-events-none">
-            {/* Center Precision Dot */}
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 border border-black shadow pointer-events-none" />
-            {/* 4 Directional Crosshair Ticks */}
-            <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-[1px] h-1.5 bg-emerald-400 pointer-events-none" />
-            <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-[1px] h-1.5 bg-emerald-400 pointer-events-none" />
-            <div className="absolute top-1/2 -left-1.5 -translate-y-1/2 h-[1px] w-1.5 bg-emerald-400 pointer-events-none" />
-            <div className="absolute top-1/2 -right-1.5 -translate-y-1/2 h-[1px] w-1.5 bg-emerald-400 pointer-events-none" />
-          </div>
-        </div>
-      )}
-
-      {/* 2. Circular Precision Magnifier Lens (Pointer-Following with Offset) */}
+      {/* Precision Magnifier Lens (Centered around cursor, shows 4x magnified satellite imagery) */}
       <div
+        ref={magnifierLensRef}
         id="magnifier-lens-root"
         style={{
-          display: (activeTool === "draw_roof" && magnifierVisible && cursorScreenPos.x >= 0 && cursorScreenPos.y >= 0) ? "block" : "none",
+          display: "none",
           position: "absolute",
-          left: `${lensLeft}px`,
-          top: `${lensTop}px`,
-          width: `${lensSize}px`,
-          height: `${lensSize}px`,
+          left: 0,
+          top: 0,
+          width: `${MAGNIFIER_SIZE}px`,
+          height: `${MAGNIFIER_SIZE}px`,
           zIndex: 1000,
           pointerEvents: "none",
           borderRadius: "50%",
@@ -1702,22 +1756,34 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           boxShadow: "0 14px 40px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.3)",
           overflow: "hidden",
           backgroundColor: "#0a0f1d",
+          willChange: "transform",
         }}
         className="magnifier-lens-wrapper select-none pointer-events-none [&_*]:!pointer-events-none"
       >
-        {/* Circular Magnifier Map Viewport */}
-        <div ref={magnifierContainerRef} className="w-full h-full pointer-events-none [&_*]:!pointer-events-none" />
+        {/* Cloned Map Tiles Viewport */}
+        <div
+          ref={magnifierContentRef}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            transformOrigin: "0 0",
+            pointerEvents: "none",
+            willChange: "transform",
+          }}
+          className="leaflet-pane pointer-events-none [&_*]:!pointer-events-none"
+        />
 
         {/* Hairline Crosshair Reticle & Exact Center Target inside lens */}
-        <div className="absolute inset-0 pointer-events-none z-10 flex flex-col items-center justify-center [&_*]:!pointer-events-none">
+        <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center [&_*]:!pointer-events-none">
           <div className="absolute left-0 right-0 h-[1px] bg-red-500/80 pointer-events-none" />
           <div className="absolute top-0 bottom-0 w-[1px] bg-red-500/80 pointer-events-none" />
-          <div className="w-4 h-4 rounded-full border border-red-500/80 pointer-events-none flex items-center justify-center">
-            <div className="w-1.5 h-1.5 rounded-full bg-red-500 border border-white pointer-events-none" />
+          <div className="w-5 h-5 rounded-full border border-red-500/85 flex items-center justify-center shadow-sm pointer-events-none">
+            <div className="w-1.5 h-1.5 rounded-full bg-red-500 border border-white shadow pointer-events-none" />
           </div>
           {/* Zoom Label Badge */}
-          <div className="absolute bottom-2 bg-slate-950/90 border border-slate-700/80 text-[8px] font-extrabold text-amber-300 px-2 py-0.5 rounded-full shadow pointer-events-none">
-            Zoom 4x
+          <div className="absolute bottom-2 bg-slate-950/90 border border-slate-700/80 text-[8px] font-extrabold text-amber-300 px-2 py-0.5 rounded-full shadow pointer-events-none tracking-wider">
+            4× ZOOM
           </div>
         </div>
       </div>
