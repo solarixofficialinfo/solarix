@@ -199,16 +199,22 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       if (!t.src) return;
       const img = document.createElement("img");
       img.src = t.src;
-      img.style.position = "absolute";
-      img.style.left = "0";
-      img.style.top = "0";
-      img.style.width = t.style.width || "256px";
-      img.style.height = t.style.height || "256px";
-      img.style.transform = t.style.transform;
-      img.style.display = "block";
-      img.style.visibility = "visible";
-      img.style.opacity = "1";
-      img.style.pointerEvents = "none";
+      img.style.cssText = `
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 256px !important;
+        height: 256px !important;
+        max-width: none !important;
+        max-height: none !important;
+        min-width: 256px !important;
+        min-height: 256px !important;
+        transform: ${t.style.transform} !important;
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: none !important;
+      `;
       paneWrapper.appendChild(img);
     });
   }, []);
@@ -1300,15 +1306,27 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       const latLngs = activeDrawPoints.map((p) => [p.lat, p.lng]);
       L.polyline(latLngs, { color: "#10b981", weight: 3, dashArray: "6, 6" }).addTo(roofGroup);
 
+      // Compute adaptive label directions to prevent overlap across multiple points
+      const pointScreenCoords = activeDrawPoints.map((p) => {
+        if (mapInstanceRef.current) {
+          try {
+            return mapInstanceRef.current.latLngToContainerPoint([p.lat, p.lng]);
+          } catch (e) {
+            return { x: 0, y: 0 };
+          }
+        }
+        return { x: 0, y: 0 };
+      });
+
       activeDrawPoints.forEach((p, idx) => {
         const isFirst = idx === 0;
         const canClose = isFirst && activeDrawPoints.length >= 3;
         const cm = L.circleMarker([p.lat, p.lng], {
-          radius: isFirst ? 9 : 6,
+          radius: isFirst ? 8 : 6,
           fillColor: canClose ? "#10b981" : isFirst ? "#059669" : "#2563eb",
           fillOpacity: 1,
           color: "#ffffff",
-          weight: isFirst ? 3 : 2,
+          weight: isFirst ? 2.5 : 2,
         }).addTo(roofGroup);
 
         if (canClose) {
@@ -1316,18 +1334,50 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             L.DomEvent.stopPropagation(e);
             handleFinishDrawingRoof();
           });
-          cm.bindTooltip("<b>Point 1 — Click to Close Roof</b>", {
-            permanent: true,
-            direction: "top",
-            className: "bg-emerald-600 text-white font-bold px-2 py-0.5 rounded-lg shadow-md text-xs",
-          });
-        } else {
-          cm.bindTooltip(`Point ${idx + 1}`, {
-            permanent: true,
-            direction: "top",
-            className: "px-1.5 py-0.5 text-[10px] font-bold",
-          });
         }
+
+        // Determine best label direction: top, right, bottom, left to avoid colliding with other points
+        let bestDir = "top";
+        let bestOffset = [0, -12];
+
+        if (pointScreenCoords.length > 1) {
+          const curr = pointScreenCoords[idx];
+          const candidates = [
+            { dir: "top", offset: [0, -12], testX: curr.x, testY: curr.y - 24 },
+            { dir: "right", offset: [12, 0], testX: curr.x + 36, testY: curr.y },
+            { dir: "bottom", offset: [0, 12], testX: curr.x, testY: curr.y + 24 },
+            { dir: "left", offset: [-12, 0], testX: curr.x - 36, testY: curr.y },
+          ];
+
+          let maxMinDist = -1;
+          for (const cand of candidates) {
+            let minDistToOther = Infinity;
+            for (let j = 0; j < pointScreenCoords.length; j++) {
+              if (j === idx) continue;
+              const other = pointScreenCoords[j];
+              const d = Math.hypot(cand.testX - other.x, cand.testY - other.y);
+              if (d < minDistToOther) minDistToOther = d;
+            }
+            if (minDistToOther > maxMinDist) {
+              maxMinDist = minDistToOther;
+              bestDir = cand.dir;
+              bestOffset = cand.offset;
+            }
+          }
+        }
+
+        const labelContent = canClose
+          ? `Point 1 (Close)`
+          : `Point ${idx + 1}`;
+
+        cm.bindTooltip(labelContent, {
+          permanent: true,
+          direction: bestDir,
+          offset: L.point(bestOffset[0], bestOffset[1]),
+          className: canClose
+            ? "solarix-point-label solarix-point-label-close"
+            : "solarix-point-label",
+        });
       });
     }
 
@@ -1743,6 +1793,39 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           visibility: visible !important;
           opacity: 1 !important;
         }
+        .magnifier-lens-wrapper img {
+          max-width: none !important;
+          max-height: none !important;
+          min-width: 256px !important;
+          min-height: 256px !important;
+          width: 256px !important;
+          height: 256px !important;
+        }
+        .solarix-point-label {
+          background-color: rgba(255, 255, 255, 0.96) !important;
+          color: #0f172a !important;
+          font-family: inherit !important;
+          font-weight: 700 !important;
+          font-size: 11px !important;
+          line-height: 1.2 !important;
+          padding: 3px 8px !important;
+          border-radius: 6px !important;
+          border: 1px solid rgba(148, 163, 184, 0.5) !important;
+          box-shadow: 0 3px 8px rgba(0, 0, 0, 0.22), 0 1px 2px rgba(0, 0, 0, 0.1) !important;
+          white-space: nowrap !important;
+          pointer-events: none !important;
+        }
+        .solarix-point-label-close {
+          background-color: #059669 !important;
+          color: #ffffff !important;
+          border: 1px solid #10b981 !important;
+        }
+        .solarix-point-label::before {
+          border-top-color: rgba(255, 255, 255, 0.96) !important;
+        }
+        .solarix-point-label-close::before {
+          border-top-color: #059669 !important;
+        }
       ` }} />
 
       <div
@@ -1795,13 +1878,13 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             top: 0,
             width: `${MAGNIFIER_SIZE}px`,
             height: `${MAGNIFIER_SIZE}px`,
-            zIndex: 1000,
+            zIndex: 500,
             pointerEvents: "none",
             borderRadius: "50%",
             border: "2.5px solid #ffffff",
             boxShadow: "0 14px 40px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.3)",
             overflow: "hidden",
-            backgroundColor: "transparent",
+            backgroundColor: "#070d1e",
             willChange: "transform",
           }}
           className="magnifier-lens-wrapper select-none pointer-events-none [&_*]:!pointer-events-none"
