@@ -163,6 +163,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const cursorScreenPosRef = useRef({ x: -999, y: -999 });
   const magnifierLensRef = useRef(null);
   const magnifierContentRef = useRef(null);
+  const magnifierPaneRef = useRef(null);
   const rafIdRef = useRef(null);
   const isDraggingVertexRef = useRef(false);
 
@@ -170,10 +171,12 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const syncMagnifierTiles = useCallback(() => {
     const container = mapContainerRef.current;
     const contentWrapper = magnifierContentRef.current;
-    if (!container || !contentWrapper) return;
+    const paneWrapper = magnifierPaneRef.current;
+    if (!container || !contentWrapper || !paneWrapper) return;
 
     const mapPane = container.querySelector(".leaflet-map-pane");
-    if (!mapPane) return;
+    const tilePane = container.querySelector(".leaflet-tile-pane");
+    if (!mapPane || !tilePane) return;
 
     const w = container.clientWidth;
     const h = container.clientHeight;
@@ -182,15 +185,32 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     contentWrapper.style.width = `${w}px`;
     contentWrapper.style.height = `${h}px`;
 
-    // Clone rendered map pane containing all loaded satellite tiles
-    contentWrapper.innerHTML = "";
-    const clone = mapPane.cloneNode(true);
+    // Keep pane wrapper aligned with mapPane transform (handles map panning)
+    paneWrapper.style.transform = mapPane.style.transform || "none";
 
-    // Strip tooltips/popups to keep magnified viewport clean
-    const overlays = clone.querySelectorAll(".leaflet-tooltip-pane, .leaflet-popup-pane");
-    overlays.forEach((el) => el.remove());
+    const tiles = tilePane.querySelectorAll("img.leaflet-tile");
+    if (tiles.length === 0) return;
 
-    contentWrapper.appendChild(clone);
+    // Clear old visual tiles
+    paneWrapper.innerHTML = "";
+
+    // Create pure visual replicates of currently rendered satellite tiles
+    tiles.forEach((t) => {
+      if (!t.src) return;
+      const img = document.createElement("img");
+      img.src = t.src;
+      img.style.position = "absolute";
+      img.style.left = "0";
+      img.style.top = "0";
+      img.style.width = t.style.width || "256px";
+      img.style.height = t.style.height || "256px";
+      img.style.transform = t.style.transform;
+      img.style.display = "block";
+      img.style.visibility = "visible";
+      img.style.opacity = "1";
+      img.style.pointerEvents = "none";
+      paneWrapper.appendChild(img);
+    });
   }, []);
 
   // Update magnifier position and high-magnification transform at display refresh rate via requestAnimationFrame
@@ -198,6 +218,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     rafIdRef.current = null;
     const lensEl = magnifierLensRef.current;
     const contentEl = magnifierContentRef.current;
+    const paneWrapper = magnifierPaneRef.current;
     const container = mapContainerRef.current;
     if (!lensEl || !contentEl || !container) return;
 
@@ -215,6 +236,17 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       return;
     }
 
+    // If tiles have not been populated yet, trigger sync now
+    if (paneWrapper && paneWrapper.children.length === 0) {
+      syncMagnifierTiles();
+    }
+
+    // Keep pane transform synced with map pane during active pan
+    const mapPane = container.querySelector(".leaflet-map-pane");
+    if (mapPane && paneWrapper && paneWrapper.style.transform !== mapPane.style.transform) {
+      paneWrapper.style.transform = mapPane.style.transform;
+    }
+
     lensEl.style.display = "block";
 
     // Center magnifier lens on cursor, clamped to avoid clipping outside container
@@ -228,7 +260,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     const ty = MAGNIFIER_RADIUS - MAGNIFIER_ZOOM * cy;
 
     contentEl.style.transform = `translate3d(${tx}px, ${ty}px, 0px) scale(${MAGNIFIER_ZOOM})`;
-  }, [MAGNIFIER_RADIUS, MAGNIFIER_SIZE, MAGNIFIER_ZOOM]);
+  }, [MAGNIFIER_RADIUS, MAGNIFIER_SIZE, MAGNIFIER_ZOOM, syncMagnifierTiles]);
 
   // Location Capture & Drag confirmation states
   const [locationCaptured, setLocationCaptured] = useState(false);
@@ -1720,6 +1752,21 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         onMouseEnter={() => {
           if (activeTool === "draw_roof") syncMagnifierTiles();
         }}
+        onMouseMove={(e) => {
+          if (activeTool === "draw_roof") {
+            const container = mapContainerRef.current;
+            if (container) {
+              const rect = container.getBoundingClientRect();
+              cursorScreenPosRef.current = {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top,
+              };
+              if (!rafIdRef.current) {
+                rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
+              }
+            }
+          }
+        }}
         onMouseLeave={() => {
           cursorScreenPosRef.current = { x: -999, y: -999 };
           if (magnifierLensRef.current) {
@@ -1736,54 +1783,64 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           className="w-full h-full leaflet-container"
           style={{ width: "100%", height: "100%", position: "relative" }}
         />
-      </div>
 
-      {/* Precision Magnifier Lens (Centered around cursor, shows 4x magnified satellite imagery) */}
-      <div
-        ref={magnifierLensRef}
-        id="magnifier-lens-root"
-        style={{
-          display: "none",
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: `${MAGNIFIER_SIZE}px`,
-          height: `${MAGNIFIER_SIZE}px`,
-          zIndex: 1000,
-          pointerEvents: "none",
-          borderRadius: "50%",
-          border: "2.5px solid #ffffff",
-          boxShadow: "0 14px 40px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.3)",
-          overflow: "hidden",
-          backgroundColor: "#0a0f1d",
-          willChange: "transform",
-        }}
-        className="magnifier-lens-wrapper select-none pointer-events-none [&_*]:!pointer-events-none"
-      >
-        {/* Cloned Map Tiles Viewport */}
+        {/* Precision Magnifier Lens (Centered around cursor, shows 4x magnified satellite imagery) */}
         <div
-          ref={magnifierContentRef}
+          ref={magnifierLensRef}
+          id="magnifier-lens-root"
           style={{
+            display: "none",
             position: "absolute",
             left: 0,
             top: 0,
-            transformOrigin: "0 0",
+            width: `${MAGNIFIER_SIZE}px`,
+            height: `${MAGNIFIER_SIZE}px`,
+            zIndex: 1000,
             pointerEvents: "none",
+            borderRadius: "50%",
+            border: "2.5px solid #ffffff",
+            boxShadow: "0 14px 40px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.3)",
+            overflow: "hidden",
+            backgroundColor: "transparent",
             willChange: "transform",
           }}
-          className="leaflet-pane pointer-events-none [&_*]:!pointer-events-none"
-        />
-
-        {/* Hairline Crosshair Reticle & Exact Center Target inside lens */}
-        <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center [&_*]:!pointer-events-none">
-          <div className="absolute left-0 right-0 h-[1px] bg-red-500/80 pointer-events-none" />
-          <div className="absolute top-0 bottom-0 w-[1px] bg-red-500/80 pointer-events-none" />
-          <div className="w-5 h-5 rounded-full border border-red-500/85 flex items-center justify-center shadow-sm pointer-events-none">
-            <div className="w-1.5 h-1.5 rounded-full bg-red-500 border border-white shadow pointer-events-none" />
+          className="magnifier-lens-wrapper select-none pointer-events-none [&_*]:!pointer-events-none"
+        >
+          {/* Magnified Map Imagery Viewport */}
+          <div
+            ref={magnifierContentRef}
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              transformOrigin: "0 0",
+              pointerEvents: "none",
+              willChange: "transform",
+            }}
+            className="pointer-events-none [&_*]:!pointer-events-none"
+          >
+            <div
+              ref={magnifierPaneRef}
+              style={{
+                position: "absolute",
+                left: 0,
+                top: 0,
+                pointerEvents: "none",
+              }}
+            />
           </div>
-          {/* Zoom Label Badge */}
-          <div className="absolute bottom-2 bg-slate-950/90 border border-slate-700/80 text-[8px] font-extrabold text-amber-300 px-2 py-0.5 rounded-full shadow pointer-events-none tracking-wider">
-            4× ZOOM
+
+          {/* Hairline Crosshair Reticle & Exact Center Target inside lens */}
+          <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center [&_*]:!pointer-events-none">
+            <div className="absolute left-0 right-0 h-[1px] bg-red-500/80 pointer-events-none" />
+            <div className="absolute top-0 bottom-0 w-[1px] bg-red-500/80 pointer-events-none" />
+            <div className="w-5 h-5 rounded-full border border-red-500/85 flex items-center justify-center shadow-sm pointer-events-none">
+              <div className="w-1.5 h-1.5 rounded-full bg-red-500 border border-white shadow pointer-events-none" />
+            </div>
+            {/* Zoom Label Badge */}
+            <div className="absolute bottom-2 bg-slate-950/90 border border-slate-700/80 text-[8px] font-extrabold text-amber-300 px-2 py-0.5 rounded-full shadow pointer-events-none tracking-wider">
+              4× ZOOM
+            </div>
           </div>
         </div>
       </div>
