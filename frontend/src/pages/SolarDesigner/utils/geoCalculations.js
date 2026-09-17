@@ -84,16 +84,37 @@ export function projectMetersToLatLng(x, y, origin) {
   return { lat, lng };
 }
 
+export function ensureCartesianCoordinates(points, customOrigin) {
+  if (!points || !Array.isArray(points) || points.length === 0) return points || [];
+  if (points[0].x !== undefined && !isNaN(points[0].x) && points[0].y !== undefined && !isNaN(points[0].y)) {
+    return points;
+  }
+  const origin = customOrigin || (points[0].lat != null && points[0].lng != null ? points[0] : null);
+  if (!origin || origin.lat == null || origin.lng == null) return points;
+  const baseLatRad = toRad(origin.lat);
+  return points.map((pt) => {
+    if (pt.x !== undefined && !isNaN(pt.x) && pt.y !== undefined && !isNaN(pt.y)) return pt;
+    const x = (toRad(pt.lng) - toRad(origin.lng)) * Math.cos(baseLatRad) * EARTH_RADIUS_METERS;
+    const y = (toRad(pt.lat) - toRad(origin.lat)) * EARTH_RADIUS_METERS;
+    return {
+      ...pt,
+      x: Math.round(x * 100) / 100,
+      y: Math.round(y * 100) / 100,
+    };
+  });
+}
+
 /**
  * Calculates signed 2D Cartesian polygon area in m²
  * Positive = Counter-Clockwise (CCW), Negative = Clockwise (CW)
  */
 export function getPolygonSignedArea(points) {
   if (!points || points.length < 3) return 0;
+  const pts = ensureCartesianCoordinates(points);
   let area = 0;
-  for (let i = 0; i < points.length; i++) {
-    const j = (i + 1) % points.length;
-    area += points[i].x * points[j].y - points[j].x * points[i].y;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    area += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
   }
   return area / 2.0;
 }
@@ -110,11 +131,12 @@ export function getCartesianPolygonArea(points) {
  */
 export function getCartesianPolygonPerimeter(points) {
   if (!points || points.length < 2) return 0;
+  const pts = ensureCartesianCoordinates(points);
   let perimeter = 0;
-  for (let i = 0; i < points.length; i++) {
-    const j = (i + 1) % points.length;
-    const dx = points[j].x - points[i].x;
-    const dy = points[j].y - points[i].y;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    const dx = pts[j].x - pts[i].x;
+    const dy = pts[j].y - pts[i].y;
     perimeter += Math.sqrt(dx * dx + dy * dy);
   }
   return perimeter;
@@ -127,12 +149,13 @@ export function getPolygonBounds(points) {
   if (!points || points.length === 0) {
     return { minX: 0, maxX: 0, minY: 0, maxY: 0, width: 0, length: 0, centerX: 0, centerY: 0 };
   }
+  const pts = ensureCartesianCoordinates(points);
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
   let maxY = -Infinity;
 
-  for (const pt of points) {
+  for (const pt of pts) {
     if (pt.x < minX) minX = pt.x;
     if (pt.x > maxX) maxX = pt.x;
     if (pt.y < minY) minY = pt.y;
@@ -183,12 +206,13 @@ export function getPolygonPrimaryAzimuth(points) {
  */
 export function isPointInPolygon(px, py, points) {
   if (!points || points.length < 3) return false;
+  const pts = ensureCartesianCoordinates(points);
   let inside = false;
-  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-    const xi = points[i].x;
-    const yi = points[i].y;
-    const xj = points[j].x;
-    const yj = points[j].y;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i].x;
+    const yi = pts[i].y;
+    const xj = pts[j].x;
+    const yj = pts[j].y;
 
     const intersect = yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi;
     if (intersect) inside = !inside;
@@ -214,9 +238,10 @@ export function segmentsIntersect(p1, p2, p3, p4) {
  */
 export function segmentIntersectsPolygon(p1, p2, points) {
   if (!points || points.length < 2) return false;
-  for (let i = 0; i < points.length; i++) {
-    const j = (i + 1) % points.length;
-    if (segmentsIntersect(p1, p2, points[i], points[j])) {
+  const pts = ensureCartesianCoordinates(points);
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    if (segmentsIntersect(p1, p2, pts[i], pts[j])) {
       return true;
     }
   }
@@ -229,8 +254,9 @@ export function segmentIntersectsPolygon(p1, p2, points) {
 export function computeSetbackPolygon(points, setbackMeters) {
   if (!points || points.length < 3 || setbackMeters <= 0) return points || [];
   
-  const signedArea = getPolygonSignedArea(points);
-  const pts = signedArea > 0 ? [...points] : [...points].reverse();
+  const ptsRaw = ensureCartesianCoordinates(points);
+  const signedArea = getPolygonSignedArea(ptsRaw);
+  const pts = signedArea > 0 ? [...ptsRaw] : [...ptsRaw].reverse();
   const n = pts.length;
   const offsetEdges = [];
 

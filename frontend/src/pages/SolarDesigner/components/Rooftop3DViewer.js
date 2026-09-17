@@ -353,11 +353,23 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     scene.background = new THREE.Color(0x0a0f1d);
     sceneRef.current = scene;
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      preserveDrawingBuffer: true,
-      powerPreference: "high-performance",
-    });
+    let renderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        preserveDrawingBuffer: true,
+        powerPreference: "high-performance",
+      });
+    } catch (err) {
+      console.warn("THREE.WebGLRenderer initialization failed:", err);
+      container.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#94a3b8;padding:24px;text-align:center;">
+          <div style="font-size:13px;font-weight:600;color:#f1f5f9;margin-bottom:8px;">3D WebGL Acceleration Unavailable</div>
+          <div style="font-size:11px;max-width:320px;line-height:1.4;">WebGL is disabled or unsupported in this browser window. Use 2D Satellite View for design and layout.</div>
+        </div>
+      `;
+      return;
+    }
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;

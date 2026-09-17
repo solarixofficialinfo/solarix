@@ -167,7 +167,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     (cursorCoords, targetZoom = 21) => {
       // Intentionally left blank as we removed the second map instance
     },
-    [magnifierVisible]
+    []
   );
 
   // Location Capture & Drag confirmation states
@@ -908,13 +908,23 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           errorTileUrl: "",
         }
       );
-      satLayer.on("tileerror", () => {
+      
+      let fallbackAdded = false;
+      satLayer.on("tileerror", (e) => {
+        console.error(`[Tile Error - Google] URL: ${e.tile?.src}, Zoom: ${mapInstanceRef.current?.getZoom()}, Center: ${JSON.stringify(mapInstanceRef.current?.getCenter())}`);
+        
         // Fallback to ArcGIS if Google tiles ever encounter rate limits
-        if (tileGroup && mapInstanceRef.current) {
-          L.tileLayer(
+        if (!fallbackAdded && tileGroup && mapInstanceRef.current) {
+          fallbackAdded = true;
+          console.warn("[Tile Fallback] Adding ArcGIS fallback layer due to Google tile failure.");
+          const arcGisLayer = L.tileLayer(
             "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
             { maxZoom: 20, maxNativeZoom: 18, keepBuffer: 6, errorTileUrl: "" }
-          ).addTo(tileGroup);
+          );
+          arcGisLayer.on("tileerror", (e2) => {
+            console.error(`[Tile Error - ArcGIS] URL: ${e2.tile?.src}, Zoom: ${mapInstanceRef.current?.getZoom()}`);
+          });
+          arcGisLayer.addTo(tileGroup);
         }
       });
       satLayer.addTo(tileGroup);
@@ -960,6 +970,18 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     }
     originRef.current = { lat, lng };
   }, [latitude, longitude, pendingMarkerLocation]);
+
+  // Ensure map size is accurately invalidated when switching back to 2D view
+  useEffect(() => {
+    if (activeTab === "2d" && mapInstanceRef.current) {
+      const timer = setTimeout(() => {
+        try {
+          mapInstanceRef.current?.invalidateSize({ pan: false });
+        } catch (err) {}
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [activeTab]);
 
   // Roof Drawing Actions
   const handleFinishDrawingRoof = useCallback(() => {
@@ -1606,16 +1628,21 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
   return (
     <div className="relative w-full h-full min-h-[580px] rounded-2xl overflow-hidden bg-slate-950 border border-slate-700 shadow-xl select-none flex flex-col">
-      {/* Scoped CSS rule ensuring magnifier lens and ALL child elements never intercept mouse events */}
+      {/* Scoped CSS rule ensuring magnifier lens never intercepts mouse events and crosshair cursor is applied reliably */}
       <style dangerouslySetInnerHTML={{ __html: `
         .magnifier-lens-wrapper, .magnifier-lens-wrapper * {
           pointer-events: none !important;
           user-select: none !important;
         }
+        .drawing-roof-cursor, .drawing-roof-cursor * {
+          cursor: crosshair !important;
+        }
       ` }} />
 
       <div
-        ref={mapContainerRef}
+        className={`w-full h-full flex-1 z-0 relative bg-slate-950 ${
+          activeTool === "draw_roof" ? "drawing-roof-cursor" : "cursor-grab"
+        }`}
         onMouseEnter={() => {
           if (activeTool === "draw_roof") setMagnifierVisible(true);
         }}
@@ -1624,10 +1651,13 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           setCursorScreenPos({ x: -999, y: -999 });
           cursorScreenPosRef.current = { x: -999, y: -999 };
         }}
-        className={`w-full h-full flex-1 z-0 bg-slate-950 ${
-          activeTool === "draw_roof" ? "cursor-crosshair" : "cursor-grab"
-        }`}
-      />
+      >
+        <div
+          ref={mapContainerRef}
+          className="w-full h-full leaflet-container"
+          style={{ width: "100%", height: "100%", position: "relative" }}
+        />
+      </div>
 
       {/* 1. Precision Crosshair Target at Exact Cursor Screen Coordinate */}
       {activeTool === "draw_roof" && magnifierVisible && cursorScreenPos.x >= 0 && cursorScreenPos.y >= 0 && (

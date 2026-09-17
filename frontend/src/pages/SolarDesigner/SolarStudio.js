@@ -36,6 +36,7 @@ import {
   computeSetbackPolygon,
   isRectInsidePolygon,
   toRad,
+  ensureCartesianCoordinates,
 } from "./utils/geoCalculations";
 import {
   searchLocations,
@@ -55,6 +56,45 @@ const DESIGN_STAGES = [
   { key: "structure", label: "5. Mounting", icon: Layers2 },
   { key: "layout", label: "6. Layout", icon: Sparkles },
 ];
+
+class Viewer3DErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, info) {
+    console.warn("[Viewer3DErrorBoundary caught error]:", error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-white p-6 text-center z-30">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-950 border border-indigo-700/60 flex items-center justify-center mb-3 text-indigo-400 font-bold">
+            3D
+          </div>
+          <h4 className="text-sm font-bold text-slate-200 mb-1">3D Visualizer Notice</h4>
+          <p className="text-xs text-slate-400 max-w-sm mb-4">
+            3D WebGL acceleration is unavailable in this environment ({this.state.error?.message || "WebGL context creation failed"}).
+          </p>
+          <Button
+            size="sm"
+            onClick={() => {
+              this.setState({ hasError: false, error: null });
+              this.props.onSwitchTo2D?.();
+            }}
+            className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-1.5 rounded-xl"
+          >
+            ← Return to 2D Satellite Designer
+          </Button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function SolarStudio() {
   const { id: designId } = useParams();
@@ -248,7 +288,16 @@ export default function SolarStudio() {
           }
           doc.obstacles = Array.isArray(doc.obstacles) ? doc.obstacles : [];
           doc.panels = Array.isArray(doc.panels) ? doc.panels : [];
-          doc.roof_polygon = Array.isArray(doc.roof_polygon) ? doc.roof_polygon : [];
+          doc.roof_polygon = Array.isArray(doc.roof_polygon) ? ensureCartesianCoordinates(doc.roof_polygon) : [];
+          if (doc.roof_polygon.length >= 3) {
+            if (!doc.roof_area_sqm || isNaN(doc.roof_area_sqm) || doc.roof_area_sqm === 0) {
+              doc.roof_area_sqm = Math.round(getCartesianPolygonArea(doc.roof_polygon) * 10) / 10;
+            }
+            if (!doc.usable_area_sqm || isNaN(doc.usable_area_sqm) || doc.usable_area_sqm === 0) {
+              const usablePoly = computeSetbackPolygon(doc.roof_polygon, Number(doc.roof?.setback_m || doc.setback_m || 0.5));
+              doc.usable_area_sqm = Math.round(getCartesianPolygonArea(usablePoly) * 10) / 10;
+            }
+          }
           doc.structure_nodes = Array.isArray(doc.structure_nodes) ? doc.structure_nodes : [];
           doc.structure_members = Array.isArray(doc.structure_members) ? doc.structure_members : [];
           doc.saved_views = Array.isArray(doc.saved_views) ? doc.saved_views : [];
@@ -1924,41 +1973,43 @@ export default function SolarStudio() {
             </div>
 
             {hasOpened3D && (
-              <Suspense fallback={
-                <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-2">
-                  <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                  <span className="text-xs">Initializing 3D Visualizer…</span>
-                </div>
-              }>
-                <Rooftop3DViewer
-                  ref={viewer3dRef}
-                  roofPolygon={designData.roof_polygon}
-                  roof={designData.roof}
-                  panels={designData.panels}
-                  obstacles={designData.obstacles}
-                  walkways={designData.walkways}
-                  structure={{
-                    ...designData.structure,
-                    azimuth: Number(designData.azimuth_angle || 180),
-                    tilt_deg: Number(designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15),
-                    height_m: Number(designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8),
-                  }}
-                  panelSpecs={{
-                    length_m: designData.panel_dimensions?.length_m || 2.278,
-                    width_m: designData.panel_dimensions?.width_m || 1.134,
-                    wattage: designData.panel_wattage || 550,
-                  }}
-                  structureNodes={designData.structure_nodes || []}
-                  structureMembers={designData.structure_members || []}
-                  onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
-                  onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
-                  onSwitchTo2D={() => {
-                    setActiveTab("2d");
-                    setActiveTool("draw_roof");
-                  }}
-                  onApplyTemplateRoof={handleApplyDefaultRoofTemplate}
-                />
-              </Suspense>
+              <Viewer3DErrorBoundary onSwitchTo2D={() => { setActiveTab("2d"); setActiveTool("draw_roof"); }}>
+                <Suspense fallback={
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-2">
+                    <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-xs">Initializing 3D Visualizer…</span>
+                  </div>
+                }>
+                  <Rooftop3DViewer
+                    ref={viewer3dRef}
+                    roofPolygon={designData.roof_polygon}
+                    roof={designData.roof}
+                    panels={designData.panels}
+                    obstacles={designData.obstacles}
+                    walkways={designData.walkways}
+                    structure={{
+                      ...designData.structure,
+                      azimuth: Number(designData.azimuth_angle || 180),
+                      tilt_deg: Number(designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15),
+                      height_m: Number(designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8),
+                    }}
+                    panelSpecs={{
+                      length_m: designData.panel_dimensions?.length_m || 2.278,
+                      width_m: designData.panel_dimensions?.width_m || 1.134,
+                      wattage: designData.panel_wattage || 550,
+                    }}
+                    structureNodes={designData.structure_nodes || []}
+                    structureMembers={designData.structure_members || []}
+                    onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
+                    onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
+                    onSwitchTo2D={() => {
+                      setActiveTab("2d");
+                      setActiveTool("draw_roof");
+                    }}
+                    onApplyTemplateRoof={handleApplyDefaultRoofTemplate}
+                  />
+                </Suspense>
+              </Viewer3DErrorBoundary>
             )}
           </div>
 
