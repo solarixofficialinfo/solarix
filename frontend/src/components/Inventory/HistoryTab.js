@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import api, { formatApiError, fileUrl } from "@/lib/api";
 import { useInventoryHistory, useInvalidateInventoryHistory } from "@/hooks/useInventory";
+import { invalidateFrontendProductCache } from "@/lib/productCache";
 import { useEmployeeList } from "@/hooks/useTeam";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -148,7 +149,9 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
       setConfirmBulk(false);
       setSelected(new Set());
       invalidateHistory();
-      queryClient.invalidateQueries({ queryKey: ["ledger"] });
+      invalidateFrontendProductCache();
+      queryClient.invalidateQueries({ queryKey: ["inventory"] });
+      queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
       queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
       onChanged?.();
     } catch (e) {
@@ -430,6 +433,10 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
           onClose={() => setEditing(null)}
           onSaved={() => {
             invalidateHistory();
+            invalidateFrontendProductCache();
+            queryClient.invalidateQueries({ queryKey: ["inventory"] });
+            queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
+            queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
             onChanged?.();
           }}
         />

@@ -1839,6 +1839,8 @@ class CollectionAdapter:
     def aggregate(self, pipeline):
         return AggregateCursorAdapter(self.table_name, pipeline)
 
+_LOCAL_FILE_CACHE: Dict[str, Tuple[float, list]] = {}
+
 class LocalFileCollection:
     def __init__(self, table_name: str):
         self.table_name = table_name
@@ -1848,8 +1850,14 @@ class LocalFileCollection:
         if not self.file_path.exists():
             return []
         try:
+            mtime = self.file_path.stat().st_mtime
+            cached = _LOCAL_FILE_CACHE.get(self.table_name)
+            if cached and cached[0] == mtime:
+                return [dict(d) for d in cached[1]]
             with open(self.file_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            _LOCAL_FILE_CACHE[self.table_name] = (mtime, data)
+            return [dict(d) for d in data]
         except Exception:
             return []
 
@@ -1858,6 +1866,11 @@ class LocalFileCollection:
             self.file_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            try:
+                mtime = self.file_path.stat().st_mtime
+                _LOCAL_FILE_CACHE[self.table_name] = (mtime, data)
+            except Exception:
+                _LOCAL_FILE_CACHE.pop(self.table_name, None)
         except Exception as e:
             logger.error(f"Error writing to local storage for {self.table_name}: {e}")
 
@@ -7912,6 +7925,7 @@ async def list_logs(user=Depends(get_current_user), page: int = 1, page_size: in
 # ---------- Inventory ----------
 class InwardIn(BaseModel):
     product: str
+    product_id: Optional[str] = ""
     size: Optional[str] = ""
     quantity: float
     unit: Optional[str] = "Nos"
@@ -7943,6 +7957,7 @@ class InwardIn(BaseModel):
 
 class OutwardIn(BaseModel):
     product: str
+    product_id: Optional[str] = ""
     size: Optional[str] = ""
     quantity: float
     unit: Optional[str] = "Nos"
@@ -8337,10 +8352,55 @@ def invalidate_products_cache(company_id: Optional[str] = None):
 
 
 
+def _apply_transaction_balance_delta(
+    cid: str,
+    prod_name: str,
+    prod_size: str,
+    delta_in: float = 0.0,
+    delta_out: float = 0.0,
+    prod_id: Optional[str] = None
+):
+    """
+    Applies an instant O(1) in-memory balance delta to _PRODUCTS_CACHE[cid].
+    Ensures zero lag for immediate product balance reads across all views.
+    """
+    if not cid or cid not in _PRODUCTS_CACHE:
+        return
+    cache_time, items = _PRODUCTS_CACHE[cid]
+    p_norm = norm_product_name(prod_name)
+    s_norm = norm_str(prod_size)
+    for p in items:
+        matched = False
+        if prod_id and str(p.get("id")) == str(prod_id):
+            matched = True
+        elif norm_product_name(p.get("name")) == p_norm and norm_str(p.get("size")) == s_norm:
+            matched = True
+
+        if matched:
+            current_in = float(p.get("total_in") or 0.0)
+            current_out = float(p.get("total_out") or 0.0)
+            op = float(p.get("opening_stock") or 0.0)
+            new_in = round(current_in + delta_in, 2)
+            new_out = round(current_out + delta_out, 2)
+            new_bal = round(op + new_in - new_out, 2)
+            p["total_in"] = new_in
+            p["total_out"] = new_out
+            p["balance"] = new_bal
+            mn = float(p.get("min_stock") or 0.0)
+            if new_bal <= 0:
+                p["stock_status"] = "Out Of Stock"
+            elif new_bal <= mn:
+                p["stock_status"] = "Low Stock"
+            else:
+                p["stock_status"] = "Normal"
+            break
+
 async def _compute_inventory_balances(cid: str):
     items = await db.products.find({"company_id": cid, "status": {"$ne": "Archived"}}, {"_id": 0}).sort("name", 1).to_list(10000)
-    inward_entries = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(100000)
-    outward_entries = await db.outward_entries.find({"company_id": cid}, {"_id": 0}).to_list(100000)
+    inward_projection = {"_id": 0, "id": 1, "product": 1, "size": 1, "quantity": 1, "product_id": 1, "status": 1, "source": 1, "source_type": 1}
+    outward_projection = {"_id": 0, "id": 1, "product": 1, "size": 1, "quantity": 1, "product_id": 1, "status": 1}
+    inward_entries = await db.inward_entries.find({"company_id": cid}, inward_projection).to_list(100000)
+    outward_entries = await db.outward_entries.find({"company_id": cid}, outward_projection).to_list(100000)
 
     # Product Maps for resolution
     prod_id_map: Dict[str, Dict] = {}
@@ -9199,7 +9259,8 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
             "high_value_goods": bool(data.high_value_asset or data.high_value_goods),
             "created_by": user_id,
             "created_by_name": user_name,
-            "created_at": now_iso()
+            "created_at": now_iso(),
+            "product_id": data.product_id or "",
         }
         if import_batch:
             doc["import_batch"] = import_batch
@@ -9261,6 +9322,7 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
             
         if not skip_activity_log:
             await log_activity(company_id, user_id, user_name, "Inward Entry", f"{pn} × {data.quantity}")
+        _apply_transaction_balance_delta(company_id, pn, data.size or "", delta_in=float(data.quantity or 0.0), delta_out=0.0, prod_id=data.product_id)
         invalidate_products_cache(company_id)
         _recent_inward_txs[inw_tx_key] = (time.time(), dict(doc))
         return doc
@@ -9374,7 +9436,8 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
             "high_value_goods": bool(data.high_value_asset or data.high_value_goods),
             "created_by": user_id,
             "created_by_name": user_name,
-            "created_at": now_iso()
+            "created_at": now_iso(),
+            "product_id": data.product_id or "",
         }
         if import_batch:
             doc["import_batch"] = import_batch
@@ -9548,6 +9611,7 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
         _save_local_assets(all_assets)
         
         await log_activity(company_id, user_id, user_name, "Outward Entry", f"{pn} × {data.quantity}")
+        _apply_transaction_balance_delta(company_id, pn, data.size or "", delta_in=0.0, delta_out=float(data.quantity or 0.0), prod_id=data.product_id)
         invalidate_products_cache(company_id)
         _recent_outward_txs[out_tx_key] = (time.time(), dict(doc))
         return doc
@@ -9600,6 +9664,7 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
     ref_num = raw_ch or numeric_only(data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None))
     patch = {
         "product": pn, "size": data.size or "", "quantity": data.quantity,
+        "product_id": data.product_id or existing.get("product_id", ""),
         "unit": data.unit or existing.get("unit") or "Nos",
         "reference_number": ref_num,
         "challan_no": ref_num,
@@ -9613,6 +9678,19 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
         "updated_at": now_iso(),
     }
     await db.inward_entries.update_one({"id": entry_id, "company_id": cid}, {"$set": patch})
+
+    # Apply instant balance difference
+    old_qty = float(existing.get("quantity") or 0.0)
+    new_qty = float(data.quantity or 0.0)
+    old_pn = existing.get("product")
+    old_ps = existing.get("size")
+    old_pid = existing.get("product_id")
+    if old_pn == pn and norm_str(old_ps) == norm_str(data.size or ""):
+        delta = new_qty - old_qty
+        _apply_transaction_balance_delta(cid, pn, data.size or "", delta_in=delta, delta_out=0.0, prod_id=data.product_id or old_pid)
+    else:
+        _apply_transaction_balance_delta(cid, old_pn, old_ps, delta_in=-old_qty, delta_out=0.0, prod_id=old_pid)
+        _apply_transaction_balance_delta(cid, pn, data.size or "", delta_in=new_qty, delta_out=0.0, prod_id=data.product_id)
 
     # Sync Challan No. to linked Purchase Bills if any
     b_num = patch.get("bill_number") or existing.get("bill_number")
@@ -9691,7 +9769,7 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
         _save_local_assets(non_inward_assets)
         
     await log_activity(cid, user["id"], user["name"], "Inward Updated", f"{pn} × {data.quantity}")
-    await sync_inventory_master(cid)
+    asyncio.create_task(sync_inventory_master(cid))
     invalidate_products_cache(cid)
     res = await db.inward_entries.find_one({"id": entry_id, "company_id": cid}, {"_id": 0})
     return _enrich_inward_with_assets(parse_inward_client_info(res))
@@ -9706,13 +9784,15 @@ async def delete_inward(entry_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Inward entry not found")
     await db.inward_entries.delete_one({"id": entry_id, "company_id": cid})
     
+    _apply_transaction_balance_delta(cid, existing.get("product"), existing.get("size"), delta_in=-float(existing.get("quantity") or 0.0), delta_out=0.0, prod_id=existing.get("product_id"))
+
     # Remove associated assets that are not installed
     all_assets = _load_local_assets()
     filtered_assets = [a for a in all_assets if a.get("inward_entry_id") != entry_id or a.get("status") == "Installed"]
     _save_local_assets(filtered_assets)
     
     await log_activity(cid, user["id"], user["name"], "Inward Deleted", f"{existing.get('product')} × {existing.get('quantity')}")
-    await sync_inventory_master(cid)
+    asyncio.create_task(sync_inventory_master(cid))
     invalidate_products_cache(cid)
     return {"ok": True}
 
@@ -9756,6 +9836,7 @@ async def update_outward(entry_id: str, data: OutwardIn, user=Depends(get_curren
     await ensure_product(cid, pn, size=data.size or "", unit=data.unit or existing.get("unit") or "Nos")
     patch = {
         "product": pn, "size": data.size or "", "quantity": data.quantity,
+        "product_id": data.product_id or existing.get("product_id", ""),
         "unit": data.unit or existing.get("unit") or "Nos",
         "client_id": data.client_id or "", "client_name": data.client_name or "",
         "project_id": data.project_id or "", "project_name": data.project_name or "",
@@ -9770,6 +9851,19 @@ async def update_outward(entry_id: str, data: OutwardIn, user=Depends(get_curren
         "updated_at": now_iso(),
     }
     await db.outward_entries.update_one({"id": entry_id, "company_id": cid}, {"$set": patch})
+
+    # Apply instant balance difference
+    old_qty = float(existing.get("quantity") or 0.0)
+    new_qty = float(data.quantity or 0.0)
+    old_pn = existing.get("product")
+    old_ps = existing.get("size")
+    old_pid = existing.get("product_id")
+    if old_pn == pn and norm_str(old_ps) == norm_str(data.size or ""):
+        delta = new_qty - old_qty
+        _apply_transaction_balance_delta(cid, pn, data.size or "", delta_in=0.0, delta_out=delta, prod_id=data.product_id or old_pid)
+    else:
+        _apply_transaction_balance_delta(cid, old_pn, old_ps, delta_in=0.0, delta_out=-old_qty, prod_id=old_pid)
+        _apply_transaction_balance_delta(cid, pn, data.size or "", delta_in=0.0, delta_out=new_qty, prod_id=data.product_id)
     
     # Reconcile high-value dispatch
     all_assets = _load_local_assets()
@@ -9947,7 +10041,7 @@ async def update_outward(entry_id: str, data: OutwardIn, user=Depends(get_curren
     _save_local_assets(all_assets)
     
     await log_activity(cid, user["id"], user["name"], "Outward Updated", f"{pn} × {data.quantity}")
-    await sync_inventory_master(cid)
+    asyncio.create_task(sync_inventory_master(cid))
     invalidate_products_cache(cid)
     res = await db.outward_entries.find_one({"id": entry_id, "company_id": cid}, {"_id": 0})
     return _enrich_outward_with_assets(res)
@@ -9962,6 +10056,8 @@ async def delete_outward(entry_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Outward entry not found")
     await db.outward_entries.delete_one({"id": entry_id, "company_id": cid})
     
+    _apply_transaction_balance_delta(cid, existing.get("product"), existing.get("size"), delta_in=0.0, delta_out=-float(existing.get("quantity") or 0.0), prod_id=existing.get("product_id"))
+
     # Revert dispatched assets
     all_assets = _load_local_assets()
     for a in all_assets:
@@ -9974,7 +10070,7 @@ async def delete_outward(entry_id: str, user=Depends(get_current_user)):
     _save_local_assets(all_assets)
     
     await log_activity(cid, user["id"], user["name"], "Outward Deleted", f"{existing.get('product')} × {existing.get('quantity')}")
-    await sync_inventory_master(cid)
+    asyncio.create_task(sync_inventory_master(cid))
     invalidate_products_cache(cid)
     return {"ok": True}
 
@@ -10410,9 +10506,40 @@ async def inv_history(
 
     rows: List[Dict[str, Any]] = []
 
+    inward_q: Dict[str, Any] = {"company_id": cid}
+    outward_q: Dict[str, Any] = {"company_id": cid}
+
+    if st_filter:
+        inward_q["status"] = st_filter
+        outward_q["status"] = st_filter
+
+    if from_d and to_d:
+        inward_q["date"] = {"$gte": from_d, "$lte": to_d}
+        outward_q["date"] = {"$gte": from_d, "$lte": to_d}
+    elif from_d:
+        inward_q["date"] = {"$gte": from_d}
+        outward_q["date"] = {"$gte": from_d}
+    elif to_d:
+        inward_q["date"] = {"$lte": to_d}
+        outward_q["date"] = {"$lte": to_d}
+
+    if prod_filter:
+        inward_q["product"] = {"$regex": re.escape(prod_filter), "$options": "i"}
+        outward_q["product"] = {"$regex": re.escape(prod_filter), "$options": "i"}
+
+    if user_filter:
+        inward_q["created_by"] = user_filter
+        outward_q["created_by"] = user_filter
+
+    has_in_memory_filters = bool(search or vendor_filter or client_filter or challan_filter or bill_filter or size_filter)
+    if has_in_memory_filters:
+        fetch_limit = min(max(page * page_size * 2, 500), 5000)
+    else:
+        fetch_limit = min(page * page_size + 100, 2000)
+
     # Inward entries
     if not txn_type or txn_type == "inward":
-        inward_rows = await db.inward_entries.find({"company_id": cid}, inward_projection).sort([("date", -1), ("created_at", -1)]).to_list(100000)
+        inward_rows = await db.inward_entries.find(inward_q, inward_projection).sort([("date", -1), ("created_at", -1)]).to_list(fetch_limit)
         for raw_r in inward_rows:
             r = parse_inward_client_info(raw_r)
             enriched = _enrich_inward_with_assets(r)
@@ -10473,7 +10600,7 @@ async def inv_history(
 
     # Outward entries
     if not txn_type or txn_type == "outward":
-        outward_rows = await db.outward_entries.find({"company_id": cid}, outward_projection).sort([("date", -1), ("created_at", -1)]).to_list(100000)
+        outward_rows = await db.outward_entries.find(outward_q, outward_projection).sort([("date", -1), ("created_at", -1)]).to_list(fetch_limit)
         for raw_r in outward_rows:
             enriched = _enrich_outward_with_assets(raw_r)
             if not enriched:
@@ -10530,7 +10657,16 @@ async def inv_history(
             rows.append({**enriched, "type": "Outward"})
 
     rows.sort(key=lambda x: (x.get("date") or x.get("created_at") or ""), reverse=True)
-    total = len(rows)
+    if not has_in_memory_filters:
+        try:
+            total_inward = await db.inward_entries.count_documents(inward_q) if (not txn_type or txn_type == "inward") else 0
+            total_outward = await db.outward_entries.count_documents(outward_q) if (not txn_type or txn_type == "outward") else 0
+            total = total_inward + total_outward
+        except Exception:
+            total = len(rows)
+    else:
+        total = len(rows)
+
     pages = max(1, math.ceil(total / page_size)) if page_size > 0 else 1
     start = (page - 1) * page_size
     paged = rows[start:start + page_size]
@@ -11904,12 +12040,29 @@ async def product_stats(product_id: str, user=Depends(get_current_user)):
     p = await db.products.find_one({"id": product_id, "company_id": cid}, {"_id": 0})
     if not p:
         raise HTTPException(status_code=404, detail="Product not found")
-    items, _, _, _ = await _compute_inventory_balances(cid)
-    matched_p = next((item for item in items if item.get("id") == product_id), None)
+    matched_p = None
+    if cid in _PRODUCTS_CACHE:
+        cache_time, cached_items = _PRODUCTS_CACHE[cid]
+        matched_p = next((item for item in cached_items if item.get("id") == product_id), None)
+        if not matched_p:
+            p_name_norm = norm_product_name(p["name"])
+            p_size_norm = norm_str(p.get("size"))
+            matched_p = next((item for item in cached_items if norm_product_name(item.get("name")) == p_name_norm and norm_str(item.get("size")) == p_size_norm), None)
+
     if not matched_p:
-        name = norm_product_name(p["name"])
-        size = norm_str(p.get("size"))
-        matched_p = next((item for item in items if norm_product_name(item.get("name")) == name and norm_str(item.get("size")) == size), p)
+        p_name = norm_product_name(p["name"])
+        p_size = norm_str(p.get("size"))
+        in_p = await db.inward_entries.find({"company_id": cid, "$or": [{"product_id": product_id}, {"product": p_name, "size": p_size}]}, {"_id": 0, "quantity": 1, "status": 1}).to_list(10000)
+        out_p = await db.outward_entries.find({"company_id": cid, "$or": [{"product_id": product_id}, {"product": p_name, "size": p_size}]}, {"_id": 0, "quantity": 1, "status": 1}).to_list(10000)
+        tot_in = sum(float(x.get("quantity") or 0.0) for x in in_p if str(x.get("status") or "").lower() not in ["cancelled", "draft_cancelled"])
+        tot_out = sum(float(x.get("quantity") or 0.0) for x in out_p if str(x.get("status") or "").lower() not in ["cancelled", "draft_cancelled"])
+        op_stock = float(p.get("opening_stock") or 0.0)
+        bal = round(op_stock + tot_in - tot_out, 2)
+        matched_p = dict(p)
+        matched_p["opening_stock"] = op_stock
+        matched_p["total_in"] = round(tot_in, 2)
+        matched_p["total_out"] = round(tot_out, 2)
+        matched_p["balance"] = bal
 
     op_stock = float(matched_p.get("opening_stock") or 0.0)
     total_in = matched_p.get("total_in", 0.0)

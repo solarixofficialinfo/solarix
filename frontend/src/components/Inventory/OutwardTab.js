@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import api, { formatApiError, fileUrl } from "@/lib/api";
 import { useOutwardList } from "@/hooks/useInventory";
 import { useClientList } from "@/hooks/useClients";
 import { useAssetList } from "@/hooks/useAssets";
+import { invalidateFrontendProductCache } from "@/lib/productCache";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +55,7 @@ const EMPTY = () => ({
 });
 
 export default function OutwardTab({ products, onChanged, globalSearch }) {
+  const queryClient = useQueryClient();
   const canCreate = usePermission("data_management", "create");
   const canEdit = usePermission("data_management", "edit");
   const canDelete = usePermission("data_management", "delete");
@@ -151,6 +154,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
         : (form.serial_numbers || []);
       const payload = {
         ...form,
+        product_id: form.product_id || "",
         unit: formatUnit(form.unit || "Nos"),
         quantity: Number(form.quantity),
         serial_numbers: parsedSns,
@@ -159,16 +163,22 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
       };
       if (editing) {
         await api.patch(`/inventory/outward/${editing.id}`, payload);
-        const { data: updated } = await api.get("/inventory/outward");
-        const verified = updated.find(x => x.id === editing.id);
-        if (!verified) throw new Error("Transaction verification failed");
-        
-        await load(); onChanged?.();
+        load();
+        invalidateFrontendProductCache();
+        queryClient.invalidateQueries({ queryKey: ["inventory"] });
+        queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
+        queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
+        onChanged?.();
         toast.success("Outward entry updated");
         reset();
       } else {
         await api.post("/inventory/outward", payload);
-        await load(); onChanged?.();
+        load();
+        invalidateFrontendProductCache();
+        queryClient.invalidateQueries({ queryKey: ["inventory"] });
+        queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
+        queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
+        onChanged?.();
         toast.success("Outward saved");
 
         if (autoContinue) {
@@ -265,7 +275,12 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
       await api.delete(`/inventory/outward/${confirmDel.id}`);
       toast.success("Outward entry deleted");
       setConfirmDel(null);
-      load(); onChanged?.();
+      load();
+      invalidateFrontendProductCache();
+      queryClient.invalidateQueries({ queryKey: ["inventory"] });
+      queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
+      queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
+      onChanged?.();
     } catch (e) { toast.error(formatApiError(e)); }
   };
 
@@ -448,6 +463,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
                     setForm(prev => ({
                       ...prev,
                       product: pName,
+                      product_id: (typeof v === "object" && v?.id) || prev.product_id || "",
                       size: sizeVal,
                       unit: unitVal,
                       high_value_goods: isHighValue,

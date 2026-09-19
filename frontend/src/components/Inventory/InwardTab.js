@@ -3,6 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { useInwardList } from "@/hooks/useInventory";
 import { useClientList } from "@/hooks/useClients";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { invalidateFrontendProductCache } from "@/lib/productCache";
 import { ProductAutocompleteInput, VendorAutocompleteInput, ClientAutocompleteInput, UNIT_OPTIONS, formatUnit, getStandardizedUnitOptions } from "./_shared";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -199,6 +200,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
     setForm((prev) => ({
       ...prev,
       product: pName,
+      product_id: (typeof v === "object" && v?.id) || prev.product_id || "",
       size: sizeVal,
       unit: unitVal,
       high_value_asset: isHighValue
@@ -240,6 +242,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
         source_id: vendorId,
         vendor_id: vendorId,
         product: form.product.trim(),
+        product_id: form.product_id || "",
         size: (form.size || "").trim(),
         quantity: Number(form.quantity),
         unit: formatUnit(form.unit || "Nos"),
@@ -263,8 +266,11 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
 
       toast.success(editing ? "Inward entry updated!" : "Inward entry saved & inventory stock updated!");
       refetchInward();
-      queryClient.invalidateQueries(["products"]);
-      queryClient.invalidateQueries(["vendors"]);
+      invalidateFrontendProductCache();
+      queryClient.invalidateQueries({ queryKey: ["inventory"] });
+      queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
+      queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
+      queryClient.invalidateQueries({ queryKey: ["vendors"] });
       onChanged?.();
 
       if (autoContinue && !editing) {
@@ -344,7 +350,10 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
       toast.success("Inward entry deleted & stock adjusted");
       setConfirmDel(null);
       refetchInward();
-      queryClient.invalidateQueries(["products"]);
+      invalidateFrontendProductCache();
+      queryClient.invalidateQueries({ queryKey: ["inventory"] });
+      queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
+      queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
       onChanged?.();
     } catch (e) {
       toast.error(formatApiError(e));

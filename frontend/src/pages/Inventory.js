@@ -71,7 +71,7 @@ export default function Inventory() {
   const bump = useCallback(() => {
     console.log("[IMPORT] Inventory bump() starting");
     invalidateInventory();
-    queryClient.invalidateQueries({ queryKey: ["ledger"] });
+    queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
     queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
     reload();
     console.log("[IMPORT] Inventory bump() finished");

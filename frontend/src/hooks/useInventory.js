@@ -42,6 +42,8 @@ export function useInvalidateInventory() {
   return () => {
     invalidateFrontendProductCache();
     queryClient.invalidateQueries({ queryKey: queryKeys.inventory.all() });
+    queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
+    queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
   };
 }
 

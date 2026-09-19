@@ -156,14 +156,16 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const cursorCoordsRef = useRef({ lat: Number(latitude) || 19.076, lng: Number(longitude) || 72.8777 });
 
   // Precision Magnifier configuration, refs & state (Visual overlay, exactly ONE Leaflet map)
-  const MAGNIFIER_SIZE = 160;
+  const MAGNIFIER_SIZE = 120;
   const MAGNIFIER_RADIUS = MAGNIFIER_SIZE / 2;
-  const MAGNIFIER_ZOOM = 4;
+  const [magnifierZoom, setMagnifierZoom] = useState(2);
+  const magnifierZoomRef = useRef(2);
 
   const cursorScreenPosRef = useRef({ x: -999, y: -999 });
   const magnifierLensRef = useRef(null);
   const magnifierContentRef = useRef(null);
   const magnifierPaneRef = useRef(null);
+  const updateMagnifierTransformRef = useRef(null);
   const rafIdRef = useRef(null);
   const isDraggingVertexRef = useRef(false);
 
@@ -255,18 +257,45 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
     lensEl.style.display = "block";
 
-    // Center magnifier lens on cursor, clamped to avoid clipping outside container
-    const lensLeft = Math.max(8, Math.min(cx - MAGNIFIER_RADIUS, containerW - MAGNIFIER_SIZE - 8));
-    const lensTop = Math.max(8, Math.min(cy - MAGNIFIER_RADIUS, containerH - MAGNIFIER_SIZE - 8));
+    // Clean Positioning: Offset lens to upper-right of cursor to prevent covering the cursor/target.
+    // Automatically flip to safe side if approaching viewport edges.
+    const MARGIN = 8;
+    const OFFSET_X = 20;
+    const OFFSET_Y = 20;
+
+    let lensLeft = cx + OFFSET_X;
+    let lensTop = cy - MAGNIFIER_SIZE - OFFSET_Y;
+
+    // Flip below cursor if near top edge
+    if (lensTop < MARGIN) {
+      lensTop = cy + OFFSET_Y;
+    }
+    // Flip to left of cursor if near right edge
+    if (lensLeft + MAGNIFIER_SIZE > containerW - MARGIN) {
+      lensLeft = cx - MAGNIFIER_SIZE - OFFSET_X;
+    }
+    // Flip above cursor if bottom boundary exceeded when placed below
+    if (lensTop + MAGNIFIER_SIZE > containerH - MARGIN) {
+      lensTop = cy - MAGNIFIER_SIZE - OFFSET_Y;
+    }
+    // Clamp inside viewport
+    lensLeft = Math.max(MARGIN, Math.min(lensLeft, containerW - MAGNIFIER_SIZE - MARGIN));
+    lensTop = Math.max(MARGIN, Math.min(lensTop, containerH - MAGNIFIER_SIZE - MARGIN));
 
     lensEl.style.transform = `translate3d(${lensLeft}px, ${lensTop}px, 0px)`;
 
-    // Translate magnified content so the cursor point (cx, cy) is centered inside the lens (MAGNIFIER_RADIUS, MAGNIFIER_RADIUS)
-    const tx = MAGNIFIER_RADIUS - MAGNIFIER_ZOOM * cx;
-    const ty = MAGNIFIER_RADIUS - MAGNIFIER_ZOOM * cy;
+    // Scale satellite imagery: The exact geographic point directly under the cursor (cx, cy)
+    // is mathematically placed in the dead center of the lens (MAGNIFIER_RADIUS, MAGNIFIER_RADIUS).
+    const zoom = magnifierZoomRef.current || 2;
+    const tx = MAGNIFIER_RADIUS - zoom * cx;
+    const ty = MAGNIFIER_RADIUS - zoom * cy;
 
-    contentEl.style.transform = `translate3d(${tx}px, ${ty}px, 0px) scale(${MAGNIFIER_ZOOM})`;
-  }, [MAGNIFIER_RADIUS, MAGNIFIER_SIZE, MAGNIFIER_ZOOM, syncMagnifierTiles]);
+    contentEl.style.transform = `translate3d(${tx}px, ${ty}px, 0px) scale(${zoom})`;
+  }, [MAGNIFIER_RADIUS, MAGNIFIER_SIZE, syncMagnifierTiles]);
+
+  useEffect(() => {
+    updateMagnifierTransformRef.current = updateMagnifierTransform;
+  }, [updateMagnifierTransform]);
 
   // Location Capture & Drag confirmation states
   const [locationCaptured, setLocationCaptured] = useState(false);
@@ -1867,7 +1896,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           style={{ width: "100%", height: "100%", position: "relative" }}
         />
 
-        {/* Precision Magnifier Lens (Centered around cursor, shows 4x magnified satellite imagery) */}
+        {/* Precision Magnifier Lens (Compact 120px circular lens, clean satellite visual overlay) */}
         <div
           ref={magnifierLensRef}
           id="magnifier-lens-root"
@@ -1881,8 +1910,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             zIndex: 500,
             pointerEvents: "none",
             borderRadius: "50%",
-            border: "2.5px solid #ffffff",
-            boxShadow: "0 14px 40px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.3)",
+            border: "2px solid #ffffff",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.4)",
             overflow: "hidden",
             backgroundColor: "#070d1e",
             willChange: "transform",
@@ -1913,16 +1942,22 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             />
           </div>
 
-          {/* Hairline Crosshair Reticle & Exact Center Target inside lens */}
+          {/* Subtle Small Center Marker (No large lines across the circle) */}
           <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center [&_*]:!pointer-events-none">
-            <div className="absolute left-0 right-0 h-[1px] bg-red-500/80 pointer-events-none" />
-            <div className="absolute top-0 bottom-0 w-[1px] bg-red-500/80 pointer-events-none" />
-            <div className="w-5 h-5 rounded-full border border-red-500/85 flex items-center justify-center shadow-sm pointer-events-none">
-              <div className="w-1.5 h-1.5 rounded-full bg-red-500 border border-white shadow pointer-events-none" />
+            <div className="relative w-4 h-4 flex items-center justify-center pointer-events-none">
+              <div className="absolute top-0 w-[1px] h-1 bg-amber-400 pointer-events-none" />
+              <div className="absolute bottom-0 w-[1px] h-1 bg-amber-400 pointer-events-none" />
+              <div className="absolute left-0 h-[1px] w-1 bg-amber-400 pointer-events-none" />
+              <div className="absolute right-0 h-[1px] w-1 bg-amber-400 pointer-events-none" />
+              <div className="w-1.5 h-1.5 rounded-full bg-amber-400 border border-black/70 shadow-sm pointer-events-none" />
             </div>
-            {/* Zoom Label Badge */}
-            <div className="absolute bottom-2 bg-slate-950/90 border border-slate-700/80 text-[8px] font-extrabold text-amber-300 px-2 py-0.5 rounded-full shadow pointer-events-none tracking-wider">
-              4× ZOOM
+
+            {/* Compact Zoom Badge */}
+            <div
+              id="magnifier-zoom-badge"
+              className="absolute bottom-1.5 bg-slate-950/85 border border-slate-700/70 text-[8.5px] font-bold text-amber-300 px-1.5 py-0.5 rounded shadow pointer-events-none tracking-wide"
+            >
+              {magnifierZoom}×
             </div>
           </div>
         </div>
@@ -2100,6 +2135,31 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                 <Target className="w-3.5 h-3.5 text-emerald-100" />
                 <span>Mark Point</span>
               </button>
+
+              {/* Compact Zoom Selector (0.5×, 1×, 2×, 3×, 4× with 2× default) */}
+              <div className="flex items-center gap-1 px-1.5 h-7 bg-slate-800/90 border border-slate-700/80 rounded-lg">
+                <span className="text-[10.5px] text-slate-400 font-semibold">Zoom:</span>
+                <select
+                  id="magnifier-zoom-select"
+                  value={magnifierZoom}
+                  onChange={(e) => {
+                    const z = parseFloat(e.target.value);
+                    setMagnifierZoom(z);
+                    magnifierZoomRef.current = z;
+                    if (updateMagnifierTransformRef.current) {
+                      updateMagnifierTransformRef.current();
+                    }
+                  }}
+                  className="bg-transparent text-amber-300 text-xs font-bold cursor-pointer outline-none"
+                  title="Magnifier Zoom Multiplier"
+                >
+                  <option value={0.5} className="bg-slate-900 text-white">0.5×</option>
+                  <option value={1} className="bg-slate-900 text-white">1×</option>
+                  <option value={2} className="bg-slate-900 text-white">2×</option>
+                  <option value={3} className="bg-slate-900 text-white">3×</option>
+                  <option value={4} className="bg-slate-900 text-white">4×</option>
+                </select>
+              </div>
 
               {/* Undo Button */}
               <button

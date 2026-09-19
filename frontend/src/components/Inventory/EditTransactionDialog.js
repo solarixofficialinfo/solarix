@@ -54,14 +54,10 @@ export default function EditTransactionDialog({ transaction, onClose, onSaved, p
     const url = isInward ? `/inventory/inward/${form.id}` : `/inventory/outward/${form.id}`;
     const payload = { ...form, quantity: Number(form.quantity) };
     try {
-      await api.patch(url, payload);
-      // Explicitly GET to verify database row as requested
-      const { data: updated } = await api.get(isInward ? "/inventory/inward" : "/inventory/outward");
-      const verified = updated.find(x => x.id === form.id);
-      if (!verified) throw new Error("Transaction verification failed");
-      
-      if (onSaved) await onSaved();
+      const { data: updated } = await api.patch(url, payload);
+      if (onSaved) await onSaved(updated);
       toast.success("Transaction updated");
+      onClose?.();
     } catch (e) { toast.error(formatApiError(e)); }
     finally { setBusy(false); }
   };
@@ -157,6 +153,7 @@ export default function EditTransactionDialog({ transaction, onClose, onSaved, p
                   }
                   upd({
                     product: pName,
+                    product_id: (typeof v === "object" && v?.id) || form.product_id || "",
                     size: sizeVal,
                     unit: unitVal,
                     rate: rateVal
