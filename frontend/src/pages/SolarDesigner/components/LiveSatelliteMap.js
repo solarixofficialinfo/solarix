@@ -160,11 +160,16 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const MAGNIFIER_RADIUS = MAGNIFIER_SIZE / 2;
   const [magnifierZoom, setMagnifierZoom] = useState(2);
   const magnifierZoomRef = useRef(2);
+  const [magnifierOffset, setMagnifierOffset] = useState({ x: 24, y: -144 });
+  const magnifierOffsetRef = useRef({ x: 24, y: -144 });
 
   const cursorScreenPosRef = useRef({ x: -999, y: -999 });
   const magnifierLensRef = useRef(null);
   const magnifierContentRef = useRef(null);
   const magnifierPaneRef = useRef(null);
+  const targetReticleRef = useRef(null);
+  const connectorSvgRef = useRef(null);
+  const connectorLineRef = useRef(null);
   const updateMagnifierTransformRef = useRef(null);
   const rafIdRef = useRef(null);
   const isDraggingVertexRef = useRef(false);
@@ -221,18 +226,23 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     });
   }, []);
 
-  // Update magnifier position and high-magnification transform at display refresh rate via requestAnimationFrame
+  // Update magnifier position, target reticle, connector line, and high-magnification transform at display refresh rate via requestAnimationFrame
   const updateMagnifierTransform = useCallback(() => {
     rafIdRef.current = null;
     const lensEl = magnifierLensRef.current;
     const contentEl = magnifierContentRef.current;
     const paneWrapper = magnifierPaneRef.current;
+    const reticleEl = targetReticleRef.current;
+    const connSvg = connectorSvgRef.current;
+    const connLine = connectorLineRef.current;
     const container = mapContainerRef.current;
     if (!lensEl || !contentEl || !container) return;
 
     const { x: cx, y: cy } = cursorScreenPosRef.current;
     if (cx < 0 || cy < 0) {
       lensEl.style.display = "none";
+      if (reticleEl) reticleEl.style.display = "none";
+      if (connSvg) connSvg.style.display = "none";
       return;
     }
 
@@ -241,6 +251,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
     if (cx < 0 || cx > containerW || cy < 0 || cy > containerH) {
       lensEl.style.display = "none";
+      if (reticleEl) reticleEl.style.display = "none";
+      if (connSvg) connSvg.style.display = "none";
       return;
     }
 
@@ -257,34 +269,66 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
     lensEl.style.display = "block";
 
-    // Clean Positioning: Offset lens to upper-right of cursor to prevent covering the cursor/target.
-    // Automatically flip to safe side if approaching viewport edges.
+    // 1. Under-cursor Target Reticle directly marking the exact geographic target
+    if (reticleEl) {
+      reticleEl.style.display = "block";
+      reticleEl.style.transform = `translate3d(${cx}px, ${cy}px, 0px)`;
+    }
+
+    // 2. Clean Positioning: Offset lens relative to cursor to prevent covering target
     const MARGIN = 8;
-    const OFFSET_X = 20;
-    const OFFSET_Y = 20;
+    const offset = magnifierOffsetRef.current || { x: 24, y: -144 };
 
-    let lensLeft = cx + OFFSET_X;
-    let lensTop = cy - MAGNIFIER_SIZE - OFFSET_Y;
+    let lensLeft = cx + offset.x;
+    let lensTop = cy + offset.y;
 
-    // Flip below cursor if near top edge
-    if (lensTop < MARGIN) {
-      lensTop = cy + OFFSET_Y;
+    // Viewport edge auto-adaptation:
+    // If approaching top edge when offset points above
+    if (lensTop < MARGIN && offset.y < 0) {
+      lensTop = cy + Math.abs(offset.y) - MAGNIFIER_SIZE;
     }
-    // Flip to left of cursor if near right edge
-    if (lensLeft + MAGNIFIER_SIZE > containerW - MARGIN) {
-      lensLeft = cx - MAGNIFIER_SIZE - OFFSET_X;
+    // If approaching right edge when offset points right
+    if (lensLeft + MAGNIFIER_SIZE > containerW - MARGIN && offset.x > 0) {
+      lensLeft = cx - MAGNIFIER_SIZE - Math.abs(offset.x);
     }
-    // Flip above cursor if bottom boundary exceeded when placed below
-    if (lensTop + MAGNIFIER_SIZE > containerH - MARGIN) {
-      lensTop = cy - MAGNIFIER_SIZE - OFFSET_Y;
+    // If approaching bottom edge when offset points below
+    if (lensTop + MAGNIFIER_SIZE > containerH - MARGIN && offset.y > 0) {
+      lensTop = cy - MAGNIFIER_SIZE - Math.abs(offset.y);
     }
-    // Clamp inside viewport
+    // If approaching left edge when offset points left
+    if (lensLeft < MARGIN && offset.x < 0) {
+      lensLeft = cx + Math.abs(offset.x);
+    }
+
+    // Clamp strictly within viewport
     lensLeft = Math.max(MARGIN, Math.min(lensLeft, containerW - MAGNIFIER_SIZE - MARGIN));
     lensTop = Math.max(MARGIN, Math.min(lensTop, containerH - MAGNIFIER_SIZE - MARGIN));
 
     lensEl.style.transform = `translate3d(${lensLeft}px, ${lensTop}px, 0px)`;
 
-    // Scale satellite imagery: The exact geographic point directly under the cursor (cx, cy)
+    // 3. Visual Connector Line between cursor target (cx, cy) and lens perimeter
+    if (connSvg && connLine) {
+      const lensCenterX = lensLeft + MAGNIFIER_RADIUS;
+      const lensCenterY = lensTop + MAGNIFIER_RADIUS;
+      const dx = lensCenterX - cx;
+      const dy = lensCenterY - cy;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist > MAGNIFIER_RADIUS + 12) {
+        connSvg.style.display = "block";
+        const edgeX = lensCenterX - (dx / dist) * MAGNIFIER_RADIUS;
+        const edgeY = lensCenterY - (dy / dist) * MAGNIFIER_RADIUS;
+        connLine.setAttribute("x1", cx);
+        connLine.setAttribute("y1", cy);
+        connLine.setAttribute("x2", edgeX);
+        connLine.setAttribute("y2", edgeY);
+        connLine.style.display = "block";
+      } else {
+        connSvg.style.display = "none";
+      }
+    }
+
+    // 4. Scale satellite imagery: The exact geographic point directly under the cursor (cx, cy)
     // is mathematically placed in the dead center of the lens (MAGNIFIER_RADIUS, MAGNIFIER_RADIUS).
     const zoom = magnifierZoomRef.current || 2;
     const tx = MAGNIFIER_RADIUS - zoom * cx;
@@ -320,8 +364,12 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     if (activeTool === "draw_roof") {
       syncMagnifierTiles();
       if (magnifierLensRef.current) magnifierLensRef.current.style.display = "none";
+      if (targetReticleRef.current) targetReticleRef.current.style.display = "none";
+      if (connectorSvgRef.current) connectorSvgRef.current.style.display = "none";
     } else {
       if (magnifierLensRef.current) magnifierLensRef.current.style.display = "none";
+      if (targetReticleRef.current) targetReticleRef.current.style.display = "none";
+      if (connectorSvgRef.current) connectorSvgRef.current.style.display = "none";
       cursorScreenPosRef.current = { x: -999, y: -999 };
       if (rafIdRef.current) {
         cancelAnimationFrame(rafIdRef.current);
@@ -835,10 +883,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           const container = mapContainerRef.current;
           if (container) {
             const rect = container.getBoundingClientRect();
-            const clientX = e.originalEvent?.clientX ?? 0;
-            const clientY = e.originalEvent?.clientY ?? 0;
-            const sx = clientX - rect.left;
-            const sy = clientY - rect.top;
+            const sx = e.containerPoint ? e.containerPoint.x : ((e.originalEvent?.clientX ?? e.clientX ?? 0) - rect.left);
+            const sy = e.containerPoint ? e.containerPoint.y : ((e.originalEvent?.clientY ?? e.clientY ?? 0) - rect.top);
             cursorScreenPosRef.current = { x: sx, y: sy };
           }
           if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
@@ -1869,10 +1915,20 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             const container = mapContainerRef.current;
             if (container) {
               const rect = container.getBoundingClientRect();
-              cursorScreenPosRef.current = {
-                x: e.clientX - rect.left,
-                y: e.clientY - rect.top,
-              };
+              const sx = e.clientX - rect.left;
+              const sy = e.clientY - rect.top;
+              cursorScreenPosRef.current = { x: sx, y: sy };
+              
+              // Keep cursor geographic coordinate synchronized from container point
+              if (mapInstanceRef.current) {
+                try {
+                  const latlng = mapInstanceRef.current.containerPointToLatLng([sx, sy]);
+                  if (isValidLatLng(latlng.lat, latlng.lng)) {
+                    cursorCoordsRef.current = { lat: latlng.lat, lng: latlng.lng };
+                  }
+                } catch (err) {}
+              }
+
               if (!rafIdRef.current) {
                 rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
               }
@@ -1883,6 +1939,12 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           cursorScreenPosRef.current = { x: -999, y: -999 };
           if (magnifierLensRef.current) {
             magnifierLensRef.current.style.display = "none";
+          }
+          if (targetReticleRef.current) {
+            targetReticleRef.current.style.display = "none";
+          }
+          if (connectorSvgRef.current) {
+            connectorSvgRef.current.style.display = "none";
           }
           if (rafIdRef.current) {
             cancelAnimationFrame(rafIdRef.current);
@@ -1895,6 +1957,49 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           className="w-full h-full leaflet-container"
           style={{ width: "100%", height: "100%", position: "relative" }}
         />
+
+        {/* Visual Connector Line between Cursor Target and Magnifier Lens */}
+        <svg
+          ref={connectorSvgRef}
+          id="magnifier-connector-svg"
+          className="absolute inset-0 w-full h-full pointer-events-none z-[498]"
+          style={{ display: "none", width: "100%", height: "100%" }}
+        >
+          <line
+            ref={connectorLineRef}
+            stroke="#10b981"
+            strokeWidth="1.5"
+            strokeDasharray="3, 3"
+            opacity="0.8"
+          />
+        </svg>
+
+        {/* Under-Cursor Target Indicator (The EXACT geographic target under mouse) */}
+        <div
+          ref={targetReticleRef}
+          id="magnifier-cursor-target"
+          style={{
+            display: "none",
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: "16px",
+            height: "16px",
+            marginLeft: "-8px",
+            marginTop: "-8px",
+            zIndex: 499,
+            pointerEvents: "none",
+            willChange: "transform",
+          }}
+          className="pointer-events-none select-none"
+        >
+          <div className="relative w-full h-full flex items-center justify-center pointer-events-none">
+            <div className="absolute w-3 h-3 rounded-full border border-emerald-400 bg-emerald-500/25 shadow-sm pointer-events-none" />
+            <div className="absolute w-[1.5px] h-4 bg-emerald-400 pointer-events-none" />
+            <div className="absolute h-[1.5px] w-4 bg-emerald-400 pointer-events-none" />
+            <div className="w-1 h-1 rounded-full bg-emerald-300 shadow pointer-events-none" />
+          </div>
+        </div>
 
         {/* Precision Magnifier Lens (Compact 120px circular lens, clean satellite visual overlay) */}
         <div
@@ -2159,6 +2264,86 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                   <option value={3} className="bg-slate-900 text-white">3×</option>
                   <option value={4} className="bg-slate-900 text-white">4×</option>
                 </select>
+              </div>
+
+              {/* Lens Position Presets & Nudge Controls */}
+              <div className="flex items-center gap-1 px-1.5 h-7 bg-slate-800/90 border border-slate-700/80 rounded-lg">
+                <span className="text-[10.5px] text-slate-400 font-semibold">Lens:</span>
+                <select
+                  id="magnifier-pos-select"
+                  value={`${magnifierOffset.x},${magnifierOffset.y}`}
+                  onChange={(e) => {
+                    const parts = e.target.value.split(",").map(Number);
+                    const next = { x: parts[0], y: parts[1] };
+                    setMagnifierOffset(next);
+                    magnifierOffsetRef.current = next;
+                    updateMagnifierTransformRef.current?.();
+                  }}
+                  className="bg-transparent text-emerald-300 text-xs font-bold cursor-pointer outline-none"
+                  title="Magnifier lens position relative to cursor"
+                >
+                  <option value="24,-144" className="bg-slate-900 text-white">↗ Top-Right</option>
+                  <option value="-144,-144" className="bg-slate-900 text-white">↖ Top-Left</option>
+                  <option value="-60,-150" className="bg-slate-900 text-white">↑ Above</option>
+                  <option value="24,24" className="bg-slate-900 text-white">↘ Bottom-Right</option>
+                  <option value="-144,24" className="bg-slate-900 text-white">↙ Bottom-Left</option>
+                </select>
+
+                {/* Nudge Buttons */}
+                <div className="flex items-center gap-0.5 pl-1 border-l border-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = { ...magnifierOffsetRef.current, y: magnifierOffsetRef.current.y - 25 };
+                      setMagnifierOffset(next);
+                      magnifierOffsetRef.current = next;
+                      updateMagnifierTransformRef.current?.();
+                    }}
+                    className="w-4 h-4 rounded hover:bg-slate-700 flex items-center justify-center text-[9px] text-slate-300 hover:text-white"
+                    title="Nudge magnifier UP"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = { ...magnifierOffsetRef.current, y: magnifierOffsetRef.current.y + 25 };
+                      setMagnifierOffset(next);
+                      magnifierOffsetRef.current = next;
+                      updateMagnifierTransformRef.current?.();
+                    }}
+                    className="w-4 h-4 rounded hover:bg-slate-700 flex items-center justify-center text-[9px] text-slate-300 hover:text-white"
+                    title="Nudge magnifier DOWN"
+                  >
+                    ▼
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = { ...magnifierOffsetRef.current, x: magnifierOffsetRef.current.x - 25 };
+                      setMagnifierOffset(next);
+                      magnifierOffsetRef.current = next;
+                      updateMagnifierTransformRef.current?.();
+                    }}
+                    className="w-4 h-4 rounded hover:bg-slate-700 flex items-center justify-center text-[9px] text-slate-300 hover:text-white"
+                    title="Nudge magnifier LEFT"
+                  >
+                    ◀
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = { ...magnifierOffsetRef.current, x: magnifierOffsetRef.current.x + 25 };
+                      setMagnifierOffset(next);
+                      magnifierOffsetRef.current = next;
+                      updateMagnifierTransformRef.current?.();
+                    }}
+                    className="w-4 h-4 rounded hover:bg-slate-700 flex items-center justify-center text-[9px] text-slate-300 hover:text-white"
+                    title="Nudge magnifier RIGHT"
+                  >
+                    ▶
+                  </button>
+                </div>
               </div>
 
               {/* Undo Button */}
