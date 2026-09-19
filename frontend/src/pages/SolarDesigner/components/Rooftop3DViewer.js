@@ -29,6 +29,62 @@ import {
 //   - Snap system (roof edge, panel corners, existing nodes, 0.25m grid)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Procedural High-Definition Solar Cell Wafer Texture (Mono PERC 6×12 cells with silver busbars)
+function createSolarCellCanvasTexture() {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 1024;
+  const ctx = canvas.getContext("2d");
+
+  // Deep anti-reflective monocrystalline silicon gradient
+  const grad = ctx.createLinearGradient(0, 0, 512, 1024);
+  grad.addColorStop(0, "#081836");
+  grad.addColorStop(0.5, "#061228");
+  grad.addColorStop(1, "#040d1c");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 512, 1024);
+
+  // 6 columns x 12 rows of mono solar cells
+  const cols = 6;
+  const rows = 12;
+  const padX = 4;
+  const padY = 4;
+  const cellW = (512 - (cols + 1) * padX) / cols;
+  const cellH = (1024 - (rows + 1) * padY) / rows;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = padX + c * (cellW + padX);
+      const y = padY + r * (cellH + padY);
+
+      // Cell silicon body
+      ctx.fillStyle = "#0c244c";
+      ctx.fillRect(x, y, cellW, cellH);
+
+      // Chamfered corner cuts (white wafer backsheet showing through)
+      ctx.fillStyle = "#ffffff";
+      const cut = 4;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + cut, y); ctx.lineTo(x, y + cut); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x + cellW, y); ctx.lineTo(x + cellW - cut, y); ctx.lineTo(x + cellW, y + cut); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x, y + cellH); ctx.lineTo(x + cut, y + cellH); ctx.lineTo(x, y + cellH - cut); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x + cellW, y + cellH); ctx.lineTo(x + cellW - cut, y + cellH); ctx.lineTo(x + cellW, y + cellH - cut); ctx.fill();
+
+      // Busbars (silver metallic ribbons)
+      ctx.fillStyle = "rgba(220, 235, 255, 0.45)";
+      for (let b = 1; b <= 5; b++) {
+        const bx = x + (b / 6) * cellW;
+        ctx.fillRect(bx - 0.75, y, 1.5, cellH);
+      }
+    }
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  return texture;
+}
+
 const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   {
     roofPolygon = [],
@@ -41,6 +97,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       tilt_deg: 15,
       height_m: 1.8,
       azimuth: 180,
+      material: "GI",
       show_structure: true,
       cross_bracing: true,
       base_plates: true,
@@ -84,9 +141,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const pendingPointRef = useRef(null);
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [selectedMemberId, setSelectedMemberId] = useState(null);
+  const [selectedGroupId, setSelectedGroupId] = useState(null);
+  const [deletedMemberIds, setDeletedMemberIds] = useState(new Set());
+  const [viewMode, setViewMode] = useState("visual"); // 'visual' | 'engineering'
   const [snapEnabled, setSnapEnabled] = useState(true);
   const snapEnabledRef = useRef(true);
   const structureToolRef = useRef("none");
+  const deletedMemberIdsRef = useRef(deletedMemberIds);
+  const viewModeRef = useRef(viewMode);
 
   // Scene-level refs for interactive meshes
   const nodeMeshMapRef = useRef({}); // nodeId → THREE.Mesh
@@ -108,6 +170,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const membersRef = useRef(structureMembers);
   useEffect(() => { nodesRef.current = structureNodes; }, [structureNodes]);
   useEffect(() => { membersRef.current = structureMembers; }, [structureMembers]);
+  useEffect(() => { deletedMemberIdsRef.current = deletedMemberIds; }, [deletedMemberIds]);
+  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
 
   const hasRoof = roofPolygon && roofPolygon.length >= 3;
   const activePanels = (panels || []).filter((p) => !p.hidden);
@@ -206,7 +270,45 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         renderer.setSize(w, h);
       }
     },
-  }));
+    getStructuralMembers: () => Object.keys(memberMeshMapRef.current).map((id) => ({
+      id,
+      ...memberMeshMapRef.current[id]?.userData,
+    })),
+    selectMemberById: (id) => {
+      if (memberMeshMapRef.current[id]) {
+        setSelectedMemberId(id);
+        setSelectedNodeId(null);
+      }
+    },
+    deleteMemberById: (id) => {
+      setDeletedMemberIds((prev) => new Set([...prev, id]));
+      setSelectedMemberId(null);
+      setSelectedGroupId(null);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), []);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.__solarix_3d_viewer = {
+        getStructuralMembers: () => Object.keys(memberMeshMapRef.current).map((id) => ({
+          id,
+          ...memberMeshMapRef.current[id]?.userData,
+        })),
+        selectMemberById: (id) => {
+          if (memberMeshMapRef.current[id]) {
+            setSelectedMemberId(id);
+            setSelectedNodeId(null);
+          }
+        },
+        deleteMemberById: (id) => {
+          setDeletedMemberIds((prev) => new Set([...prev, id]));
+          setSelectedMemberId(null);
+          setSelectedGroupId(null);
+        },
+      };
+    }
+  }, []);
 
   // ─── Camera Utilities ────────────────────────────────────────────────────────
   const updateCameraPosition = useCallback(() => {
@@ -584,9 +686,19 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         if (mIntersects.length > 0) {
           const hit = mIntersects[0].object;
           const memberId = hit.userData?.memberId;
-          if (memberId) { setSelectedMemberId(memberId); setSelectedNodeId(null); }
+          if (memberId) {
+            setSelectedMemberId(memberId);
+            setSelectedNodeId(null);
+            if (e.altKey || e.shiftKey) {
+              setSelectedGroupId(hit.userData?.groupId || null);
+            } else {
+              setSelectedGroupId(null);
+            }
+          }
         } else {
-          setSelectedNodeId(null); setSelectedMemberId(null);
+          setSelectedNodeId(null);
+          setSelectedMemberId(null);
+          setSelectedGroupId(null);
         }
       }
       return;
@@ -676,6 +788,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     if (!scene) return;
 
     if (rootGroupRef.current) scene.remove(rootGroupRef.current);
+    memberMeshMapRef.current = {};
 
     const rootGroup = new THREE.Group();
     rootGroup.name = "dynamic_rooftop_group";
@@ -997,27 +1110,74 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       const isFlush = structType === "flush";
       const isElevated = structType === "elevated";
       const isFixedTilt = structType === "fixed_tilt";
+      const isEastWest = structType === "east_west";
       const isBallasted = structType === "ballasted";
+      const structMaterial = structure?.material || "GI";
+
       const baseClearance = isFlush ? 0.12 : Number(structure?.height_m || 1.8);
       const panelTiltDeg = isFlush ? roofPitchDeg : Number(structure?.tilt_deg || 15);
       const structAzimuth = Number(structure?.azimuth ?? 180);
 
-      // Materials
-      const panelGeom = new THREE.BoxGeometry(1, 0.038, 1);
-      const siliconCellMat = new THREE.MeshStandardMaterial({ color: 0x071b3b, roughness: 0.16, metalness: 0.75 });
-      const frameMat = new THREE.MeshStandardMaterial({ color: 0xd1d5db, roughness: 0.35, metalness: 0.85 });
+      // Photorealistic Solar Cell Wafer Texture
+      const solarTexture = createSolarCellCanvasTexture();
+      const siliconCellMat = new THREE.MeshStandardMaterial({
+        map: solarTexture,
+        roughness: 0.12,
+        metalness: 0.65,
+      });
+      const frameMat = new THREE.MeshStandardMaterial({ color: 0xd1d5db, roughness: 0.3, metalness: 0.88 });
       const moduleMaterials = [frameMat, frameMat, siliconCellMat, frameMat, frameMat, frameMat];
 
-      const railMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.3, metalness: 0.85 });
-      const rafterMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.4, metalness: 0.8 });
-      const postMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.35, metalness: 0.85 });
+      // Material finish based on structureMaterial prop (GI, Aluminium, MS)
+      let railMatColor = 0x94a3b8; // GI
+      let postMatColor = 0x64748b;
+      let structMetalness = 0.8;
+      let structRoughness = 0.35;
+      if (structMaterial === "Aluminium") {
+        railMatColor = 0xd1d5db;
+        postMatColor = 0xb0b8c8;
+        structMetalness = 0.9;
+        structRoughness = 0.25;
+      } else if (structMaterial === "MS") {
+        railMatColor = 0x334155;
+        postMatColor = 0x1e293b;
+        structMetalness = 0.6;
+        structRoughness = 0.45;
+      }
+
+      // Visual materials
+      const railMat = new THREE.MeshStandardMaterial({ color: railMatColor, roughness: structRoughness, metalness: structMetalness });
+      const rafterMat = new THREE.MeshStandardMaterial({ color: postMatColor, roughness: structRoughness + 0.05, metalness: structMetalness });
+      const postMat = new THREE.MeshStandardMaterial({ color: postMatColor, roughness: structRoughness, metalness: structMetalness });
       const basePlateMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5, metalness: 0.9 });
       const boltMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.2, metalness: 0.95 });
-      const braceMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4, metalness: 0.85 });
+      const braceMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: structRoughness, metalness: structMetalness });
       const ballastMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.95, metalness: 0.05 });
-      const flushRailMat = new THREE.MeshStandardMaterial({ color: 0xb0b8c8, roughness: 0.25, metalness: 0.9 });
+      const clampMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.25, metalness: 0.85 });
 
-      // A. Render PV Panels
+      // Engineering Mode materials (high-contrast functional color-coding)
+      const engRailMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.3, metalness: 0.7 }); // Amber
+      const engRafterMat = new THREE.MeshStandardMaterial({ color: 0x06b6d4, roughness: 0.3, metalness: 0.7 }); // Cyan
+      const engPostMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, roughness: 0.3, metalness: 0.8 }); // Blue
+      const engBraceMat = new THREE.MeshStandardMaterial({ color: 0xa855f7, roughness: 0.3, metalness: 0.7 }); // Purple
+
+      // Selection materials
+      const selectedMat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        emissive: 0x0284c7,
+        emissiveIntensity: 0.6,
+        roughness: 0.2,
+        metalness: 0.8,
+      });
+      const groupSelectedMat = new THREE.MeshStandardMaterial({
+        color: 0x60a5fa,
+        emissive: 0x2563eb,
+        emissiveIntensity: 0.3,
+        roughness: 0.3,
+        metalness: 0.7,
+      });
+
+      // A. Render PV Panels with realistic mono PERC cell wafer texture, beveled border & clamps
       if (showPanels) {
         activePanels.forEach((p) => {
           const pw = Number(p.width || 1.134);
@@ -1028,147 +1188,379 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             roof: fullRoof,
             structure: { type: structType, tilt_deg: panelTiltDeg, height_m: baseClearance, azimuth: panelAzimuth },
           });
+
           const panelGroup = new THREE.Group();
           panelGroup.position.set(transform.x, transform.y, transform.z);
           panelGroup.rotation.y = transform.yawRad + toRad(p.rotation || 0);
-          const panelMesh = new THREE.Mesh(panelGeom, moduleMaterials);
-          panelMesh.scale.set(pw, 1, pl);
+
+          // 1. PV Module Body with Monocrystalline PERC cell texture
+          const panelMesh = new THREE.Mesh(new THREE.BoxGeometry(pw, 0.038, pl), moduleMaterials);
           panelMesh.rotation.x = -transform.tiltRad;
           panelMesh.castShadow = true; panelMesh.receiveShadow = true;
           panelGroup.add(panelMesh);
+
+          // 2. Beveled Aluminium Frame Lip (0.012m outer border)
+          const frameLipGeom = new THREE.BoxGeometry(pw + 0.016, 0.012, pl + 0.016);
+          const frameLipMesh = new THREE.Mesh(frameLipGeom, frameMat);
+          frameLipMesh.position.set(0, -0.016, 0);
+          frameLipMesh.rotation.x = -transform.tiltRad;
+          panelGroup.add(frameLipMesh);
+
           rootGroup.add(panelGroup);
         });
       }
 
-      // B. Render Row-Based Structural Mounting Framework
+      // B. Render Row-Based Structural Mounting Framework with Node-to-Node Precision
       if (showStructures) {
         const rows = clusterPanelsIntoRows(activePanels, structAzimuth);
 
         rows.forEach((row) => {
+          const groupId = `row-${row.rowIndex}`;
           const tiltRad = toRad(panelTiltDeg);
-          const azYawRad = toRad(structAzimuth - 180);
+          const azRad = toRad(structAzimuth - 180);
+          const cosAz = Math.cos(azRad);
+          const sinAz = Math.sin(azRad);
+
           const rowRoofY = calculateRoofElevationAtPoint(row.centerX, row.centerY, fullRoof);
           const frameCenterY = rowRoofY + baseClearance + (row.pl / 2) * Math.sin(tiltRad);
 
+          // ── FLUSH MOUNT: Mini Rails directly on roof surface ───────────────
+          if (isFlush) {
+            const railLength = row.totalRowLength + 0.12;
+            const railGeom = new THREE.BoxGeometry(railLength, 0.035, 0.045);
+            [-row.pl * 0.28, row.pl * 0.28].forEach((vOff, railIdx) => {
+              const railId = `member-row${row.rowIndex}-flush-rail-${railIdx}`;
+              if (deletedMemberIdsRef.current.has(railId)) return;
+
+              const railZ = vOff * Math.cos(tiltRad);
+              const wx = row.centerX - railZ * sinAz;
+              const wy = row.centerY + railZ * cosAz;
+              const wRoofY = calculateRoofElevationAtPoint(wx, wy, fullRoof);
+              const finalY = wRoofY + 0.04;
+
+              const isSel = selectedMemberId === railId;
+              const isGrpSel = selectedGroupId === groupId;
+              const rMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engRailMat : railMat;
+
+              const railMesh = new THREE.Mesh(railGeom, rMat);
+              railMesh.position.set(wx, finalY, -wy);
+              railMesh.rotation.y = azRad;
+              railMesh.rotation.x = -tiltRad;
+              railMesh.userData = {
+                memberId: railId,
+                groupId,
+                type: "Purlin / Rail",
+                material: structMaterial,
+                length: Number(railLength.toFixed(2)),
+              };
+              railMesh.castShadow = true;
+              rootGroup.add(railMesh);
+              memberMeshMapRef.current[railId] = railMesh;
+            });
+            return;
+          }
+
+          // ── TILTED / ELEVATED / FIXED TILT / BALLASTED MOUNT ───────────────
           const rowMountGroup = new THREE.Group();
           rowMountGroup.position.set(row.centerX, frameCenterY, -row.centerY);
-          rowMountGroup.rotation.y = azYawRad;
+          rowMountGroup.rotation.y = azRad;
 
-          // ── FLUSH MOUNT: short mini-clamp rails, no posts ──────────────────
-          if (isFlush) {
-            const miniRailGeom = new THREE.BoxGeometry(row.totalRowLength + 0.1, 0.032, 0.04);
-            [-row.pl * 0.3, row.pl * 0.3].forEach((zOff) => {
-              const r = new THREE.Mesh(miniRailGeom, flushRailMat);
-              r.position.set(0, -0.02, zOff);
-              r.castShadow = true;
-              rowMountGroup.add(r);
-            });
-          } else {
-            // ── STANDARD RAILS ──────────────────────────────────────────────
-            const railLength = row.totalRowLength + 0.12;
-            const railGeom = new THREE.BoxGeometry(railLength, 0.045, 0.055);
-            const topRail = new THREE.Mesh(railGeom, railMat);
-            topRail.position.set(0, -0.038, -row.pl * 0.28 * Math.cos(tiltRad));
-            topRail.rotation.x = -tiltRad;
-            topRail.castShadow = true;
-            rowMountGroup.add(topRail);
-            const bottomRail = new THREE.Mesh(railGeom, railMat);
-            bottomRail.position.set(0, -0.038, +row.pl * 0.28 * Math.cos(tiltRad));
-            bottomRail.rotation.x = -tiltRad;
-            bottomRail.castShadow = true;
-            rowMountGroup.add(bottomRail);
+          // 1. CONTINUOUS RAILS (Bottom Rail & Top Rail)
+          const railLength = row.totalRowLength + 0.14;
+          const railGeom = new THREE.BoxGeometry(railLength, 0.045, 0.055);
 
-            // ── BALLASTED MOUNT: add concrete ballast blocks ────────────────
-            if (isBallasted && showPosts) {
-              const ballastBlockGeom = new THREE.BoxGeometry(0.40, 0.22, 0.32);
-              row.rafterUOffsets.forEach((uOffset) => {
-                const uRel = uOffset - row.centerU;
-                [+row.pl * 0.28 * Math.cos(tiltRad), -row.pl * 0.28 * Math.cos(tiltRad)].forEach((zOff) => {
-                  const ballast = new THREE.Mesh(ballastBlockGeom, ballastMat);
-                  ballast.position.set(uRel, -(baseClearance - 0.11), zOff);
-                  ballast.castShadow = true; ballast.receiveShadow = true;
-                  rowMountGroup.add(ballast);
+          const railsConfig = [
+            { idSuffix: "rail-bottom", vRel: +row.pl * 0.28, label: "Bottom Rail" },
+            { idSuffix: "rail-top", vRel: -row.pl * 0.28, label: "Top Rail" },
+          ];
+
+          railsConfig.forEach(({ idSuffix, vRel }) => {
+            const railId = `member-row${row.rowIndex}-${idSuffix}`;
+            if (deletedMemberIdsRef.current.has(railId)) return;
+
+            const railZ = vRel * Math.cos(tiltRad);
+            const railY = -vRel * Math.sin(tiltRad) - 0.038;
+
+            const isSel = selectedMemberId === railId;
+            const isGrpSel = selectedGroupId === groupId;
+            const rMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engRailMat : railMat;
+
+            const railMesh = new THREE.Mesh(railGeom, rMat);
+            railMesh.position.set(0, railY, railZ);
+            railMesh.rotation.x = -tiltRad;
+            railMesh.userData = {
+              memberId: railId,
+              groupId,
+              type: "Purlin / Rail",
+              material: structMaterial,
+              length: Number(railLength.toFixed(2)),
+            };
+            railMesh.castShadow = true;
+            rowMountGroup.add(railMesh);
+            memberMeshMapRef.current[railId] = railMesh;
+          });
+
+          // 2. MID CLAMPS & END CLAMPS AT RAIL INTERSECTIONS
+          if (row.items && row.items.length > 0) {
+            const clampGeom = new THREE.BoxGeometry(0.035, 0.018, 0.045);
+            row.items.forEach((it, itIdx) => {
+              const uPos = it.u - row.centerU;
+              const isFirst = itIdx === 0;
+              const uOffsets = [];
+              if (isFirst) uOffsets.push(uPos - it.pw / 2 + 0.02);
+              uOffsets.push(uPos + it.pw / 2 - 0.02);
+
+              uOffsets.forEach((uCl) => {
+                [+row.pl * 0.28, -row.pl * 0.28].forEach((vRel) => {
+                  const clampMesh = new THREE.Mesh(clampGeom, clampMat);
+                  const clZ = vRel * Math.cos(tiltRad);
+                  const clY = -vRel * Math.sin(tiltRad) - 0.015;
+                  clampMesh.position.set(uCl, clY, clZ);
+                  clampMesh.rotation.x = -tiltRad;
+                  rowMountGroup.add(clampMesh);
                 });
+              });
+            });
+          }
+
+          // 3. STRUCTURAL FRAMES: Rafters, Posts, Base Plates, and Cross Braces
+          const rafterLength = row.pl * 0.88;
+          const rafterGeom = new THREE.BoxGeometry(0.06, 0.08, rafterLength);
+          const basePlateGeom = new THREE.BoxGeometry(0.20, 0.022, 0.20);
+          const boltGeom = new THREE.CylinderGeometry(0.008, 0.008, 0.035, 8);
+
+          // Local attachment positions along tilt
+          const frontZ = +row.pl * 0.28 * Math.cos(tiltRad);
+          const rearZ = -row.pl * 0.28 * Math.cos(tiltRad);
+          const frontYOffset = -(row.pl * 0.28) * Math.sin(tiltRad) - 0.065;
+          const rearYOffset = +(row.pl * 0.28) * Math.sin(tiltRad) - 0.065;
+
+          row.rafterUOffsets.forEach((uOffset, idx) => {
+            const uRel = uOffset - row.centerU;
+            const isEndFrame = idx === 0 || idx === row.rafterUOffsets.length - 1;
+
+            // Compute exact Cartesian coordinates of front & rear posts on roof
+            // in world space to query exact roof height at each post foot:
+            const wFrontX = row.centerX + uRel * cosAz - frontZ * sinAz;
+            const wFrontY = row.centerY + uRel * sinAz + frontZ * cosAz;
+            const roofFrontY = calculateRoofElevationAtPoint(wFrontX, wFrontY, fullRoof);
+
+            const wRearX = row.centerX + uRel * cosAz - rearZ * sinAz;
+            const wRearY = row.centerY + uRel * sinAz + rearZ * cosAz;
+            const roofRearY = calculateRoofElevationAtPoint(wRearX, wRearY, fullRoof);
+
+            // Exact post height from roof surface to rafter connection (ZERO GAP!)
+            const frontLegHeight = Math.max(0.08, frameCenterY + frontYOffset - roofFrontY);
+            const rearLegHeight = Math.max(0.08, frameCenterY + rearYOffset - roofRearY);
+
+            // A. RAFTER BEAM
+            const rafterId = `member-row${row.rowIndex}-rafter-${idx}`;
+            if (!deletedMemberIdsRef.current.has(rafterId)) {
+              const isSel = selectedMemberId === rafterId;
+              const isGrpSel = selectedGroupId === groupId;
+              const rafMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engRafterMat : rafterMat;
+
+              const rafterMesh = new THREE.Mesh(rafterGeom, rafMat);
+              rafterMesh.position.set(uRel, -0.065, 0);
+              rafterMesh.rotation.x = -tiltRad;
+              rafterMesh.userData = {
+                memberId: rafterId,
+                groupId,
+                type: "Rafter Beam",
+                material: structMaterial,
+                length: Number(rafterLength.toFixed(2)),
+              };
+              rafterMesh.castShadow = true;
+              rowMountGroup.add(rafterMesh);
+              memberMeshMapRef.current[rafterId] = rafterMesh;
+            }
+
+            // B. BALLAST BLOCKS (for ballasted flat roof)
+            if (isBallasted && showPosts) {
+              const ballastBlockGeom = new THREE.BoxGeometry(0.42, 0.22, 0.32);
+              [frontZ, rearZ].forEach((zOff) => {
+                const ballast = new THREE.Mesh(ballastBlockGeom, ballastMat);
+                ballast.position.set(uRel, -(baseClearance - 0.11), zOff);
+                ballast.castShadow = true; ballast.receiveShadow = true;
+                rowMountGroup.add(ballast);
               });
             }
 
-            // ── POSTS + BASE PLATES (Elevated, Fixed Tilt) ──────────────────
-            if (showPosts && !isFlush && !isBallasted) {
-              const frontZ = +row.pl * 0.28 * Math.cos(tiltRad);
-              const rearZ = -row.pl * 0.28 * Math.cos(tiltRad);
-              const frontYOffset = -(row.pl * 0.28) * Math.sin(tiltRad) - 0.065;
-              const rearYOffset = +(row.pl * 0.28) * Math.sin(tiltRad) - 0.065;
-              const frontLegHeight = Math.max(0.1, frameCenterY + frontYOffset - rowRoofY);
-              const rearLegHeight = Math.max(0.1, frameCenterY + rearYOffset - rowRoofY);
-              const rafterLength = row.pl * 0.85;
-              const rafterGeom = new THREE.BoxGeometry(0.06, 0.08, rafterLength);
-              const postGeomFront = new THREE.CylinderGeometry(0.028, 0.028, frontLegHeight, 12);
-              const postGeomRear = isFixedTilt
-                ? new THREE.CylinderGeometry(0.028, 0.028, rearLegHeight * 0.6, 12)
-                : new THREE.CylinderGeometry(0.028, 0.028, rearLegHeight, 12);
-              const basePlateGeom = new THREE.BoxGeometry(0.18, 0.02, 0.18);
-              const boltGeom = new THREE.CylinderGeometry(0.008, 0.008, 0.03, 8);
+            // C. POSTS & BASE PLATES (Elevated & Fixed Tilt)
+            if (showPosts && !isBallasted) {
+              // 1. FRONT POST
+              const frontPostId = `member-row${row.rowIndex}-post-f-${idx}`;
+              if (!deletedMemberIdsRef.current.has(frontPostId)) {
+                const isSel = selectedMemberId === frontPostId;
+                const isGrpSel = selectedGroupId === groupId;
+                const pMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engPostMat : postMat;
 
-              row.rafterUOffsets.forEach((uOffset, idx) => {
-                const uRel = uOffset - row.centerU;
-                const isEndFrame = idx === 0 || idx === row.rafterUOffsets.length - 1;
-
-                // Rafter beam
-                const rafterMesh = new THREE.Mesh(rafterGeom, rafterMat);
-                rafterMesh.position.set(uRel, -0.065, 0);
-                rafterMesh.rotation.x = -tiltRad;
-                rafterMesh.castShadow = true;
-                rowMountGroup.add(rafterMesh);
-
-                // Front post + base
-                const frontPost = new THREE.Mesh(postGeomFront, postMat);
+                const postGeomFront = new THREE.CylinderGeometry(0.032, 0.032, frontLegHeight, 12);
+                const frontPost = new THREE.Mesh(postGeomFront, pMat);
+                // Position centered between rafter connection (frontYOffset) and roof surface
                 frontPost.position.set(uRel, frontYOffset - frontLegHeight / 2, frontZ);
+                frontPost.userData = {
+                  memberId: frontPostId,
+                  groupId,
+                  type: "Support Post (Front)",
+                  material: structMaterial,
+                  length: Number(frontLegHeight.toFixed(2)),
+                  elevation: Number(roofFrontY.toFixed(2)),
+                };
                 frontPost.castShadow = true;
                 rowMountGroup.add(frontPost);
+                memberMeshMapRef.current[frontPostId] = frontPost;
+
+                // Base Plate flush ON roof surface
                 const frontBase = new THREE.Mesh(basePlateGeom, basePlateMat);
-                frontBase.position.set(uRel, frontYOffset - frontLegHeight + 0.01, frontZ);
+                frontBase.position.set(uRel, frontYOffset - frontLegHeight + 0.011, frontZ);
                 frontBase.castShadow = true;
                 rowMountGroup.add(frontBase);
-                [[-0.06, -0.06], [-0.06, 0.06], [0.06, -0.06], [0.06, 0.06]].forEach(([bx, bz]) => {
+
+                // Anchor bolts
+                [[-0.07, -0.07], [-0.07, 0.07], [0.07, -0.07], [0.07, 0.07]].forEach(([bx, bz]) => {
                   const bolt = new THREE.Mesh(boltGeom, boltMat);
-                  bolt.position.set(uRel + bx, frontYOffset - frontLegHeight + 0.025, frontZ + bz);
+                  bolt.position.set(uRel + bx, frontYOffset - frontLegHeight + 0.026, frontZ + bz);
                   rowMountGroup.add(bolt);
                 });
+              }
 
-                // Rear post + base
-                const rearPost = new THREE.Mesh(postGeomRear, postMat);
+              // 2. REAR POST
+              const rearPostId = `member-row${row.rowIndex}-post-r-${idx}`;
+              if (!deletedMemberIdsRef.current.has(rearPostId)) {
+                const isSel = selectedMemberId === rearPostId;
+                const isGrpSel = selectedGroupId === groupId;
+                const pMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engPostMat : postMat;
+
+                const postGeomRear = new THREE.CylinderGeometry(0.032, 0.032, rearLegHeight, 12);
+                const rearPost = new THREE.Mesh(postGeomRear, pMat);
+                // Position centered between rafter connection (rearYOffset) and roof surface (ZERO GAP!)
                 rearPost.position.set(uRel, rearYOffset - rearLegHeight / 2, rearZ);
+                rearPost.userData = {
+                  memberId: rearPostId,
+                  groupId,
+                  type: "Support Post (Rear)",
+                  material: structMaterial,
+                  length: Number(rearLegHeight.toFixed(2)),
+                  elevation: Number(roofRearY.toFixed(2)),
+                };
                 rearPost.castShadow = true;
                 rowMountGroup.add(rearPost);
+                memberMeshMapRef.current[rearPostId] = rearPost;
+
+                // Base Plate flush ON roof surface
                 const rearBase = new THREE.Mesh(basePlateGeom, basePlateMat);
-                rearBase.position.set(uRel, rearYOffset - rearLegHeight + 0.01, rearZ);
+                rearBase.position.set(uRel, rearYOffset - rearLegHeight + 0.011, rearZ);
                 rearBase.castShadow = true;
                 rowMountGroup.add(rearBase);
-                [[-0.06, -0.06], [-0.06, 0.06], [0.06, -0.06], [0.06, 0.06]].forEach(([bx, bz]) => {
+
+                // Anchor bolts
+                [[-0.07, -0.07], [-0.07, 0.07], [0.07, -0.07], [0.07, 0.07]].forEach(([bx, bz]) => {
                   const bolt = new THREE.Mesh(boltGeom, boltMat);
-                  bolt.position.set(uRel + bx, rearYOffset - rearLegHeight + 0.025, rearZ + bz);
+                  bolt.position.set(uRel + bx, rearYOffset - rearLegHeight + 0.026, rearZ + bz);
                   rowMountGroup.add(bolt);
                 });
+              }
 
-                // Cross bracing on end frames (elevated only)
-                if (isElevated && baseClearance >= 1.2 && isEndFrame && structure?.cross_bracing !== false) {
+              // 3. CROSS BRACING (on elevated end frames or clearance >= 1.2m)
+              if (isElevated && baseClearance >= 1.2 && isEndFrame && structure?.cross_bracing !== false) {
+                const braceId = `member-row${row.rowIndex}-brace-${idx}`;
+                if (!deletedMemberIdsRef.current.has(braceId)) {
+                  const isSel = selectedMemberId === braceId;
+                  const isGrpSel = selectedGroupId === groupId;
+                  const bMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engBraceMat : braceMat;
+
                   const braceSpanZ = frontZ - rearZ;
                   const braceSpanY = rearYOffset - (frontYOffset - frontLegHeight);
                   const braceLength = Math.hypot(braceSpanZ, braceSpanY);
-                  const braceGeom = new THREE.CylinderGeometry(0.018, 0.018, braceLength, 8);
-                  const braceMesh = new THREE.Mesh(braceGeom, braceMat);
+                  const braceGeom = new THREE.CylinderGeometry(0.02, 0.02, braceLength, 8);
+                  const braceMesh = new THREE.Mesh(braceGeom, bMat);
                   braceMesh.position.set(uRel, (frontYOffset - frontLegHeight + rearYOffset) / 2, (frontZ + rearZ) / 2);
                   braceMesh.rotation.x = Math.atan2(braceSpanZ, braceSpanY);
+                  braceMesh.userData = {
+                    memberId: braceId,
+                    groupId,
+                    type: "Diagonal Brace",
+                    material: structMaterial,
+                    length: Number(braceLength.toFixed(2)),
+                  };
                   braceMesh.castShadow = true;
                   rowMountGroup.add(braceMesh);
+                  memberMeshMapRef.current[braceId] = braceMesh;
                 }
-              });
+              }
+
+              // 4. ENGINEERING JOINT NODES (Shown when viewMode === 'engineering')
+              if (viewMode === "engineering") {
+                const nodeSphGeom = new THREE.SphereGeometry(0.045, 10, 10);
+                const nodeMat = new THREE.MeshBasicMaterial({ color: 0x22d3ee });
+
+                // Joint 1: Front Post Top
+                const n1 = new THREE.Mesh(nodeSphGeom, nodeMat);
+                n1.position.set(uRel, frontYOffset, frontZ);
+                rowMountGroup.add(n1);
+
+                // Joint 2: Rear Post Top
+                const n2 = new THREE.Mesh(nodeSphGeom, nodeMat);
+                n2.position.set(uRel, rearYOffset, rearZ);
+                rowMountGroup.add(n2);
+
+                // Joint 3: Front Base Anchor
+                const n3 = new THREE.Mesh(nodeSphGeom, new THREE.MeshBasicMaterial({ color: 0x10b981 }));
+                n3.position.set(uRel, frontYOffset - frontLegHeight, frontZ);
+                rowMountGroup.add(n3);
+
+                // Joint 4: Rear Base Anchor
+                const n4 = new THREE.Mesh(nodeSphGeom, new THREE.MeshBasicMaterial({ color: 0x10b981 }));
+                n4.position.set(uRel, rearYOffset - rearLegHeight, rearZ);
+                rowMountGroup.add(n4);
+              }
             }
-          }
+          });
 
           rootGroup.add(rowMountGroup);
         });
       }
+    }
+
+    // ── 2.5 Walkways & Maintenance Corridors (CEA 750mm Standard) ─────────────
+    if (walkways && walkways.length > 0) {
+      walkways.forEach((w) => {
+        const wWidth = Number(w.width || 0.75); // 750mm CEA standard
+        const wLength = Number(w.length || 4.0);
+        const wx = Number(w.x || 0);
+        const wy = Number(w.y || 0);
+        const wRoofY = calculateRoofElevationAtPoint(wx, wy, fullRoof);
+        const wRot = toRad(Number(w.rotation || 0));
+
+        const walkGroup = new THREE.Group();
+        walkGroup.position.set(wx, wRoofY + 0.02, -wy);
+        walkGroup.rotation.y = wRot;
+
+        // Perforated safety grating walkway
+        const gratingGeom = new THREE.BoxGeometry(wWidth, 0.03, wLength);
+        const gratingMat = new THREE.MeshStandardMaterial({
+          color: 0xd97706, // Industrial amber safety walkway
+          roughness: 0.45,
+          metalness: 0.65,
+        });
+        const gratingMesh = new THREE.Mesh(gratingGeom, gratingMat);
+        gratingMesh.castShadow = true;
+        gratingMesh.receiveShadow = true;
+        walkGroup.add(gratingMesh);
+
+        // Yellow high-visibility anti-slip borders
+        const borderGeom = new THREE.BoxGeometry(0.025, 0.045, wLength);
+        const borderMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.3 });
+        const leftB = new THREE.Mesh(borderGeom, borderMat);
+        leftB.position.set(-wWidth / 2 + 0.012, 0.02, 0);
+        walkGroup.add(leftB);
+        const rightB = new THREE.Mesh(borderGeom, borderMat);
+        rightB.position.set(wWidth / 2 - 0.012, 0.02, 0);
+        walkGroup.add(rightB);
+
+        rootGroup.add(walkGroup);
+      });
     }
 
     // ── 3. Obstacles ──────────────────────────────────────────────────────────
@@ -1238,6 +1630,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   }, [
     roofPolygon, roof, panels, activePanels, obstacles, walkways, structure,
     showPanels, showStructures, showPosts, showRoof, showBuilding, showObstacles,
+    selectedMemberId, selectedGroupId, viewMode, deletedMemberIds,
   ]);
 
   // ─── Build / Update Interactive Structure Nodes & Members ─────────────────────
@@ -1248,7 +1641,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     // Clear previous interactive meshes
     while (iGroup.children.length > 0) iGroup.remove(iGroup.children[0]);
     nodeMeshMapRef.current = {};
-    memberMeshMapRef.current = {};
+    // Clean up previous manual member refs, but preserve auto-generated members
+    Object.keys(memberMeshMapRef.current).forEach((k) => {
+      if (k.startsWith("member-") || k.startsWith("manual-")) {
+        delete memberMeshMapRef.current[k];
+      }
+    });
 
     const nodeMat_default = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.3, metalness: 0.7, emissive: 0x7c4400, emissiveIntensity: 0.1 });
     const nodeMat_selected = new THREE.MeshStandardMaterial({ color: 0x3b82f6, roughness: 0.2, metalness: 0.8, emissive: 0x1d4ed8, emissiveIntensity: 0.4 });
@@ -1337,9 +1735,11 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
   // ─── Contextual Panel for Selected Node ───────────────────────────────────────
   const selectedNode = structureNodes.find((n) => n.id === selectedNodeId);
-  const selectedMember = structureMembers.find((m) => m.id === selectedMemberId);
+  const selectedMember = structureMembers.find((m) => m.id === selectedMemberId)
+    || (selectedMemberId && memberMeshMapRef.current[selectedMemberId]?.userData)
+    || null;
 
-  const handleDeleteNode = () => {
+  const handleDeleteNode = useCallback(() => {
     if (!selectedNodeId) return;
     const updatedNodes = nodesRef.current.filter((n) => n.id !== selectedNodeId);
     const updatedMembers = membersRef.current.filter((m) => m.nodeAId !== selectedNodeId && m.nodeBId !== selectedNodeId);
@@ -1348,15 +1748,41 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     onStructureNodesChange?.(updatedNodes);
     onStructureMembersChange?.(updatedMembers);
     setSelectedNodeId(null);
-  };
+  }, [selectedNodeId, onStructureNodesChange, onStructureMembersChange]);
 
-  const handleDeleteMember = () => {
+  const handleDeleteMember = useCallback(() => {
     if (!selectedMemberId) return;
-    const updatedMembers = membersRef.current.filter((m) => m.id !== selectedMemberId);
-    membersRef.current = updatedMembers;
-    onStructureMembersChange?.(updatedMembers);
+    if (membersRef.current.some((m) => m.id === selectedMemberId)) {
+      const updatedMembers = membersRef.current.filter((m) => m.id !== selectedMemberId);
+      membersRef.current = updatedMembers;
+      onStructureMembersChange?.(updatedMembers);
+    }
+    setDeletedMemberIds((prev) => new Set([...prev, selectedMemberId]));
     setSelectedMemberId(null);
-  };
+    setSelectedGroupId(null);
+  }, [selectedMemberId, onStructureMembersChange]);
+
+  // Keyboard navigation & deletion shortcuts (Esc = deselect, Del/Backspace = remove selected)
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") {
+        setSelectedMemberId(null);
+        setSelectedNodeId(null);
+        setSelectedGroupId(null);
+        setPendingPoint(null);
+        pendingPointRef.current = null;
+        setStructureTool("none");
+      } else if ((e.key === "Delete" || e.key === "Backspace") && !e.target.matches("input, select, textarea")) {
+        if (selectedMemberId) {
+          handleDeleteMember();
+        } else if (selectedNodeId) {
+          handleDeleteNode();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedMemberId, selectedNodeId, handleDeleteMember, handleDeleteNode]);
 
   const handleDuplicateMember = () => {
     if (!selectedMember) return;
@@ -1384,6 +1810,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     onStructureMembersChange?.([]);
     setSelectedNodeId(null);
     setSelectedMemberId(null);
+    setSelectedGroupId(null);
   };
 
   // ─── Toolbar button style helper ───────────────────────────────────────────────
@@ -1469,8 +1896,32 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           </button>
         </div>
 
-        {/* RIGHT: Layer Toggles + Fullscreen */}
-        <div className="flex items-center gap-1 bg-slate-900/98 backdrop-blur-md p-1 rounded-xl border border-slate-700 shadow-lg pointer-events-auto">
+        {/* RIGHT: View Mode + Layer Toggles + Fullscreen */}
+        <div className="flex items-center gap-1.5 bg-slate-900/98 backdrop-blur-md p-1 rounded-xl border border-slate-700 shadow-lg pointer-events-auto">
+          {/* Visual / Engineering Mode Toggle */}
+          <div className="flex items-center gap-0.5 bg-slate-800/80 p-0.5 rounded-lg border border-slate-700/80 mr-1">
+            <button
+              onClick={() => setViewMode("visual")}
+              className={`px-2.5 py-1 text-[10.5px] font-bold rounded-md transition-all cursor-pointer ${
+                viewMode === "visual"
+                  ? "bg-blue-600 text-white shadow-sm"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Visual
+            </button>
+            <button
+              onClick={() => setViewMode("engineering")}
+              className={`px-2.5 py-1 text-[10.5px] font-bold rounded-md transition-all cursor-pointer ${
+                viewMode === "engineering"
+                  ? "bg-indigo-600 text-white shadow-sm"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Engineering
+            </button>
+          </div>
+
           <button onClick={() => setShowRoof(!showRoof)} className={tbBtn(showRoof)}>Roof</button>
           <button onClick={() => setShowStructures(!showStructures)} className={tbBtn(showStructures)}>Structure</button>
           <button onClick={() => setShowPanels(!showPanels)} className={tbBtn(showPanels)}>Panels ({activePanels.length})</button>
@@ -1553,7 +2004,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
       {/* ── SELECTED ELEMENT CONTEXTUAL PANEL ───────────────────────────────── */}
       {(selectedNode || selectedMember) && (
-        <div className="absolute top-14 right-3 bg-slate-900/98 backdrop-blur-md p-3 rounded-xl border border-blue-700/60 shadow-xl z-10 pointer-events-auto min-w-[160px]">
+        <div className="absolute top-14 right-3 bg-slate-900/98 backdrop-blur-md p-3 rounded-xl border border-blue-700/60 shadow-xl z-10 pointer-events-auto min-w-[200px] animate-in fade-in">
           {selectedNode && (
             <>
               <div className="text-[10px] font-bold text-blue-400 uppercase tracking-wider mb-2">
@@ -1565,7 +2016,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                 <div className="flex justify-between"><span className="text-slate-500">Elevation</span><span className="font-bold">{Number(selectedNode.z ?? 0).toFixed(2)} m</span></div>
               </div>
               <div className="flex gap-1">
-                <button onClick={handleDeleteNode} className="flex-1 h-7 text-[11px] font-bold bg-red-900/60 text-red-300 border border-red-700 rounded-lg hover:bg-red-800/70 transition-all flex items-center justify-center gap-1">
+                <button onClick={handleDeleteNode} className="flex-1 h-7 text-[11px] font-bold bg-red-900/60 text-red-300 border border-red-700 rounded-lg hover:bg-red-800/70 transition-all flex items-center justify-center gap-1 cursor-pointer">
                   <Trash2 className="w-3 h-3" /> Delete
                 </button>
               </div>
@@ -1573,29 +2024,40 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           )}
           {selectedMember && (
             <>
-              <div className="text-[10px] font-bold text-blue-400 uppercase tracking-wider mb-2">
-                {selectedMember.type === "post" ? "│ Support Post" : selectedMember.type === "brace" ? "╲ Diagonal Brace" : selectedMember.type === "rail" ? "━ Rail" : "━ Member"}
+              <div className="text-[10px] font-bold text-blue-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                <span>{selectedMember.type || "Structural Member"}</span>
+                {selectedGroupId && <span className="text-[9px] text-emerald-400 bg-emerald-950/80 px-1 py-0.5 rounded border border-emerald-800">Group</span>}
               </div>
-              {(() => {
-                const nA = structureNodes.find((n) => n.id === selectedMember.nodeAId);
-                const nB = structureNodes.find((n) => n.id === selectedMember.nodeBId);
-                if (!nA || !nB) return null;
-                const len = Math.sqrt(
-                  Math.pow(nB.x - nA.x, 2) + Math.pow((nB.z ?? 0) - (nA.z ?? 0), 2) + Math.pow(nB.y - nA.y, 2)
-                );
-                return (
-                  <div className="space-y-1 text-[11px] text-slate-300 mb-2">
-                    <div className="flex justify-between"><span className="text-slate-500">Length</span><span className="font-bold">{len.toFixed(2)} m</span></div>
-                    <div className="flex justify-between"><span className="text-slate-500">Type</span><span className="font-bold capitalize">{selectedMember.type}</span></div>
-                  </div>
-                );
-              })()}
-              <div className="flex gap-1">
-                <button onClick={handleDuplicateMember} className="flex-1 h-7 text-[10px] font-bold bg-slate-700 text-slate-200 border border-slate-600 rounded-lg hover:bg-slate-600 transition-all flex items-center justify-center gap-1">
-                  <Copy className="w-3 h-3" /> Dup
-                </button>
-                <button onClick={handleDeleteMember} className="flex-1 h-7 text-[10px] font-bold bg-red-900/60 text-red-300 border border-red-700 rounded-lg hover:bg-red-800/70 transition-all flex items-center justify-center gap-1">
-                  <Trash2 className="w-3 h-3" /> Del
+              <div className="space-y-1 text-[11px] text-slate-300 mb-2.5">
+                <div className="flex justify-between"><span className="text-slate-500">ID</span><span className="font-mono text-[10px] text-slate-300 truncate max-w-[110px]">{selectedMember.id}</span></div>
+                {selectedMember.length && <div className="flex justify-between"><span className="text-slate-500">Length</span><span className="font-bold text-white">{selectedMember.length} m</span></div>}
+                {selectedMember.material && <div className="flex justify-between"><span className="text-slate-500">Material</span><span className="font-bold text-amber-300">{selectedMember.material}</span></div>}
+                {selectedMember.elevation && <div className="flex justify-between"><span className="text-slate-500">Roof Height</span><span className="font-bold text-slate-300">{selectedMember.elevation} m</span></div>}
+                {selectedMember.groupId && <div className="flex justify-between"><span className="text-slate-500">Table</span><span className="font-bold text-slate-300 capitalize">{selectedMember.groupId}</span></div>}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedGroupId(selectedGroupId ? null : selectedMember.groupId)}
+                    className="flex-1 h-7 text-[10px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Layers className="w-3 h-3" /> {selectedGroupId ? "Single" : "Select Group"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteMember}
+                    className="flex-1 h-7 text-[10px] font-bold bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-700 rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" /> Delete
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setSelectedMemberId(null); setSelectedGroupId(null); }}
+                  className="w-full h-6 text-[10px] text-slate-400 hover:text-white bg-transparent hover:bg-slate-800/60 rounded transition text-center cursor-pointer"
+                >
+                  Deselect (Esc)
                 </button>
               </div>
             </>

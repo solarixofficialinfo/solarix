@@ -213,7 +213,7 @@ export default function SolarStudio() {
     calibration: {},
     setback_m: 0.5,
     edge_clearance_m: 0.5,
-    walkway_m: 0.6,
+    walkway_m: 0.75, // India CEA standard: 75cm (750mm) clear rooftop access pathway
     walkways: [],
     usable_area_sqm: 0,
     coverage_pct: 0,
@@ -235,10 +235,11 @@ export default function SolarStudio() {
     panels: [],
     // 4. Mounting Structure
     structure: {
-      type: "elevated", // 'elevated' | 'flush' | 'fixed_tilt' | 'ballasted'
+      type: "elevated", // 'elevated' | 'flush' | 'fixed_tilt' | 'east_west' | 'ballasted'
       tilt_deg: 15,
       height_m: 1.8,
       azimuth: 180,
+      material: "GI", // 'GI' | 'Aluminium' | 'MS'
       show_structure: true,
       cross_bracing: true,
       base_plates: true,
@@ -416,8 +417,9 @@ export default function SolarStudio() {
   }, [designData.roof?.setback_m, designData.setback_m]);
 
   // Trigger Automatic Panel Layout
-  const handleAutoLayout = useCallback((customStrategy = "auto") => {
-    if (!designData.roof_polygon || designData.roof_polygon.length < 3) {
+  const handleAutoLayout = useCallback((customStrategy = "auto", customPolygon = null) => {
+    const polygon = customPolygon || designData.roof_polygon;
+    if (!polygon || polygon.length < 3) {
       toast.warning("Please draw a roof boundary on the map first.");
       setOpenSection("roof");
       setActiveTool("draw_roof");
@@ -425,7 +427,7 @@ export default function SolarStudio() {
     }
 
     const result = generateAutoPanelLayout({
-      roofPolygon: designData.roof_polygon,
+      roofPolygon: polygon,
       setbackMeters: Number(designData.roof?.setback_m || designData.setback_m || 0.5),
       obstacles: designData.obstacles || [],
       walkways: designData.walkways || [],
@@ -608,7 +610,7 @@ export default function SolarStudio() {
     toast.success("Applied standard 12m × 8m roof template.");
 
     setTimeout(() => {
-      handleAutoLayout("auto");
+      handleAutoLayout("auto", templatePolygon);
       viewer3dRef.current?.applyViewPreset?.("fitDesign");
     }, 150);
   }, [handleSetRoofPolygon, handleAutoLayout]);
@@ -1704,9 +1706,10 @@ export default function SolarStudio() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-slate-900 border-slate-800 text-white">
-                          <SelectItem value="elevated">Elevated</SelectItem>
-                          <SelectItem value="flush">Flush</SelectItem>
+                          <SelectItem value="elevated">Elevated Tilt</SelectItem>
+                          <SelectItem value="flush">Flush Mount</SelectItem>
                           <SelectItem value="fixed_tilt">Fixed Tilt</SelectItem>
+                          <SelectItem value="east_west">East-West (Dual Tilt)</SelectItem>
                           <SelectItem value="ballasted">Ballasted</SelectItem>
                         </SelectContent>
                       </Select>
@@ -1770,6 +1773,31 @@ export default function SolarStudio() {
                         className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
                       />
                     </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-[10px] font-semibold text-slate-400">Structure Material</Label>
+                    <Select
+                      value={designData.structure?.material || "GI"}
+                      onValueChange={(val) => {
+                        setDesignData((prev) => ({
+                          ...prev,
+                          structure: {
+                            ...prev.structure,
+                            material: val,
+                          },
+                        }));
+                      }}
+                    >
+                      <SelectTrigger className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                        <SelectItem value="GI">GI (Hot-Dip Galvanized Iron)</SelectItem>
+                        <SelectItem value="Aluminium">Aluminium (Anodized Al 6063-T6)</SelectItem>
+                        <SelectItem value="MS">MS (Mild Steel Powder-Coated)</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
               )}
