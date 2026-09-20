@@ -8045,7 +8045,7 @@ LABEL_TO_CANONICAL_CODE = {
 def norm_unit(u: Optional[str]) -> str:
     if not u:
         return "Nos"
-    clean = str(u).strip()
+    clean = u.strip()
     val = clean.upper()
     if val in UNIT_CODE_MAP:
         return UNIT_CODE_MAP[val]
@@ -8054,7 +8054,7 @@ def norm_unit(u: Optional[str]) -> str:
 def norm_unit_code(u: Optional[str]) -> str:
     if not u:
         return "NOS"
-    clean = str(u).strip()
+    clean = u.strip()
     val = clean.upper()
     label = UNIT_CODE_MAP.get(val)
     if label:
@@ -8354,8 +8354,8 @@ def invalidate_products_cache(company_id: Optional[str] = None):
 
 def _apply_transaction_balance_delta(
     cid: str,
-    prod_name: str,
-    prod_size: str,
+    prod_name: Optional[str] = None,
+    prod_size: Optional[str] = None,
     delta_in: float = 0.0,
     delta_out: float = 0.0,
     prod_id: Optional[str] = None
@@ -8371,9 +8371,9 @@ def _apply_transaction_balance_delta(
     s_norm = norm_str(prod_size)
     for p in items:
         matched = False
-        if prod_id and str(p.get("id")) == str(prod_id):
+        if prod_id and str(p.get("id")) == prod_id:
             matched = True
-        elif norm_product_name(p.get("name")) == p_norm and norm_str(p.get("size")) == s_norm:
+        elif p_norm and norm_product_name(p.get("name")) == p_norm and norm_str(p.get("size")) == s_norm:
             matched = True
 
         if matched:
@@ -9682,8 +9682,8 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
     # Apply instant balance difference
     old_qty = float(existing.get("quantity") or 0.0)
     new_qty = float(data.quantity or 0.0)
-    old_pn = existing.get("product")
-    old_ps = existing.get("size")
+    old_pn = existing.get("product") or ""
+    old_ps = existing.get("size") or ""
     old_pid = existing.get("product_id")
     if old_pn == pn and norm_str(old_ps) == norm_str(data.size or ""):
         delta = new_qty - old_qty
@@ -9784,7 +9784,7 @@ async def delete_inward(entry_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Inward entry not found")
     await db.inward_entries.delete_one({"id": entry_id, "company_id": cid})
     
-    _apply_transaction_balance_delta(cid, existing.get("product"), existing.get("size"), delta_in=-float(existing.get("quantity") or 0.0), delta_out=0.0, prod_id=existing.get("product_id"))
+    _apply_transaction_balance_delta(cid, existing.get("product") or "", existing.get("size") or "", delta_in=-float(existing.get("quantity") or 0.0), delta_out=0.0, prod_id=existing.get("product_id"))
 
     # Remove associated assets that are not installed
     all_assets = _load_local_assets()
@@ -9855,8 +9855,8 @@ async def update_outward(entry_id: str, data: OutwardIn, user=Depends(get_curren
     # Apply instant balance difference
     old_qty = float(existing.get("quantity") or 0.0)
     new_qty = float(data.quantity or 0.0)
-    old_pn = existing.get("product")
-    old_ps = existing.get("size")
+    old_pn = existing.get("product") or ""
+    old_ps = existing.get("size") or ""
     old_pid = existing.get("product_id")
     if old_pn == pn and norm_str(old_ps) == norm_str(data.size or ""):
         delta = new_qty - old_qty
@@ -10056,7 +10056,7 @@ async def delete_outward(entry_id: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Outward entry not found")
     await db.outward_entries.delete_one({"id": entry_id, "company_id": cid})
     
-    _apply_transaction_balance_delta(cid, existing.get("product"), existing.get("size"), delta_in=0.0, delta_out=-float(existing.get("quantity") or 0.0), prod_id=existing.get("product_id"))
+    _apply_transaction_balance_delta(cid, existing.get("product") or "", existing.get("size") or "", delta_in=0.0, delta_out=-float(existing.get("quantity") or 0.0), prod_id=existing.get("product_id"))
 
     # Revert dispatched assets
     all_assets = _load_local_assets()
