@@ -1,19 +1,24 @@
 import React, { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from "react";
 import * as THREE from "three";
+import { toast } from "sonner";
 import {
   RotateCcw, Eye, Layers, Compass, ZoomIn, ZoomOut, Maximize2, Minimize2,
   Box, Camera, Sun, Info, Focus, Sliders, Check, Plus, Trash2, Copy,
-  Move, AlertTriangle, Grid, Magnet, Triangle, Sparkles
+  Move, AlertTriangle, Grid, Magnet, Triangle, Sparkles,
+  ArrowUp, ArrowDown, ArrowLeft, ArrowRight, X
 } from "lucide-react";
 import {
   toRad,
   calculateRoofElevationAtPoint,
   calculateSectionRoofElevationAtPoint,
   isPointInsidePolygon,
+  isPointInOrNearPolygon,
   calculatePanel3DPosition,
   clusterPanelsIntoRows,
   getPolygonBounds,
+  getPolygonArea,
 } from "../utils/geoCalculations";
+import { validatePanelPlacement } from "../utils/layoutEngine";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Engineering-Grade 3D Rooftop WebGL Visualizer
@@ -38,6 +43,7 @@ function createSolarCellCanvasTexture() {
   canvas.width = 512;
   canvas.height = 1024;
   const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
 
   // Deep anti-reflective monocrystalline silicon gradient
   const grad = ctx.createLinearGradient(0, 0, 512, 1024);
@@ -60,39 +66,75 @@ function createSolarCellCanvasTexture() {
       const x = padX + c * (cellW + padX);
       const y = padY + r * (cellH + padY);
 
-      // Cell silicon body
-      ctx.fillStyle = "#0c244c";
+      // Wafer background with subtle blue sheen
+      ctx.fillStyle = "#0a2550";
       ctx.fillRect(x, y, cellW, cellH);
 
-      // Chamfered corner cuts (white wafer backsheet showing through)
-      ctx.fillStyle = "#ffffff";
-      const cut = 4;
-      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + cut, y); ctx.lineTo(x, y + cut); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(x + cellW, y); ctx.lineTo(x + cellW - cut, y); ctx.lineTo(x + cellW, y + cut); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(x, y + cellH); ctx.lineTo(x + cut, y + cellH); ctx.lineTo(x, y + cellH - cut); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(x + cellW, y + cellH); ctx.lineTo(x + cellW - cut, y + cellH); ctx.lineTo(x + cellW, y + cellH - cut); ctx.fill();
+      // Diagonal chamfered corners (monocrystalline pseudo-square)
+      ctx.fillStyle = "#040c1a";
+      const chamfer = 7;
+      ctx.beginPath();
+      ctx.moveTo(x, y); ctx.lineTo(x + chamfer, y); ctx.lineTo(x, y + chamfer); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x + cellW, y); ctx.lineTo(x + cellW - chamfer, y); ctx.lineTo(x + cellW, y + chamfer); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x, y + cellH); ctx.lineTo(x + chamfer, y + cellH); ctx.lineTo(x, y + cellH - chamfer); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x + cellW, y + cellH); ctx.lineTo(x + cellW - chamfer, y + cellH); ctx.lineTo(x + cellW, y + cellH - chamfer); ctx.fill();
 
-      // Busbars (silver metallic ribbons)
-      ctx.fillStyle = "rgba(220, 235, 255, 0.45)";
-      for (let b = 1; b <= 5; b++) {
-        const bx = x + (b / 6) * cellW;
-        ctx.fillRect(bx - 0.75, y, 1.5, cellH);
+      // Ultra-fine silver grid fingers (horizontal lines per cell)
+      ctx.strokeStyle = "rgba(180, 210, 255, 0.22)";
+      ctx.lineWidth = 0.6;
+      for (let f = 1; f < 8; f++) {
+        const fy = y + (f * cellH) / 8;
+        ctx.beginPath();
+        ctx.moveTo(x + 2, fy);
+        ctx.lineTo(x + cellW - 2, fy);
+        ctx.stroke();
       }
     }
   }
 
+  // Multi-Busbar (MBB) 9-BB silver ribbons running vertically down the module
+  ctx.strokeStyle = "rgba(235, 245, 255, 0.85)";
+  ctx.lineWidth = 1.6;
+  const busbars = 9;
+  for (let b = 1; b <= busbars; b++) {
+    const bx = (b * 512) / (busbars + 1);
+    ctx.beginPath();
+    ctx.moveTo(bx, 2);
+    ctx.lineTo(bx, 1022);
+    ctx.stroke();
+
+    // Subtle solder pad highlights along busbars
+    ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+    for (let r = 0; r < rows; r++) {
+      const py = padY + r * (cellH + padY) + cellH / 2;
+      ctx.fillRect(bx - 1.5, py - 2, 3, 4);
+    }
+  }
+
   const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.ClampToEdgeWrapping;
-  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.anisotropy = 4;
   return texture;
+}
+
+// Global cached solar cell texture
+let cachedSolarTexture = null;
+function getSolarCellTexture() {
+  if (!cachedSolarTexture) {
+    cachedSolarTexture = createSolarCellCanvasTexture();
+  }
+  return cachedSolarTexture;
 }
 
 // Cache generated procedural tile textures
 const tileTextureCache = new Map();
 
 function getTileRoofTexture(tileConfig = {}) {
-  const style = tileConfig?.style || "spanish";
-  const colorHex = tileConfig?.color || "#c85a32";
+  if (typeof document === "undefined") return null;
+  const style = tileConfig.type || "spanish_barrel";
+  const colorHex = tileConfig.color || "#b45309";
   const cacheKey = `${style}_${colorHex}`;
   if (tileTextureCache.has(cacheKey)) {
     return tileTextureCache.get(cacheKey);
@@ -166,6 +208,17 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     selectedSectionId = null,
     onSelectSection = null,
     panels = [],
+    setPanels = null,
+    selectedPanelId = null,
+    setSelectedPanelId = null,
+    selectionMode = "panel", // 'panel' | 'row' | 'array'
+    setSelectionMode = null,
+    selectedRowIndex = null,
+    setSelectedRowIndex = null,
+    hasManualAdjustments = false,
+    setHasManualAdjustments = null,
+    setbackMeters = 0.5,
+    onUpdateSection = null,
     obstacles = [],
     walkways = [],
     structure = {
@@ -254,6 +307,189 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
   const hasRoof = roofPolygon && roofPolygon.length >= 3;
   const activePanels = (panels || []).filter((p) => !p.hidden);
+
+  // 3D Panel Selection & Adjustment Fallbacks
+  const [internalSelectedPanelId, setInternalSelectedPanelId] = useState(null);
+  const [internalSelectionMode, setInternalSelectionMode] = useState("panel");
+  const [internalSelectedRowIndex, setInternalSelectedRowIndex] = useState(null);
+  const [stepIncrement, setStepIncrement] = useState(0.05); // 0.01, 0.05, 0.10
+
+  const activeSelectedPanelId = selectedPanelId !== undefined && selectedPanelId !== null ? selectedPanelId : internalSelectedPanelId;
+  const changeSelectedPanelId = setSelectedPanelId || setInternalSelectedPanelId;
+
+  const activeSelectionMode = selectionMode || internalSelectionMode;
+  const changeSelectionMode = setSelectionMode || setInternalSelectionMode;
+
+  const activeSelectedRowIndex = selectedRowIndex !== undefined && selectedRowIndex !== null ? selectedRowIndex : internalSelectedRowIndex;
+  const changeSelectedRowIndex = setSelectedRowIndex || setInternalSelectedRowIndex;
+
+  // 3D Micro-Move Handler with Boundary Collision Checks
+  const handle3DMicroMove = useCallback((dx, dy) => {
+    if (!panels || panels.length === 0 || !setPanels) return;
+    const finalDx = Math.round(dx * 1000) / 1000;
+    const finalDy = Math.round(dy * 1000) / 1000;
+
+    const currentSelectedPanel = activeSelectedPanelId ? panels.find((p) => p.id === activeSelectedPanelId) : null;
+    const activeSec = (selectedSectionId && roofSections)
+      ? roofSections.find((s) => s.id === selectedSectionId)
+      : (currentSelectedPanel?.sectionId ? roofSections.find((s) => s.id === currentSelectedPanel.sectionId) : null);
+    const targetPolygon = activeSec?.polygon || roofPolygon;
+
+    if (!targetPolygon || targetPolygon.length < 3) {
+      toast.warning("Roof boundary required for micro-adjustments.");
+      return;
+    }
+
+    // MODE 1: Single Panel Move
+    if (activeSelectionMode === "panel") {
+      if (!activeSelectedPanelId || !currentSelectedPanel) {
+        toast.info("Click a solar panel in 3D to select and move it.");
+        return;
+      }
+
+      const candidate = {
+        ...currentSelectedPanel,
+        x: Math.round((currentSelectedPanel.x + finalDx) * 1000) / 1000,
+        y: Math.round((currentSelectedPanel.y + finalDy) * 1000) / 1000,
+      };
+
+      const validation = validatePanelPlacement({
+        candidate,
+        roofPolygon: targetPolygon,
+        setbackMeters,
+        panels,
+        obstacles,
+        walkways,
+        excludePanelId: currentSelectedPanel.id,
+      });
+
+      if (!validation.valid) {
+        toast.warning(validation.reason || "Movement blocked: panel would leave usable roof area.");
+        return;
+      }
+
+      setPanels((prev) =>
+        prev.map((p) => (p.id === currentSelectedPanel.id ? { ...p, x: candidate.x, y: candidate.y } : p))
+      );
+      setHasManualAdjustments?.(true);
+      return;
+    }
+
+    // MODE 2: Row Move
+    if (activeSelectionMode === "row") {
+      if (activeSelectedRowIndex == null) {
+        toast.info("Please select a panel to identify its row.");
+        return;
+      }
+
+      const rowPanels = panels.filter((p) => p.row === activeSelectedRowIndex);
+      if (rowPanels.length === 0) return;
+
+      const rowPanelIds = new Set(rowPanels.map((p) => p.id));
+      const candidatePanels = rowPanels.map((p) => ({
+        ...p,
+        x: Math.round((p.x + finalDx) * 1000) / 1000,
+        y: Math.round((p.y + finalDy) * 1000) / 1000,
+      }));
+
+      const otherPanels = panels.filter((p) => !rowPanelIds.has(p.id));
+
+      for (const cand of candidatePanels) {
+        const validation = validatePanelPlacement({
+          candidate: cand,
+          roofPolygon: targetPolygon,
+          setbackMeters,
+          panels: otherPanels,
+          obstacles,
+          walkways,
+          excludePanelId: cand.id,
+        });
+
+        if (!validation.valid) {
+          toast.warning(validation.reason || "Row movement blocked: would push panels outside usable roof area.");
+          return;
+        }
+      }
+
+      const candMap = new Map(candidatePanels.map((p) => [p.id, p]));
+      setPanels((prev) =>
+        prev.map((p) => {
+          if (candMap.has(p.id)) {
+            const u = candMap.get(p.id);
+            return { ...p, x: u.x, y: u.y };
+          }
+          return p;
+        })
+      );
+      setHasManualAdjustments?.(true);
+      return;
+    }
+
+    // MODE 3: Entire Array Move
+    if (activeSelectionMode === "array") {
+      const candidatePanels = panels.map((p) => ({
+        ...p,
+        x: Math.round((p.x + finalDx) * 1000) / 1000,
+        y: Math.round((p.y + finalDy) * 1000) / 1000,
+      }));
+
+      for (const cand of candidatePanels) {
+        const validation = validatePanelPlacement({
+          candidate: cand,
+          roofPolygon: targetPolygon,
+          setbackMeters,
+          panels: [],
+          obstacles,
+          walkways,
+          excludePanelId: cand.id,
+        });
+
+        if (!validation.valid) {
+          toast.warning("Array movement blocked: would push panels outside usable roof area.");
+          return;
+        }
+      }
+
+      setPanels(candidatePanels);
+      setHasManualAdjustments?.(true);
+      return;
+    }
+  }, [panels, setPanels, activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode, selectedSectionId, roofSections, roofPolygon, setbackMeters, obstacles, walkways, setHasManualAdjustments]);
+
+  // Delete currently selected panel in 3D
+  const handleDeleteSelectedPanel = useCallback(() => {
+    if (!activeSelectedPanelId || !setPanels) return;
+    setPanels((prev) => prev.filter((p) => p.id !== activeSelectedPanelId));
+    changeSelectedPanelId(null);
+    changeSelectedRowIndex(null);
+    toast.success("Panel removed.");
+  }, [activeSelectedPanelId, setPanels, changeSelectedPanelId, changeSelectedRowIndex]);
+
+  // Arrow keys listener when panel is selected
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (!activeSelectedPanelId && activeSelectedRowIndex == null) return;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) return;
+
+      const step = stepIncrement;
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        handle3DMicroMove(0, step);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        handle3DMicroMove(0, -step);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        handle3DMicroMove(-step, 0);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        handle3DMicroMove(step, 0);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeSelectedPanelId, activeSelectedRowIndex, stepIncrement, handle3DMicroMove]);
 
   // Keep refs in sync with state
   useEffect(() => { structureToolRef.current = structureTool; }, [structureTool]);
@@ -788,7 +1024,15 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const pIntersects = raycasterRef.current.intersectObjects(panelObjects, false);
           if (pIntersects.length > 0) {
             const hit = pIntersects[0].object;
+            const pId = hit.userData?.panelId;
             const secId = hit.userData?.sectionId;
+            if (pId) {
+              changeSelectedPanelId(pId);
+              const clickedP = panels.find((item) => item.id === pId);
+              if (clickedP && clickedP.row != null) {
+                changeSelectedRowIndex(clickedP.row);
+              }
+            }
             if (secId && onSelectSection) {
               onSelectSection(secId);
             }
@@ -798,6 +1042,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             if (secIntersects.length > 0) {
               const hit = secIntersects[0].object;
               const secId = hit.userData?.sectionId;
+              changeSelectedPanelId(null);
+              changeSelectedRowIndex(null);
               if (secId && onSelectSection) {
                 onSelectSection(secId);
               }
@@ -805,6 +1051,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
               setSelectedNodeId(null);
               setSelectedMemberId(null);
               setSelectedGroupId(null);
+              changeSelectedPanelId(null);
+              changeSelectedRowIndex(null);
             }
           }
         }
@@ -888,7 +1136,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       }
       return;
     }
-  }, [roof, structure, snapToNearest, onStructureNodesChange, onStructureMembersChange, onSelectSection]);
+  }, [roof, structure, snapToNearest, onStructureNodesChange, onStructureMembersChange, onSelectSection, panels, changeSelectedPanelId, changeSelectedRowIndex]);
 
   // ─── Build / Update Main 3D Scene ─────────────────────────────────────────────
   useEffect(() => {
@@ -950,8 +1198,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           for (let i = 0; i < roofPolygon.length; i++) {
             const j = (i + 1) % roofPolygon.length;
             const p1 = roofPolygon[i], p2 = roofPolygon[j];
-            const sec1 = roofSections.find((s) => isPointInsidePolygon(p1.x, p1.y, s.polygon)) || roofSections[0];
-            const sec2 = roofSections.find((s) => isPointInsidePolygon(p2.x, p2.y, s.polygon)) || roofSections[0];
+            const sec1 = roofSections.find((s) => isPointInOrNearPolygon(p1.x, p1.y, s.polygon, 0.25)) || roofSections[0];
+            const sec2 = roofSections.find((s) => isPointInOrNearPolygon(p2.x, p2.y, s.polygon, 0.25)) || roofSections[0];
             const h1 = calculateSectionRoofElevationAtPoint(p1.x, p1.y, sec1, fullRoof);
             const h2 = calculateSectionRoofElevationAtPoint(p2.x, p2.y, sec2, fullRoof);
             const z1 = -p1.y, z2 = -p2.y;
@@ -968,7 +1216,29 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           rootGroup.add(wallMesh);
         }
 
-        // 2. Individual Roof Planes per Section
+        // 2. Unified Base Building Roof Slab
+        if (showRoof && hasValidRoofPolygon) {
+          const baseShape = new THREE.Shape();
+          roofPolygon.forEach((pt, idx) => {
+            if (idx === 0) baseShape.moveTo(pt.x, -pt.y);
+            else baseShape.lineTo(pt.x, -pt.y);
+          });
+          baseShape.closePath();
+          const baseGeom = new THREE.ShapeGeometry(baseShape);
+          const basePos = baseGeom.getAttribute("position");
+          for (let i = 0; i < basePos.count; i++) {
+            const px = basePos.getX(i);
+            const pz = basePos.getY(i);
+            basePos.setXYZ(i, px, buildingElevationM, pz);
+          }
+          baseGeom.computeVertexNormals();
+          const baseMesh = new THREE.Mesh(baseGeom, roofMat);
+          baseMesh.castShadow = true;
+          baseMesh.receiveShadow = true;
+          rootGroup.add(baseMesh);
+        }
+
+        // 3. Individual Roof Planes per Section
         if (showRoof) {
           roofSections.forEach((sec) => {
             if (!sec.polygon || sec.polygon.length < 3) return;
@@ -989,7 +1259,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
               const px = posAttr.getX(i);
               const pz = posAttr.getY(i);
               const py = calculateSectionRoofElevationAtPoint(px, -pz, sec, fullRoof);
-              posAttr.setXYZ(i, px, py, pz);
+              const finalY = sec.pitch <= 0 ? Math.max(py, buildingElevationM + 0.005) : py;
+              posAttr.setXYZ(i, px, finalY, pz);
               if (uvAttr) {
                 // UV repeat scaled to real-world meters
                 uvAttr.setXY(i, px / 0.40, pz / 0.40);
@@ -1445,10 +1716,28 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             panelId: p.id,
             sectionId: pSec?.id,
             sectionName: pSec?.name,
+            row: p.row,
           };
           panelGroup.add(panelMesh);
           if (p.id) {
             panelMeshMapRef.current[p.id] = panelMesh;
+          }
+
+          // 3D Panel Selection Outline Highlight
+          const isSingleSel = activeSelectedPanelId === p.id;
+          const isRowSel = activeSelectionMode === "row" && activeSelectedRowIndex != null && p.row === activeSelectedRowIndex;
+          const isArraySel = activeSelectionMode === "array" && (activeSelectedPanelId != null || activeSelectedRowIndex != null);
+          const isPanelHighlighted = isSingleSel || isRowSel || isArraySel;
+
+          if (isPanelHighlighted) {
+            const selGeom = new THREE.EdgesGeometry(new THREE.BoxGeometry(pw + 0.03, 0.055, pl + 0.03));
+            const selMat = new THREE.LineBasicMaterial({
+              color: isSingleSel ? 0x06b6d4 : 0xf59e0b,
+              linewidth: 3,
+            });
+            const selOutline = new THREE.LineSegments(selGeom, selMat);
+            selOutline.rotation.x = -tiltRad;
+            panelGroup.add(selOutline);
           }
 
           // 2. Beveled Aluminium Frame Lip (0.012m outer border)
@@ -1973,6 +2262,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     roofPolygon, roof, roofSections, selectedSectionId, panels, activePanels, obstacles, walkways, structure,
     showPanels, showStructures, showPosts, showRoof, showBuilding, showObstacles,
     selectedMemberId, selectedGroupId, viewMode, deletedMemberIds, renderNonce,
+    activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode,
   ]);
 
   // ─── Build / Update Interactive Structure Nodes & Members ─────────────────────
@@ -2343,6 +2633,227 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           </div>
         )}
       </div>
+
+      {/* ── 3D PANEL MICRO-ADJUSTER HUD ─────────────────────────────────────────── */}
+      {(activeSelectedPanelId || activeSelectedRowIndex != null) && (
+        <div className="absolute top-14 left-3 bg-slate-900/98 backdrop-blur-md p-3 rounded-xl border border-cyan-500/60 shadow-2xl z-20 pointer-events-auto w-[230px] animate-in fade-in text-slate-200">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-cyan-400">
+              <Move className="w-3.5 h-3.5" />
+              <span>Panel Adjustment</span>
+            </div>
+            <button
+              onClick={() => { changeSelectedPanelId(null); changeSelectedRowIndex(null); }}
+              className="text-slate-400 hover:text-white p-0.5 rounded transition cursor-pointer"
+              title="Close adjuster"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Selection Mode Toggle */}
+          <div className="mt-2.5">
+            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold mb-1">Selection Mode</div>
+            <div className="grid grid-cols-3 gap-1 bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+              {["panel", "row", "array"].map((m) => (
+                <button
+                  key={m}
+                  onClick={() => changeSelectionMode(m)}
+                  className={`py-1 text-[10px] font-bold rounded capitalize transition cursor-pointer ${
+                    activeSelectionMode === m ? "bg-cyan-600 text-white shadow-sm" : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  {m === "panel" ? "Single" : m}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Step Increment */}
+          <div className="mt-2.5 flex items-center justify-between">
+            <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Step:</span>
+            <div className="flex gap-1">
+              {[0.01, 0.05, 0.10].map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setStepIncrement(s)}
+                  className={`px-1.5 py-0.5 text-[10px] font-mono rounded font-bold transition border cursor-pointer ${
+                    stepIncrement === s ? "bg-cyan-950 text-cyan-300 border-cyan-500" : "bg-slate-800 text-slate-400 border-slate-700 hover:text-white"
+                  }`}
+                >
+                  {s.toFixed(2)}m
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Directional Nudge Keypad */}
+          <div className="mt-3 flex flex-col items-center gap-1">
+            <button
+              onClick={() => handle3DMicroMove(0, stepIncrement)}
+              className="w-9 h-8 bg-slate-800 hover:bg-cyan-600 hover:text-white text-cyan-300 border border-slate-700 rounded-lg flex items-center justify-center transition shadow-sm active:scale-95 cursor-pointer"
+              title="Move Up / North (ArrowUp)"
+            >
+              <ArrowUp className="w-4 h-4" />
+            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handle3DMicroMove(-stepIncrement, 0)}
+                className="w-9 h-8 bg-slate-800 hover:bg-cyan-600 hover:text-white text-cyan-300 border border-slate-700 rounded-lg flex items-center justify-center transition shadow-sm active:scale-95 cursor-pointer"
+                title="Move Left / West (ArrowLeft)"
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+              <div className="w-9 h-8 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center text-[10px] text-slate-400 font-mono">
+                {stepIncrement}m
+              </div>
+              <button
+                onClick={() => handle3DMicroMove(stepIncrement, 0)}
+                className="w-9 h-8 bg-slate-800 hover:bg-cyan-600 hover:text-white text-cyan-300 border border-slate-700 rounded-lg flex items-center justify-center transition shadow-sm active:scale-95 cursor-pointer"
+                title="Move Right / East (ArrowRight)"
+              >
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+            <button
+              onClick={() => handle3DMicroMove(0, -stepIncrement)}
+              className="w-9 h-8 bg-slate-800 hover:bg-cyan-600 hover:text-white text-cyan-300 border border-slate-700 rounded-lg flex items-center justify-center transition shadow-sm active:scale-95 cursor-pointer"
+              title="Move Down / South (ArrowDown)"
+            >
+              <ArrowDown className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Selection Info & Actions */}
+          <div className="mt-3 pt-2.5 border-t border-slate-800 flex items-center justify-between text-[10px]">
+            <span className="text-slate-400 truncate max-w-[130px]">
+              {activeSelectionMode === "panel" ? (
+                <>Panel: <b className="text-white font-mono">{activeSelectedPanelId?.slice(-6) || "Selected"}</b></>
+              ) : activeSelectionMode === "row" ? (
+                <>Row: <b className="text-white">#{activeSelectedRowIndex != null ? Number(activeSelectedRowIndex) + 1 : "-"}</b></>
+              ) : (
+                <>All Panels (<b className="text-white">{panels.length}</b>)</>
+              )}
+            </span>
+            {activeSelectionMode === "panel" && activeSelectedPanelId && (
+              <button
+                onClick={handleDeleteSelectedPanel}
+                className="px-2 py-0.5 rounded text-red-300 bg-red-950/80 border border-red-800 hover:bg-red-900 transition flex items-center gap-1 cursor-pointer"
+                title="Delete selected panel"
+              >
+                <Trash2 className="w-3 h-3" /> Delete
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── 3D CONTEXTUAL SECTION INSPECTOR ─────────────────────────────────────── */}
+      {selectedSectionId && !activeSelectedPanelId && activeSelectedRowIndex == null && (() => {
+        const sec = (roofSections || []).find((s) => s.id === selectedSectionId);
+        if (!sec) return null;
+        const secPanels = (panels || []).filter((p) => p.sectionId === sec.id);
+        const secArea = sec.polygon ? getPolygonArea(sec.polygon) : 0;
+
+        return (
+          <div className="absolute top-14 left-3 bg-slate-900/98 backdrop-blur-md p-3 rounded-xl border border-blue-500/60 shadow-2xl z-20 pointer-events-auto w-[240px] animate-in fade-in text-slate-200">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div>
+                <div className="text-xs font-bold text-blue-400">{sec.name || "Section"}</div>
+                <div className="text-[10px] text-slate-400">Area: <b className="text-slate-200">{secArea.toFixed(1)} m²</b> • Panels: <b className="text-emerald-400">{secPanels.length}</b></div>
+              </div>
+              <button
+                onClick={() => onSelectSection?.(null)}
+                className="text-slate-400 hover:text-white p-0.5 rounded transition cursor-pointer"
+                title="Deselect section"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="mt-2.5 space-y-2 text-[11px]">
+              {/* Roof Type */}
+              <div>
+                <span className="text-[10px] text-slate-400 uppercase font-semibold">Roof Type:</span>
+                <div className="grid grid-cols-4 gap-1 mt-1">
+                  {["RCC", "Tile", "Metal", "Shingle"].map((rt) => (
+                    <button
+                      key={rt}
+                      onClick={() => onUpdateSection?.(sec.id, { roofType: rt })}
+                      className={`py-0.5 text-[9.5px] font-bold rounded border transition cursor-pointer ${
+                        sec.roofType === rt ? "bg-blue-600 text-white border-blue-400" : "bg-slate-800 text-slate-400 border-slate-700 hover:text-white"
+                      }`}
+                    >
+                      {rt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Pitch & Azimuth */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-slate-400 uppercase font-semibold block">Pitch (°)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={60}
+                    value={sec.pitch ?? 0}
+                    onChange={(e) => onUpdateSection?.(sec.id, { pitch: parseFloat(e.target.value) || 0 })}
+                    className="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 uppercase font-semibold block">Azimuth (°)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={360}
+                    value={sec.azimuth ?? 180}
+                    onChange={(e) => onUpdateSection?.(sec.id, { azimuth: parseFloat(e.target.value) || 0 })}
+                    className="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              {/* Solar PV & Structure Toggles */}
+              <div className="pt-1.5 border-t border-slate-800 flex items-center justify-between">
+                <span className="text-[10px] text-slate-400">Solar PV:</span>
+                <button
+                  onClick={() => onUpdateSection?.(sec.id, { solarEnabled: sec.solarEnabled === false ? true : false })}
+                  className={`px-2 py-0.5 text-[10px] font-bold rounded border cursor-pointer ${
+                    sec.solarEnabled !== false ? "bg-emerald-950 text-emerald-300 border-emerald-600" : "bg-slate-800 text-slate-500 border-slate-700"
+                  }`}
+                >
+                  {sec.solarEnabled !== false ? "ON" : "OFF"}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400">Structure:</span>
+                <button
+                  onClick={() => onUpdateSection?.(sec.id, { structureEnabled: sec.structureEnabled === false ? true : false })}
+                  className={`px-2 py-0.5 text-[10px] font-bold rounded border cursor-pointer ${
+                    sec.structureEnabled !== false ? "bg-indigo-950 text-indigo-300 border-indigo-600" : "bg-slate-800 text-slate-500 border-slate-700"
+                  }`}
+                >
+                  {sec.structureEnabled !== false ? "ON" : "OFF"}
+                </button>
+              </div>
+
+              {/* Edit in 2D shortcut */}
+              <div className="pt-1.5">
+                <button
+                  onClick={() => onSwitchTo2D?.()}
+                  className="w-full py-1 text-[10px] font-bold rounded bg-slate-800 hover:bg-slate-700 text-blue-300 border border-slate-700 transition flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  Switch to 2D to Edit Section
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── SELECTED ELEMENT CONTEXTUAL PANEL ───────────────────────────────── */}
       {(selectedNode || selectedMember) && (

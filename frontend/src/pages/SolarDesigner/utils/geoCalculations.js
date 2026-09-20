@@ -126,6 +126,8 @@ export function getCartesianPolygonArea(points) {
   return Math.abs(getPolygonSignedArea(points));
 }
 
+export const getPolygonArea = getCartesianPolygonArea;
+
 /**
  * Calculates polygon perimeter in meters
  */
@@ -221,6 +223,38 @@ export function isPointInPolygon(px, py, points) {
 }
 
 export const isPointInsidePolygon = isPointInPolygon;
+
+/**
+ * Checks if a point is inside or near the boundary of a polygon (within tolerance in meters)
+ */
+export function isPointInOrNearPolygon(px, py, points, tolerance = 0.08) {
+  if (!points || points.length < 3) return false;
+  if (isPointInPolygon(px, py, points)) return true;
+
+  const pts = ensureCartesianCoordinates(points);
+  const tolSq = tolerance * tolerance;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    const ax = pts[i].x, ay = pts[i].y;
+    const bx = pts[j].x, by = pts[j].y;
+
+    // Check distance to vertex
+    const distVertexSq = (px - ax) * (px - ax) + (py - ay) * (py - ay);
+    if (distVertexSq <= tolSq) return true;
+
+    // Distance from point to segment AB
+    const dx = bx - ax, dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq > 1e-8) {
+      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+      const projX = ax + t * dx;
+      const projY = ay + t * dy;
+      const distSegSq = (px - projX) * (px - projX) + (py - projY) * (py - projY);
+      if (distSegSq <= tolSq) return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Line segment intersection test between (p1, p2) and (p3, p4)
@@ -785,9 +819,11 @@ export function calculateSectionRoofElevationAtPoint(x, y, section = {}, roofBas
  * - Must have at least 3 points
  * - Must have area >= 0.5 m²
  * - Must not self-intersect
+ * - Must be contained within parent roof polygon
+ * - Must not overlap existing sibling sections
  * Returns { valid: boolean, error?: string }
  */
-export function validateSectionPolygon(polygon, parentRoofPolygon = null) {
+export function validateSectionPolygon(polygon, parentRoofPolygon = null, existingSections = [], currentSectionId = null) {
   if (!polygon || !Array.isArray(polygon) || polygon.length < 3) {
     return { valid: false, error: "Section requires at least 3 points." };
   }
@@ -795,7 +831,7 @@ export function validateSectionPolygon(polygon, parentRoofPolygon = null) {
   const pts = ensureCartesianCoordinates(polygon);
   const area = getCartesianPolygonArea(pts);
   if (isNaN(area) || area < 0.5) {
-    return { valid: false, error: "Section area is too small or invalid (minimum 0.5 m²)." };
+    return { valid: false, error: "Section area is too small (minimum 0.5 m²)." };
   }
 
   // Self-intersection check: non-adjacent edges must not intersect
@@ -809,6 +845,97 @@ export function validateSectionPolygon(polygon, parentRoofPolygon = null) {
       const p4 = pts[(j + 1) % n];
       if (segmentsIntersect(p1, p2, p3, p4)) {
         return { valid: false, error: "Section edges cross over each other (self-intersecting)." };
+      }
+    }
+  }
+
+  // 1. Parent Roof Boundary Containment Check
+  if (parentRoofPolygon && Array.isArray(parentRoofPolygon) && parentRoofPolygon.length >= 3) {
+    const parentPts = ensureCartesianCoordinates(parentRoofPolygon);
+    for (let i = 0; i < pts.length; i++) {
+      if (!isPointInOrNearPolygon(pts[i].x, pts[i].y, parentPts, 0.20)) {
+        return { valid: false, error: "Section must be completely inside the parent roof boundary." };
+      }
+    }
+
+    const bounds = getPolygonBounds(pts);
+    if (!isPointInOrNearPolygon(bounds.centerX, bounds.centerY, parentPts, 0.20)) {
+      return { valid: false, error: "Section must be completely inside the parent roof boundary." };
+    }
+  }
+
+  // Helper: checks if a point is strictly inside polygon interior (excluding shared boundary edges)
+  function isPointStrictlyInside(px, py, points, borderTol = 0.08) {
+    if (!isPointInPolygon(px, py, points)) return false;
+    const ptsList = ensureCartesianCoordinates(points);
+    for (let i = 0; i < ptsList.length; i++) {
+      const j = (i + 1) % ptsList.length;
+      const ax = ptsList[i].x, ay = ptsList[i].y;
+      const bx = ptsList[j].x, by = ptsList[j].y;
+      const dx = bx - ax, dy = by - ay;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq > 1e-8) {
+        const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+        const projX = ax + t * dx;
+        const projY = ay + t * dy;
+        if (Math.hypot(px - projX, py - projY) <= borderTol) {
+          return false; // on border
+        }
+      }
+    }
+    return true;
+  }
+
+  // 2. Overlap Check with Existing Sibling Sections
+  if (Array.isArray(existingSections) && existingSections.length > 0) {
+    for (const sec of existingSections) {
+      if (!sec || !sec.polygon || sec.polygon.length < 3) continue;
+      if (currentSectionId && sec.id === currentSectionId) continue;
+
+      const secPts = ensureCartesianCoordinates(sec.polygon);
+
+      // Check if centroid of candidate is strictly inside sibling
+      const bounds = getPolygonBounds(pts);
+      if (isPointStrictlyInside(bounds.centerX, bounds.centerY, secPts)) {
+        return { valid: false, error: `Section overlaps ${sec.name || "another section"}. Sections must not overlap.` };
+      }
+
+      // Check if centroid of sibling is strictly inside candidate
+      const siblingBounds = getPolygonBounds(secPts);
+      if (isPointStrictlyInside(siblingBounds.centerX, siblingBounds.centerY, pts)) {
+        return { valid: false, error: `Section overlaps ${sec.name || "another section"}. Sections must not overlap.` };
+      }
+
+      // Check if vertices of candidate are strictly inside sibling section interior
+      for (const p of pts) {
+        if (isPointStrictlyInside(p.x, p.y, secPts)) {
+          return { valid: false, error: `Section overlaps ${sec.name || "another section"}. Sections must not overlap.` };
+        }
+      }
+
+      // Check if sibling vertices are strictly inside candidate interior
+      for (const sp of secPts) {
+        if (isPointStrictlyInside(sp.x, sp.y, pts)) {
+          return { valid: false, error: `Section overlaps ${sec.name || "another section"}. Sections must not overlap.` };
+        }
+      }
+
+      // Check if non-endpoint edges cross
+      const n1 = pts.length;
+      const n2 = secPts.length;
+      for (let i = 0; i < n1; i++) {
+        const a1 = pts[i], a2 = pts[(i + 1) % n1];
+        for (let j = 0; j < n2; j++) {
+          const b1 = secPts[j], b2 = secPts[(j + 1) % n2];
+          if (segmentsIntersect(a1, a2, b1, b2)) {
+            const isEndpoint =
+              (Math.hypot(a1.x - b1.x, a1.y - b1.y) < 0.08 || Math.hypot(a1.x - b2.x, a1.y - b2.y) < 0.08) ||
+              (Math.hypot(a2.x - b1.x, a2.y - b1.y) < 0.08 || Math.hypot(a2.x - b2.x, a2.y - b2.y) < 0.08);
+            if (!isEndpoint) {
+              return { valid: false, error: `Section crosses boundary of ${sec.name || "another section"}.` };
+            }
+          }
+        }
       }
     }
   }

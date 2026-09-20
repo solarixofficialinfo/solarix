@@ -674,6 +674,26 @@ export default function SolarStudio() {
     });
   }, [effectiveSections]);
 
+  // Centralized panel update handler with metrics recalculation
+  const handleSetPanels = useCallback((panelsOrFn) => {
+    setDesignData((prev) => {
+      const currentPanels = prev.panels || [];
+      const newPanels = typeof panelsOrFn === "function" ? panelsOrFn(currentPanels) : panelsOrFn;
+      const pCount = newPanels.filter((p) => !p.hidden).length;
+      const pWatt = Number(prev.panel_wattage || 550);
+      const totalKw = (pCount * pWatt) / 1000.0;
+      const singleArea = (prev.panel_dimensions?.width_m || 1.134) * (prev.panel_dimensions?.length_m || 2.278);
+      const coveragePct = prev.usable_area_sqm > 0 ? ((pCount * singleArea) / prev.usable_area_sqm) * 100 : 0;
+      return {
+        ...prev,
+        panels: newPanels,
+        panel_count: pCount,
+        system_kw: Math.round(totalKw * 100) / 100,
+        coverage_pct: Math.min(100, Math.round(coveragePct * 10) / 10),
+      };
+    });
+  }, []);
+
   // Add a new child section directly inside the roof
   const handleAddSection = useCallback((sectionPolygon) => {
     if (!sectionPolygon || sectionPolygon.length < 3) {
@@ -681,18 +701,17 @@ export default function SolarStudio() {
       return;
     }
 
-    const val = validateSectionPolygon(sectionPolygon, designData.roof_polygon);
+    const explicitSections = Array.isArray(designData.roof_sections) ? designData.roof_sections : [];
+    const val = validateSectionPolygon(sectionPolygon, designData.roof_polygon, explicitSections);
     if (!val.valid) {
       toast.error(val.error || "Invalid section polygon.");
       return;
     }
 
-    const sections = (designData.roof_sections && designData.roof_sections.length > 0)
-      ? designData.roof_sections
-      : effectiveSections;
-
-    // Sequential naming: Section A, Section B, Section C...
-    const existingNames = sections.map((s) => s.name || "");
+    // Sequential naming:
+    // If no explicit sections exist yet, the first drawn section is Section A!
+    // If Section A already exists, the next is Section B, Section C, Section D...
+    const existingNames = explicitSections.map((s) => s.name || "");
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let nextLetter = "A";
     for (let i = 0; i < alphabet.length; i++) {
@@ -703,12 +722,12 @@ export default function SolarStudio() {
       }
     }
     if (existingNames.includes(`Section ${nextLetter}`)) {
-      nextLetter = `${alphabet[sections.length % 26]}${Math.floor(sections.length / 26) + 1}`;
+      nextLetter = `${alphabet[explicitSections.length % 26]}${Math.floor(explicitSections.length / 26) + 1}`;
     }
 
     const surfaceMat = (designData.roof?.surface_material || "").toLowerCase();
     const defaultRoofType = surfaceMat.includes("tile") ? "Tile" : surfaceMat.includes("metal") ? "Metal" : "RCC";
-    const refSec = sections[sections.length - 1] || {};
+    const refSec = explicitSections[explicitSections.length - 1] || {};
 
     const newSection = {
       id: `sec_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
@@ -726,9 +745,7 @@ export default function SolarStudio() {
     };
 
     setDesignData((prev) => {
-      const current = (prev.roof_sections && prev.roof_sections.length > 0)
-        ? prev.roof_sections
-        : effectiveSections;
+      const current = Array.isArray(prev.roof_sections) ? prev.roof_sections : [];
       const nextSections = [...current, newSection];
       const metrics = recalculateRoofMetrics(
         prev.roof_polygon,
@@ -745,8 +762,8 @@ export default function SolarStudio() {
 
     setSelectedSectionId(newSection.id);
     setActiveTool("select");
-    toast.success(`${newSection.name} saved.`);
-  }, [designData, effectiveSections]);
+    toast.success(`${newSection.name} created.`);
+  }, [designData]);
 
   // Delete a specific section while preserving parent roof and sibling sections
   const handleDeleteSection = useCallback((sectionId) => {
@@ -763,32 +780,50 @@ export default function SolarStudio() {
     const secToDelete = sections.find((s) => s.id === sectionId);
     const secName = secToDelete?.name || "Section";
 
-    if (!window.confirm(`Delete ${secName}?`)) return;
+    setDesignData((prev) => {
+      const current = (prev.roof_sections && prev.roof_sections.length > 0)
+        ? prev.roof_sections
+        : effectiveSections;
+      const nextSections = current.filter((s) => s.id !== sectionId);
+      const metrics = recalculateRoofMetrics(
+        prev.roof_polygon,
+        nextSections,
+        Number(prev.roof?.setback_m || prev.setback_m || 0.5)
+      );
 
-    const remaining = sections.filter((s) => s.id !== sectionId);
-    const remainingPanels = (designData.panels || []).filter((p) => p.sectionId !== sectionId);
-    const metrics = recalculateRoofMetrics(
-      designData.roof_polygon,
-      remaining,
-      Number(designData.roof?.setback_m || designData.setback_m || 0.5)
-    );
+      // Reassign orphaned panels to first available section or unassign
+      const fallbackSecId = nextSections[0]?.id;
+      const remappedPanels = (prev.panels || []).map((p) =>
+        p.sectionId === sectionId ? { ...p, sectionId: fallbackSecId } : p
+      );
 
-    setDesignData((prev) => ({
-      ...prev,
-      roof_sections: remaining,
-      panels: remainingPanels,
-      roof_area_sqm: metrics.roof_area_sqm,
-      usable_area_sqm: metrics.usable_area_sqm,
-    }));
+      return {
+        ...prev,
+        roof_sections: nextSections,
+        panels: remappedPanels,
+        roof_area_sqm: metrics.roof_area_sqm,
+        usable_area_sqm: metrics.usable_area_sqm,
+      };
+    });
 
-    setSelectedSectionId(remaining[0]?.id || null);
+    setSelectedSectionId(null);
     setActiveTool("select");
     toast.success(`Deleted ${secName}.`);
-  }, [designData.roof_sections, designData.panels, designData.roof_polygon, designData.roof?.setback_m, designData.setback_m, effectiveSections]);
+  }, [designData.roof_sections, effectiveSections]);
 
   // Update polygon vertices of a specific section (from edit_section mode)
   const handleUpdateSectionPolygon = useCallback((sectionId, updatedPolygon) => {
     if (!sectionId || !updatedPolygon || updatedPolygon.length < 3) return;
+    const currentSections = Array.isArray(designData.roof_sections) && designData.roof_sections.length > 0
+      ? designData.roof_sections
+      : effectiveSections;
+
+    const val = validateSectionPolygon(updatedPolygon, designData.roof_polygon, currentSections, sectionId);
+    if (!val.valid) {
+      toast.error(val.error || "Invalid section polygon boundary.");
+      return;
+    }
+
     setDesignData((prev) => {
       const current = (prev.roof_sections && prev.roof_sections.length > 0)
         ? prev.roof_sections
@@ -806,7 +841,8 @@ export default function SolarStudio() {
         usable_area_sqm: metrics.usable_area_sqm,
       };
     });
-  }, [effectiveSections]);
+    toast.success("Section boundary updated.");
+  }, [designData.roof_polygon, designData.roof_sections, effectiveSections]);
 
   // Update Roof Polygon and recalculate geometric properties (Preserves existing sections)
   const handleSetRoofPolygon = useCallback((polygon) => {
@@ -1497,7 +1533,7 @@ export default function SolarStudio() {
     });
 
     if (!check.canFit || !check.newPanel) {
-      toast.warning(check.reason || `No valid panel position available in ${targetSection?.name || "current roof area"}.`);
+      toast.warning(check.reason || "No valid panel position remains in this section.");
       return;
     }
 
@@ -3045,21 +3081,7 @@ export default function SolarStudio() {
               roofPolygon={designData.roof_polygon}
               setRoofPolygon={handleSetRoofPolygon}
               panels={designData.panels}
-              setPanels={(panelsOrFn) => {
-                const newPanels = typeof panelsOrFn === "function" ? panelsOrFn(designData.panels) : panelsOrFn;
-                const pCount = newPanels.filter((p) => !p.hidden).length;
-                const pWatt = Number(designData.panel_wattage || 550);
-                const totalKw = (pCount * pWatt) / 1000.0;
-                const singleArea = (designData.panel_dimensions?.width_m || 1.134) * (designData.panel_dimensions?.length_m || 2.278);
-                const coveragePct = designData.usable_area_sqm > 0 ? ((pCount * singleArea) / designData.usable_area_sqm) * 100 : 0;
-                setDesignData((prev) => ({
-                  ...prev,
-                  panels: newPanels,
-                  panel_count: pCount,
-                  system_kw: Math.round(totalKw * 100) / 100,
-                  coverage_pct: Math.min(100, Math.round(coveragePct * 10) / 10),
-                }));
-              }}
+              setPanels={handleSetPanels}
               obstacles={designData.obstacles}
               setObstacles={(obsOrFn) => {
                 const newObs = typeof obsOrFn === "function" ? obsOrFn(designData.obstacles) : obsOrFn;
@@ -3192,6 +3214,17 @@ export default function SolarStudio() {
                       setOpenSection("roof");
                     }}
                     panels={designData.panels}
+                    setPanels={handleSetPanels}
+                    selectedPanelId={selectedPanelId}
+                    setSelectedPanelId={setSelectedPanelId}
+                    selectionMode={selectionMode}
+                    setSelectionMode={setSelectionMode}
+                    selectedRowIndex={selectedRowIndex}
+                    setSelectedRowIndex={setSelectedRowIndex}
+                    hasManualAdjustments={hasManualAdjustments}
+                    setHasManualAdjustments={setHasManualAdjustments}
+                    setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
+                    onUpdateSection={handleUpdateSection}
                     obstacles={designData.obstacles}
                     walkways={designData.walkways}
                     structure={{
@@ -3303,6 +3336,17 @@ export default function SolarStudio() {
                       setOpenSection("roof");
                     }}
                     panels={designData.panels}
+                    setPanels={handleSetPanels}
+                    selectedPanelId={selectedPanelId}
+                    setSelectedPanelId={setSelectedPanelId}
+                    selectionMode={selectionMode}
+                    setSelectionMode={setSelectionMode}
+                    selectedRowIndex={selectedRowIndex}
+                    setSelectedRowIndex={setSelectedRowIndex}
+                    hasManualAdjustments={hasManualAdjustments}
+                    setHasManualAdjustments={setHasManualAdjustments}
+                    setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
+                    onUpdateSection={handleUpdateSection}
                     obstacles={designData.obstacles}
                     structure={{
                       ...designData.structure,
