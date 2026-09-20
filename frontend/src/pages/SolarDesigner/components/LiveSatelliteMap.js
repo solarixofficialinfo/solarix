@@ -117,6 +117,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     onSelectSection,
     onSplitSection,
     onMergeSections,
+    onAddSection,
+    onDeleteSection,
+    onUpdateSectionPolygon,
     panels = [],
     setPanels,
     obstacles = [],
@@ -169,6 +172,25 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
   const activeSelectedPanelId = selectedPanelId !== undefined ? selectedPanelId : internalSelectedPanelId;
   const changeSelectedPanelId = setSelectedPanelId || setInternalSelectedPanelId;
+
+  // Next candidate section name (Section A, Section B, Section C...)
+  const candidateSectionName = useMemo(() => {
+    const sections = roofSections || [];
+    const existingNames = sections.map((s) => s.name || "");
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    for (let i = 0; i < alphabet.length; i++) {
+      const candidate = `Section ${alphabet[i]}`;
+      if (!existingNames.includes(candidate)) {
+        return candidate;
+      }
+    }
+    return `Section ${alphabet[sections.length % 26]}${Math.floor(sections.length / 26) + 1}`;
+  }, [roofSections]);
+
+  const selectedSectionObj = useMemo(() => {
+    if (!roofSections || roofSections.length === 0) return null;
+    return roofSections.find((s) => s.id === selectedSectionId) || roofSections[0];
+  }, [roofSections, selectedSectionId]);
 
   // Stable refs for latest prop values
   const roofPolygonRef = useRef(roofPolygon);
@@ -379,6 +401,10 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const editingRoofRef = useRef(editingRoof);
   useEffect(() => { editingRoofRef.current = editingRoof; }, [editingRoof]);
 
+  const editingSection = activeTool === "edit_section";
+  const editingSectionRef = useRef(editingSection);
+  useEffect(() => { editingSectionRef.current = editingSection; }, [editingSection]);
+
   const activeToolRef = useRef(activeTool);
   const handleMapClickForAddPanelRef = useRef(null);
   const handleMapClickRoofRef = useRef(null);
@@ -410,7 +436,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   }, [activeTool]);
 
   useEffect(() => {
-    if (activeTool === "draw_roof") {
+    if (activeTool === "draw_roof" || activeTool === "draw_section") {
       syncMagnifierTiles();
       if (magnifierLensRef.current) magnifierLensRef.current.style.display = "none";
       if (targetReticleRef.current) targetReticleRef.current.style.display = "none";
@@ -429,7 +455,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
   // Keep magnifier tiles synchronized when roof points or polygon changes
   useEffect(() => {
-    if (activeTool === "draw_roof") {
+    if (activeTool === "draw_roof" || activeTool === "draw_section") {
       const timer = setTimeout(() => {
         syncMagnifierTiles();
       }, 50);
@@ -903,7 +929,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
         // Cancel any active drawing or editing mode cleanly
         const currentTool = activeToolRef.current ?? window.__activeSolarTool;
-        if (currentTool === "draw_roof" || currentTool === "edit_roof") {
+        if (currentTool === "draw_roof" || currentTool === "draw_section" || currentTool === "edit_roof" || currentTool === "edit_section") {
           setActiveDrawPoints([]);
           setActiveTool?.("select");
         }
@@ -936,12 +962,13 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             const sy = e.containerPoint ? e.containerPoint.y : ((e.originalEvent?.clientY ?? e.clientY ?? 0) - rect.top);
             cursorScreenPosRef.current = { x: sx, y: sy };
           }
-          if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
+          const tool = activeToolRef.current ?? window.__activeSolarTool;
+          if (tool === "draw_roof" || tool === "draw_section") {
             if (!rafIdRef.current) {
               rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
             }
           }
-          if ((activeToolRef.current ?? window.__activeSolarTool) === "add_section_line" && sectionLineStartRef.current && mapInstanceRef.current) {
+          if (tool === "add_section_line" && sectionLineStartRef.current && mapInstanceRef.current) {
             const start = sectionLineStartRef.current;
             const end = e.latlng;
             if (sectionCutPreviewLayerRef.current) {
@@ -964,7 +991,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       });
 
       const syncMagnifierOnMapMove = () => {
-        if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
+        const tool = activeToolRef.current ?? window.__activeSolarTool;
+        if (tool === "draw_roof" || tool === "draw_section") {
           syncMagnifierTiles();
           if (!rafIdRef.current) {
             rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
@@ -990,7 +1018,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             if (isValidLatLng(latlng.lat, latlng.lng)) {
               cursorCoordsRef.current = { lat: latlng.lat, lng: latlng.lng };
             }
-            if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
+            const tool = activeToolRef.current ?? window.__activeSolarTool;
+            if (tool === "draw_roof" || tool === "draw_section") {
               syncMagnifierTiles();
               if (!rafIdRef.current) {
                 rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
@@ -1013,7 +1042,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             if (isValidLatLng(latlng.lat, latlng.lng)) {
               cursorCoordsRef.current = { lat: latlng.lat, lng: latlng.lng };
             }
-            if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_roof") {
+            const tool = activeToolRef.current ?? window.__activeSolarTool;
+            if (tool === "draw_roof" || tool === "draw_section") {
               if (!rafIdRef.current) {
                 rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
               }
@@ -1085,9 +1115,6 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         // 6. Apply new center and zoom immediately without animation drift
         map.setView(newCenter, targetZoom, { animate: false });
         onZoomChange?.(targetZoom);
-
-        // Sync precision magnifier if active
-        // Removed secondary map manipulation
       };
 
       const domElem = mapContainerRef.current;
@@ -1102,7 +1129,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         if (!isValidLatLng(lat, lng)) return;
 
         const tool = activeToolRef.current ?? window.__activeSolarTool;
-        if (tool === "draw_roof") {
+        if (tool === "draw_roof" || tool === "draw_section") {
           (handleMapClickRoofRef.current ?? window.__handleSolarMapClickRoof)?.(lat, lng);
         } else if (tool === "add_section_line") {
           const { x, y } = latLngToCartesian(lat, lng);
@@ -1310,6 +1337,16 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       return;
     }
 
+    if ((activeToolRef.current ?? window.__activeSolarTool) === "draw_section") {
+      onAddSection?.(deduped);
+      setActiveDrawPoints([]);
+      setActiveTool("select");
+      if (magnifierLensRef.current) {
+        magnifierLensRef.current.style.display = "none";
+      }
+      return;
+    }
+
     pushVertexHistory(roofPolygonRef.current);
     setRoofPolygon(deduped);
     setActiveDrawPoints([]);
@@ -1317,8 +1354,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     if (magnifierLensRef.current) {
       magnifierLensRef.current.style.display = "none";
     }
-    toast.success(`Roof drawn: ${deduped.length} vertices. Click "Edit Roof" to adjust.`);
-  }, [activeDrawPoints, pushVertexHistory, setRoofPolygon, setActiveTool]);
+    toast.success(`Roof drawn: ${deduped.length} vertices. Click "Edit Points" to adjust.`);
+  }, [activeDrawPoints, pushVertexHistory, setRoofPolygon, setActiveTool, onAddSection]);
 
   const handleMapClickRoof = useCallback((lat, lng) => {
     if (!isValidLatLng(lat, lng)) return;
@@ -1569,20 +1606,118 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           });
 
           const isSelected = selectedSectionId === sec.id;
+          const isEditingThisSec = isSelected && activeTool === "edit_section";
           const pal = sectionPalettes[sIdx % sectionPalettes.length];
 
           const secLayer = L.polygon(polyLatLngs, {
-            color: isSelected ? "#38bdf8" : pal.stroke,
-            weight: isSelected ? 3.5 : 2.5,
-            fillColor: pal.fill,
-            fillOpacity: isSelected ? 0.28 : 0.16,
-            dashArray: isSelected ? undefined : "4, 3",
+            color: isEditingThisSec ? "#f59e0b" : isSelected ? "#38bdf8" : pal.stroke,
+            weight: isEditingThisSec ? 3 : isSelected ? 3.5 : 2.5,
+            fillColor: isEditingThisSec ? "#fbbf24" : pal.fill,
+            fillOpacity: isEditingThisSec ? 0.24 : isSelected ? 0.28 : 0.16,
+            dashArray: isEditingThisSec ? "4, 4" : isSelected ? undefined : "4, 3",
           }).addTo(roofGroup);
+
+          // If this section is currently being edited, render draggable vertex handles!
+          if (isEditingThisSec) {
+            validSecPoly.forEach((pt, vIdx) => {
+              const latlng = isValidLatLng(pt.lat, pt.lng) ? [pt.lat, pt.lng] : cartesianToLatLng(pt.x, pt.y);
+              const handle = L.marker(latlng, {
+                draggable: true,
+                icon: L.divIcon({
+                  className: "",
+                  html: `<div style="width:20px;height:20px;border-radius:50%;background:#f59e0b;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;cursor:grab;font-size:9px;font-weight:bold;color:#1c1917;">${vIdx + 1}</div>`,
+                  iconSize: [20, 20],
+                  iconAnchor: [10, 10],
+                }),
+                zIndexOffset: 1200,
+              }).addTo(roofGroup);
+
+              handle.on("dragstart", () => {
+                isDraggingVertexRef.current = true;
+                syncMagnifierTiles();
+              });
+
+              handle.on("drag", (e) => {
+                const { lat, lng } = e.target.getLatLng();
+                const origin = originRef.current;
+                const baseLatRad = toRad(origin.lat);
+                const x = (toRad(lng) - toRad(origin.lng)) * Math.cos(baseLatRad) * 6378137;
+                const y = (toRad(lat) - toRad(origin.lat)) * 6378137;
+                const updated = validSecPoly.map((p, i) =>
+                  i === vIdx ? { ...p, x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, lat, lng } : p
+                );
+                onUpdateSectionPolygon?.(sec.id, updated);
+              });
+
+              handle.on("dragend", () => {
+                isDraggingVertexRef.current = false;
+              });
+
+              handle.on("contextmenu", (e) => {
+                L.DomEvent.stopPropagation(e);
+                if (validSecPoly.length <= 3) {
+                  toast.warning("A section requires at least 3 points.");
+                  return;
+                }
+                const updated = validSecPoly.filter((_, i) => i !== vIdx);
+                onUpdateSectionPolygon?.(sec.id, updated);
+                toast.success(`Removed vertex P${vIdx + 1}`);
+              });
+
+              handle.bindTooltip(
+                `<div style="font-size:10px;font-weight:bold">P${vIdx + 1} — drag to adjust<br>Right-click to delete</div>`,
+                { direction: "top" }
+              );
+              vertexHandlesRef.current.push(handle);
+            });
+          }
 
           secLayer.on("click", (e) => {
             L.DomEvent.stopPropagation(e);
+            if (isEditingThisSec) {
+              const clickLL = e.latlng;
+              const { x, y } = latLngToCartesian(clickLL.lat, clickLL.lng);
+              const poly = validSecPoly;
+              if (poly.length >= 2) {
+                let minD = Infinity;
+                let bestIdx = 0;
+                for (let i = 0; i < poly.length; i++) {
+                  const j = (i + 1) % poly.length;
+                  const p1 = poly[i], p2 = poly[j];
+                  const l2 = (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2;
+                  let d = 0;
+                  if (l2 === 0) {
+                    d = Math.hypot(x - p1.x, y - p1.y);
+                  } else {
+                    const t = Math.max(0, Math.min(1, ((x - p1.x) * (p2.x - p1.x) + (y - p1.y) * (p2.y - p1.y)) / l2));
+                    const projX = p1.x + t * (p2.x - p1.x);
+                    const projY = p1.y + t * (p2.y - p1.y);
+                    d = Math.hypot(x - projX, y - projY);
+                  }
+                  if (d < minD) {
+                    minD = d;
+                    bestIdx = i;
+                  }
+                }
+                if (minD < 3.0) {
+                  const j = (bestIdx + 1) % poly.length;
+                  const a = poly[bestIdx], b = poly[j];
+                  const newPt = {
+                    x: (a.x + b.x) / 2,
+                    y: (a.y + b.y) / 2,
+                    lat: (a.lat + b.lat) / 2,
+                    lng: (a.lng + b.lng) / 2,
+                  };
+                  const updated = [...poly.slice(0, j), newPt, ...poly.slice(j)];
+                  onUpdateSectionPolygon?.(sec.id, updated);
+                  toast.success("Added vertex at edge midpoint.");
+                  return;
+                }
+              }
+              return;
+            }
             const tool = activeToolRef.current ?? window.__activeSolarTool;
-            if (tool === "add_section_line") {
+            if (tool === "add_section_line" || tool === "draw_section") {
               return;
             }
             if (tool === "merge_section") {
@@ -1972,8 +2107,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       });
     }
   }, [
-    roofPolygon, roofSections, selectedSectionId, onSelectSection, onMergeSections, panels, obstacles, walkways, setbackMeters,
-    activeDrawPoints, layers, activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode, hoveredRowIndex, editingRoof,
+    roofPolygon, roofSections, selectedSectionId, onSelectSection, onMergeSections, onUpdateSectionPolygon, panels, obstacles, walkways, setbackMeters,
+    activeDrawPoints, layers, activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode, hoveredRowIndex, editingRoof, editingSection, activeTool,
     cartesianToLatLng, latLngToCartesian, handleVertexDrag, handleDeleteVertex,
     handleInsertVertexOnEdge, pushVertexHistory, changeSelectedPanelId, changeSelectedRowIndex, setPanels, setHasManualAdjustments,
     setActiveTool, handleFinishDrawingRoof, syncMagnifierTiles, updateMagnifierTransform
@@ -2132,13 +2267,13 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
       <div
         className={`w-full h-full flex-1 z-0 relative bg-slate-950 ${
-          activeTool === "draw_roof" ? "drawing-roof-cursor" : "cursor-grab"
+          (activeTool === "draw_roof" || activeTool === "draw_section") ? "drawing-roof-cursor" : "cursor-grab"
         }`}
         onMouseEnter={() => {
-          if (activeTool === "draw_roof") syncMagnifierTiles();
+          if (activeTool === "draw_roof" || activeTool === "draw_section") syncMagnifierTiles();
         }}
         onMouseMove={(e) => {
-          if (activeTool === "draw_roof") {
+          if (activeTool === "draw_roof" || activeTool === "draw_section") {
             const container = mapContainerRef.current;
             if (container) {
               const rect = container.getBoundingClientRect();
@@ -2438,18 +2573,18 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         {/* Floating Action Tools Bar matching Reference */}
         <div className="flex items-center gap-1 bg-slate-900/95 border border-slate-700/80 rounded-xl p-1 shadow-xl text-xs text-white">
           {/* Active Tool / In-progress context switch */}
-          {activeTool === "draw_roof" ? (
+          {(activeTool === "draw_roof" || activeTool === "draw_section") ? (
             <div className="flex items-center gap-1.5 px-1 text-xs">
               {/* Point Index Pill */}
-              <span className="bg-emerald-600 text-white text-[11px] font-extrabold px-2.5 py-1 rounded-lg flex items-center gap-1.5 shadow-sm">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-200 animate-ping" />
-                Pt {activeDrawPoints.length + 1}
+              <span className={`${activeTool === "draw_section" ? "bg-amber-600" : "bg-emerald-600"} text-white text-[11px] font-extrabold px-2.5 py-1 rounded-lg flex items-center gap-1.5 shadow-sm`}>
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                {activeTool === "draw_section" ? `Drawing ${candidateSectionName} (Pt ${activeDrawPoints.length + 1})` : `Pt ${activeDrawPoints.length + 1}`}
               </span>
 
               {/* Status Hint */}
               <span className="text-slate-300 text-xs px-1 hidden sm:inline-block">
                 {activeDrawPoints.length === 0
-                  ? "Click map to mark 1st corner"
+                  ? (activeTool === "draw_section" ? "Click map inside roof to mark 1st point" : "Click map to mark 1st corner")
                   : activeDrawPoints.length < 3
                   ? "Click next corner"
                   : "Click corners or Pt 1 to close"}
@@ -2585,16 +2720,16 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                 <span>Undo</span>
               </button>
 
-              {/* Finish Roof (Available when >= 3 points marked) */}
+              {/* Finish Roof / Finish Section (Available when >= 3 points marked) */}
               {activeDrawPoints.length >= 3 && (
                 <button
                   type="button"
                   onClick={handleFinishDrawingRoof}
                   className="h-7 px-2.5 text-[11px] rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold flex items-center gap-1.5 shadow-md transition cursor-pointer animate-pulse"
-                  title="Complete and close roof polygon"
+                  title={activeTool === "draw_section" ? `Complete and commit ${candidateSectionName}` : "Complete and close roof polygon"}
                 >
                   <CheckCircle2 className="w-3.5 h-3.5 text-blue-100" />
-                  <span>Finish Roof ({activeDrawPoints.length} pts)</span>
+                  <span>{activeTool === "draw_section" ? `Finish ${candidateSectionName} (${activeDrawPoints.length} pts)` : `Finish Roof (${activeDrawPoints.length} pts)`}</span>
                 </button>
               )}
 
@@ -2603,7 +2738,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                 type="button"
                 onClick={handleCancelDrawing}
                 className="h-7 px-2 text-[11px] rounded-lg text-red-400 hover:text-red-300 hover:bg-red-950/50 flex items-center gap-1 transition cursor-pointer"
-                title="Cancel roof drawing"
+                title="Cancel drawing"
               >
                 <X className="w-3.5 h-3.5" />
                 <span>Cancel</span>
@@ -2649,6 +2784,24 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                 <CheckSquare className="w-3.5 h-3.5" /> Done
               </button>
             </div>
+          ) : activeTool === "edit_section" ? (
+            <div className="flex items-center gap-1">
+              <span className="bg-amber-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">
+                Editing {selectedSectionObj?.name || "Section"} ({selectedSectionObj?.polygon?.length || 0} pts)
+              </span>
+              <button
+                onClick={() => toast.info("Drag orange handles to adjust vertices, click edge to insert point, or right-click handle to remove.")}
+                className="h-7 px-2 text-[11px] rounded-lg text-amber-300 hover:text-white bg-amber-950/60 border border-amber-800/60 flex items-center gap-1"
+              >
+                <Edit3 className="w-3.5 h-3.5" /> Drag Vertices
+              </button>
+              <button
+                onClick={() => setActiveTool("select")}
+                className="h-7 px-3 text-[11px] rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold flex items-center gap-1 shadow-sm"
+              >
+                <CheckSquare className="w-3.5 h-3.5" /> Done
+              </button>
+            </div>
           ) : (
             <>
               <div className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded-lg p-0.5">
@@ -2686,10 +2839,10 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                 className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
                   activeTool === "draw_roof" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
                 }`}
-                title="Mark Roof Boundary (Trace rooftop perimeter)"
+                title={hasRoof ? "Re-mark Roof Perimeter" : "Mark Roof Boundary (Trace rooftop perimeter)"}
               >
                 <PenTool className="w-3.5 h-3.5" />
-                <span>Mark Roof Boundary</span>
+                <span>{hasRoof ? "Re-mark Roof" : "Mark Roof Boundary"}</span>
               </button>
 
               <button
@@ -2698,11 +2851,61 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                 className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 ${
                   activeTool === "edit_roof" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
                 }`}
-                title="Drag vertices or add points"
+                title="Drag roof boundary vertices or add points"
               >
                 <Edit3 className="w-3.5 h-3.5" />
                 <span>Edit Points</span>
               </button>
+
+              {hasRoof && (
+                <button
+                  onClick={() => {
+                    setActiveTool("draw_section");
+                    setActiveDrawPoints([]);
+                    toast.info(`Draw ${candidateSectionName}: click corners on map to trace section polygon, then click Finish.`);
+                  }}
+                  className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                    activeTool === "draw_section" ? "bg-emerald-600 text-white shadow-sm ring-1 ring-emerald-300" : "text-emerald-400 hover:text-white hover:bg-slate-800 border border-emerald-500/40"
+                  }`}
+                  title="Add child roof section inside parent roof"
+                >
+                  <Plus className="w-3.5 h-3.5 text-emerald-300" />
+                  <span>+ Add Section</span>
+                </button>
+              )}
+
+              {hasRoof && selectedSectionObj && (
+                <>
+                  <button
+                    onClick={() => {
+                      setActiveTool(activeTool === "edit_section" ? "select" : "edit_section");
+                      setActiveDrawPoints([]);
+                    }}
+                    className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                      activeTool === "edit_section" ? "bg-amber-600 text-white shadow-sm ring-1 ring-amber-300" : "text-amber-300 hover:text-white hover:bg-slate-800"
+                    }`}
+                    title={`Edit vertices for ${selectedSectionObj.name}`}
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Edit Section</span>
+                  </button>
+
+                  {roofSections && roofSections.length > 1 && onDeleteSection && (
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Delete ${selectedSectionObj.name}? This will preserve the parent roof.`)) {
+                          onDeleteSection(selectedSectionObj.id);
+                        }
+                      }}
+                      className="h-7 px-2 text-[11px] rounded-lg text-red-400 hover:text-red-200 hover:bg-red-950/50 transition cursor-pointer flex items-center gap-1"
+                      title={`Delete ${selectedSectionObj.name}`}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Delete Section</span>
+                    </button>
+                  )}
+                </>
+              )}
 
               <button
                 onClick={() => {
@@ -2718,7 +2921,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                 title="Add Section Line (Draw line across roof to split into sections)"
               >
                 <Scissors className="w-3.5 h-3.5" />
-                <span>Add Section Line</span>
+                <span>Split (Line)</span>
               </button>
 
               {roofSections && roofSections.length > 1 && (

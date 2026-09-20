@@ -41,6 +41,7 @@ import {
   ensureCartesianCoordinates,
   splitPolygonWithLine,
   mergeTwoAdjacentPolygons,
+  validateSectionPolygon,
 } from "./utils/geoCalculations";
 import {
   searchLocations,
@@ -612,7 +613,119 @@ export default function SolarStudio() {
     });
   }, [effectiveSections]);
 
-  // Update Roof Polygon and recalculate geometric properties
+  // Add a new child section directly inside the roof
+  const handleAddSection = useCallback((sectionPolygon) => {
+    if (!sectionPolygon || sectionPolygon.length < 3) {
+      toast.warning("Section polygon requires at least 3 points.");
+      return;
+    }
+
+    const val = validateSectionPolygon(sectionPolygon, designData.roof_polygon);
+    if (!val.valid) {
+      toast.error(val.error || "Invalid section polygon.");
+      return;
+    }
+
+    const sections = (designData.roof_sections && designData.roof_sections.length > 0)
+      ? designData.roof_sections
+      : effectiveSections;
+
+    // Sequential naming: Section A, Section B, Section C...
+    const existingNames = sections.map((s) => s.name || "");
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let nextLetter = "A";
+    for (let i = 0; i < alphabet.length; i++) {
+      const candidate = `Section ${alphabet[i]}`;
+      if (!existingNames.includes(candidate)) {
+        nextLetter = alphabet[i];
+        break;
+      }
+    }
+    if (existingNames.includes(`Section ${nextLetter}`)) {
+      nextLetter = `${alphabet[sections.length % 26]}${Math.floor(sections.length / 26) + 1}`;
+    }
+
+    const surfaceMat = (designData.roof?.surface_material || "").toLowerCase();
+    const defaultRoofType = surfaceMat.includes("tile") ? "Tile" : surfaceMat.includes("metal") ? "Metal" : "RCC";
+    const refSec = sections[sections.length - 1] || {};
+
+    const newSection = {
+      id: `sec_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      name: `Section ${nextLetter}`,
+      polygon: sectionPolygon,
+      roofType: refSec.roofType || defaultRoofType,
+      pitch: Number(refSec.pitch ?? designData.roof?.pitch_deg ?? 0),
+      azimuth: Number(refSec.azimuth ?? designData.roof?.azimuth_deg ?? designData.azimuth_angle ?? 180),
+      elevation: Number(refSec.elevation ?? designData.roof?.eave_height_m ?? designData.roof?.elevation_m ?? 3.5),
+      solarEnabled: true,
+      mountingType: refSec.mountingType || designData.structure?.type || "elevated",
+      structureEnabled: refSec.structureEnabled !== false,
+      jointType: "same_plane",
+      tileConfig: refSec.tileConfig || { type: "spanish_barrel", color: "#b45309" },
+    };
+
+    setDesignData((prev) => {
+      const current = (prev.roof_sections && prev.roof_sections.length > 0)
+        ? prev.roof_sections
+        : effectiveSections;
+      return {
+        ...prev,
+        roof_sections: [...current, newSection],
+      };
+    });
+
+    setSelectedSectionId(newSection.id);
+    setActiveTool("select");
+    toast.success(`${newSection.name} saved.`);
+  }, [designData, effectiveSections]);
+
+  // Delete a specific section while preserving parent roof and sibling sections
+  const handleDeleteSection = useCallback((sectionId) => {
+    if (!sectionId) return;
+    const sections = (designData.roof_sections && designData.roof_sections.length > 0)
+      ? designData.roof_sections
+      : effectiveSections;
+
+    if (sections.length <= 1) {
+      toast.warning("Cannot delete the only section. Use 'Remove All' to restore single roof.");
+      return;
+    }
+
+    const secToDelete = sections.find((s) => s.id === sectionId);
+    const secName = secToDelete?.name || "Section";
+
+    if (!window.confirm(`Delete ${secName}?`)) return;
+
+    const remaining = sections.filter((s) => s.id !== sectionId);
+    const remainingPanels = (designData.panels || []).filter((p) => p.sectionId !== sectionId);
+
+    setDesignData((prev) => ({
+      ...prev,
+      roof_sections: remaining,
+      panels: remainingPanels,
+    }));
+
+    setSelectedSectionId(remaining[0]?.id || null);
+    setActiveTool("select");
+    toast.success(`Deleted ${secName}.`);
+  }, [designData.roof_sections, designData.panels, effectiveSections]);
+
+  // Update polygon vertices of a specific section (from edit_section mode)
+  const handleUpdateSectionPolygon = useCallback((sectionId, updatedPolygon) => {
+    if (!sectionId || !updatedPolygon || updatedPolygon.length < 3) return;
+    setDesignData((prev) => {
+      const current = (prev.roof_sections && prev.roof_sections.length > 0)
+        ? prev.roof_sections
+        : effectiveSections;
+      const updated = current.map((s) => (s.id === sectionId ? { ...s, polygon: updatedPolygon } : s));
+      return {
+        ...prev,
+        roof_sections: updated,
+      };
+    });
+  }, [effectiveSections]);
+
+  // Update Roof Polygon and recalculate geometric properties (Preserves existing sections)
   const handleSetRoofPolygon = useCallback((polygon) => {
     if (!polygon || polygon.length < 3) {
       setDesignData((prev) => ({
@@ -670,7 +783,6 @@ export default function SolarStudio() {
       jointType: "same_plane",
       tileConfig: { type: "spanish_barrel", color: "#b45309" },
     };
-    setSelectedSectionId(initialSection.id);
 
     setDesignData((prev) => {
       // Revalidate existing panels against new roof polygon without random auto-regeneration
@@ -690,10 +802,26 @@ export default function SolarStudio() {
       const singleArea = (prev.panel_dimensions?.width_m || 1.134) * (prev.panel_dimensions?.length_m || 2.278);
       const coveragePct = usableArea > 0 ? Math.min(100, Math.round(((validPanels.length * singleArea) / usableArea) * 1000) / 10) : 0;
 
+      // PRESERVE EXISTING SECTIONS: Never wipe multi-section roofs on perimeter edit
+      const prevSections = prev.roof_sections;
+      let nextSections;
+      if (Array.isArray(prevSections) && prevSections.length > 1) {
+        nextSections = prevSections;
+      } else if (Array.isArray(prevSections) && prevSections.length === 1) {
+        nextSections = [{
+          ...prevSections[0],
+          polygon: validPolygon,
+        }];
+        setSelectedSectionId(prevSections[0].id);
+      } else {
+        nextSections = [initialSection];
+        setSelectedSectionId(initialSection.id);
+      }
+
       return {
         ...prev,
         roof_polygon: validPolygon,
-        roof_sections: [initialSection],
+        roof_sections: nextSections,
         roof_area_sqm: Math.round(area * 10) / 10,
         roof_perimeter_m: Math.round(perimeter * 10) / 10,
         roof_dimensions: {
@@ -1861,36 +1989,67 @@ export default function SolarStudio() {
               {openSection === "roof" && (
                 <div className="space-y-3 text-xs">
                   {/* Boundary & Points Actions */}
-                  <div className="flex items-center gap-1.5">
+                  {(!designData.roof_polygon || designData.roof_polygon.length < 3) ? (
                     <Button
                       size="sm"
-                      onClick={() => setActiveTool(activeTool === "draw_roof" ? "select" : "draw_roof")}
-                      className={`flex-1 h-7 text-xs font-bold rounded-lg gap-1.5 ${
+                      onClick={() => {
+                        if (activeTab !== "2d") setActiveTab("2d");
+                        setActiveTool(activeTool === "draw_roof" ? "select" : "draw_roof");
+                      }}
+                      className={`w-full h-8 text-xs font-bold rounded-lg gap-1.5 ${
                         activeTool === "draw_roof"
                           ? "bg-emerald-600 hover:bg-emerald-700 text-white"
                           : "bg-emerald-950/70 text-emerald-300 border border-emerald-700/60 hover:bg-emerald-900"
                       }`}
                     >
-                      <PenTool className="w-3 h-3" />
+                      <PenTool className="w-3.5 h-3.5" />
                       {activeTool === "draw_roof" ? "Marking Boundary..." : "Mark Roof Boundary"}
                     </Button>
-                    {designData.roof_polygon?.length >= 3 && (
-                      <Button
-                        size="sm"
-                        onClick={() => setActiveTool(activeTool === "edit_roof" ? "select" : "edit_roof")}
-                        className={`h-7 text-xs font-bold rounded-lg gap-1.5 ${
-                          activeTool === "edit_roof"
-                            ? "bg-amber-500 text-slate-950"
-                            : "bg-amber-950/60 text-amber-300 border border-amber-700/60 hover:bg-amber-900"
-                        }`}
-                      >
-                        <Edit3 className="w-3 h-3" />
-                        Edit Points
-                      </Button>
-                    )}
-                  </div>
+                  ) : (
+                    <div className="flex items-center justify-between p-2 rounded-xl bg-slate-950/80 border border-slate-800">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                        <span className="text-xs font-bold text-white">Roof Perimeter</span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {Math.round(designData.roof_area_sqm || 0)} m²
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            if (activeTab !== "2d") setActiveTab("2d");
+                            setActiveTool(activeTool === "edit_roof" ? "select" : "edit_roof");
+                          }}
+                          className={`h-6 text-[10.5px] font-bold rounded-lg gap-1 px-2 ${
+                            activeTool === "edit_roof"
+                              ? "bg-amber-500 text-slate-950"
+                              : "bg-amber-950/60 text-amber-300 border border-amber-700/60 hover:bg-amber-900"
+                          }`}
+                          title="Drag perimeter boundary vertices"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                          {activeTool === "edit_roof" ? "Editing..." : "Edit Points"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            if (window.confirm("Re-mark roof boundary? This will trace a new perimeter.")) {
+                              if (activeTab !== "2d") setActiveTab("2d");
+                              setActiveTool("draw_roof");
+                            }
+                          }}
+                          variant="ghost"
+                          className="h-6 text-[10px] text-slate-400 hover:text-white px-1.5"
+                          title="Re-draw parent roof boundary"
+                        >
+                          Re-trace
+                        </Button>
+                      </div>
+                    </div>
+                  )}
 
-                  {/* Section Tools: Split (Add Section Line) & Merge */}
+                  {/* Section Tools: + Add Section, Split & Merge */}
                   {designData.roof_polygon?.length >= 3 && (
                     <div className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
                       <div className="flex items-center justify-between">
@@ -1899,7 +2058,7 @@ export default function SolarStudio() {
                           <span>Roof Sections & Planes</span>
                         </div>
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-slate-700 text-cyan-400">
-                          {effectiveSections.length} {effectiveSections.length === 1 ? "Section" : "Sections"}
+                          Existing Sections: {effectiveSections.length}
                         </Badge>
                       </div>
 
@@ -1932,16 +2091,34 @@ export default function SolarStudio() {
                           size="sm"
                           onClick={() => {
                             if (activeTab !== "2d") setActiveTab("2d");
-                            setActiveTool(activeTool === "add_section_line" ? "select" : "add_section_line");
+                            setActiveTool(activeTool === "draw_section" ? "select" : "draw_section");
                           }}
                           className={`flex-1 h-6 text-[10.5px] font-bold rounded-lg gap-1 ${
+                            activeTool === "draw_section"
+                              ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                              : "bg-emerald-950/70 text-emerald-300 border border-emerald-700/60 hover:bg-emerald-900"
+                          }`}
+                          title="Draw a new child section polygon inside the roof"
+                        >
+                          <Plus className="w-3 h-3" />
+                          {activeTool === "draw_section" ? "Drawing..." : "+ Add Section"}
+                        </Button>
+
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            if (activeTab !== "2d") setActiveTab("2d");
+                            setActiveTool(activeTool === "add_section_line" ? "select" : "add_section_line");
+                          }}
+                          className={`h-6 text-[10.5px] font-bold rounded-lg gap-1 px-2 ${
                             activeTool === "add_section_line"
                               ? "bg-cyan-600 hover:bg-cyan-700 text-white"
                               : "bg-cyan-950/60 text-cyan-300 border border-cyan-700/60 hover:bg-cyan-900"
                           }`}
+                          title="Split roof with a cut line"
                         >
                           <Scissors className="w-3 h-3" />
-                          {activeTool === "add_section_line" ? "Click line across roof..." : "Add Section Line"}
+                          Split
                         </Button>
 
                         {effectiveSections.length > 1 && (
@@ -1959,7 +2136,7 @@ export default function SolarStudio() {
                             }`}
                             title="Click 2 adjacent sections on map to merge"
                           >
-                            {activeTool === "merge_section" ? "Click 2 to merge..." : "Merge"}
+                            {activeTool === "merge_section" ? "Click 2..." : "Merge"}
                           </Button>
                         )}
 
@@ -1972,7 +2149,7 @@ export default function SolarStudio() {
                             title="Remove all sections and restore single roof"
                           >
                             <Trash2 className="w-3 h-3" />
-                            Remove
+                            Remove All
                           </Button>
                         )}
                       </div>
@@ -1987,8 +2164,38 @@ export default function SolarStudio() {
                           <span className="w-2 h-2 rounded-full bg-cyan-400" />
                           <span>{activeSection.name || "Section"} Settings</span>
                         </div>
-                        <div className="text-[10px] text-slate-400 font-mono">
-                          {activeSection.polygon?.length >= 3 ? `${Math.round(getCartesianPolygonArea(activeSection.polygon))} m²` : ""}
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-slate-400 font-mono mr-1">
+                            {activeSection.polygon?.length >= 3 ? `${Math.round(getCartesianPolygonArea(activeSection.polygon))} m²` : ""}
+                          </span>
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              if (activeTab !== "2d") setActiveTab("2d");
+                              setActiveTool(activeTool === "edit_section" ? "select" : "edit_section");
+                            }}
+                            variant="outline"
+                            className={`h-5 text-[10px] font-semibold px-2 rounded-md ${
+                              activeTool === "edit_section"
+                                ? "bg-amber-500 text-slate-950 border-amber-400"
+                                : "bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-900/60"
+                            }`}
+                            title="Edit boundary points of this section"
+                          >
+                            <Edit3 className="w-2.5 h-2.5 mr-0.5" />
+                            {activeTool === "edit_section" ? "Editing..." : "Edit Section"}
+                          </Button>
+                          {effectiveSections.length > 1 && (
+                            <Button
+                              size="sm"
+                              onClick={() => handleDeleteSection(activeSection.id)}
+                              variant="outline"
+                              className="h-5 text-[10px] font-semibold px-1.5 rounded-md bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/50"
+                              title="Delete this section"
+                            >
+                              <Trash2 className="w-2.5 h-2.5" />
+                            </Button>
+                          )}
                         </div>
                       </div>
 
@@ -2731,6 +2938,9 @@ export default function SolarStudio() {
               }}
               onSplitSection={handleSplitSection}
               onMergeSections={handleMergeSections}
+              onAddSection={handleAddSection}
+              onDeleteSection={handleDeleteSection}
+              onUpdateSectionPolygon={handleUpdateSectionPolygon}
             />
           </div>
 
@@ -2907,6 +3117,9 @@ export default function SolarStudio() {
                 }}
                 onSplitSection={handleSplitSection}
                 onMergeSections={handleMergeSections}
+                onAddSection={handleAddSection}
+                onDeleteSection={handleDeleteSection}
+                onUpdateSectionPolygon={handleUpdateSectionPolygon}
               />
               {hasOpened3D && (
                 <Suspense fallback={

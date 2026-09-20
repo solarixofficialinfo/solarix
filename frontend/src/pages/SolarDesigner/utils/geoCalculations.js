@@ -779,3 +779,39 @@ export function calculateSectionRoofElevationAtPoint(x, y, section = {}, roofBas
 
   return Math.max(0.5, baseElevation + projDist * Math.tan(pitchRad));
 }
+
+/**
+ * Validates a newly drawn or edited section polygon
+ * - Must have at least 3 points
+ * - Must have area >= 0.5 m²
+ * - Must not self-intersect
+ * Returns { valid: boolean, error?: string }
+ */
+export function validateSectionPolygon(polygon, parentRoofPolygon = null) {
+  if (!polygon || !Array.isArray(polygon) || polygon.length < 3) {
+    return { valid: false, error: "Section requires at least 3 points." };
+  }
+
+  const pts = ensureCartesianCoordinates(polygon);
+  const area = getCartesianPolygonArea(pts);
+  if (isNaN(area) || area < 0.5) {
+    return { valid: false, error: "Section area is too small or invalid (minimum 0.5 m²)." };
+  }
+
+  // Self-intersection check: non-adjacent edges must not intersect
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      const p3 = pts[j];
+      const p4 = pts[(j + 1) % n];
+      if (segmentsIntersect(p1, p2, p3, p4)) {
+        return { valid: false, error: "Section edges cross over each other (self-intersecting)." };
+      }
+    }
+  }
+
+  return { valid: true };
+}
