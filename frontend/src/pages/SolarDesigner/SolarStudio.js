@@ -537,6 +537,36 @@ export default function SolarStudio() {
     toast.success(`Merged ${secA.name} and ${secB.name} into ${mergedSection.name}`);
   }, [effectiveSections, designData.panels]);
 
+  // Remove all sections and restore single roof
+  const handleRemoveSectioning = useCallback(() => {
+    if (!designData.roof_polygon || designData.roof_polygon.length < 3) return;
+    if (!window.confirm("Remove all sections and restore single roof?")) return;
+    const surfaceMat = (designData.roof?.surface_material || "").toLowerCase();
+    const roofType = surfaceMat.includes("tile") ? "Tile" : surfaceMat.includes("metal") ? "Metal" : "RCC";
+    const single = {
+      id: `sec_${Date.now()}_1`,
+      name: "Section A",
+      polygon: designData.roof_polygon,
+      roofType,
+      pitch: Number(designData.roof?.pitch_deg || 0),
+      azimuth: Number(designData.roof?.azimuth_deg ?? designData.azimuth_angle ?? 180),
+      elevation: Number(designData.roof?.eave_height_m ?? designData.roof?.elevation_m ?? 3.5),
+      solarEnabled: true,
+      mountingType: designData.structure?.type || (roofType === "Tile" ? "tile_hook_rail" : "elevated"),
+      structureEnabled: designData.structure?.show_structure !== false,
+      jointType: "same_plane",
+      tileConfig: { type: "spanish_barrel", color: "#b45309" },
+    };
+    const panels = (designData.panels || []).map((p) => ({ ...p, sectionId: single.id }));
+    setDesignData((prev) => ({
+      ...prev,
+      roof_sections: [single],
+      panels,
+    }));
+    setSelectedSectionId(single.id);
+    toast.success("Restored single roof — all sections removed.");
+  }, [designData]);
+
   // Update a section's parameters (pitch, azimuth, roofType, solarEnabled, etc.)
   const handleUpdateSection = useCallback((sectionId, updates) => {
     setDesignData((prev) => {
@@ -1902,34 +1932,47 @@ export default function SolarStudio() {
                           size="sm"
                           onClick={() => {
                             if (activeTab !== "2d") setActiveTab("2d");
-                            setActiveTool(activeTool === "split_section" ? "select" : "split_section");
+                            setActiveTool(activeTool === "add_section_line" ? "select" : "add_section_line");
                           }}
                           className={`flex-1 h-6 text-[10.5px] font-bold rounded-lg gap-1 ${
-                            activeTool === "split_section"
+                            activeTool === "add_section_line"
                               ? "bg-cyan-600 hover:bg-cyan-700 text-white"
                               : "bg-cyan-950/60 text-cyan-300 border border-cyan-700/60 hover:bg-cyan-900"
                           }`}
                         >
                           <Scissors className="w-3 h-3" />
-                          {activeTool === "split_section" ? "Click line across roof..." : "Add Section Line"}
+                          {activeTool === "add_section_line" ? "Click line across roof..." : "Add Section Line"}
                         </Button>
 
                         {effectiveSections.length > 1 && (
                           <Button
                             size="sm"
                             onClick={() => {
-                              if (effectiveSections.length === 2) {
-                                handleMergeSections(effectiveSections[0].id, effectiveSections[1].id);
-                              } else if (activeSection) {
-                                const other = effectiveSections.find((s) => s.id !== activeSection.id);
-                                if (other) handleMergeSections(activeSection.id, other.id);
-                              }
+                              if (activeTab !== "2d") setActiveTab("2d");
+                              setActiveTool(activeTool === "merge_section" ? "select" : "merge_section");
                             }}
                             variant="outline"
-                            className="h-6 text-[10.5px] font-bold rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 gap-1 px-2"
-                            title="Merge adjacent sections back together"
+                            className={`h-6 text-[10.5px] font-bold rounded-lg gap-1 px-2 ${
+                              activeTool === "merge_section"
+                                ? "bg-purple-600 hover:bg-purple-700 text-white border-purple-500"
+                                : "bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700"
+                            }`}
+                            title="Click 2 adjacent sections on map to merge"
                           >
-                            Merge
+                            {activeTool === "merge_section" ? "Click 2 to merge..." : "Merge"}
+                          </Button>
+                        )}
+
+                        {effectiveSections.length > 1 && (
+                          <Button
+                            size="sm"
+                            onClick={handleRemoveSectioning}
+                            variant="outline"
+                            className="h-6 text-[10.5px] font-bold rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/50 gap-1 px-2"
+                            title="Remove all sections and restore single roof"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Remove
                           </Button>
                         )}
                       </div>

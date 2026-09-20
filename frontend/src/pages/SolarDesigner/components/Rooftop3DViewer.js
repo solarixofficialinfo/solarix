@@ -1376,7 +1376,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
       // A. Render PV Panels with realistic mono PERC cell wafer texture, beveled border & clamps
       if (showPanels) {
-        activePanels.forEach((p) => {
+        const renderablePanels = activePanels.filter((p) => {
+          if (!roofSections || roofSections.length === 0) return true;
+          const sec = roofSections.find((s) => s.id === p.sectionId) ||
+                      roofSections.find((s) => isPointInsidePolygon(p.x, p.y, s.polygon));
+          return !sec || sec.solarEnabled !== false;
+        });
+
+        renderablePanels.forEach((p) => {
           const pw = Number(p.width || 1.134);
           const pl = Number(p.height || 2.278);
 
@@ -1427,7 +1434,16 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
       // B. Render Row-Based Structural Mounting Framework with Node-to-Node Precision
       if (showStructures) {
-        const rows = clusterPanelsIntoRows(activePanels, structAzimuth);
+        const structPanels = activePanels.filter((p) => {
+          if (!roofSections || roofSections.length === 0) return true;
+          const sec = roofSections.find((s) => s.id === p.sectionId) ||
+                      roofSections.find((s) => isPointInsidePolygon(p.x, p.y, s.polygon));
+          if (!sec) return true;
+          if (sec.solarEnabled === false) return false;
+          return sec.structureEnabled !== false;
+        });
+
+        const rows = clusterPanelsIntoRows(structPanels, structAzimuth);
 
         rows.forEach((row) => {
           const groupId = `row-${row.rowIndex}`;
@@ -1436,18 +1452,22 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const cosAz = Math.cos(azRad);
           const sinAz = Math.sin(azRad);
 
-          const rowRoofY = calculateRoofElevationAtPoint(row.centerX, row.centerY, fullRoof);
+          const samplePanel = row.items?.[0]?.panel;
+          const rowSec = (roofSections && roofSections.length > 0)
+            ? (roofSections.find((s) => s.id === samplePanel?.sectionId) || roofSections.find((s) => isPointInsidePolygon(samplePanel?.x, samplePanel?.y, s.polygon)))
+            : null;
+          const isRowFlush = rowSec ? (rowSec.mountingType === "flush" || rowSec.roofType === "Tile" || rowSec.roofType === "Metal" || isFlush) : isFlush;
+
+          const rowRoofY = rowSec
+            ? calculateSectionRoofElevationAtPoint(row.centerX, row.centerY, rowSec, fullRoof)
+            : calculateRoofElevationAtPoint(row.centerX, row.centerY, fullRoof);
           const frameCenterY = rowRoofY + baseClearance + (row.pl / 2) * Math.sin(tiltRad);
 
           // ── FLUSH MOUNT: Mini Rails directly on roof surface ───────────────
-          if (isFlush) {
-            const samplePanel = row.items?.[0]?.panel;
-            const rowSec = (roofSections && roofSections.length > 0)
-              ? (roofSections.find((s) => s.id === samplePanel?.sectionId) || roofSections.find((s) => isPointInsidePolygon(samplePanel?.x, samplePanel?.y, s.polygon)))
-              : null;
+          if (isRowFlush) {
             const isTileRoof = rowSec?.roofType === "Tile";
             const rowPitchDeg = rowSec ? Number(rowSec.pitch ?? 0) : panelTiltDeg;
-            const effectiveRowTiltRad = isFlush ? toRad(rowPitchDeg) : tiltRad;
+            const effectiveRowTiltRad = isRowFlush ? toRad(rowPitchDeg) : tiltRad;
 
             const railLength = row.totalRowLength + 0.12;
             const railGeom = new THREE.BoxGeometry(railLength, 0.035, 0.045);
