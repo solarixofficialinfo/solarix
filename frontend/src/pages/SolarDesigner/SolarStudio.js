@@ -11,7 +11,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import {
   Sun, MapPin, PenTool, Box, Sparkles, Layers, ArrowLeft, ArrowRight,
-  Save, FileDown, Plus, Trash2, RotateCw, RefreshCw, Check, CheckCircle2,
+  Save, FileDown, Plus, Trash2, RotateCw, RotateCcw, RefreshCw, Check, CheckCircle2,
   AlertTriangle, ShieldCheck, Download, Sliders, Ruler, Maximize2, Minimize2,
   Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, ChevronUp, Eye, Focus,
   PlusCircle, Undo2, Edit3, X, HelpCircle, Bell, Grid, Layers2, Image as ImageIcon, ChevronRight, Edit2, Zap
@@ -115,6 +115,10 @@ export default function SolarStudio() {
 
   const [activeTool, setActiveTool] = useState("select"); // 'select' | 'draw_roof' | 'edit_roof' | 'add_panel' | 'calibrate'
   const [selectedPanelId, setSelectedPanelId] = useState(null);
+  const [selectionMode, setSelectionMode] = useState("panel"); // 'panel' | 'row' | 'array'
+  const [selectedRowIndex, setSelectedRowIndex] = useState(null);
+  const [autoLayoutBaselinePanels, setAutoLayoutBaselinePanels] = useState(null);
+  const [hasManualAdjustments, setHasManualAdjustments] = useState(false);
   const [isCalibrated, setIsCalibrated] = useState(false);
 
   // Active section controls: which floating drawer is open
@@ -307,6 +311,9 @@ export default function SolarStudio() {
           doc.saved_views = Array.isArray(doc.saved_views) ? doc.saved_views : [];
 
           setDesignData(doc);
+          if (doc.panels && doc.panels.length > 0) {
+            setAutoLayoutBaselinePanels(doc.panels);
+          }
           if (doc.saved_views && doc.saved_views.length > 0) {
             setSavedViews(doc.saved_views);
           }
@@ -420,7 +427,13 @@ export default function SolarStudio() {
   }, [designData.roof?.setback_m, designData.setback_m]);
 
   // Trigger Automatic Panel Layout with live recalculation support
-  const handleAutoLayout = useCallback((customStrategy = "auto", customPolygon = null, customOverrides = {}) => {
+  const handleAutoLayout = useCallback((customStrategy = "auto", customPolygon = null, customOverrides = {}, bypassConfirm = false) => {
+    if (!bypassConfirm && hasManualAdjustments) {
+      if (!window.confirm("Regenerate layout? Manual panel adjustments will be removed.")) {
+        return;
+      }
+    }
+
     const polygon = customPolygon || designData.roof_polygon;
     if (!polygon || polygon.length < 3) {
       toast.warning("Please draw a roof boundary on the map first.");
@@ -459,6 +472,11 @@ export default function SolarStudio() {
       strategy: customStrategy,
     });
 
+    setAutoLayoutBaselinePanels(result.panels);
+    setHasManualAdjustments(false);
+    setSelectedPanelId(null);
+    setSelectedRowIndex(null);
+
     setDesignData((prev) => ({
       ...prev,
       panels: result.panels,
@@ -474,7 +492,7 @@ export default function SolarStudio() {
     }));
 
     toast.success(`Generated layout: ${result.panelCount} panels (${result.totalKw.toFixed(2)} kWp)`);
-  }, [designData]);
+  }, [designData, hasManualAdjustments]);
 
   // Live Layout Parameter Adjustment Handler
   const handleLayoutParamChange = useCallback((field, value) => {
@@ -2049,6 +2067,35 @@ export default function SolarStudio() {
                     </Button>
                   </div>
 
+                  {hasManualAdjustments && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        if (autoLayoutBaselinePanels && autoLayoutBaselinePanels.length > 0) {
+                          const pWatt = Number(designData.panel_wattage || 550);
+                          const totalKw = (autoLayoutBaselinePanels.length * pWatt) / 1000.0;
+                          const singleArea = (designData.panel_dimensions?.width_m || 1.134) * (designData.panel_dimensions?.length_m || 2.278);
+                          const coveragePct = designData.usable_area_sqm > 0 ? ((autoLayoutBaselinePanels.length * singleArea) / designData.usable_area_sqm) * 100 : 0;
+                          setDesignData((prev) => ({
+                            ...prev,
+                            panels: autoLayoutBaselinePanels,
+                            panel_count: autoLayoutBaselinePanels.length,
+                            system_kw: Math.round(totalKw * 100) / 100,
+                            coverage_pct: Math.min(100, Math.round(coveragePct * 10) / 10),
+                          }));
+                          setHasManualAdjustments(false);
+                          setSelectedPanelId(null);
+                          setSelectedRowIndex(null);
+                          toast.success("Restored latest Auto Layout panels");
+                        }
+                      }}
+                      className="w-full h-7 text-[11px] font-bold bg-amber-950/40 hover:bg-amber-900/60 border border-amber-600/50 text-amber-300 rounded-lg flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" /> Reset Local Changes
+                    </Button>
+                  )}
+
                   <div className="flex items-center justify-between bg-slate-950/80 px-2.5 py-1.5 rounded-xl border border-slate-800">
                     <span className="text-slate-400 font-semibold text-xs">Panel Count:</span>
                     <div className="flex items-center gap-1.5">
@@ -2114,6 +2161,13 @@ export default function SolarStudio() {
               setActiveTool={setActiveTool}
               selectedPanelId={selectedPanelId}
               setSelectedPanelId={setSelectedPanelId}
+              selectionMode={selectionMode}
+              setSelectionMode={setSelectionMode}
+              selectedRowIndex={selectedRowIndex}
+              setSelectedRowIndex={setSelectedRowIndex}
+              autoLayoutBaselinePanels={autoLayoutBaselinePanels}
+              hasManualAdjustments={hasManualAdjustments}
+              setHasManualAdjustments={setHasManualAdjustments}
               orientation={designData.orientation}
               azimuthDegrees={Number(designData.azimuth_angle || 180)}
               rowSpacingMeters={Number(designData.row_spacing_m || designData.panel_spacing_m || 0.03)}
@@ -2267,6 +2321,13 @@ export default function SolarStudio() {
                 setActiveTool={setActiveTool}
                 selectedPanelId={selectedPanelId}
                 setSelectedPanelId={setSelectedPanelId}
+                selectionMode={selectionMode}
+                setSelectionMode={setSelectionMode}
+                selectedRowIndex={selectedRowIndex}
+                setSelectedRowIndex={setSelectedRowIndex}
+                autoLayoutBaselinePanels={autoLayoutBaselinePanels}
+                hasManualAdjustments={hasManualAdjustments}
+                setHasManualAdjustments={setHasManualAdjustments}
                 orientation={designData.orientation}
                 azimuthDegrees={Number(designData.azimuth_angle || 180)}
                 rowSpacingMeters={Number(designData.row_spacing_m || designData.panel_spacing_m || 0.03)}

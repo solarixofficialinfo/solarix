@@ -26,6 +26,7 @@ import {
   isPointInPolygon,
 } from "../utils/geoCalculations";
 import { validatePanelPlacement, canFitAdditionalPanel } from "../utils/layoutEngine";
+import LayoutMicroAdjuster from "./LayoutMicroAdjuster";
 
 // Fix Leaflet default marker icons (CDN-based to avoid webpack asset issues)
 delete L.Icon.Default.prototype._getIconUrl;
@@ -125,6 +126,13 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     onAddPanel,
     selectedPanelId = null,
     setSelectedPanelId,
+    selectionMode = "panel",
+    setSelectionMode,
+    selectedRowIndex = null,
+    setSelectedRowIndex,
+    autoLayoutBaselinePanels = null,
+    hasManualAdjustments = false,
+    setHasManualAdjustments,
     onCalibrationComplete,
     orientation = "portrait",
     azimuthDegrees = 180,
@@ -141,6 +149,21 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const obstaclesLayerGroupRef = useRef(null);
   const markerRef = useRef(null);
   const vertexHandlesRef = useRef([]);
+
+  // Fallback states for layout micro-adjustments
+  const [internalSelectionMode, setInternalSelectionMode] = useState("panel");
+  const [internalSelectedRowIndex, setInternalSelectedRowIndex] = useState(null);
+  const [internalSelectedPanelId, setInternalSelectedPanelId] = useState(null);
+  const [hoveredRowIndex, setHoveredRowIndex] = useState(null);
+
+  const activeSelectionMode = selectionMode || internalSelectionMode;
+  const changeSelectionMode = setSelectionMode || setInternalSelectionMode;
+
+  const activeSelectedRowIndex = selectedRowIndex !== undefined ? selectedRowIndex : internalSelectedRowIndex;
+  const changeSelectedRowIndex = setSelectedRowIndex || setInternalSelectedRowIndex;
+
+  const activeSelectedPanelId = selectedPanelId !== undefined ? selectedPanelId : internalSelectedPanelId;
+  const changeSelectedPanelId = setSelectedPanelId || setInternalSelectedPanelId;
 
   // Stable refs for latest prop values
   const roofPolygonRef = useRef(roofPolygon);
@@ -1672,38 +1695,95 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       });
     }
 
-    // 4. Solar Panels (with out-of-bounds safety indicator)
+    // 4. Solar Panels (with out-of-bounds safety indicator & micro-adjustment selection)
     if (layers.panels && Array.isArray(panels) && panels.length > 0) {
+      const rowPanelsMap = new Map();
+      panels.forEach((p) => {
+        const rKey = p.row !== undefined && p.row !== null ? p.row : 0;
+        if (!rowPanelsMap.has(rKey)) rowPanelsMap.set(rKey, []);
+        rowPanelsMap.get(rKey).push(p);
+      });
+
       panels.forEach((p, idx) => {
         if (p.hidden || !isValidCartesian(p)) return;
-        const isSelected = p.id === selectedPanelId;
+        const pRow = p.row !== undefined && p.row !== null ? p.row : 0;
+        const rowPanels = rowPanelsMap.get(pRow) || [p];
+
+        const isPanelSelected = activeSelectionMode === "panel" && p.id === activeSelectedPanelId;
+        const isRowSelected = activeSelectionMode === "row" && activeSelectedRowIndex != null && pRow === activeSelectedRowIndex;
+        const isRowHovered = activeSelectionMode === "row" && hoveredRowIndex != null && pRow === hoveredRowIndex && !isRowSelected;
+        const isArraySelected = activeSelectionMode === "array";
+
+        const isSelected = isPanelSelected || isRowSelected || isArraySelected;
         const isOutOfBounds = roofPolygon && roofPolygon.length >= 3 && !isPointInPolygon(p.x, p.y, roofPolygon);
 
         const corners = getRotatedRectCorners(p.x, p.y, p.width || 1.134, p.height || 2.278, p.rotation || 0);
         const pLatLngs = corners.map((c) => cartesianToLatLng(c.x, c.y));
         const centerLatLng = cartesianToLatLng(p.x, p.y);
 
+        const strokeColor = isOutOfBounds
+          ? "#ef4444"
+          : isSelected
+          ? "#fbbf24"
+          : isRowHovered
+          ? "#38bdf8"
+          : "#93c5fd";
+
+        const fillColor = isOutOfBounds
+          ? "#b91c1c"
+          : isSelected
+          ? "#2563eb"
+          : isRowHovered
+          ? "#1e40af"
+          : "#0a192f";
+
         const panelPoly = L.polygon(pLatLngs, {
-          color: isOutOfBounds ? "#ef4444" : isSelected ? "#fbbf24" : "#93c5fd",
+          color: strokeColor,
           dashArray: isOutOfBounds ? "4, 4" : undefined,
-          weight: isOutOfBounds ? 2.5 : isSelected ? 2.5 : 1,
-          fillColor: isOutOfBounds ? "#b91c1c" : isSelected ? "#2563eb" : "#0a192f",
-          fillOpacity: isOutOfBounds ? 0.85 : 0.92,
+          weight: isOutOfBounds ? 2.5 : isSelected ? 2.5 : isRowHovered ? 2 : 1,
+          fillColor: fillColor,
+          fillOpacity: isOutOfBounds ? 0.85 : isSelected ? 0.95 : isRowHovered ? 0.9 : 0.85,
         }).addTo(panelGroup);
 
         panelPoly.on("click", (e) => {
           L.DomEvent.stopPropagation(e);
-          setSelectedPanelId?.(p.id);
+          if (activeSelectionMode === "panel") {
+            changeSelectedPanelId(p.id);
+            changeSelectedRowIndex(null);
+          } else if (activeSelectionMode === "row") {
+            changeSelectedRowIndex(pRow);
+            changeSelectedPanelId(null);
+          } else if (activeSelectionMode === "array") {
+            changeSelectedPanelId(null);
+            changeSelectedRowIndex(null);
+          }
         });
 
-        if (isOutOfBounds) {
+        panelPoly.on("mouseover", () => {
+          if (activeSelectionMode === "row") {
+            setHoveredRowIndex(pRow);
+          }
+        });
+
+        panelPoly.on("mouseout", () => {
+          if (activeSelectionMode === "row") {
+            setHoveredRowIndex(null);
+          }
+        });
+
+        if (activeSelectionMode === "row") {
+          panelPoly.bindTooltip(
+            `<div class="text-[10px] font-bold text-amber-300">Row ${Number(pRow) + 1}<br><span class="text-slate-300 text-[9px]">${rowPanels.length} Panels</span></div>`,
+            { direction: "top", opacity: 0.95 }
+          );
+        } else if (isOutOfBounds) {
           panelPoly.bindTooltip(
             `<div class="text-[10px] font-bold text-amber-300">⚠ Panel #${idx + 1} is outside the roof boundary.<br>Click to reposition or delete.</div>`,
             { direction: "top" }
           );
         }
 
-        if (isSelected) {
+        if (isPanelSelected) {
           const moveHandle = L.marker(centerLatLng, {
             draggable: true,
             icon: L.divIcon({
@@ -1728,13 +1808,14 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             });
             if (validation.valid) {
               setPanels?.((prev) => prev.map((item) => item.id === p.id ? { ...item, x: newX, y: newY } : item));
+              setHasManualAdjustments?.(true);
               toast.success(`Moved Panel #${idx + 1}`);
             } else {
               toast.warning(validation.reason || "Invalid position.");
               setPanels?.((prev) => [...prev]);
             }
           });
-        } else {
+        } else if (!isRowSelected && !isArraySelected) {
           const numIcon = L.divIcon({
             className: "text-[8px] font-bold text-center text-blue-200 select-none pointer-events-none",
             html: `${idx + 1}`,
@@ -1746,9 +1827,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     }
   }, [
     roofPolygon, panels, obstacles, walkways, setbackMeters,
-    activeDrawPoints, layers, selectedPanelId, editingRoof,
+    activeDrawPoints, layers, activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode, hoveredRowIndex, editingRoof,
     cartesianToLatLng, latLngToCartesian, handleVertexDrag, handleDeleteVertex,
-    handleInsertVertexOnEdge, pushVertexHistory, setSelectedPanelId, setPanels,
+    handleInsertVertexOnEdge, pushVertexHistory, changeSelectedPanelId, changeSelectedRowIndex, setPanels, setHasManualAdjustments,
     setActiveTool, handleFinishDrawingRoof, syncMagnifierTiles, updateMagnifierTransform
   ]);
 
@@ -2424,16 +2505,35 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
             </div>
           ) : (
             <>
-              <button
-                onClick={() => { setActiveTool("select"); setActiveDrawPoints([]); }}
-                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                  activeTool === "select" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
-                }`}
-                title="Select & Inspect"
-              >
-                <MousePointer className="w-3.5 h-3.5" />
-                <span>Select</span>
-              </button>
+              <div className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded-lg p-0.5">
+                <button
+                  onClick={() => { setActiveTool("select"); setActiveDrawPoints([]); }}
+                  className={`h-6 px-2 rounded-md font-semibold flex items-center gap-1 transition cursor-pointer ${
+                    activeTool === "select" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white"
+                  }`}
+                  title="Select & Inspect"
+                >
+                  <MousePointer className="w-3 h-3" />
+                  <span className="text-[11px]">Select</span>
+                </button>
+                {panels.length > 0 && activeTool === "select" && (
+                  <select
+                    id="map-selection-mode-select"
+                    value={activeSelectionMode}
+                    onChange={(e) => {
+                      changeSelectionMode(e.target.value);
+                      if (e.target.value === "panel") changeSelectedRowIndex(null);
+                      if (e.target.value === "row") changeSelectedPanelId(null);
+                    }}
+                    className="bg-transparent text-amber-300 font-bold text-[10.5px] px-1 py-0.5 outline-none cursor-pointer border-l border-slate-700 ml-0.5"
+                    title="Selection Target (Panel, Row, Array)"
+                  >
+                    <option value="panel" className="bg-slate-900 text-white">Panel</option>
+                    <option value="row" className="bg-slate-900 text-white">Row</option>
+                    <option value="array" className="bg-slate-900 text-white">Array</option>
+                  </select>
+                )}
+              </div>
 
               <button
                 onClick={() => { setActiveTool("draw_roof"); setActiveDrawPoints([]); }}
@@ -2676,6 +2776,28 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* ── 5. FLOATING LAYOUT MICRO-ADJUSTMENT TOOL ──────────────────────────── */}
+      {layers.panels && Array.isArray(panels) && panels.length > 0 && activeTool === "select" && (
+        <LayoutMicroAdjuster
+          panels={panels}
+          setPanels={setPanels}
+          roofPolygon={roofPolygon}
+          setbackMeters={setbackMeters}
+          obstacles={obstacles}
+          walkways={walkways}
+          panelSpecs={panelSpecs}
+          orientation={orientation}
+          selectionMode={activeSelectionMode}
+          setSelectionMode={changeSelectionMode}
+          selectedPanelId={activeSelectedPanelId}
+          setSelectedPanelId={changeSelectedPanelId}
+          selectedRowIndex={activeSelectedRowIndex}
+          setSelectedRowIndex={changeSelectedRowIndex}
+          autoLayoutBaselinePanels={autoLayoutBaselinePanels}
+          hasManualAdjustments={hasManualAdjustments}
+          setHasManualAdjustments={setHasManualAdjustments}
+        />
+      )}
     </div>
   );
 });

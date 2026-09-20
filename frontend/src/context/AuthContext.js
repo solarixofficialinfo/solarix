@@ -77,6 +77,7 @@ export const AuthProvider = ({ children }) => {
     let origin = (typeof window !== "undefined" && window.location?.origin)
       ? window.location.origin
       : (process.env.REACT_APP_SITE_URL || "https://solarix-cumx-sable.vercel.app");
+    origin = origin.replace(/\/+$/, "");
     const redirectUrl = `${origin}/login`;
 
     const { data, error } = await supabase.auth.signInWithOAuth({
