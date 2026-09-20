@@ -660,7 +660,7 @@ export default function SolarStudio() {
           return pSecId !== sectionId;
         });
       }
-      if (updates.azimuth != null || updates.pitch != null) {
+      if (updates.azimuth != null || updates.pitch != null || updates.tilt_deg != null) {
         panels = panels.map((p) => {
           const pSecId = p.sectionId || defaultSecId;
           if (pSecId === sectionId) {
@@ -668,6 +668,7 @@ export default function SolarStudio() {
               ...p,
               azimuth: updates.azimuth != null ? Number(updates.azimuth) : p.azimuth,
               pitch: updates.pitch != null ? Number(updates.pitch) : p.pitch,
+              tilt: updates.tilt_deg != null ? Number(updates.tilt_deg) : p.tilt,
             };
           }
           return p;
@@ -759,6 +760,7 @@ export default function SolarStudio() {
       structureEnabled: refSec.structureEnabled !== false,
       jointType: "same_plane",
       tileConfig: refSec.tileConfig ? { ...refSec.tileConfig } : { type: "spanish_barrel", color: "#b45309" },
+      tilt_deg: Number(refSec.tilt_deg ?? designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15),
       panel_spacing_m: Number(refSec.panel_spacing_m ?? designData.panel_spacing_m ?? 0.03),
       row_spacing_m: Number(refSec.row_spacing_m ?? designData.row_spacing_m ?? 0.03),
       setback_m: Number(refSec.setback_m ?? designData.roof?.setback_m ?? designData.setback_m ?? 0.5),
@@ -891,6 +893,7 @@ export default function SolarStudio() {
       sectionId: sec.id,
       pitch: Number(sec.pitch || 0),
       azimuth: secAzimuth,
+      tilt: Number(sec.tilt_deg ?? designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15),
     }));
 
     setDesignData((prev) => {
@@ -1036,6 +1039,11 @@ export default function SolarStudio() {
       structureEnabled: designData.structure?.show_structure !== false,
       jointType: "same_plane",
       tileConfig: { type: "spanish_barrel", color: "#b45309" },
+      tilt_deg: Number(designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15),
+      panel_spacing_m: Number(designData.panel_spacing_m ?? 0.03),
+      row_spacing_m: Number(designData.row_spacing_m ?? 0.03),
+      setback_m: Number(designData.roof?.setback_m ?? designData.setback_m ?? 0.5),
+      orientation: designData.orientation || "portrait",
     };
 
     setDesignData((prev) => {
@@ -1091,6 +1099,7 @@ export default function SolarStudio() {
         coverage_pct: coveragePct,
       };
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [designData.roof?.setback_m, designData.roof?.surface_material, designData.roof?.pitch_deg, designData.roof?.azimuth_deg, designData.roof?.eave_height_m, designData.roof?.elevation_m, designData.setback_m, designData.azimuth_angle, designData.structure?.type, designData.structure?.show_structure]);
 
   // Trigger Automatic Panel Layout with live recalculation support (Per-Section Aware)
@@ -2989,7 +2998,7 @@ export default function SolarStudio() {
                       </span>
                     </div>
                     <div className="text-[9.5px] text-slate-400">
-                      {activeSection.roofType || "RCC"} · {activeSection.pitch ?? 0}° pitch · {activeSection.azimuth ?? 180}° az
+                      {activeSection.roofType || "RCC"} · {activeSection.pitch ?? 0}° pitch · {activeSection.tilt_deg ?? designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15}° tilt · {activeSection.azimuth ?? 180}° az
                     </div>
                   </div>
                 </div>
@@ -3020,7 +3029,7 @@ export default function SolarStudio() {
                       >
                         <span>{sec.name || "Sec"}</span>
                         <span className={`text-[8.5px] font-mono ${isCur ? "text-slate-900" : "text-slate-400"}`}>
-                          {sec.pitch ?? 0}°
+                          {sec.pitch ?? 0}°p / {sec.tilt_deg ?? 15}°t
                         </span>
                       </button>
                     );
@@ -3141,10 +3150,13 @@ export default function SolarStudio() {
                     </div>
                   )}
 
-                  {/* Pitch / Slope */}
+                  {/* Pitch / Slope (Physical Roof Slope) */}
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
-                      <Label className="text-[10px] font-semibold text-slate-400">Pitch / Slope (°)</Label>
+                      <div>
+                        <Label className="text-[10px] font-semibold text-slate-400">Roof Pitch (°)</Label>
+                        <span className="text-[8.5px] text-slate-500 block">Physical roof plane slope</span>
+                      </div>
                       <span className="font-mono text-cyan-400 text-xs font-bold">{activeSection.pitch ?? 0}°</span>
                     </div>
                     <div className="flex items-center gap-2">
@@ -3168,6 +3180,45 @@ export default function SolarStudio() {
                         className="h-6 w-14 text-xs font-mono font-bold bg-slate-800 border-slate-700 text-white text-center p-0"
                       />
                     </div>
+                  </div>
+
+                  {/* Solar Mounting Tilt Angle */}
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Label className="text-[10px] font-semibold text-slate-400">Solar Tilt Angle (°)</Label>
+                        <span className="text-[8.5px] text-slate-500 block">Solar module / mount tilt</span>
+                      </div>
+                      <span className="font-mono text-amber-400 text-xs font-bold">
+                        {activeSection.tilt_deg ?? designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15}°
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Slider
+                        min={0}
+                        max={60}
+                        step={1}
+                        value={[Number(activeSection.tilt_deg ?? designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15)]}
+                        onValueChange={([val]) => handleUpdateSection(activeSection.id, { tilt_deg: val })}
+                        className="flex-1"
+                      />
+                      <Input
+                        type="number"
+                        min="0"
+                        max="60"
+                        value={activeSection.tilt_deg ?? designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15}
+                        onChange={(e) => {
+                          const val = Math.max(0, Math.min(60, parseFloat(e.target.value) || 0));
+                          handleUpdateSection(activeSection.id, { tilt_deg: val });
+                        }}
+                        className="h-6 w-14 text-xs font-mono font-bold bg-slate-800 border-slate-700 text-white text-center p-0"
+                      />
+                    </div>
+                    {((activeSection.mountingType || "").toLowerCase() === "flush" || (activeSection.mountingType || "").toLowerCase() === "tile_hook_rail") && (
+                      <p className="text-[8.5px] text-slate-400 italic">
+                        Flush mount: panels align to roof pitch ({activeSection.pitch ?? 0}°).
+                      </p>
+                    )}
                   </div>
 
                   {/* Azimuth / Orientation */}

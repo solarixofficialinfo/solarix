@@ -1312,13 +1312,15 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             rootGroup.add(secMesh);
             sectionMeshMapRef.current[sec.id] = secMesh;
 
-            // Edge wireframe (Highlighted cyan if selected section)
-            const secEdgeGeom = new THREE.EdgesGeometry(secGeom);
-            const secEdgeMat = new THREE.LineBasicMaterial({
-              color: isSelectedSec ? 0x06b6d4 : 0x475569,
-              linewidth: isSelectedSec ? 3 : 1.5,
-            });
-            secMesh.add(new THREE.LineSegments(secEdgeGeom, secEdgeMat));
+            // Edge wireframe (Highlighted cyan only when section is selected)
+            if (isSelectedSec) {
+              const secEdgeGeom = new THREE.EdgesGeometry(secGeom);
+              const secEdgeMat = new THREE.LineBasicMaterial({
+                color: 0x06b6d4,
+                linewidth: 3,
+              });
+              secMesh.add(new THREE.LineSegments(secEdgeGeom, secEdgeMat));
+            }
           });
         }
       } else if (roofType === "gable" && roofPitchDeg > 0) {
@@ -1688,12 +1690,13 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const panelAzimuth = Number(p.azimuth ?? pSec?.azimuth ?? structAzimuth);
           const panelPitch = pSec ? Number(pSec.pitch ?? 0) : panelTiltDeg;
           const secMType = (pSec?.mountingType || "").toLowerCase();
-          const isSectionFlush = secMType === "flush"
+          const isSectionFlush = secMType === "flush" || secMType === "tile_hook_rail"
             ? true
-            : (secMType === "elevated" || secMType === "ballasted")
+            : (secMType === "elevated" || secMType === "fixed_tilt" || secMType === "ballasted" || secMType === "ground_mount")
             ? false
             : (pSec?.roofType === "Tile" || pSec?.roofType === "Metal" || isFlush);
-          const effectiveTiltDeg = isSectionFlush ? panelPitch : Number(panelTiltDeg);
+          const secTiltAngle = Number(pSec?.tilt_deg ?? p.tilt ?? structure?.tilt_deg ?? 15);
+          const effectiveTiltDeg = isSectionFlush ? panelPitch : secTiltAngle;
 
           // Panel elevation on section
           const sectionRoofElevation = pSec
@@ -2862,17 +2865,17 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           <div className="bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700/80 shadow-lg pointer-events-auto flex items-center gap-3 text-xs text-slate-300">
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-blue-500 shadow-sm" />
-              <span>Roof: <b>{hasRoof ? `${roof?.type?.toUpperCase() || "FLAT"} (${roof?.elevation_m || 3.0}m)` : "None"}</b></span>
+              <span>Roof: <b>{activeSec ? `${activeSec.roofType || "RCC"} (${activeSec.pitch ?? 0}°)` : hasRoof ? `${roof?.type?.toUpperCase() || "FLAT"} (${roof?.elevation_m || 3.0}m)` : "None"}</b></span>
             </div>
             <span className="text-slate-700">|</span>
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-sm" />
-              <span>Tilt: <b>{structure?.tilt_deg || 15}°</b></span>
+              <span>Tilt: <b>{activeSec?.tilt_deg ?? structure?.tilt_deg ?? 15}°</b>{activeSec && <span className="text-[10px] text-cyan-400 font-normal ml-0.5">({activeSec.name})</span>}</span>
             </div>
             <span className="text-slate-700">|</span>
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-amber-400 shadow-sm" />
-              <span>Az: <b>{structure?.azimuth || 180}°</b></span>
+              <span>Az: <b>{activeSec?.azimuth ?? structure?.azimuth ?? 180}°</b></span>
             </div>
             <button
               onClick={() => setShowLegend(!showLegend)}

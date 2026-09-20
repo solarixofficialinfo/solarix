@@ -2832,79 +2832,15 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
               </button>
             </div>
           ) : (
-            <>
-              <div className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded-lg p-0.5">
-                <button
-                  onClick={() => { setActiveTool("select"); setActiveDrawPoints([]); }}
-                  className={`h-6 px-2 rounded-md font-semibold flex items-center gap-1 transition cursor-pointer ${
-                    activeTool === "select" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white"
-                  }`}
-                  title="Select & Inspect"
-                >
-                  <MousePointer className="w-3 h-3" />
-                  <span className="text-[11px]">Select</span>
-                </button>
-                {panels.length > 0 && activeTool === "select" && (
-                  <select
-                    id="map-selection-mode-select"
-                    value={activeSelectionMode}
-                    onChange={(e) => {
-                      changeSelectionMode(e.target.value);
-                      if (e.target.value === "panel") changeSelectedRowIndex(null);
-                      if (e.target.value === "row") changeSelectedPanelId(null);
-                    }}
-                    className="bg-transparent text-amber-300 font-bold text-[10.5px] px-1 py-0.5 outline-none cursor-pointer border-l border-slate-700 ml-0.5"
-                    title="Selection Target (Panel, Row, Array)"
-                  >
-                    <option value="panel" className="bg-slate-900 text-white">Panel</option>
-                    <option value="row" className="bg-slate-900 text-white">Row</option>
-                    <option value="array" className="bg-slate-900 text-white">Array</option>
-                  </select>
-                )}
-              </div>
+            selectedSectionObj ? (
+              <>
+                {/* ── Contextual Section Actions (Shown ONLY when a section is active) ── */}
+                <div className="flex items-center gap-1.5 bg-slate-900/90 border border-cyan-500/40 rounded-xl p-0.5 shadow-lg">
+                  <span className="bg-cyan-500 text-slate-950 text-[10px] font-bold px-2 py-1 rounded-lg flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-950" />
+                    {selectedSectionObj.name}
+                  </span>
 
-              <button
-                onClick={() => { setActiveTool("draw_roof"); setActiveDrawPoints([]); }}
-                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                  activeTool === "draw_roof" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
-                }`}
-                title={hasRoof ? "Re-mark Roof Perimeter" : "Mark Roof Boundary (Trace rooftop perimeter)"}
-              >
-                <PenTool className="w-3.5 h-3.5" />
-                <span>{hasRoof ? "Re-mark Roof" : "Mark Roof Boundary"}</span>
-              </button>
-
-              <button
-                onClick={() => { setActiveTool("edit_roof"); setActiveDrawPoints([]); }}
-                disabled={!hasRoof}
-                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 ${
-                  activeTool === "edit_roof" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
-                }`}
-                title="Drag roof boundary vertices or add points"
-              >
-                <Edit3 className="w-3.5 h-3.5" />
-                <span>Edit Points</span>
-              </button>
-
-              {hasRoof && (
-                <button
-                  onClick={() => {
-                    setActiveTool("draw_section");
-                    setActiveDrawPoints([]);
-                    toast.info(`Draw ${candidateSectionName}: click corners on map to trace section polygon, then click Finish.`);
-                  }}
-                  className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                    activeTool === "draw_section" ? "bg-emerald-600 text-white shadow-sm ring-1 ring-emerald-300" : "text-emerald-400 hover:text-white hover:bg-slate-800 border border-emerald-500/40"
-                  }`}
-                  title="Add child roof section inside parent roof"
-                >
-                  <Plus className="w-3.5 h-3.5 text-emerald-300" />
-                  <span>+ Add Section</span>
-                </button>
-              )}
-
-              {hasRoof && selectedSectionObj && (
-                <>
                   <button
                     onClick={() => {
                       setActiveTool(activeTool === "edit_section" ? "select" : "edit_section");
@@ -2919,6 +2855,55 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                     <span>Edit Section</span>
                   </button>
 
+                  <button
+                    onClick={() => {
+                      const nextTool = activeTool === "add_section_line" ? "select" : "add_section_line";
+                      setActiveTool(nextTool);
+                      setSectionLineStart(null);
+                      setActiveDrawPoints([]);
+                    }}
+                    className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                      activeTool === "add_section_line" ? "bg-cyan-600 text-white shadow-sm ring-1 ring-cyan-300" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                    }`}
+                    title="Split this section with a drawn cut line"
+                  >
+                    <Scissors className="w-3.5 h-3.5" />
+                    <span>Split (Line)</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (selectedPanelId) {
+                        toast.info("Drag panel move handle to reposition");
+                      } else {
+                        toast.info("Click any panel to select and move it");
+                      }
+                    }}
+                    className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                      selectedPanelId ? "text-amber-300 bg-slate-800" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                    }`}
+                    title="Move Panel"
+                  >
+                    <Navigation className="w-3.5 h-3.5" />
+                    <span>Move</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (selectedPanelId) {
+                        setPanels?.((prev) => prev.map((p) => p.id === selectedPanelId ? { ...p, rotation: (p.rotation || 0) + 15 } : p));
+                        toast.success("Rotated panel +15°");
+                      } else {
+                        toast.info("Select a panel first to rotate");
+                      }
+                    }}
+                    className="h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                    title="Rotate Selected Panel"
+                  >
+                    <RotateCw className="w-3.5 h-3.5" />
+                    <span>Rotate</span>
+                  </button>
+
                   {roofSections && roofSections.length > 1 && onDeleteSection && (
                     <button
                       onClick={() => {
@@ -2926,131 +2911,162 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                           onDeleteSection(selectedSectionObj.id);
                         }
                       }}
-                      className="h-7 px-2 text-[11px] rounded-lg text-red-400 hover:text-red-200 hover:bg-red-950/50 transition cursor-pointer flex items-center gap-1"
+                      className="h-7 px-2.5 text-[11px] rounded-lg text-red-400 hover:text-red-200 hover:bg-red-950/50 transition cursor-pointer flex items-center gap-1 font-semibold"
                       title={`Delete ${selectedSectionObj.name}`}
                     >
-                      <Trash2 className="w-3 h-3" />
-                      <span>Delete Section</span>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
                     </button>
                   )}
-                </>
-              )}
 
-              <button
-                onClick={() => {
-                  const nextTool = activeTool === "add_section_line" ? "select" : "add_section_line";
-                  setActiveTool(nextTool);
-                  setSectionLineStart(null);
-                  setActiveDrawPoints([]);
-                }}
-                disabled={!hasRoof}
-                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 ${
-                  activeTool === "add_section_line" ? "bg-amber-600 text-white shadow-sm ring-1 ring-amber-300" : "text-slate-300 hover:text-white hover:bg-slate-800"
-                }`}
-                title="Add Section Line (Draw line across roof to split into sections)"
-              >
-                <Scissors className="w-3.5 h-3.5" />
-                <span>Split (Line)</span>
-              </button>
+                  <button
+                    onClick={() => onSelectSection?.(null)}
+                    className="h-7 px-2 text-[11px] rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer flex items-center gap-1"
+                    title="Deselect section"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>Done</span>
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* ── Base 2D Tools (Clean geometric workflow when no section is selected) ── */}
+                <div className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded-lg p-0.5">
+                  <button
+                    onClick={() => { setActiveTool("select"); setActiveDrawPoints([]); }}
+                    className={`h-6 px-2 rounded-md font-semibold flex items-center gap-1 transition cursor-pointer ${
+                      activeTool === "select" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white"
+                    }`}
+                    title="Select & Inspect"
+                  >
+                    <MousePointer className="w-3 h-3" />
+                    <span className="text-[11px]">Select</span>
+                  </button>
+                  {panels.length > 0 && activeTool === "select" && (
+                    <select
+                      id="map-selection-mode-select"
+                      value={activeSelectionMode}
+                      onChange={(e) => {
+                        changeSelectionMode(e.target.value);
+                        if (e.target.value === "panel") changeSelectedRowIndex(null);
+                        if (e.target.value === "row") changeSelectedPanelId(null);
+                      }}
+                      className="bg-transparent text-amber-300 font-bold text-[10.5px] px-1 py-0.5 outline-none cursor-pointer border-l border-slate-700 ml-0.5"
+                      title="Selection Target (Panel, Row, Array)"
+                    >
+                      <option value="panel" className="bg-slate-900 text-white">Panel</option>
+                      <option value="row" className="bg-slate-900 text-white">Row</option>
+                      <option value="array" className="bg-slate-900 text-white">Array</option>
+                    </select>
+                  )}
+                </div>
 
-              {roofSections && roofSections.length > 1 && (
+                <button
+                  onClick={() => { setActiveTool("draw_roof"); setActiveDrawPoints([]); }}
+                  className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                    activeTool === "draw_roof" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                  }`}
+                  title={hasRoof ? "Re-mark Roof Perimeter" : "Mark Roof Boundary (Trace rooftop perimeter)"}
+                >
+                  <PenTool className="w-3.5 h-3.5" />
+                  <span>{hasRoof ? "Re-mark Roof" : "Mark Roof"}</span>
+                </button>
+
+                <button
+                  onClick={() => { setActiveTool("edit_roof"); setActiveDrawPoints([]); }}
+                  disabled={!hasRoof}
+                  className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 ${
+                    activeTool === "edit_roof" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                  }`}
+                  title="Drag roof boundary vertices or add points"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>Edit Points</span>
+                </button>
+
+                {hasRoof && (
+                  <button
+                    onClick={() => {
+                      setActiveTool("draw_section");
+                      setActiveDrawPoints([]);
+                      toast.info(`Draw ${candidateSectionName}: click corners on map to trace section polygon, then click Finish.`);
+                    }}
+                    className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                      activeTool === "draw_section" ? "bg-emerald-600 text-white shadow-sm ring-1 ring-emerald-300" : "text-emerald-400 hover:text-white hover:bg-slate-800 border border-emerald-500/40"
+                    }`}
+                    title="Add child roof section inside parent roof"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-emerald-300" />
+                    <span>+ Add Section</span>
+                  </button>
+                )}
+
                 <button
                   onClick={() => {
-                    setActiveTool(activeTool === "merge_section" ? "select" : "merge_section");
-                    pendingMergeSectionIdRef.current = null;
+                    if (selectedPanelId) {
+                      toast.info("Drag panel move handle to reposition");
+                    } else {
+                      toast.info("Click any panel to select and move it");
+                    }
                   }}
                   className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                    activeTool === "merge_section" ? "bg-purple-600 text-white shadow-sm ring-1 ring-purple-300" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                    selectedPanelId ? "text-amber-300 bg-slate-800" : "text-slate-300 hover:text-white hover:bg-slate-800"
                   }`}
-                  title="Merge adjacent roof sections"
+                  title="Move Panel"
                 >
-                  <LayersIcon className="w-3.5 h-3.5" />
-                  <span>Merge Section</span>
+                  <Navigation className="w-3.5 h-3.5" />
+                  <span>Move</span>
                 </button>
-              )}
 
-              <button
-                onClick={() => {
-                  if (onAddPanel) {
-                    onAddPanel();
-                  } else {
-                    setActiveTool(activeTool === "add_panel" ? "select" : "add_panel");
-                    setActiveDrawPoints([]);
-                  }
-                }}
-                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                  activeTool === "add_panel" ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:text-white hover:bg-slate-800"
-                }`}
-                title="Add panel following row/column layout rules"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Panel</span>
-              </button>
+                <button
+                  onClick={() => {
+                    if (selectedPanelId) {
+                      setPanels?.((prev) => prev.map((p) => p.id === selectedPanelId ? { ...p, rotation: (p.rotation || 0) + 15 } : p));
+                      toast.success("Rotated panel +15°");
+                    } else {
+                      toast.info("Select a panel first to rotate");
+                    }
+                  }}
+                  className="h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                  title="Rotate Selected Panel"
+                >
+                  <RotateCw className="w-3.5 h-3.5" />
+                  <span>Rotate</span>
+                </button>
 
-              <button
-                onClick={() => {
-                  if (selectedPanelId) {
-                    toast.info("Drag panel move handle to reposition");
-                  } else {
-                    toast.info("Click any panel to select and move it");
-                  }
-                }}
-                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-                  selectedPanelId ? "text-amber-300 bg-slate-800" : "text-slate-300 hover:text-white hover:bg-slate-800"
-                }`}
-                title="Move Panel"
-              >
-                <Navigation className="w-3.5 h-3.5" />
-                <span>Move</span>
-              </button>
+                <button
+                  onClick={() => {
+                    if (selectedPanelId) {
+                      setPanels?.((prev) => prev.filter((p) => p.id !== selectedPanelId));
+                      setSelectedPanelId?.(null);
+                      toast.success("Panel deleted");
+                    } else if (hasRoof && window.confirm("Clear roof and panels?")) {
+                      pushVertexHistory(roofPolygonRef.current);
+                      setRoofPolygon([]);
+                      setPanels?.([]);
+                      toast.success("Roof cleared");
+                    }
+                  }}
+                  className="h-7 px-2 rounded-lg font-semibold flex items-center gap-1 text-red-400 hover:text-red-300 hover:bg-red-950/50 transition cursor-pointer"
+                  title="Delete Selected Panel or Clear Roof"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete</span>
+                </button>
 
-              <button
-                onClick={() => {
-                  if (selectedPanelId) {
-                    setPanels?.((prev) => prev.map((p) => p.id === selectedPanelId ? { ...p, rotation: (p.rotation || 0) + 15 } : p));
-                    toast.success("Rotated panel +15°");
-                  } else {
-                    toast.info("Select a panel first to rotate");
-                  }
-                }}
-                className="h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 text-slate-300 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-                title="Rotate Selected Panel"
-              >
-                <RotateCw className="w-3.5 h-3.5" />
-                <span>Rotate</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  if (selectedPanelId) {
-                    setPanels?.((prev) => prev.filter((p) => p.id !== selectedPanelId));
-                    setSelectedPanelId?.(null);
-                    toast.success("Panel deleted");
-                  } else if (hasRoof && window.confirm("Clear roof and panels?")) {
-                    pushVertexHistory(roofPolygonRef.current);
-                    setRoofPolygon([]);
-                    setPanels?.([]);
-                    toast.success("Roof cleared");
-                  }
-                }}
-                className="h-7 px-2 rounded-lg font-semibold flex items-center gap-1 text-red-400 hover:text-red-300 hover:bg-red-950/50 transition cursor-pointer"
-                title="Delete Selected or Clear Roof"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete</span>
-              </button>
-
-              <button
-                onClick={() => { setActiveTool("calibrate"); setCalibratePoints([]); }}
-                className={`h-7 px-2 rounded-lg font-semibold flex items-center gap-1 transition cursor-pointer ${
-                  activeTool === "calibrate" ? "bg-purple-600 text-white" : "text-purple-400 hover:text-purple-300 hover:bg-slate-800"
-                }`}
-                title="Measure distance & calibrate map scale"
-              >
-                <Ruler className="w-3 h-3" />
-                <span className="text-[10.5px]">Calibrate</span>
-              </button>
-            </>
+                <button
+                  onClick={() => { setActiveTool("calibrate"); setCalibratePoints([]); }}
+                  className={`h-7 px-2 rounded-lg font-semibold flex items-center gap-1 transition cursor-pointer ${
+                    activeTool === "calibrate" ? "bg-purple-600 text-white" : "text-purple-400 hover:text-purple-300 hover:bg-slate-800"
+                  }`}
+                  title="Measure distance & calibrate map scale"
+                >
+                  <Ruler className="w-3 h-3" />
+                  <span className="text-[10.5px]">Calibrate</span>
+                </button>
+              </>
+            )
           )}
         </div>
       </div>
