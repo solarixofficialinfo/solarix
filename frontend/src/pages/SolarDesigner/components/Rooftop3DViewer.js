@@ -1687,7 +1687,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
           const panelAzimuth = Number(p.azimuth ?? pSec?.azimuth ?? structAzimuth);
           const panelPitch = pSec ? Number(pSec.pitch ?? 0) : panelTiltDeg;
-          const isSectionFlush = pSec ? (pSec.mountingType === "flush" || pSec.roofType === "Tile" || pSec.roofType === "Metal" || isFlush) : isFlush;
+          const secMType = (pSec?.mountingType || "").toLowerCase();
+          const isSectionFlush = secMType === "flush"
+            ? true
+            : (secMType === "elevated" || secMType === "ballasted")
+            ? false
+            : (pSec?.roofType === "Tile" || pSec?.roofType === "Metal" || isFlush);
           const effectiveTiltDeg = isSectionFlush ? panelPitch : Number(panelTiltDeg);
 
           // Panel elevation on section
@@ -1695,7 +1700,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             ? calculateSectionRoofElevationAtPoint(p.x, p.y, pSec, fullRoof)
             : calculateRoofElevationAtPoint(p.x, p.y, fullRoof);
 
-          const structClearance = isSectionFlush ? 0.12 : baseClearance;
+          const structClearance = isSectionFlush ? 0.12 : Number(pSec?.structure_height_m ?? baseClearance);
           const tiltRad = toRad(effectiveTiltDeg);
           const verticalOffset = (pl / 2) * Math.sin(tiltRad);
           const yawRad = toRad(panelAzimuth - 180);
@@ -1781,19 +1786,23 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           if (secPanels.length === 0) return;
 
           // Determine section-specific structure parameters
-          const secMountType = (sec.mountingType || structType || "elevated").toLowerCase();
+          const secMountType = (sec.mountingType || "").toLowerCase();
           const isSecTile = sec.roofType === "Tile";
           const isSecMetal = sec.roofType === "Metal";
-          const isSecFlush = secMountType === "flush" || isSecTile || isSecMetal || isFlush;
-          const isSecElevated = secMountType === "elevated" || (!isSecFlush && isElevated);
+          const isSecFlush = secMountType === "flush"
+            ? true
+            : (secMountType === "elevated" || secMountType === "ballasted")
+            ? false
+            : (isSecTile || isSecMetal || isFlush);
+          const isSecElevated = !isSecFlush;
 
           const secAzimuth = Number(sec.azimuth ?? structAzimuth ?? 180);
-          const secPitchDeg = isSecFlush ? Number(sec.pitch ?? 0) : Number(structure?.tilt_deg || 15);
+          const secPitchDeg = isSecFlush ? Number(sec.pitch ?? 0) : Number(sec.tilt_deg ?? structure?.tilt_deg ?? 15);
           const secTiltRad = toRad(secPitchDeg);
           const secAzRad = toRad(secAzimuth - 180);
           const secCosAz = Math.cos(secAzRad);
           const secSinAz = Math.sin(secAzRad);
-          const secClearance = isSecFlush ? 0.12 : baseClearance;
+          const secClearance = isSecFlush ? 0.12 : Number(sec.structure_height_m ?? structure?.height_m ?? baseClearance);
 
           // Cluster panels of THIS section into rows using THIS section's azimuth
           const rows = clusterPanelsIntoRows(secPanels, secAzimuth);
@@ -2726,10 +2735,17 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
           {/* Selection Info & Actions */}
           <div className="mt-3 pt-2.5 border-t border-slate-800 flex items-center justify-between text-[10px]">
-            <span className="text-slate-400 truncate max-w-[130px]">
-              {activeSelectionMode === "panel" ? (
-                <>Panel: <b className="text-white font-mono">{activeSelectedPanelId?.slice(-6) || "Selected"}</b></>
-              ) : activeSelectionMode === "row" ? (
+            <span className="text-slate-400 truncate max-w-[145px]">
+              {activeSelectionMode === "panel" ? (() => {
+                const currentP = (panels || []).find((p) => p.id === activeSelectedPanelId);
+                const pSec = (roofSections || []).find((s) => s.id === currentP?.sectionId);
+                return (
+                  <>
+                    Panel: <b className="text-white font-mono">{activeSelectedPanelId?.slice(-6) || "Selected"}</b>
+                    {pSec && <span className="text-cyan-400 ml-1 font-semibold">({pSec.name})</span>}
+                  </>
+                );
+              })() : activeSelectionMode === "row" ? (
                 <>Row: <b className="text-white">#{activeSelectedRowIndex != null ? Number(activeSelectedRowIndex) + 1 : "-"}</b></>
               ) : (
                 <>All Panels (<b className="text-white">{panels.length}</b>)</>
@@ -2747,113 +2763,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           </div>
         </div>
       )}
-
-      {/* ── 3D CONTEXTUAL SECTION INSPECTOR ─────────────────────────────────────── */}
-      {selectedSectionId && !activeSelectedPanelId && activeSelectedRowIndex == null && (() => {
-        const sec = (roofSections || []).find((s) => s.id === selectedSectionId);
-        if (!sec) return null;
-        const secPanels = (panels || []).filter((p) => p.sectionId === sec.id);
-        const secArea = sec.polygon ? getPolygonArea(sec.polygon) : 0;
-
-        return (
-          <div className="absolute top-14 left-3 bg-slate-900/98 backdrop-blur-md p-3 rounded-xl border border-blue-500/60 shadow-2xl z-20 pointer-events-auto w-[240px] animate-in fade-in text-slate-200">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-              <div>
-                <div className="text-xs font-bold text-blue-400">{sec.name || "Section"}</div>
-                <div className="text-[10px] text-slate-400">Area: <b className="text-slate-200">{secArea.toFixed(1)} m²</b> • Panels: <b className="text-emerald-400">{secPanels.length}</b></div>
-              </div>
-              <button
-                onClick={() => onSelectSection?.(null)}
-                className="text-slate-400 hover:text-white p-0.5 rounded transition cursor-pointer"
-                title="Deselect section"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            <div className="mt-2.5 space-y-2 text-[11px]">
-              {/* Roof Type */}
-              <div>
-                <span className="text-[10px] text-slate-400 uppercase font-semibold">Roof Type:</span>
-                <div className="grid grid-cols-4 gap-1 mt-1">
-                  {["RCC", "Tile", "Metal", "Shingle"].map((rt) => (
-                    <button
-                      key={rt}
-                      onClick={() => onUpdateSection?.(sec.id, { roofType: rt })}
-                      className={`py-0.5 text-[9.5px] font-bold rounded border transition cursor-pointer ${
-                        sec.roofType === rt ? "bg-blue-600 text-white border-blue-400" : "bg-slate-800 text-slate-400 border-slate-700 hover:text-white"
-                      }`}
-                    >
-                      {rt}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Pitch & Azimuth */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] text-slate-400 uppercase font-semibold block">Pitch (°)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={60}
-                    value={sec.pitch ?? 0}
-                    onChange={(e) => onUpdateSection?.(sec.id, { pitch: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] text-slate-400 uppercase font-semibold block">Azimuth (°)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={360}
-                    value={sec.azimuth ?? 180}
-                    onChange={(e) => onUpdateSection?.(sec.id, { azimuth: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-white"
-                  />
-                </div>
-              </div>
-
-              {/* Solar PV & Structure Toggles */}
-              <div className="pt-1.5 border-t border-slate-800 flex items-center justify-between">
-                <span className="text-[10px] text-slate-400">Solar PV:</span>
-                <button
-                  onClick={() => onUpdateSection?.(sec.id, { solarEnabled: sec.solarEnabled === false ? true : false })}
-                  className={`px-2 py-0.5 text-[10px] font-bold rounded border cursor-pointer ${
-                    sec.solarEnabled !== false ? "bg-emerald-950 text-emerald-300 border-emerald-600" : "bg-slate-800 text-slate-500 border-slate-700"
-                  }`}
-                >
-                  {sec.solarEnabled !== false ? "ON" : "OFF"}
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-slate-400">Structure:</span>
-                <button
-                  onClick={() => onUpdateSection?.(sec.id, { structureEnabled: sec.structureEnabled === false ? true : false })}
-                  className={`px-2 py-0.5 text-[10px] font-bold rounded border cursor-pointer ${
-                    sec.structureEnabled !== false ? "bg-indigo-950 text-indigo-300 border-indigo-600" : "bg-slate-800 text-slate-500 border-slate-700"
-                  }`}
-                >
-                  {sec.structureEnabled !== false ? "ON" : "OFF"}
-                </button>
-              </div>
-
-              {/* Edit in 2D shortcut */}
-              <div className="pt-1.5">
-                <button
-                  onClick={() => onSwitchTo2D?.()}
-                  className="w-full py-1 text-[10px] font-bold rounded bg-slate-800 hover:bg-slate-700 text-blue-300 border border-slate-700 transition flex items-center justify-center gap-1 cursor-pointer"
-                >
-                  Switch to 2D to Edit Section
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* ── SELECTED ELEMENT CONTEXTUAL PANEL ───────────────────────────────── */}
       {(selectedNode || selectedMember) && (
@@ -2882,6 +2791,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                 {selectedGroupId && <span className="text-[9px] text-emerald-400 bg-emerald-950/80 px-1 py-0.5 rounded border border-emerald-800">Group</span>}
               </div>
               <div className="space-y-1 text-[11px] text-slate-300 mb-2.5">
+                {(() => {
+                  const mSec = (roofSections || []).find((s) => selectedMember.id?.includes(`sec${s.id}`));
+                  return mSec ? (
+                    <div className="flex justify-between"><span className="text-slate-500">Section</span><span className="font-bold text-cyan-400">{mSec.name}</span></div>
+                  ) : null;
+                })()}
                 <div className="flex justify-between"><span className="text-slate-500">ID</span><span className="font-mono text-[10px] text-slate-300 truncate max-w-[110px]">{selectedMember.id}</span></div>
                 {selectedMember.length && <div className="flex justify-between"><span className="text-slate-500">Length</span><span className="font-bold text-white">{selectedMember.length} m</span></div>}
                 {selectedMember.material && <div className="flex justify-between"><span className="text-slate-500">Material</span><span className="font-bold text-amber-300">{selectedMember.material}</span></div>}
