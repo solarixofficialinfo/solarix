@@ -230,8 +230,10 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const nodeMeshMapRef = useRef({}); // nodeId → THREE.Mesh
   const memberMeshMapRef = useRef({}); // memberId → THREE.Mesh (+ line)
   const sectionMeshMapRef = useRef({}); // sectionId → THREE.Mesh
+  const panelMeshMapRef = useRef({}); // panelId → THREE.Mesh
 
   // Visibility toggles
+  const [renderNonce, setRenderNonce] = useState(0);
   const [activePreset, setActivePreset] = useState("isometric");
   const [showPanels, setShowPanels] = useState(true);
   const [showStructures, setShowStructures] = useState(structure?.show_structure !== false);
@@ -269,6 +271,11 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
   // Expose snapshot export, multi-view generation, and fit-camera functions to parent
   useImperativeHandle(ref, () => ({
+    regenerateStructure: () => {
+      deletedMemberIdsRef.current.clear();
+      setDeletedMemberIds(new Set());
+      setRenderNonce((n) => n + 1);
+    },
     getSnapshotDataUrl: () => {
       if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return null;
       rendererRef.current.render(sceneRef.current, cameraRef.current);
@@ -766,6 +773,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           if (memberId) {
             setSelectedMemberId(memberId);
             setSelectedNodeId(null);
+            if (hit.userData?.sectionId && onSelectSection) {
+              onSelectSection(hit.userData.sectionId);
+            }
             if (e.altKey || e.shiftKey) {
               setSelectedGroupId(hit.userData?.groupId || null);
             } else {
@@ -773,18 +783,29 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             }
           }
         } else {
-          const sectionObjects = Object.values(sectionMeshMapRef.current || {});
-          const secIntersects = raycasterRef.current.intersectObjects(sectionObjects, false);
-          if (secIntersects.length > 0) {
-            const hit = secIntersects[0].object;
+          // Check if a panel was clicked
+          const panelObjects = Object.values(panelMeshMapRef.current || {});
+          const pIntersects = raycasterRef.current.intersectObjects(panelObjects, false);
+          if (pIntersects.length > 0) {
+            const hit = pIntersects[0].object;
             const secId = hit.userData?.sectionId;
             if (secId && onSelectSection) {
               onSelectSection(secId);
             }
           } else {
-            setSelectedNodeId(null);
-            setSelectedMemberId(null);
-            setSelectedGroupId(null);
+            const sectionObjects = Object.values(sectionMeshMapRef.current || {});
+            const secIntersects = raycasterRef.current.intersectObjects(sectionObjects, false);
+            if (secIntersects.length > 0) {
+              const hit = secIntersects[0].object;
+              const secId = hit.userData?.sectionId;
+              if (secId && onSelectSection) {
+                onSelectSection(secId);
+              }
+            } else {
+              setSelectedNodeId(null);
+              setSelectedMemberId(null);
+              setSelectedGroupId(null);
+            }
           }
         }
       }
@@ -877,6 +898,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     if (rootGroupRef.current) scene.remove(rootGroupRef.current);
     memberMeshMapRef.current = {};
     sectionMeshMapRef.current = {};
+    panelMeshMapRef.current = {};
 
     const rootGroup = new THREE.Group();
     rootGroup.name = "dynamic_rooftop_group";
@@ -1406,7 +1428,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const tiltRad = toRad(effectiveTiltDeg);
           const verticalOffset = (pl / 2) * Math.sin(tiltRad);
           const yawRad = toRad(panelAzimuth - 180);
-
           const posX = Number(p.x || 0);
           const posY = sectionRoofElevation + structClearance + verticalOffset + 0.035;
           const posZ = -Number(p.y || 0);
@@ -1419,7 +1440,16 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const panelMesh = new THREE.Mesh(new THREE.BoxGeometry(pw, 0.038, pl), moduleMaterials);
           panelMesh.rotation.x = -tiltRad;
           panelMesh.castShadow = true; panelMesh.receiveShadow = true;
+          panelMesh.userData = {
+            isPanel: true,
+            panelId: p.id,
+            sectionId: pSec?.id,
+            sectionName: pSec?.name,
+          };
           panelGroup.add(panelMesh);
+          if (p.id) {
+            panelMeshMapRef.current[p.id] = panelMesh;
+          }
 
           // 2. Beveled Aluminium Frame Lip (0.012m outer border)
           const frameLipGeom = new THREE.BoxGeometry(pw + 0.016, 0.012, pl + 0.016);
@@ -1432,360 +1462,347 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         });
       }
 
-      // B. Render Row-Based Structural Mounting Framework with Node-to-Node Precision
+      // B. Render Row-Based Structural Mounting Framework with Node-to-Node Precision (Per-Section Isolated)
       if (showStructures) {
-        const structPanels = activePanels.filter((p) => {
-          if (!roofSections || roofSections.length === 0) return true;
-          const sec = roofSections.find((s) => s.id === p.sectionId) ||
-                      roofSections.find((s) => isPointInsidePolygon(p.x, p.y, s.polygon));
-          if (!sec) return true;
-          if (sec.solarEnabled === false) return false;
-          return sec.structureEnabled !== false;
-        });
+        const sectionsToProcess = (roofSections && roofSections.length > 0)
+          ? roofSections
+          : [{
+              id: "sec_default",
+              name: "Default Roof",
+              polygon: roofPolygon,
+              solarEnabled: true,
+              structureEnabled: true,
+              mountingType: structType,
+              pitch: roofPitchDeg,
+              azimuth: structAzimuth,
+            }];
 
-        const rows = clusterPanelsIntoRows(structPanels, structAzimuth);
+        sectionsToProcess.forEach((sec) => {
+          if (sec.solarEnabled === false || sec.structureEnabled === false) return;
 
-        rows.forEach((row) => {
-          const groupId = `row-${row.rowIndex}`;
-          const tiltRad = toRad(panelTiltDeg);
-          const azRad = toRad(structAzimuth - 180);
-          const cosAz = Math.cos(azRad);
-          const sinAz = Math.sin(azRad);
+          // Panels specifically belonging to THIS section
+          const secPanels = activePanels.filter((p) => {
+            if (p.sectionId) return p.sectionId === sec.id;
+            if (sec.polygon && sec.polygon.length >= 3) {
+              return isPointInsidePolygon(p.x, p.y, sec.polygon);
+            }
+            return false;
+          });
 
-          const samplePanel = row.items?.[0]?.panel;
-          const rowSec = (roofSections && roofSections.length > 0)
-            ? (roofSections.find((s) => s.id === samplePanel?.sectionId) || roofSections.find((s) => isPointInsidePolygon(samplePanel?.x, samplePanel?.y, s.polygon)))
-            : null;
-          const isRowFlush = rowSec ? (rowSec.mountingType === "flush" || rowSec.roofType === "Tile" || rowSec.roofType === "Metal" || isFlush) : isFlush;
+          if (secPanels.length === 0) return;
 
-          const rowRoofY = rowSec
-            ? calculateSectionRoofElevationAtPoint(row.centerX, row.centerY, rowSec, fullRoof)
-            : calculateRoofElevationAtPoint(row.centerX, row.centerY, fullRoof);
-          const frameCenterY = rowRoofY + baseClearance + (row.pl / 2) * Math.sin(tiltRad);
+          // Determine section-specific structure parameters
+          const secMountType = (sec.mountingType || structType || "elevated").toLowerCase();
+          const isSecTile = sec.roofType === "Tile";
+          const isSecMetal = sec.roofType === "Metal";
+          const isSecFlush = secMountType === "flush" || isSecTile || isSecMetal || isFlush;
+          const isSecElevated = secMountType === "elevated" || (!isSecFlush && isElevated);
 
-          // ── FLUSH MOUNT: Mini Rails directly on roof surface ───────────────
-          if (isRowFlush) {
-            const isTileRoof = rowSec?.roofType === "Tile";
-            const rowPitchDeg = rowSec ? Number(rowSec.pitch ?? 0) : panelTiltDeg;
-            const effectiveRowTiltRad = isRowFlush ? toRad(rowPitchDeg) : tiltRad;
+          const secAzimuth = Number(sec.azimuth ?? structAzimuth ?? 180);
+          const secPitchDeg = isSecFlush ? Number(sec.pitch ?? 0) : Number(structure?.tilt_deg || 15);
+          const secTiltRad = toRad(secPitchDeg);
+          const secAzRad = toRad(secAzimuth - 180);
+          const secCosAz = Math.cos(secAzRad);
+          const secSinAz = Math.sin(secAzRad);
+          const secClearance = isSecFlush ? 0.12 : baseClearance;
 
-            const railLength = row.totalRowLength + 0.12;
-            const railGeom = new THREE.BoxGeometry(railLength, 0.035, 0.045);
-            [-row.pl * 0.28, row.pl * 0.28].forEach((vOff, railIdx) => {
-              const railId = `member-row${row.rowIndex}-flush-rail-${railIdx}`;
+          // Cluster panels of THIS section into rows using THIS section's azimuth
+          const rows = clusterPanelsIntoRows(secPanels, secAzimuth);
+
+          rows.forEach((row, rIdx) => {
+            const groupId = `sec-${sec.id}-row-${rIdx}`;
+            const tiltRad = secTiltRad;
+            const azRad = secAzRad;
+            const cosAz = secCosAz;
+            const sinAz = secSinAz;
+
+            const rowRoofY = calculateSectionRoofElevationAtPoint(row.centerX, row.centerY, sec, fullRoof);
+            const frameCenterY = rowRoofY + secClearance + (row.pl / 2) * Math.sin(tiltRad);
+
+            // ── FLUSH MOUNT: Mini Rails directly on roof surface ───────────────
+            if (isSecFlush) {
+              const effectiveRowTiltRad = toRad(Number(sec.pitch ?? 0));
+              const railLength = row.totalRowLength + 0.12;
+              const railGeom = new THREE.BoxGeometry(railLength, 0.035, 0.045);
+              [-row.pl * 0.28, row.pl * 0.28].forEach((vOff, railIdx) => {
+                const railId = `member-sec${sec.id}-row${rIdx}-flush-rail-${railIdx}`;
+                if (deletedMemberIdsRef.current.has(railId)) return;
+
+                const railZ = vOff * Math.cos(effectiveRowTiltRad);
+                const wx = row.centerX - railZ * sinAz;
+                const wy = row.centerY + railZ * cosAz;
+                const wRoofY = calculateSectionRoofElevationAtPoint(wx, wy, sec, fullRoof);
+                const finalY = wRoofY + (isSecTile ? 0.08 : 0.04);
+
+                const isSel = selectedMemberId === railId;
+                const isGrpSel = selectedGroupId === groupId;
+                const rMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engRailMat : railMat;
+
+                const railMesh = new THREE.Mesh(railGeom, rMat);
+                railMesh.position.set(wx, finalY, -wy);
+                railMesh.rotation.y = azRad;
+                railMesh.rotation.x = -effectiveRowTiltRad;
+                railMesh.userData = {
+                  memberId: railId,
+                  groupId,
+                  sectionId: sec.id,
+                  type: "Purlin / Rail",
+                  material: structMaterial,
+                  length: Number(railLength.toFixed(2)),
+                };
+                railMesh.castShadow = true;
+                rootGroup.add(railMesh);
+                memberMeshMapRef.current[railId] = railMesh;
+
+                // IF TILE ROOF: Add Tile Roof Hooks under the rail
+                if (isSecTile && row.items && row.items.length > 0) {
+                  const hookMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.35, metalness: 0.85 });
+                  row.items.forEach((it) => {
+                    const uPos = it.u - row.centerU;
+                    const hx = wx + uPos * cosAz;
+                    const hy = wy + uPos * sinAz;
+                    const hRoofY = calculateSectionRoofElevationAtPoint(hx, hy, sec, fullRoof);
+
+                    const hookGroup = new THREE.Group();
+                    hookGroup.position.set(hx, hRoofY, -hy);
+                    hookGroup.rotation.y = azRad;
+                    hookGroup.rotation.x = -effectiveRowTiltRad;
+
+                    // Hook Foot (bolted under tile)
+                    const footMesh = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.008, 0.12), hookMat);
+                    footMesh.position.set(0, 0.004, -0.04);
+                    hookGroup.add(footMesh);
+
+                    // Hook Arm (riser coming up through tile gap)
+                    const armMesh = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.075, 0.03), hookMat);
+                    armMesh.position.set(0, 0.04, 0);
+                    hookGroup.add(armMesh);
+
+                    // Hook Top (bracket clamping rail)
+                    const topMesh = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.012, 0.05), hookMat);
+                    topMesh.position.set(0, 0.075, 0);
+                    hookGroup.add(topMesh);
+
+                    rootGroup.add(hookGroup);
+                  });
+                }
+
+                // Mid and End Clamps on top of flush rail
+                if (row.items && row.items.length > 0) {
+                  const clampGeom = new THREE.BoxGeometry(0.035, 0.018, 0.045);
+                  row.items.forEach((it, itIdx) => {
+                    const uPos = it.u - row.centerU;
+                    const isFirst = itIdx === 0;
+                    const uOffsets = [];
+                    if (isFirst) uOffsets.push(uPos - it.pw / 2 + 0.02);
+                    uOffsets.push(uPos + it.pw / 2 - 0.02);
+
+                    uOffsets.forEach((uCl) => {
+                      const clampMesh = new THREE.Mesh(clampGeom, clampMat);
+                      clampMesh.position.set(wx + uCl * cosAz, finalY + 0.02, -(wy + uCl * sinAz));
+                      clampMesh.rotation.y = azRad;
+                      clampMesh.rotation.x = -effectiveRowTiltRad;
+                      rootGroup.add(clampMesh);
+                    });
+                  });
+                }
+              });
+              return;
+            }
+
+            // ── TILTED / ELEVATED / FIXED TILT / BALLASTED MOUNT ───────────────
+            const rowMountGroup = new THREE.Group();
+            rowMountGroup.position.set(row.centerX, frameCenterY, -row.centerY);
+            rowMountGroup.rotation.y = azRad;
+
+            const tiltedSubgroup = new THREE.Group();
+            tiltedSubgroup.rotation.x = -tiltRad;
+            rowMountGroup.add(tiltedSubgroup);
+
+            // 1. CONTINUOUS RAILS (Bottom Rail & Top Rail)
+            const railLength = row.totalRowLength + 0.14;
+            const railGeom = new THREE.BoxGeometry(railLength, 0.045, 0.055);
+
+            const railsConfig = [
+              { idSuffix: "rail-bottom", vRel: +row.pl * 0.28, label: "Bottom Rail" },
+              { idSuffix: "rail-top", vRel: -row.pl * 0.28, label: "Top Rail" },
+            ];
+
+            railsConfig.forEach(({ idSuffix, vRel }) => {
+              const railId = `member-sec${sec.id}-row${rIdx}-${idSuffix}`;
               if (deletedMemberIdsRef.current.has(railId)) return;
-
-              const railZ = vOff * Math.cos(effectiveRowTiltRad);
-              const wx = row.centerX - railZ * sinAz;
-              const wy = row.centerY + railZ * cosAz;
-              const wRoofY = rowSec
-                ? calculateSectionRoofElevationAtPoint(wx, wy, rowSec, fullRoof)
-                : calculateRoofElevationAtPoint(wx, wy, fullRoof);
-              const finalY = wRoofY + (isTileRoof ? 0.08 : 0.04);
 
               const isSel = selectedMemberId === railId;
               const isGrpSel = selectedGroupId === groupId;
               const rMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engRailMat : railMat;
 
               const railMesh = new THREE.Mesh(railGeom, rMat);
-              railMesh.position.set(wx, finalY, -wy);
-              railMesh.rotation.y = azRad;
-              railMesh.rotation.x = -effectiveRowTiltRad;
+              railMesh.position.set(0, -0.0415, vRel);
               railMesh.userData = {
                 memberId: railId,
                 groupId,
+                sectionId: sec.id,
                 type: "Purlin / Rail",
                 material: structMaterial,
                 length: Number(railLength.toFixed(2)),
               };
               railMesh.castShadow = true;
-              rootGroup.add(railMesh);
+              tiltedSubgroup.add(railMesh);
               memberMeshMapRef.current[railId] = railMesh;
+            });
 
-              // IF TILE ROOF: Add Tile Roof Hooks under the rail! (Tile Roof → Roof Hook → Rail)
-              if (isTileRoof && row.items && row.items.length > 0) {
-                const hookMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.35, metalness: 0.85 });
-                row.items.forEach((it) => {
-                  const uPos = it.u - row.centerU;
-                  const hx = wx + uPos * cosAz;
-                  const hy = wy + uPos * sinAz;
-                  const hRoofY = rowSec
-                    ? calculateSectionRoofElevationAtPoint(hx, hy, rowSec, fullRoof)
-                    : calculateRoofElevationAtPoint(hx, hy, fullRoof);
+            // 2. MID CLAMPS & END CLAMPS AT RAIL INTERSECTIONS
+            if (row.items && row.items.length > 0) {
+              const clampGeom = new THREE.BoxGeometry(0.035, 0.018, 0.045);
+              row.items.forEach((it, itIdx) => {
+                const uPos = it.u - row.centerU;
+                const isFirst = itIdx === 0;
+                const uOffsets = [];
+                if (isFirst) uOffsets.push(uPos - it.pw / 2 + 0.02);
+                uOffsets.push(uPos + it.pw / 2 - 0.02);
 
-                  const hookGroup = new THREE.Group();
-                  hookGroup.position.set(hx, hRoofY, -hy);
-                  hookGroup.rotation.y = azRad;
-                  hookGroup.rotation.x = -effectiveRowTiltRad;
-
-                  // Hook Foot (bolted under tile)
-                  const footMesh = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.008, 0.12), hookMat);
-                  footMesh.position.set(0, 0.004, -0.04);
-                  hookGroup.add(footMesh);
-
-                  // Hook Arm (riser coming up through tile gap)
-                  const armMesh = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.075, 0.03), hookMat);
-                  armMesh.position.set(0, 0.04, 0);
-                  hookGroup.add(armMesh);
-
-                  // Hook Top (bracket clamping rail)
-                  const topMesh = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.012, 0.05), hookMat);
-                  topMesh.position.set(0, 0.075, 0);
-                  hookGroup.add(topMesh);
-
-                  rootGroup.add(hookGroup);
+                uOffsets.forEach((uCl) => {
+                  [+row.pl * 0.28, -row.pl * 0.28].forEach((vRel) => {
+                    const clampMesh = new THREE.Mesh(clampGeom, clampMat);
+                    clampMesh.position.set(uCl, 0.018, vRel);
+                    tiltedSubgroup.add(clampMesh);
+                  });
                 });
+              });
+            }
+
+            // 3. STRUCTURAL FRAMES: Rafters, Posts, Base Plates, and Cross Braces
+            const rafterLength = row.pl * 0.88;
+            const rafterGeom = new THREE.BoxGeometry(0.06, 0.08, rafterLength);
+            const basePlateGeom = new THREE.BoxGeometry(0.20, 0.022, 0.20);
+            const boltGeom = new THREE.CylinderGeometry(0.008, 0.008, 0.035, 8);
+
+            const rafterLocalY = -0.104;
+            const rafterBottomLocalY = -0.144;
+            const frontVRel = +row.pl * 0.28;
+            const rearVRel = -row.pl * 0.28;
+
+            row.rafterUOffsets.forEach((uOffset, idx) => {
+              const uRel = uOffset - row.centerU;
+              const isEndFrame = idx === 0 || idx === row.rafterUOffsets.length - 1;
+
+              // A. RAFTER BEAM
+              const rafterId = `member-sec${sec.id}-row${rIdx}-rafter-${idx}`;
+              if (!deletedMemberIdsRef.current.has(rafterId)) {
+                const isSel = selectedMemberId === rafterId;
+                const isGrpSel = selectedGroupId === groupId;
+                const rafMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engRafterMat : rafterMat;
+
+                const rafterMesh = new THREE.Mesh(rafterGeom, rafMat);
+                rafterMesh.position.set(uRel, rafterLocalY, 0);
+                rafterMesh.userData = {
+                  memberId: rafterId,
+                  groupId,
+                  sectionId: sec.id,
+                  type: "Rafter Beam",
+                  material: structMaterial,
+                  length: Number(rafterLength.toFixed(2)),
+                };
+                rafterMesh.castShadow = true;
+                tiltedSubgroup.add(rafterMesh);
+                memberMeshMapRef.current[rafterId] = rafterMesh;
               }
 
-              // Mid and End Clamps on top of flush rail
-              if (row.items && row.items.length > 0) {
-                const clampGeom = new THREE.BoxGeometry(0.035, 0.018, 0.045);
-                row.items.forEach((it, itIdx) => {
-                  const uPos = it.u - row.centerU;
-                  const isFirst = itIdx === 0;
-                  const uOffsets = [];
-                  if (isFirst) uOffsets.push(uPos - it.pw / 2 + 0.02);
-                  uOffsets.push(uPos + it.pw / 2 - 0.02);
+              // Post attachment points on rafter bottom
+              const nodeFrontLocal = new THREE.Vector3(uRel, rafterBottomLocalY, frontVRel);
+              const nodeRearLocal = new THREE.Vector3(uRel, rafterBottomLocalY, rearVRel);
+              const nodeFrontInMount = nodeFrontLocal.clone().applyAxisAngle(new THREE.Vector3(1, 0, 0), -tiltRad);
+              const nodeRearInMount = nodeRearLocal.clone().applyAxisAngle(new THREE.Vector3(1, 0, 0), -tiltRad);
 
-                  uOffsets.forEach((uCl) => {
-                    const cx = wx + uCl * cosAz;
-                    const cy = wy + uCl * sinAz;
-                    const clampMesh = new THREE.Mesh(clampGeom, clampMat);
-                    clampMesh.position.set(cx, finalY + 0.025, -cy);
-                    clampMesh.rotation.y = azRad;
-                    clampMesh.rotation.x = -effectiveRowTiltRad;
-                    rootGroup.add(clampMesh);
+              const worldFrontX = row.centerX + nodeFrontInMount.x * cosAz + nodeFrontInMount.z * sinAz;
+              const worldFrontY = row.centerY - nodeFrontInMount.x * sinAz + nodeFrontInMount.z * cosAz;
+              const worldRearX = row.centerX + nodeRearInMount.x * cosAz + nodeRearInMount.z * sinAz;
+              const worldRearY = row.centerY - nodeRearInMount.x * sinAz + nodeRearInMount.z * cosAz;
+
+              const roofFrontY = calculateSectionRoofElevationAtPoint(worldFrontX, worldFrontY, sec, fullRoof);
+              const roofRearY = calculateSectionRoofElevationAtPoint(worldRearX, worldRearY, sec, fullRoof);
+
+              const frontPostTopY = frameCenterY + nodeFrontInMount.y;
+              const rearPostTopY = frameCenterY + nodeRearInMount.y;
+
+              const frontPostH = Math.max(0.15, frontPostTopY - roofFrontY);
+              const rearPostH = Math.max(0.15, rearPostTopY - roofRearY);
+
+              // B. FRONT POST
+              const postFrontId = `member-sec${sec.id}-row${rIdx}-post-front-${idx}`;
+              if (!deletedMemberIdsRef.current.has(postFrontId)) {
+                const isSel = selectedMemberId === postFrontId;
+                const isGrpSel = selectedGroupId === groupId;
+                const pMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engPostMat : postMat;
+
+                const frontPostGeom = new THREE.BoxGeometry(0.065, frontPostH, 0.065);
+                const frontPostMesh = new THREE.Mesh(frontPostGeom, pMat);
+                frontPostMesh.position.set(nodeFrontInMount.x, (frontPostTopY + roofFrontY) / 2 - frameCenterY, nodeFrontInMount.z);
+                frontPostMesh.userData = {
+                  memberId: postFrontId,
+                  groupId,
+                  sectionId: sec.id,
+                  type: "Front Column / Post",
+                  material: structMaterial,
+                  length: Number(frontPostH.toFixed(2)),
+                };
+                frontPostMesh.castShadow = true;
+                rowMountGroup.add(frontPostMesh);
+                memberMeshMapRef.current[postFrontId] = frontPostMesh;
+
+                // Base Plate & Anchor Bolts
+                const basePlateMesh = new THREE.Mesh(basePlateGeom, basePlateMat);
+                basePlateMesh.position.set(nodeFrontInMount.x, roofFrontY - frameCenterY + 0.011, nodeFrontInMount.z);
+                rowMountGroup.add(basePlateMesh);
+
+                [-0.065, 0.065].forEach((bx) => {
+                  [-0.065, 0.065].forEach((bz) => {
+                    const bolt = new THREE.Mesh(boltGeom, boltMat);
+                    bolt.position.set(nodeFrontInMount.x + bx, roofFrontY - frameCenterY + 0.026, nodeFrontInMount.z + bz);
+                    rowMountGroup.add(bolt);
                   });
                 });
               }
-            });
-            return;
-          }
 
-          // ── TILTED / ELEVATED / FIXED TILT / BALLASTED MOUNT ───────────────
-          const rowMountGroup = new THREE.Group();
-          rowMountGroup.position.set(row.centerX, frameCenterY, -row.centerY);
-          rowMountGroup.rotation.y = azRad;
-
-          // Local tilted subgroup aligned directly with the PV module plane
-          // Its local X is row direction, local Z is module slope direction, local Y is normal to module
-          const tiltedSubgroup = new THREE.Group();
-          tiltedSubgroup.rotation.x = -tiltRad;
-          rowMountGroup.add(tiltedSubgroup);
-
-          // 1. CONTINUOUS RAILS (Bottom Rail & Top Rail)
-          // Tilted with modules, placed strictly BELOW module frame (local y = -0.0415)
-          const railLength = row.totalRowLength + 0.14;
-          const railGeom = new THREE.BoxGeometry(railLength, 0.045, 0.055);
-
-          const railsConfig = [
-            { idSuffix: "rail-bottom", vRel: +row.pl * 0.28, label: "Bottom Rail" },
-            { idSuffix: "rail-top", vRel: -row.pl * 0.28, label: "Top Rail" },
-          ];
-
-          railsConfig.forEach(({ idSuffix, vRel }) => {
-            const railId = `member-row${row.rowIndex}-${idSuffix}`;
-            if (deletedMemberIdsRef.current.has(railId)) return;
-
-            const isSel = selectedMemberId === railId;
-            const isGrpSel = selectedGroupId === groupId;
-            const rMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engRailMat : railMat;
-
-            const railMesh = new THREE.Mesh(railGeom, rMat);
-            railMesh.position.set(0, -0.0415, vRel);
-            railMesh.userData = {
-              memberId: railId,
-              groupId,
-              type: "Purlin / Rail",
-              material: structMaterial,
-              length: Number(railLength.toFixed(2)),
-            };
-            railMesh.castShadow = true;
-            tiltedSubgroup.add(railMesh);
-            memberMeshMapRef.current[railId] = railMesh;
-          });
-
-          // 2. MID CLAMPS & END CLAMPS AT RAIL INTERSECTIONS
-          if (row.items && row.items.length > 0) {
-            const clampGeom = new THREE.BoxGeometry(0.035, 0.018, 0.045);
-            row.items.forEach((it, itIdx) => {
-              const uPos = it.u - row.centerU;
-              const isFirst = itIdx === 0;
-              const uOffsets = [];
-              if (isFirst) uOffsets.push(uPos - it.pw / 2 + 0.02);
-              uOffsets.push(uPos + it.pw / 2 - 0.02);
-
-              uOffsets.forEach((uCl) => {
-                [+row.pl * 0.28, -row.pl * 0.28].forEach((vRel) => {
-                  const clampMesh = new THREE.Mesh(clampGeom, clampMat);
-                  clampMesh.position.set(uCl, 0.018, vRel);
-                  tiltedSubgroup.add(clampMesh);
-                });
-              });
-            });
-          }
-
-          // 3. STRUCTURAL FRAMES: Rafters, Posts, Base Plates, and Cross Braces
-          const rafterLength = row.pl * 0.88;
-          const rafterGeom = new THREE.BoxGeometry(0.06, 0.08, rafterLength);
-          const basePlateGeom = new THREE.BoxGeometry(0.20, 0.022, 0.20);
-          const boltGeom = new THREE.CylinderGeometry(0.008, 0.008, 0.035, 8);
-
-          // Rafter sits immediately underneath continuous rails:
-          // Rail bottom is at local y = -0.064, rafter height = 0.08, so rafter center is at local y = -0.104
-          const rafterLocalY = -0.104;
-          const rafterBottomLocalY = -0.144;
-
-          const frontVRel = +row.pl * 0.28;
-          const rearVRel = -row.pl * 0.28;
-
-          row.rafterUOffsets.forEach((uOffset, idx) => {
-            const uRel = uOffset - row.centerU;
-            const isEndFrame = idx === 0 || idx === row.rafterUOffsets.length - 1;
-
-            // A. RAFTER BEAM (in tiltedSubgroup directly under rails)
-            const rafterId = `member-row${row.rowIndex}-rafter-${idx}`;
-            if (!deletedMemberIdsRef.current.has(rafterId)) {
-              const isSel = selectedMemberId === rafterId;
-              const isGrpSel = selectedGroupId === groupId;
-              const rafMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engRafterMat : rafterMat;
-
-              const rafterMesh = new THREE.Mesh(rafterGeom, rafMat);
-              rafterMesh.position.set(uRel, rafterLocalY, 0);
-              rafterMesh.userData = {
-                memberId: rafterId,
-                groupId,
-                type: "Rafter Beam",
-                material: structMaterial,
-                length: Number(rafterLength.toFixed(2)),
-              };
-              rafterMesh.castShadow = true;
-              tiltedSubgroup.add(rafterMesh);
-              memberMeshMapRef.current[rafterId] = rafterMesh;
-            }
-
-            // Connection nodes at rafter underside in rowMountGroup coordinates
-            // Rotate local (uRel, rafterBottomLocalY, vRel) by -tiltRad around X
-            const nodeFrontInMount = new THREE.Vector3(uRel, rafterBottomLocalY, frontVRel)
-              .applyAxisAngle(new THREE.Vector3(1, 0, 0), -tiltRad);
-            const nodeRearInMount = new THREE.Vector3(uRel, rafterBottomLocalY, rearVRel)
-              .applyAxisAngle(new THREE.Vector3(1, 0, 0), -tiltRad);
-
-            // World coordinates of front & rear nodes to query exact roof height at each post foot
-            const frontWorld = nodeFrontInMount.clone()
-              .applyAxisAngle(new THREE.Vector3(0, 1, 0), azRad);
-            const wFrontX = row.centerX + frontWorld.x;
-            const wFrontY = row.centerY - frontWorld.z;
-            const roofFrontY = calculateRoofElevationAtPoint(wFrontX, wFrontY, fullRoof);
-
-            const rearWorld = nodeRearInMount.clone()
-              .applyAxisAngle(new THREE.Vector3(0, 1, 0), azRad);
-            const wRearX = row.centerX + rearWorld.x;
-            const wRearY = row.centerY - rearWorld.z;
-            const roofRearY = calculateRoofElevationAtPoint(wRearX, wRearY, fullRoof);
-
-            // Exact post height from roof surface to rafter bottom connection (ZERO GAP!)
-            const frontLegHeight = Math.max(0.08, frameCenterY + nodeFrontInMount.y - roofFrontY);
-            const rearLegHeight = Math.max(0.08, frameCenterY + nodeRearInMount.y - roofRearY);
-
-            // B. BALLAST BLOCKS (for ballasted flat roof)
-            if (isBallasted && showPosts) {
-              const ballastBlockGeom = new THREE.BoxGeometry(0.42, 0.22, 0.32);
-              [nodeFrontInMount, nodeRearInMount].forEach((node) => {
-                const ballast = new THREE.Mesh(ballastBlockGeom, ballastMat);
-                ballast.position.set(node.x, -(baseClearance - 0.11), node.z);
-                ballast.castShadow = true; ballast.receiveShadow = true;
-                rowMountGroup.add(ballast);
-              });
-            }
-
-            // C. POSTS & BASE PLATES (Elevated & Fixed Tilt)
-            if (showPosts && !isBallasted) {
-              // 1. FRONT POST
-              const frontPostId = `member-row${row.rowIndex}-post-f-${idx}`;
-              if (!deletedMemberIdsRef.current.has(frontPostId)) {
-                const isSel = selectedMemberId === frontPostId;
+              // C. REAR POST
+              const postRearId = `member-sec${sec.id}-row${rIdx}-post-rear-${idx}`;
+              if (!deletedMemberIdsRef.current.has(postRearId)) {
+                const isSel = selectedMemberId === postRearId;
                 const isGrpSel = selectedGroupId === groupId;
                 const pMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engPostMat : postMat;
 
-                const postGeomFront = new THREE.CylinderGeometry(0.032, 0.032, frontLegHeight, 12);
-                const frontPost = new THREE.Mesh(postGeomFront, pMat);
-                const frontRoofInMountY = roofFrontY - frameCenterY;
-                frontPost.position.set(
-                  nodeFrontInMount.x,
-                  (nodeFrontInMount.y + frontRoofInMountY) / 2,
-                  nodeFrontInMount.z
-                );
-                frontPost.userData = {
-                  memberId: frontPostId,
+                const rearPostGeom = new THREE.BoxGeometry(0.065, rearPostH, 0.065);
+                const rearPostMesh = new THREE.Mesh(rearPostGeom, pMat);
+                rearPostMesh.position.set(nodeRearInMount.x, (rearPostTopY + roofRearY) / 2 - frameCenterY, nodeRearInMount.z);
+                rearPostMesh.userData = {
+                  memberId: postRearId,
                   groupId,
-                  type: "Support Post (Front)",
+                  sectionId: sec.id,
+                  type: "Rear Column / Post",
                   material: structMaterial,
-                  length: Number(frontLegHeight.toFixed(2)),
-                  elevation: Number(roofFrontY.toFixed(2)),
+                  length: Number(rearPostH.toFixed(2)),
                 };
-                frontPost.castShadow = true;
-                rowMountGroup.add(frontPost);
-                memberMeshMapRef.current[frontPostId] = frontPost;
+                rearPostMesh.castShadow = true;
+                rowMountGroup.add(rearPostMesh);
+                memberMeshMapRef.current[postRearId] = rearPostMesh;
 
-                // Base Plate flush ON roof surface
-                const frontBase = new THREE.Mesh(basePlateGeom, basePlateMat);
-                frontBase.position.set(nodeFrontInMount.x, frontRoofInMountY + 0.011, nodeFrontInMount.z);
-                frontBase.castShadow = true;
-                rowMountGroup.add(frontBase);
+                // Base Plate & Anchor Bolts
+                const basePlateRearMesh = new THREE.Mesh(basePlateGeom, basePlateMat);
+                basePlateRearMesh.position.set(nodeRearInMount.x, roofRearY - frameCenterY + 0.011, nodeRearInMount.z);
+                rowMountGroup.add(basePlateRearMesh);
 
-                // Anchor bolts
-                [[-0.07, -0.07], [-0.07, 0.07], [0.07, -0.07], [0.07, 0.07]].forEach(([bx, bz]) => {
-                  const bolt = new THREE.Mesh(boltGeom, boltMat);
-                  bolt.position.set(nodeFrontInMount.x + bx, frontRoofInMountY + 0.026, nodeFrontInMount.z + bz);
-                  rowMountGroup.add(bolt);
+                [-0.065, 0.065].forEach((bx) => {
+                  [-0.065, 0.065].forEach((bz) => {
+                    const bolt = new THREE.Mesh(boltGeom, boltMat);
+                    bolt.position.set(nodeRearInMount.x + bx, roofRearY - frameCenterY + 0.026, nodeRearInMount.z + bz);
+                    rowMountGroup.add(bolt);
+                  });
                 });
               }
 
-              // 2. REAR POST
-              const rearPostId = `member-row${row.rowIndex}-post-r-${idx}`;
-              if (!deletedMemberIdsRef.current.has(rearPostId)) {
-                const isSel = selectedMemberId === rearPostId;
-                const isGrpSel = selectedGroupId === groupId;
-                const pMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engPostMat : postMat;
-
-                const postGeomRear = new THREE.CylinderGeometry(0.032, 0.032, rearLegHeight, 12);
-                const rearPost = new THREE.Mesh(postGeomRear, pMat);
-                const rearRoofInMountY = roofRearY - frameCenterY;
-                rearPost.position.set(
-                  nodeRearInMount.x,
-                  (nodeRearInMount.y + rearRoofInMountY) / 2,
-                  nodeRearInMount.z
-                );
-                rearPost.userData = {
-                  memberId: rearPostId,
-                  groupId,
-                  type: "Support Post (Rear)",
-                  material: structMaterial,
-                  length: Number(rearLegHeight.toFixed(2)),
-                  elevation: Number(roofRearY.toFixed(2)),
-                };
-                rearPost.castShadow = true;
-                rowMountGroup.add(rearPost);
-                memberMeshMapRef.current[rearPostId] = rearPost;
-
-                // Base Plate flush ON roof surface
-                const rearBase = new THREE.Mesh(basePlateGeom, basePlateMat);
-                rearBase.position.set(nodeRearInMount.x, rearRoofInMountY + 0.011, nodeRearInMount.z);
-                rearBase.castShadow = true;
-                rowMountGroup.add(rearBase);
-
-                // Anchor bolts
-                [[-0.07, -0.07], [-0.07, 0.07], [0.07, -0.07], [0.07, 0.07]].forEach(([bx, bz]) => {
-                  const bolt = new THREE.Mesh(boltGeom, boltMat);
-                  bolt.position.set(nodeRearInMount.x + bx, rearRoofInMountY + 0.026, nodeRearInMount.z + bz);
-                  rowMountGroup.add(bolt);
-                });
-              }
-
-              // 3. CROSS BRACING (on elevated end frames or clearance >= 1.2m)
-              if (isElevated && baseClearance >= 1.2 && isEndFrame && structure?.cross_bracing !== false) {
-                const braceId = `member-row${row.rowIndex}-brace-${idx}`;
+              // D. CROSS BRACING (on elevated end frames or clearance >= 1.2m)
+              if (isSecElevated && secClearance >= 1.2 && isEndFrame && structure?.cross_bracing !== false) {
+                const braceId = `member-sec${sec.id}-row${rIdx}-brace-${idx}`;
                 if (!deletedMemberIdsRef.current.has(braceId)) {
                   const isSel = selectedMemberId === braceId;
                   const isGrpSel = selectedGroupId === groupId;
@@ -1804,6 +1821,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                   braceMesh.userData = {
                     memberId: braceId,
                     groupId,
+                    sectionId: sec.id,
                     type: "Diagonal Brace",
                     material: structMaterial,
                     length: Number(braceLength.toFixed(2)),
@@ -1814,7 +1832,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                 }
               }
 
-              // 4. ENGINEERING JOINT NODES (Shown when viewMode === 'engineering')
+              // E. ENGINEERING JOINT NODES (Shown when viewMode === 'engineering')
               if (viewMode === "engineering") {
                 const nodeSphGeom = new THREE.SphereGeometry(0.045, 10, 10);
                 const nodeMat = new THREE.MeshBasicMaterial({ color: 0x22d3ee });
@@ -1839,10 +1857,10 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                 n4.position.set(nodeRearInMount.x, roofRearY - frameCenterY, nodeRearInMount.z);
                 rowMountGroup.add(n4);
               }
-            }
-          });
+            });
 
-          rootGroup.add(rowMountGroup);
+            rootGroup.add(rowMountGroup);
+          });
         });
       }
     }
@@ -1954,7 +1972,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   }, [
     roofPolygon, roof, roofSections, selectedSectionId, panels, activePanels, obstacles, walkways, structure,
     showPanels, showStructures, showPosts, showRoof, showBuilding, showObstacles,
-    selectedMemberId, selectedGroupId, viewMode, deletedMemberIds,
+    selectedMemberId, selectedGroupId, viewMode, deletedMemberIds, renderNonce,
   ]);
 
   // ─── Build / Update Interactive Structure Nodes & Members ─────────────────────

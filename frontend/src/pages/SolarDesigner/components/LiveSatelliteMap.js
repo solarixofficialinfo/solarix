@@ -839,7 +839,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     },
   }));
 
-  // Handle Add Panel click on map with canonical placement
+  // Handle Add Panel click on map with canonical placement (Section-Aware)
   const handleMapClickForAddPanel = useCallback((lat, lng) => {
     if (!roofPolygonRef.current || roofPolygonRef.current.length < 3) {
       toast.warning("Please draw a roof boundary first before adding panels.");
@@ -849,9 +849,27 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
     const { x, y } = latLngToCartesian(lat, lng);
 
+    // Identify target section (either containing clicked point or currently active)
+    const sections = roofSections || [];
+    let targetSec = null;
+    if (sections.length > 0) {
+      targetSec = sections.find((s) => s.polygon && isPointInPolygon(x, y, s.polygon));
+      if (!targetSec) {
+        targetSec = (selectedSectionId ? sections.find((s) => s.id === selectedSectionId) : null) || sections[0];
+      }
+    }
+
+    if (targetSec && targetSec.solarEnabled === false) {
+      toast.warning(`Solar is disabled on ${targetSec.name || "this section"}.`);
+      return;
+    }
+
+    const targetPolygon = targetSec?.polygon || roofPolygonRef.current;
+    const targetAzimuth = Number(targetSec?.azimuth ?? azimuthDegrees ?? 180);
+
     const check = canFitAdditionalPanel({
       panels,
-      roofPolygon: roofPolygonRef.current,
+      roofPolygon: targetPolygon,
       setbackMeters,
       obstacles,
       walkways,
@@ -859,20 +877,31 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       orientation,
       rowSpacingMeters,
       panelSpacingMeters,
-      azimuthDegrees,
+      azimuthDegrees: targetAzimuth,
       nearX: x,
       nearY: y,
     });
 
     if (!check.canFit || !check.newPanel) {
-      toast.warning(check.reason || "No valid panel position available in the current roof area.");
+      toast.warning(check.reason || `No valid panel position available in ${targetSec?.name || "current roof area"}.`);
       return;
     }
 
-    setPanels?.((prev) => [...prev, check.newPanel]);
-    setSelectedPanelId?.(check.newPanel.id);
-    toast.success(`Placed Panel #${panels.length + 1}`);
-  }, [latLngToCartesian, orientation, panelSpecs, setbackMeters, rowSpacingMeters, panelSpacingMeters, panels, obstacles, walkways, azimuthDegrees, setPanels, setSelectedPanelId]);
+    const panelWithSection = {
+      ...check.newPanel,
+      id: targetSec ? `p-${targetSec.id}-${Date.now()}` : check.newPanel.id,
+      sectionId: targetSec ? targetSec.id : undefined,
+      azimuth: targetAzimuth,
+      pitch: Number(targetSec?.pitch ?? 0),
+    };
+
+    setPanels?.((prev) => [...prev, panelWithSection]);
+    setSelectedPanelId?.(panelWithSection.id);
+    if (targetSec && onSelectSection) {
+      onSelectSection(targetSec.id);
+    }
+    toast.success(`Placed Panel #${panels.length + 1}${targetSec ? ` in ${targetSec.name}` : ""}`);
+  }, [latLngToCartesian, orientation, panelSpecs, setbackMeters, rowSpacingMeters, panelSpacingMeters, panels, obstacles, walkways, azimuthDegrees, setPanels, setSelectedPanelId, roofSections, selectedSectionId, onSelectSection]);
 
   useEffect(() => {
     handleMapClickForAddPanelRef.current = handleMapClickForAddPanel;

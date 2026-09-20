@@ -62,6 +62,44 @@ const DESIGN_STAGES = [
   { key: "layout", label: "6. Layout", icon: Sparkles },
 ];
 
+/**
+ * Authoritative roof metric recalculation helper.
+ * Mathematically enforces usable_area_sqm <= roof_area_sqm across single or multi-section roofs.
+ */
+export const recalculateRoofMetrics = (roofPolygon, roofSections, setbackM = 0.5) => {
+  const polyArea = roofPolygon && roofPolygon.length >= 3 ? getCartesianPolygonArea(roofPolygon) : 0;
+  let sectionsArea = 0;
+  let totalUsableArea = 0;
+
+  if (Array.isArray(roofSections) && roofSections.length > 0) {
+    roofSections.forEach((sec) => {
+      if (sec.polygon && sec.polygon.length >= 3) {
+        const sArea = getCartesianPolygonArea(sec.polygon);
+        sectionsArea += sArea;
+        const sUsable = computeSetbackPolygon(sec.polygon, setbackM);
+        const sUsableArea = sUsable && sUsable.length >= 3 ? getCartesianPolygonArea(sUsable) : 0;
+        totalUsableArea += Math.min(sArea, sUsableArea);
+      }
+    });
+  }
+
+  const totalRoofArea = Math.max(polyArea, sectionsArea);
+  let finalUsableArea = 0;
+  if (Array.isArray(roofSections) && roofSections.length > 0) {
+    finalUsableArea = Math.min(totalRoofArea, totalUsableArea);
+  } else if (roofPolygon && roofPolygon.length >= 3) {
+    const parentUsable = computeSetbackPolygon(roofPolygon, setbackM);
+    const parentUsableArea = parentUsable && parentUsable.length >= 3 ? getCartesianPolygonArea(parentUsable) : 0;
+    finalUsableArea = Math.min(totalRoofArea, parentUsableArea);
+  }
+
+  return {
+    roof_area_sqm: Math.round(totalRoofArea * 10) / 10,
+    usable_area_sqm: Math.round(finalUsableArea * 10) / 10,
+  };
+};
+
+
 class Viewer3DErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -487,15 +525,23 @@ export default function SolarStudio() {
       return p;
     });
 
+    const metrics = recalculateRoofMetrics(
+      designData.roof_polygon,
+      newSections,
+      Number(designData.roof?.setback_m || designData.setback_m || 0.5)
+    );
+
     setDesignData((prev) => ({
       ...prev,
       roof_sections: newSections,
       panels: updatedPanels,
+      roof_area_sqm: metrics.roof_area_sqm,
+      usable_area_sqm: metrics.usable_area_sqm,
     }));
     setSelectedSectionId(sec2.id);
     setOpenSection("roof");
     toast.success(`Split into ${sec1.name} and ${sec2.name}!`);
-  }, [effectiveSections, designData.panels]);
+  }, [effectiveSections, designData.panels, designData.roof_polygon, designData.roof?.setback_m, designData.setback_m]);
 
   // Merge two adjacent sections
   const handleMergeSections = useCallback((secIdA, secIdB) => {
@@ -529,14 +575,22 @@ export default function SolarStudio() {
       return p;
     });
 
+    const metrics = recalculateRoofMetrics(
+      designData.roof_polygon,
+      newSections,
+      Number(designData.roof?.setback_m || designData.setback_m || 0.5)
+    );
+
     setDesignData((prev) => ({
       ...prev,
       roof_sections: newSections,
       panels: updatedPanels,
+      roof_area_sqm: metrics.roof_area_sqm,
+      usable_area_sqm: metrics.usable_area_sqm,
     }));
     setSelectedSectionId(mergedSection.id);
     toast.success(`Merged ${secA.name} and ${secB.name} into ${mergedSection.name}`);
-  }, [effectiveSections, designData.panels]);
+  }, [effectiveSections, designData.panels, designData.roof_polygon, designData.roof?.setback_m, designData.setback_m]);
 
   // Remove all sections and restore single roof
   const handleRemoveSectioning = useCallback(() => {
@@ -559,10 +613,17 @@ export default function SolarStudio() {
       tileConfig: { type: "spanish_barrel", color: "#b45309" },
     };
     const panels = (designData.panels || []).map((p) => ({ ...p, sectionId: single.id }));
+    const metrics = recalculateRoofMetrics(
+      designData.roof_polygon,
+      [single],
+      Number(designData.roof?.setback_m || designData.setback_m || 0.5)
+    );
     setDesignData((prev) => ({
       ...prev,
       roof_sections: [single],
       panels,
+      roof_area_sqm: metrics.roof_area_sqm,
+      usable_area_sqm: metrics.usable_area_sqm,
     }));
     setSelectedSectionId(single.id);
     toast.success("Restored single roof — all sections removed.");
@@ -668,9 +729,17 @@ export default function SolarStudio() {
       const current = (prev.roof_sections && prev.roof_sections.length > 0)
         ? prev.roof_sections
         : effectiveSections;
+      const nextSections = [...current, newSection];
+      const metrics = recalculateRoofMetrics(
+        prev.roof_polygon,
+        nextSections,
+        Number(prev.roof?.setback_m || prev.setback_m || 0.5)
+      );
       return {
         ...prev,
-        roof_sections: [...current, newSection],
+        roof_sections: nextSections,
+        roof_area_sqm: metrics.roof_area_sqm,
+        usable_area_sqm: metrics.usable_area_sqm,
       };
     });
 
@@ -698,17 +767,24 @@ export default function SolarStudio() {
 
     const remaining = sections.filter((s) => s.id !== sectionId);
     const remainingPanels = (designData.panels || []).filter((p) => p.sectionId !== sectionId);
+    const metrics = recalculateRoofMetrics(
+      designData.roof_polygon,
+      remaining,
+      Number(designData.roof?.setback_m || designData.setback_m || 0.5)
+    );
 
     setDesignData((prev) => ({
       ...prev,
       roof_sections: remaining,
       panels: remainingPanels,
+      roof_area_sqm: metrics.roof_area_sqm,
+      usable_area_sqm: metrics.usable_area_sqm,
     }));
 
     setSelectedSectionId(remaining[0]?.id || null);
     setActiveTool("select");
     toast.success(`Deleted ${secName}.`);
-  }, [designData.roof_sections, designData.panels, effectiveSections]);
+  }, [designData.roof_sections, designData.panels, designData.roof_polygon, designData.roof?.setback_m, designData.setback_m, effectiveSections]);
 
   // Update polygon vertices of a specific section (from edit_section mode)
   const handleUpdateSectionPolygon = useCallback((sectionId, updatedPolygon) => {
@@ -718,9 +794,16 @@ export default function SolarStudio() {
         ? prev.roof_sections
         : effectiveSections;
       const updated = current.map((s) => (s.id === sectionId ? { ...s, polygon: updatedPolygon } : s));
+      const metrics = recalculateRoofMetrics(
+        prev.roof_polygon,
+        updated,
+        Number(prev.roof?.setback_m || prev.setback_m || 0.5)
+      );
       return {
         ...prev,
         roof_sections: updated,
+        roof_area_sqm: metrics.roof_area_sqm,
+        usable_area_sqm: metrics.usable_area_sqm,
       };
     });
   }, [effectiveSections]);
@@ -818,17 +901,19 @@ export default function SolarStudio() {
         setSelectedSectionId(initialSection.id);
       }
 
+      const metrics = recalculateRoofMetrics(validPolygon, nextSections, setback);
+
       return {
         ...prev,
         roof_polygon: validPolygon,
         roof_sections: nextSections,
-        roof_area_sqm: Math.round(area * 10) / 10,
+        roof_area_sqm: metrics.roof_area_sqm,
         roof_perimeter_m: Math.round(perimeter * 10) / 10,
         roof_dimensions: {
           length_m: Math.round(bounds.length * 10) / 10,
           width_m: Math.round(bounds.width * 10) / 10,
         },
-        usable_area_sqm: usableArea,
+        usable_area_sqm: metrics.usable_area_sqm,
         panels: validPanels,
         panel_count: validPanels.length,
         system_kw: Math.round(totalKw * 100) / 100,
@@ -904,10 +989,18 @@ export default function SolarStudio() {
         }
       });
 
+      const metrics = recalculateRoofMetrics(
+        designData.roof_polygon,
+        sections,
+        setback
+      );
+      const guaranteedRoofArea = metrics.roof_area_sqm;
+      const guaranteedUsableArea = metrics.usable_area_sqm;
+
       const pWatt = Number(designData.panel_wattage || 550);
       const totalKw = (allPanels.length * pWatt) / 1000.0;
       const singleArea = (designData.panel_dimensions?.width_m || 1.134) * (designData.panel_dimensions?.length_m || 2.278);
-      const coveragePct = totalUsableArea > 0 ? Math.min(100, Math.round(((allPanels.length * singleArea) / totalUsableArea) * 1000) / 10) : 0;
+      const coveragePct = guaranteedUsableArea > 0 ? Math.min(100, Math.round(((allPanels.length * singleArea) / guaranteedUsableArea) * 1000) / 10) : 0;
 
       setAutoLayoutBaselinePanels(allPanels);
       setHasManualAdjustments(false);
@@ -919,7 +1012,8 @@ export default function SolarStudio() {
         panels: allPanels,
         panel_count: allPanels.length,
         system_kw: Math.round(totalKw * 100) / 100,
-        usable_area_sqm: Math.round(totalUsableArea * 10) / 10,
+        roof_area_sqm: guaranteedRoofArea,
+        usable_area_sqm: guaranteedUsableArea,
         coverage_pct: coveragePct,
         walkways: [
           ...(prev.walkways || []).filter((w) => w.type !== "corridor"),
@@ -1368,16 +1462,26 @@ export default function SolarStudio() {
     }
   };
 
-  // Manual Increase Panel Count
+  // Manual Increase Panel Count (Section-Aware)
   const handleIncreasePanelCount = () => {
-    if (!designData.roof_polygon || designData.roof_polygon.length < 3) {
+    const targetSection = activeSection || (effectiveSections && effectiveSections[0]);
+    const targetPolygon = targetSection?.polygon || designData.roof_polygon;
+
+    if (!targetPolygon || targetPolygon.length < 3) {
       toast.warning("Please draw a roof boundary first.");
       return;
     }
 
+    if (targetSection && targetSection.solarEnabled === false) {
+      toast.warning(`Solar is disabled on ${targetSection.name || "selected section"}.`);
+      return;
+    }
+
+    const targetAzimuth = Number(targetSection?.azimuth ?? designData.azimuth_angle ?? 180);
+
     const check = canFitAdditionalPanel({
       panels: designData.panels,
-      roofPolygon: designData.roof_polygon,
+      roofPolygon: targetPolygon,
       setbackMeters: Number(designData.roof?.setback_m || designData.setback_m || 0.5),
       obstacles: designData.obstacles,
       walkways: designData.walkways,
@@ -1389,18 +1493,26 @@ export default function SolarStudio() {
       orientation: designData.orientation,
       rowSpacingMeters: Number(designData.row_spacing_m || designData.panel_spacing_m || 0.03),
       panelSpacingMeters: Number(designData.panel_spacing_m || 0.03),
-      azimuthDegrees: Number(designData.azimuth_angle || 180),
+      azimuthDegrees: targetAzimuth,
     });
 
     if (!check.canFit || !check.newPanel) {
-      toast.warning(check.reason || "No valid panel position available in the current roof area.");
+      toast.warning(check.reason || `No valid panel position available in ${targetSection?.name || "current roof area"}.`);
       return;
     }
 
-    const updatedPanels = [...designData.panels, check.newPanel];
+    const taggedPanel = {
+      ...check.newPanel,
+      id: targetSection ? `p-${targetSection.id}-${Date.now()}` : check.newPanel.id,
+      sectionId: targetSection ? targetSection.id : undefined,
+      azimuth: targetAzimuth,
+      pitch: Number(targetSection?.pitch ?? 0),
+    };
+
+    const updatedPanels = [...designData.panels, taggedPanel];
     const pWatt = Number(designData.panel_wattage || 550);
     const totalKw = (updatedPanels.length * pWatt) / 1000.0;
-    const totalPanelArea = updatedPanels.length * check.newPanel.width * check.newPanel.height;
+    const totalPanelArea = updatedPanels.length * taggedPanel.width * taggedPanel.height;
     const coveragePct = designData.usable_area_sqm > 0 ? (totalPanelArea / designData.usable_area_sqm) * 100 : 0;
     const remainingArea = Math.max(0, (designData.usable_area_sqm || 0) - totalPanelArea);
 
@@ -1413,13 +1525,30 @@ export default function SolarStudio() {
       remaining_area_sqm: Math.round(remainingArea * 100) / 100,
     }));
 
-    toast.success(`Added panel #${updatedPanels.length}`);
+    toast.success(`Added panel #${updatedPanels.length}${targetSection ? ` in ${targetSection.name}` : ""}`);
   };
 
-  // Manual Decrease Panel Count
+  // Manual Decrease Panel Count (Section-Aware)
   const handleDecreasePanelCount = () => {
-    if (designData.panels.length === 0) return;
-    const updatedPanels = designData.panels.slice(0, -1);
+    if (!designData.panels || designData.panels.length === 0) return;
+
+    let updatedPanels;
+    if (selectedPanelId) {
+      updatedPanels = designData.panels.filter((p) => p.id !== selectedPanelId);
+      setSelectedPanelId(null);
+    } else {
+      const targetSecId = activeSection?.id;
+      const lastInSecIdx = targetSecId
+        ? designData.panels.map((p, idx) => (p.sectionId === targetSecId ? idx : -1)).filter((idx) => idx !== -1).pop()
+        : undefined;
+
+      if (lastInSecIdx !== undefined) {
+        updatedPanels = designData.panels.filter((_, idx) => idx !== lastInSecIdx);
+      } else {
+        updatedPanels = designData.panels.slice(0, -1);
+      }
+    }
+
     const pWatt = Number(designData.panel_wattage || 550);
     const totalKw = (updatedPanels.length * pWatt) / 1000.0;
     const singleArea = (designData.panel_dimensions?.width_m || 1.134) * (designData.panel_dimensions?.length_m || 2.278);
@@ -1435,6 +1564,16 @@ export default function SolarStudio() {
       remaining_area_sqm: Math.round(remainingArea * 100) / 100,
     }));
   };
+
+  // Regenerate Mounting Structure cleanly across all sections
+  const handleRegenerateStructure = useCallback(() => {
+    if (viewer3dRef.current?.regenerateStructure) {
+      viewer3dRef.current.regenerateStructure();
+      toast.success("Mounting structure regenerated from current panel layout.");
+    } else {
+      toast.info("Switch to 3D View to inspect regenerated structure.");
+    }
+  }, []);
 
   // Generate Multi-View Snapshots from 3D Scene
   const handleGenerateViews = async () => {
@@ -2385,6 +2524,31 @@ export default function SolarStudio() {
                           </div>
                         </div>
                       )}
+
+                      {/* Section Panel Count & Regenerate Structure */}
+                      {(() => {
+                        const sPanels = (designData.panels || []).filter(
+                          (p) => p.sectionId === activeSection.id || (!p.sectionId && activeSection.id === effectiveSections[0]?.id)
+                        );
+                        return (
+                          <div className="pt-1 space-y-1.5">
+                            <div className="flex items-center justify-between text-[11px] font-mono bg-slate-900/90 px-2 py-1 rounded-md border border-slate-800">
+                              <span className="text-slate-400">Panels on {activeSection.name || "Section"}:</span>
+                              <span className="font-bold text-cyan-300">{sPanels.length} module{sPanels.length === 1 ? "" : "s"}</span>
+                            </div>
+                            <Button
+                              size="sm"
+                              onClick={handleRegenerateStructure}
+                              variant="outline"
+                              className="w-full h-6 text-[10.5px] font-bold rounded-lg bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 border border-cyan-800/50 flex items-center justify-center gap-1.5"
+                              title="Rebuild mounting structure from current roof sections and panel layout"
+                            >
+                              <RefreshCw className="w-3 h-3" />
+                              Regenerate Structure
+                            </Button>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
 
