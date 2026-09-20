@@ -14,7 +14,8 @@ import {
   Save, FileDown, Plus, Trash2, RotateCw, RotateCcw, RefreshCw, Check, CheckCircle2,
   AlertTriangle, ShieldCheck, Download, Sliders, Ruler, Maximize2, Minimize2,
   Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, ChevronUp, Eye, Focus,
-  PlusCircle, Undo2, Edit3, X, HelpCircle, Bell, Grid, Layers2, Image as ImageIcon, ChevronRight, Edit2, Zap
+  PlusCircle, Undo2, Edit3, X, HelpCircle, Bell, Grid, Layers2, Image as ImageIcon, ChevronRight, Edit2, Zap,
+  Scissors
 } from "lucide-react";
 import { toast } from "sonner";
 import dayjs from "dayjs";
@@ -38,6 +39,8 @@ import {
   isRectInsidePolygon,
   toRad,
   ensureCartesianCoordinates,
+  splitPolygonWithLine,
+  mergeTwoAdjacentPolygons,
 } from "./utils/geoCalculations";
 import {
   searchLocations,
@@ -115,6 +118,7 @@ export default function SolarStudio() {
 
   const [activeTool, setActiveTool] = useState("select"); // 'select' | 'draw_roof' | 'edit_roof' | 'add_panel' | 'calibrate'
   const [selectedPanelId, setSelectedPanelId] = useState(null);
+  const [selectedSectionId, setSelectedSectionId] = useState(null);
   const [selectionMode, setSelectionMode] = useState("panel"); // 'panel' | 'row' | 'array'
   const [selectedRowIndex, setSelectedRowIndex] = useState(null);
   const [autoLayoutBaselinePanels, setAutoLayoutBaselinePanels] = useState(null);
@@ -212,6 +216,7 @@ export default function SolarStudio() {
       setback_m: 0.5,
     },
     roof_polygon: [],
+    roof_sections: [],
     roof_area_sqm: 0,
     roof_perimeter_m: 0,
     roof_dimensions: { length_m: 0, width_m: 0 },
@@ -306,6 +311,15 @@ export default function SolarStudio() {
               doc.usable_area_sqm = Math.round(getCartesianPolygonArea(usablePoly) * 10) / 10;
             }
           }
+          doc.roof_sections = Array.isArray(doc.roof_sections)
+            ? doc.roof_sections.map((sec) => ({
+                ...sec,
+                polygon: Array.isArray(sec.polygon) ? ensureCartesianCoordinates(sec.polygon) : [],
+              }))
+            : [];
+          if (doc.roof_sections.length > 0) {
+            setSelectedSectionId(doc.roof_sections[0].id);
+          }
           doc.structure_nodes = Array.isArray(doc.structure_nodes) ? doc.structure_nodes : [];
           doc.structure_members = Array.isArray(doc.structure_members) ? doc.structure_members : [];
           doc.saved_views = Array.isArray(doc.saved_views) ? doc.saved_views : [];
@@ -349,12 +363,232 @@ export default function SolarStudio() {
     return () => clearTimeout(timer);
   }, [activeTab, isFullscreen, openSection]);
 
+  // Effective Roof Sections (guarantees backward compatibility with single roof_polygon)
+  const effectiveSections = useMemo(() => {
+    if (Array.isArray(designData.roof_sections) && designData.roof_sections.length > 0) {
+      return designData.roof_sections;
+    }
+    if (Array.isArray(designData.roof_polygon) && designData.roof_polygon.length >= 3) {
+      const surfaceMat = (designData.roof?.surface_material || "").toLowerCase();
+      const initialRoofType = surfaceMat.includes("tile") ? "Tile" : surfaceMat.includes("metal") ? "Metal" : "RCC";
+      return [
+        {
+          id: "sec_default",
+          name: "Section A",
+          polygon: designData.roof_polygon,
+          roofType: initialRoofType,
+          pitch: Number(designData.roof?.pitch_deg || 0),
+          azimuth: Number(designData.roof?.azimuth_deg ?? designData.azimuth_angle ?? 180),
+          elevation: Number(designData.roof?.eave_height_m ?? designData.roof?.elevation_m ?? 3.5),
+          solarEnabled: true,
+          mountingType: designData.structure?.type || (initialRoofType === "Tile" ? "tile_hook_rail" : "elevated"),
+          structureEnabled: designData.structure?.show_structure !== false,
+          jointType: "same_plane",
+          tileConfig: {
+            type: "spanish_barrel",
+            color: "#b45309",
+          },
+        },
+      ];
+    }
+    return [];
+  }, [
+    designData.roof_sections,
+    designData.roof_polygon,
+    designData.roof?.surface_material,
+    designData.roof?.pitch_deg,
+    designData.roof?.azimuth_deg,
+    designData.roof?.eave_height_m,
+    designData.roof?.elevation_m,
+    designData.azimuth_angle,
+    designData.structure?.type,
+    designData.structure?.show_structure,
+  ]);
+
+  // Current active / selected section object
+  const activeSection = useMemo(() => {
+    if (!effectiveSections || effectiveSections.length === 0) return null;
+    if (!selectedSectionId) return effectiveSections[0];
+    return effectiveSections.find((s) => s.id === selectedSectionId) || effectiveSections[0];
+  }, [effectiveSections, selectedSectionId]);
+
+  // Split section with a line drawn across the polygon
+  const handleSplitSection = useCallback((lineStart, lineEnd, targetSectionId = null) => {
+    if (!lineStart || !lineEnd) return;
+    const sections = effectiveSections;
+    if (!sections || sections.length === 0) {
+      toast.warning("Draw a roof boundary first before splitting sections.");
+      return;
+    }
+
+    let target = null;
+    let splitResult = null;
+
+    if (targetSectionId) {
+      target = sections.find((s) => s.id === targetSectionId);
+      if (target) {
+        splitResult = splitPolygonWithLine(target.polygon, lineStart, lineEnd);
+      }
+    }
+
+    if (!splitResult) {
+      for (const sec of sections) {
+        const res = splitPolygonWithLine(sec.polygon, lineStart, lineEnd);
+        if (res) {
+          target = sec;
+          splitResult = res;
+          break;
+        }
+      }
+    }
+
+    if (!splitResult || !target) {
+      toast.warning("Section line must cut across the roof boundary edges. Try drawing completely across.");
+      return;
+    }
+
+    const [poly1, poly2] = splitResult;
+    const existingNames = sections.map((s) => s.name || "");
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let nextLetter = "B";
+    for (let i = 0; i < alphabet.length; i++) {
+      const candidate = `Section ${alphabet[i]}`;
+      if (!existingNames.includes(candidate)) {
+        nextLetter = alphabet[i];
+        break;
+      }
+    }
+
+    const sec1 = {
+      ...target,
+      polygon: poly1,
+    };
+
+    const sec2 = {
+      ...target,
+      id: `sec_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      name: `Section ${nextLetter}`,
+      polygon: poly2,
+      solarEnabled: true,
+    };
+
+    const newSections = sections.map((s) => (s.id === target.id ? sec1 : s));
+    newSections.push(sec2);
+
+    // Re-associate panels to respective sections based on geometry containment
+    const updatedPanels = (designData.panels || []).map((p) => {
+      if (p.sectionId === target.id || !p.sectionId) {
+        if (isRectInsidePolygon(p.x, p.y, p.width || 1.134, p.height || 2.278, p.rotation || 0, poly2)) {
+          return { ...p, sectionId: sec2.id };
+        }
+        return { ...p, sectionId: sec1.id };
+      }
+      return p;
+    });
+
+    setDesignData((prev) => ({
+      ...prev,
+      roof_sections: newSections,
+      panels: updatedPanels,
+    }));
+    setSelectedSectionId(sec2.id);
+    setOpenSection("roof");
+    toast.success(`Split into ${sec1.name} and ${sec2.name}!`);
+  }, [effectiveSections, designData.panels]);
+
+  // Merge two adjacent sections
+  const handleMergeSections = useCallback((secIdA, secIdB) => {
+    const sections = effectiveSections;
+    const secA = sections.find((s) => s.id === secIdA);
+    const secB = sections.find((s) => s.id === secIdB);
+    if (!secA || !secB) {
+      toast.warning("Select two valid sections to merge.");
+      return;
+    }
+
+    const mergedPoly = mergeTwoAdjacentPolygons(secA.polygon, secB.polygon);
+    if (!mergedPoly) {
+      toast.warning("Sections do not share a common boundary edge.");
+      return;
+    }
+
+    const mergedSection = {
+      ...secA,
+      polygon: mergedPoly,
+    };
+
+    const newSections = sections
+      .filter((s) => s.id !== secIdA && s.id !== secIdB)
+      .concat(mergedSection);
+
+    const updatedPanels = (designData.panels || []).map((p) => {
+      if (p.sectionId === secIdA || p.sectionId === secIdB) {
+        return { ...p, sectionId: mergedSection.id };
+      }
+      return p;
+    });
+
+    setDesignData((prev) => ({
+      ...prev,
+      roof_sections: newSections,
+      panels: updatedPanels,
+    }));
+    setSelectedSectionId(mergedSection.id);
+    toast.success(`Merged ${secA.name} and ${secB.name} into ${mergedSection.name}`);
+  }, [effectiveSections, designData.panels]);
+
+  // Update a section's parameters (pitch, azimuth, roofType, solarEnabled, etc.)
+  const handleUpdateSection = useCallback((sectionId, updates) => {
+    setDesignData((prev) => {
+      const currentSections = (prev.roof_sections && prev.roof_sections.length > 0)
+        ? prev.roof_sections
+        : effectiveSections;
+
+      const newSections = currentSections.map((s) => {
+        if (s.id === sectionId) {
+          return { ...s, ...updates };
+        }
+        return s;
+      });
+
+      let panels = prev.panels || [];
+      if (updates.solarEnabled === false) {
+        panels = panels.filter((p) => p.sectionId !== sectionId);
+      }
+      if (updates.azimuth != null || updates.pitch != null) {
+        panels = panels.map((p) => {
+          if (p.sectionId === sectionId) {
+            return {
+              ...p,
+              azimuth: updates.azimuth != null ? Number(updates.azimuth) : p.azimuth,
+              pitch: updates.pitch != null ? Number(updates.pitch) : p.pitch,
+            };
+          }
+          return p;
+        });
+      }
+
+      const pCount = panels.filter((p) => !p.hidden).length;
+      const pWatt = Number(prev.panel_wattage || 550);
+      const totalKw = (pCount * pWatt) / 1000.0;
+
+      return {
+        ...prev,
+        roof_sections: newSections,
+        panels,
+        panel_count: pCount,
+        system_kw: Math.round(totalKw * 100) / 100,
+      };
+    });
+  }, [effectiveSections]);
+
   // Update Roof Polygon and recalculate geometric properties
   const handleSetRoofPolygon = useCallback((polygon) => {
     if (!polygon || polygon.length < 3) {
       setDesignData((prev) => ({
         ...prev,
         roof_polygon: polygon || [],
+        roof_sections: [],
         roof_area_sqm: 0,
         roof_perimeter_m: 0,
         usable_area_sqm: 0,
@@ -390,6 +624,24 @@ export default function SolarStudio() {
     const usablePoly = computeSetbackPolygon(validPolygon, setback);
     const usableArea = Math.round(getCartesianPolygonArea(usablePoly) * 10) / 10;
 
+    const surfaceMat = (designData.roof?.surface_material || "").toLowerCase();
+    const initialRoofType = surfaceMat.includes("tile") ? "Tile" : surfaceMat.includes("metal") ? "Metal" : "RCC";
+    const initialSection = {
+      id: `sec_${Date.now()}_1`,
+      name: "Section A",
+      polygon: validPolygon,
+      roofType: initialRoofType,
+      pitch: Number(designData.roof?.pitch_deg || 0),
+      azimuth: Number(designData.roof?.azimuth_deg ?? designData.azimuth_angle ?? 180),
+      elevation: Number(designData.roof?.eave_height_m ?? designData.roof?.elevation_m ?? 3.5),
+      solarEnabled: true,
+      mountingType: designData.structure?.type || (initialRoofType === "Tile" ? "tile_hook_rail" : "elevated"),
+      structureEnabled: designData.structure?.show_structure !== false,
+      jointType: "same_plane",
+      tileConfig: { type: "spanish_barrel", color: "#b45309" },
+    };
+    setSelectedSectionId(initialSection.id);
+
     setDesignData((prev) => {
       // Revalidate existing panels against new roof polygon without random auto-regeneration
       const currentPanels = prev.panels || [];
@@ -411,6 +663,7 @@ export default function SolarStudio() {
       return {
         ...prev,
         roof_polygon: validPolygon,
+        roof_sections: [initialSection],
         roof_area_sqm: Math.round(area * 10) / 10,
         roof_perimeter_m: Math.round(perimeter * 10) / 10,
         roof_dimensions: {
@@ -424,14 +677,101 @@ export default function SolarStudio() {
         coverage_pct: coveragePct,
       };
     });
-  }, [designData.roof?.setback_m, designData.setback_m]);
+  }, [designData.roof?.setback_m, designData.roof?.surface_material, designData.roof?.pitch_deg, designData.roof?.azimuth_deg, designData.roof?.eave_height_m, designData.roof?.elevation_m, designData.setback_m, designData.azimuth_angle, designData.structure?.type, designData.structure?.show_structure]);
 
-  // Trigger Automatic Panel Layout with live recalculation support
+  // Trigger Automatic Panel Layout with live recalculation support (Per-Section Aware)
   const handleAutoLayout = useCallback((customStrategy = "auto", customPolygon = null, customOverrides = {}, bypassConfirm = false) => {
     if (!bypassConfirm && hasManualAdjustments) {
       if (!window.confirm("Regenerate layout? Manual panel adjustments will be removed.")) {
         return;
       }
+    }
+
+    const sections = effectiveSections;
+    const hasMultipleSections = sections && sections.length > 1;
+
+    const setback = Number(customOverrides.setback_m ?? designData.roof?.setback_m ?? designData.setback_m ?? 0.5);
+    const rowGap = Number(customOverrides.row_spacing_m ?? designData.row_spacing_m ?? 0.03);
+    const panelGap = Number(customOverrides.panel_spacing_m ?? designData.panel_spacing_m ?? 0.03);
+    const orientation = customOverrides.orientation ?? designData.orientation ?? "portrait";
+    const walkwayWidth = Number(customOverrides.walkway_m ?? designData.walkway_m ?? 0.75);
+    const walkwayEnabled = customOverrides.walkway_enabled ?? designData.walkway_enabled ?? true;
+    const walkwayFreq = customOverrides.walkway_frequency ?? designData.walkway_frequency ?? "every_10";
+
+    if (hasMultipleSections) {
+      let allPanels = [];
+      let totalUsableArea = 0;
+      let generatedWalkways = [];
+
+      sections.forEach((sec, sIdx) => {
+        if (sec.solarEnabled === false) return;
+        const secPoly = sec.polygon;
+        if (!secPoly || secPoly.length < 3) return;
+
+        const secAzimuth = Number(sec.azimuth ?? designData.azimuth_angle ?? 180);
+        const result = generateAutoPanelLayout({
+          roofPolygon: secPoly,
+          setbackMeters: setback,
+          obstacles: designData.obstacles || [],
+          walkways: (designData.walkways || []).filter((w) => w.type !== "corridor"),
+          panelSpecs: {
+            make: designData.panel_make,
+            model: designData.panel_model,
+            wattage: Number(designData.panel_wattage || 550),
+            length_m: designData.panel_dimensions?.length_m || 2.278,
+            width_m: designData.panel_dimensions?.width_m || 1.134,
+          },
+          orientation,
+          rowSpacingMeters: rowGap,
+          panelSpacingMeters: panelGap,
+          walkwayEnabled,
+          walkwayWidth,
+          walkwayFrequency: walkwayFreq,
+          azimuthDegrees: secAzimuth,
+          strategy: customStrategy,
+        });
+
+        const taggedPanels = result.panels.map((p, pIdx) => ({
+          ...p,
+          id: `sec-${sec.id}-p-${pIdx + 1}`,
+          sectionId: sec.id,
+          pitch: Number(sec.pitch || 0),
+          azimuth: secAzimuth,
+        }));
+
+        allPanels.push(...taggedPanels);
+        totalUsableArea += result.usableAreaSqm;
+        if (result.generatedWalkways) {
+          generatedWalkways.push(...result.generatedWalkways);
+        }
+      });
+
+      const pWatt = Number(designData.panel_wattage || 550);
+      const totalKw = (allPanels.length * pWatt) / 1000.0;
+      const singleArea = (designData.panel_dimensions?.width_m || 1.134) * (designData.panel_dimensions?.length_m || 2.278);
+      const coveragePct = totalUsableArea > 0 ? Math.min(100, Math.round(((allPanels.length * singleArea) / totalUsableArea) * 1000) / 10) : 0;
+
+      setAutoLayoutBaselinePanels(allPanels);
+      setHasManualAdjustments(false);
+      setSelectedPanelId(null);
+      setSelectedRowIndex(null);
+
+      setDesignData((prev) => ({
+        ...prev,
+        panels: allPanels,
+        panel_count: allPanels.length,
+        system_kw: Math.round(totalKw * 100) / 100,
+        usable_area_sqm: Math.round(totalUsableArea * 10) / 10,
+        coverage_pct: coveragePct,
+        walkways: [
+          ...(prev.walkways || []).filter((w) => w.type !== "corridor"),
+          ...generatedWalkways,
+        ],
+        ...customOverrides,
+      }));
+
+      toast.success(`Generated multi-section layout: ${allPanels.length} panels (${totalKw.toFixed(2)} kWp)`);
+      return;
     }
 
     const polygon = customPolygon || designData.roof_polygon;
@@ -441,14 +781,6 @@ export default function SolarStudio() {
       setActiveTool("draw_roof");
       return;
     }
-
-    const setback = Number(customOverrides.setback_m ?? designData.roof?.setback_m ?? designData.setback_m ?? 0.5);
-    const rowGap = Number(customOverrides.row_spacing_m ?? designData.row_spacing_m ?? 0.03);
-    const panelGap = Number(customOverrides.panel_spacing_m ?? designData.panel_spacing_m ?? 0.03);
-    const orientation = customOverrides.orientation ?? designData.orientation ?? "portrait";
-    const walkwayWidth = Number(customOverrides.walkway_m ?? designData.walkway_m ?? 0.75);
-    const walkwayEnabled = customOverrides.walkway_enabled ?? designData.walkway_enabled ?? true;
-    const walkwayFreq = customOverrides.walkway_frequency ?? designData.walkway_frequency ?? "every_10";
 
     const result = generateAutoPanelLayout({
       roofPolygon: polygon,
@@ -472,15 +804,21 @@ export default function SolarStudio() {
       strategy: customStrategy,
     });
 
-    setAutoLayoutBaselinePanels(result.panels);
+    const defaultSecId = effectiveSections[0]?.id || "sec_default";
+    const taggedPanels = result.panels.map((p) => ({
+      ...p,
+      sectionId: defaultSecId,
+    }));
+
+    setAutoLayoutBaselinePanels(taggedPanels);
     setHasManualAdjustments(false);
     setSelectedPanelId(null);
     setSelectedRowIndex(null);
 
     setDesignData((prev) => ({
       ...prev,
-      panels: result.panels,
-      panel_count: result.panelCount,
+      panels: taggedPanels,
+      panel_count: taggedPanels.length,
       system_kw: result.totalKw,
       usable_area_sqm: result.usableAreaSqm,
       coverage_pct: result.coveragePct,
@@ -492,7 +830,7 @@ export default function SolarStudio() {
     }));
 
     toast.success(`Generated layout: ${result.panelCount} panels (${result.totalKw.toFixed(2)} kWp)`);
-  }, [designData, hasManualAdjustments]);
+  }, [designData, effectiveSections, hasManualAdjustments]);
 
   // Live Layout Parameter Adjustment Handler
   const handleLayoutParamChange = useCallback((field, value) => {
@@ -1491,7 +1829,8 @@ export default function SolarStudio() {
 
               {/* SECTION 2: ROOF CONTROLS */}
               {openSection === "roof" && (
-                <div className="space-y-2.5 text-xs">
+                <div className="space-y-3 text-xs">
+                  {/* Boundary & Points Actions */}
                   <div className="flex items-center gap-1.5">
                     <Button
                       size="sm"
@@ -1521,82 +1860,286 @@ export default function SolarStudio() {
                     )}
                   </div>
 
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setShowManualRoofModal(true)}
-                    className="w-full h-7 text-xs font-bold bg-indigo-950/60 border border-indigo-700/60 text-indigo-300 hover:bg-indigo-900 hover:text-white rounded-lg gap-1.5 shadow-sm transition"
-                  >
-                    <Box className="w-3.5 h-3.5 text-indigo-400" />
-                    Manual 3D Roof Engine
-                  </Button>
+                  {/* Section Tools: Split (Add Section Line) & Merge */}
+                  {designData.roof_polygon?.length >= 3 && (
+                    <div className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 font-bold text-slate-200 text-[11px]">
+                          <Scissors className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Roof Sections & Planes</span>
+                        </div>
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-slate-700 text-cyan-400">
+                          {effectiveSections.length} {effectiveSections.length === 1 ? "Section" : "Sections"}
+                        </Badge>
+                      </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <Label className="text-[10px] font-semibold text-slate-400">Roof Type</Label>
-                      <Select
-                        value={designData.roof?.type || "flat"}
-                        onValueChange={(val) =>
-                          setDesignData((prev) => ({
-                            ...prev,
-                            roof_type: val,
-                            roof: { ...prev.roof, type: val },
-                          }))
-                        }
-                      >
-                        <SelectTrigger className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="bg-slate-900 border-slate-800 text-white">
-                          <SelectItem value="flat">Flat (0°)</SelectItem>
-                          <SelectItem value="single_slope">Single Slope</SelectItem>
-                          <SelectItem value="gable">Gable</SelectItem>
-                          <SelectItem value="hip">Hip</SelectItem>
-                          <SelectItem value="custom_polygon">Custom Polygon</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label className="text-[10px] font-semibold text-slate-400">Pitch (°)</Label>
-                      <Input
-                        type="number"
-                        min="0"
-                        max="60"
-                        value={designData.roof?.pitch_deg ?? 0}
-                        onChange={(e) => {
-                          const p = parseFloat(e.target.value) || 0;
-                          setDesignData((prev) => ({
-                            ...prev,
-                            roof_pitch: p,
-                            roof: { ...prev.roof, pitch_deg: p },
-                          }));
-                        }}
-                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
-                      />
-                    </div>
-                  </div>
+                      {/* Section Tabs / Switcher */}
+                      <div className="flex items-center gap-1 overflow-x-auto pb-1 no-scrollbar">
+                        {effectiveSections.map((sec) => {
+                          const isSelected = sec.id === (activeSection?.id || effectiveSections[0]?.id);
+                          return (
+                            <button
+                              key={sec.id}
+                              onClick={() => setSelectedSectionId(sec.id)}
+                              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 transition ${
+                                isSelected
+                                  ? "bg-cyan-500 text-slate-950 shadow-sm"
+                                  : "bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                              }`}
+                            >
+                              <span>{sec.name || "Section"}</span>
+                              <span className={`text-[9px] px-1 rounded ${isSelected ? "bg-cyan-600/30 text-slate-950 font-mono" : "text-slate-500 font-mono"}`}>
+                                {sec.pitch ?? 0}°
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <Label className="text-[10px] font-semibold text-slate-400">Eave / Base (m)</Label>
-                      <Input
-                        type="number"
-                        step="0.5"
-                        min="1"
-                        max="40"
-                        value={designData.roof?.eave_height_m ?? designData.roof?.elevation_m ?? 3.5}
-                        onChange={(e) => {
-                          const ev = parseFloat(e.target.value) || 3.5;
-                          setDesignData((prev) => ({
-                            ...prev,
-                            building_elevation_m: ev,
-                            eave_height_m: ev,
-                            roof: { ...prev.roof, elevation_m: ev, eave_height_m: ev },
-                          }));
-                        }}
-                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
-                      />
+                      {/* Section Tool Actions */}
+                      <div className="flex items-center gap-1.5 pt-0.5">
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            if (activeTab !== "2d") setActiveTab("2d");
+                            setActiveTool(activeTool === "split_section" ? "select" : "split_section");
+                          }}
+                          className={`flex-1 h-6 text-[10.5px] font-bold rounded-lg gap-1 ${
+                            activeTool === "split_section"
+                              ? "bg-cyan-600 hover:bg-cyan-700 text-white"
+                              : "bg-cyan-950/60 text-cyan-300 border border-cyan-700/60 hover:bg-cyan-900"
+                          }`}
+                        >
+                          <Scissors className="w-3 h-3" />
+                          {activeTool === "split_section" ? "Click line across roof..." : "Add Section Line"}
+                        </Button>
+
+                        {effectiveSections.length > 1 && (
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              if (effectiveSections.length === 2) {
+                                handleMergeSections(effectiveSections[0].id, effectiveSections[1].id);
+                              } else if (activeSection) {
+                                const other = effectiveSections.find((s) => s.id !== activeSection.id);
+                                if (other) handleMergeSections(activeSection.id, other.id);
+                              }
+                            }}
+                            variant="outline"
+                            className="h-6 text-[10.5px] font-bold rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 gap-1 px-2"
+                            title="Merge adjacent sections back together"
+                          >
+                            Merge
+                          </Button>
+                        )}
+                      </div>
                     </div>
+                  )}
+
+                  {/* ACTIVE SECTION PARAMETERS */}
+                  {activeSection && (
+                    <div className="space-y-2 p-2.5 rounded-xl bg-slate-950 border border-cyan-900/40">
+                      <div className="flex items-center justify-between">
+                        <div className="font-bold text-white text-xs flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                          <span>{activeSection.name || "Section"} Settings</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          {activeSection.polygon?.length >= 3 ? `${Math.round(getCartesianPolygonArea(activeSection.polygon))} m²` : ""}
+                        </div>
+                      </div>
+
+                      {/* Roof Covering (RCC, Metal, Tile, Shingle, Custom) */}
+                      <div>
+                        <Label className="text-[10px] font-semibold text-slate-400">Roof Covering / Type</Label>
+                        <Select
+                          value={activeSection.roofType || "RCC"}
+                          onValueChange={(val) => handleUpdateSection(activeSection.id, { roofType: val })}
+                        >
+                          <SelectTrigger className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                            <SelectItem value="RCC">RCC / Concrete Slab</SelectItem>
+                            <SelectItem value="Metal">Metal Sheet (Standing Seam / Trapezoidal)</SelectItem>
+                            <SelectItem value="Tile">Tile Roof (Clay / Concrete Tiles)</SelectItem>
+                            <SelectItem value="Shingle">Asphalt Shingle</SelectItem>
+                            <SelectItem value="Custom">Custom Polygon</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* Tile Configuration (if Tile) */}
+                      {activeSection.roofType === "Tile" && (
+                        <div className="p-2 rounded-lg bg-orange-950/30 border border-orange-800/40 space-y-2">
+                          <div className="text-[10.5px] font-bold text-orange-300 flex items-center justify-between">
+                            <span>Tile Covering Configuration</span>
+                            <span className="text-[9px] font-mono text-orange-400">Tile → Hook → Rail</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <Label className="text-[9.5px] text-slate-400">Tile Style</Label>
+                              <Select
+                                value={activeSection.tileConfig?.style || "spanish"}
+                                onValueChange={(val) =>
+                                  handleUpdateSection(activeSection.id, {
+                                    tileConfig: { ...(activeSection.tileConfig || {}), style: val },
+                                  })
+                                }
+                              >
+                                <SelectTrigger className="h-6 text-[11px] bg-slate-900 border-slate-700 text-white">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                                  <SelectItem value="spanish">Spanish S-Tile</SelectItem>
+                                  <SelectItem value="flat">Flat Concrete</SelectItem>
+                                  <SelectItem value="roman">Roman Barrel</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div>
+                              <Label className="text-[9.5px] text-slate-400">Tile Color</Label>
+                              <Select
+                                value={activeSection.tileConfig?.color || "#c85a32"}
+                                onValueChange={(val) =>
+                                  handleUpdateSection(activeSection.id, {
+                                    tileConfig: { ...(activeSection.tileConfig || {}), color: val },
+                                  })
+                                }
+                              >
+                                <SelectTrigger className="h-6 text-[11px] bg-slate-900 border-slate-700 text-white">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                                  <SelectItem value="#c85a32">Terracotta Red</SelectItem>
+                                  <SelectItem value="#475569">Slate Grey</SelectItem>
+                                  <SelectItem value="#5c3a21">Dark Brown</SelectItem>
+                                  <SelectItem value="#991b1b">Heritage Red</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Pitch & Azimuth */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <div className="flex justify-between items-center">
+                            <Label className="text-[10px] font-semibold text-slate-400">Pitch (°)</Label>
+                            <span className="text-[10px] text-cyan-400 font-mono font-bold">{activeSection.pitch ?? 0}°</span>
+                          </div>
+                          <Input
+                            type="number"
+                            min="0"
+                            max="60"
+                            value={activeSection.pitch ?? 0}
+                            onChange={(e) => handleUpdateSection(activeSection.id, { pitch: parseFloat(e.target.value) || 0 })}
+                            className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                          />
+                        </div>
+                        <div>
+                          <div className="flex justify-between items-center">
+                            <Label className="text-[10px] font-semibold text-slate-400">Azimuth (°)</Label>
+                            <span className="text-[10px] text-cyan-400 font-mono font-bold">{activeSection.azimuth ?? 180}°</span>
+                          </div>
+                          <Input
+                            type="number"
+                            min="0"
+                            max="360"
+                            value={activeSection.azimuth ?? 180}
+                            onChange={(e) => handleUpdateSection(activeSection.id, { azimuth: parseFloat(e.target.value) || 180 })}
+                            className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Base Elevation & Joint Type */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-[10px] font-semibold text-slate-400">Elevation (m)</Label>
+                          <Input
+                            type="number"
+                            step="0.5"
+                            min="1"
+                            max="40"
+                            value={activeSection.elevation ?? 3.5}
+                            onChange={(e) => handleUpdateSection(activeSection.id, { elevation: parseFloat(e.target.value) || 3.5 })}
+                            className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-[10px] font-semibold text-slate-400">Joint Type</Label>
+                          <Select
+                            value={activeSection.jointType || "Same Plane"}
+                            onValueChange={(val) => handleUpdateSection(activeSection.id, { jointType: val })}
+                          >
+                            <SelectTrigger className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                              <SelectItem value="Same Plane">Same Plane</SelectItem>
+                              <SelectItem value="Ridge">Ridge (Apex)</SelectItem>
+                              <SelectItem value="Valley">Valley (Trough)</SelectItem>
+                              <SelectItem value="Step">Step / Parapet</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      {/* Solar PV Enable Switch */}
+                      <div className="flex items-center justify-between p-2 rounded-lg bg-slate-900/90 border border-slate-800">
+                        <div>
+                          <div className="text-[11px] font-bold text-white">Solar PV on this Section</div>
+                          <div className="text-[9.5px] text-slate-400">Auto Layout module generation</div>
+                        </div>
+                        <Switch
+                          checked={activeSection.solarEnabled !== false}
+                          onCheckedChange={(checked) => handleUpdateSection(activeSection.id, { solarEnabled: checked })}
+                        />
+                      </div>
+
+                      {/* Mounting System for this section */}
+                      {activeSection.solarEnabled !== false && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <Label className="text-[9.5px] font-semibold text-slate-400">Mounting Type</Label>
+                            <Select
+                              value={activeSection.mountingType || (activeSection.roofType === "Tile" || activeSection.roofType === "Metal" ? "flush" : "elevated")}
+                              onValueChange={(val) => handleUpdateSection(activeSection.id, { mountingType: val })}
+                            >
+                              <SelectTrigger className="h-6 text-[11px] bg-slate-800 border-slate-700 text-white">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                                <SelectItem value="flush">Flush Mount (Coplanar)</SelectItem>
+                                <SelectItem value="elevated">Elevated Structure</SelectItem>
+                                <SelectItem value="ballasted">Ballasted</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label className="text-[9.5px] font-semibold text-slate-400">Structure Framing</Label>
+                            <Select
+                              value={activeSection.structureEnabled !== false ? "enabled" : "disabled"}
+                              onValueChange={(val) => handleUpdateSection(activeSection.id, { structureEnabled: val === "enabled" })}
+                            >
+                              <SelectTrigger className="h-6 text-[11px] bg-slate-800 border-slate-700 text-white">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                                <SelectItem value="enabled">Show Framework</SelectItem>
+                                <SelectItem value="disabled">Hide Framework</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Setback & Area Metrics */}
+                  <div className="grid grid-cols-2 gap-2">
                     <div>
                       <Label className="text-[10px] font-semibold text-slate-400">Setback (m)</Label>
                       <Input
@@ -1616,56 +2159,13 @@ export default function SolarStudio() {
                         className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
                       />
                     </div>
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Total Roof Area</Label>
+                      <div className="h-7 mt-0.5 px-2 flex items-center bg-slate-900 border border-slate-800 rounded-md font-mono text-emerald-400 font-bold text-xs">
+                        {designData.roof_area_sqm || 0} m²
+                      </div>
+                    </div>
                   </div>
-
-                  {designData.roof?.type && designData.roof?.type !== "flat" && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-[10px] font-semibold text-slate-400">Ridge Apex (m)</Label>
-                        <Input
-                          type="number"
-                          step="0.2"
-                          min="1"
-                          max="40"
-                          value={designData.roof?.ridge_height_m ?? 5.0}
-                          onChange={(e) => {
-                            const rh = parseFloat(e.target.value) || 5.0;
-                            setDesignData((prev) => ({
-                              ...prev,
-                              ridge_height_m: rh,
-                              roof: { ...prev.roof, ridge_height_m: rh },
-                            }));
-                          }}
-                          className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-[10px] font-semibold text-slate-400">Ridge Azimuth (°)</Label>
-                        <Input
-                          type="number"
-                          step="5"
-                          min="0"
-                          max="360"
-                          value={designData.roof?.azimuth_deg ?? 180}
-                          onChange={(e) => {
-                            const az = parseFloat(e.target.value) || 180;
-                            setDesignData((prev) => ({
-                              ...prev,
-                              roof: { ...prev.roof, azimuth_deg: az },
-                            }));
-                          }}
-                          className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {designData.roof_polygon?.length >= 3 && (
-                    <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 text-[11px] grid grid-cols-2 gap-1 font-mono">
-                      <div>Area: <span className="text-emerald-400 font-bold">{designData.roof_area_sqm} m²</span></div>
-                      <div>Perimeter: <span className="text-white font-bold">{designData.roof_perimeter_m} m</span></div>
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -2180,6 +2680,14 @@ export default function SolarStudio() {
               }}
               isCalibrated={isCalibrated}
               onCalibrationComplete={() => setIsCalibrated(true)}
+              roofSections={effectiveSections}
+              selectedSectionId={selectedSectionId}
+              onSelectSection={(id) => {
+                setSelectedSectionId(id);
+                setOpenSection("roof");
+              }}
+              onSplitSection={handleSplitSection}
+              onMergeSections={handleMergeSections}
             />
           </div>
 
@@ -2260,6 +2768,12 @@ export default function SolarStudio() {
                     ref={viewer3dRef}
                     roofPolygon={designData.roof_polygon}
                     roof={designData.roof}
+                    roofSections={effectiveSections}
+                    selectedSectionId={selectedSectionId}
+                    onSelectSection={(id) => {
+                      setSelectedSectionId(id);
+                      setOpenSection("roof");
+                    }}
                     panels={designData.panels}
                     obstacles={designData.obstacles}
                     walkways={designData.walkways}
@@ -2342,6 +2856,14 @@ export default function SolarStudio() {
                 onCalibrationComplete={() => setIsCalibrated(true)}
                 onLocationChange={(coords) => requestLocationChange(coords)}
                 onCaptureLocation={handleCaptureLocation}
+                roofSections={effectiveSections}
+                selectedSectionId={selectedSectionId}
+                onSelectSection={(id) => {
+                  setSelectedSectionId(id);
+                  setOpenSection("roof");
+                }}
+                onSplitSection={handleSplitSection}
+                onMergeSections={handleMergeSections}
               />
               {hasOpened3D && (
                 <Suspense fallback={
@@ -2354,6 +2876,12 @@ export default function SolarStudio() {
                     ref={viewer3dRef}
                     roofPolygon={designData.roof_polygon}
                     roof={designData.roof}
+                    roofSections={effectiveSections}
+                    selectedSectionId={selectedSectionId}
+                    onSelectSection={(id) => {
+                      setSelectedSectionId(id);
+                      setOpenSection("roof");
+                    }}
                     panels={designData.panels}
                     obstacles={designData.obstacles}
                     structure={{

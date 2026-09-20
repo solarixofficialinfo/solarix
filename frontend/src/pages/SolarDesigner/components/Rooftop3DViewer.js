@@ -8,6 +8,8 @@ import {
 import {
   toRad,
   calculateRoofElevationAtPoint,
+  calculateSectionRoofElevationAtPoint,
+  isPointInsidePolygon,
   calculatePanel3DPosition,
   clusterPanelsIntoRows,
   getPolygonBounds,
@@ -85,10 +87,84 @@ function createSolarCellCanvasTexture() {
   return texture;
 }
 
+// Cache generated procedural tile textures
+const tileTextureCache = new Map();
+
+function getTileRoofTexture(tileConfig = {}) {
+  const style = tileConfig?.style || "spanish";
+  const colorHex = tileConfig?.color || "#c85a32";
+  const cacheKey = `${style}_${colorHex}`;
+  if (tileTextureCache.has(cacheKey)) {
+    return tileTextureCache.get(cacheKey);
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  ctx.fillStyle = colorHex;
+  ctx.fillRect(0, 0, 512, 512);
+
+  const rows = 16;
+  const cols = 8;
+  const rowHeight = 512 / rows;
+  const colWidth = 512 / cols;
+
+  for (let r = 0; r < rows; r++) {
+    const y = r * rowHeight;
+    const rowOffset = (r % 2) * (colWidth / 2);
+
+    // Lap shadow at top of course
+    const grad = ctx.createLinearGradient(0, y, 0, y + rowHeight);
+    grad.addColorStop(0, "rgba(0, 0, 0, 0.45)");
+    grad.addColorStop(0.12, "rgba(0, 0, 0, 0.15)");
+    grad.addColorStop(0.85, "rgba(255, 255, 255, 0.08)");
+    grad.addColorStop(1, "rgba(0, 0, 0, 0.35)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, y, 512, rowHeight);
+
+    // Individual tile arches or seams
+    for (let c = -1; c <= cols + 1; c++) {
+      const x = c * colWidth + rowOffset;
+      if (style === "spanish" || style === "roman") {
+        const archGrad = ctx.createLinearGradient(x, 0, x + colWidth, 0);
+        archGrad.addColorStop(0, "rgba(0, 0, 0, 0.4)");
+        archGrad.addColorStop(0.3, "rgba(255, 255, 255, 0.22)");
+        archGrad.addColorStop(0.7, "rgba(0, 0, 0, 0.08)");
+        archGrad.addColorStop(1, "rgba(0, 0, 0, 0.5)");
+        ctx.fillStyle = archGrad;
+        ctx.fillRect(x, y, colWidth, rowHeight);
+      } else {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+        ctx.fillRect(x, y, 3, rowHeight);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+        ctx.fillRect(x + 3, y, 2, rowHeight);
+      }
+    }
+
+    // Horizontal course overhang line
+    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+    ctx.fillRect(0, y, 512, 2.5);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.2)";
+    ctx.fillRect(0, y + 2.5, 512, 1.5);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  tileTextureCache.set(cacheKey, texture);
+  return texture;
+}
+
 const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   {
     roofPolygon = [],
     roof = { type: "flat", pitch_deg: 0, azimuth_deg: 180, elevation_m: 3.0, surface_material: "concrete" },
+    roofSections = [],
+    selectedSectionId = null,
+    onSelectSection = null,
     panels = [],
     obstacles = [],
     walkways = [],
@@ -153,6 +229,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   // Scene-level refs for interactive meshes
   const nodeMeshMapRef = useRef({}); // nodeId → THREE.Mesh
   const memberMeshMapRef = useRef({}); // memberId → THREE.Mesh (+ line)
+  const sectionMeshMapRef = useRef({}); // sectionId → THREE.Mesh
 
   // Visibility toggles
   const [activePreset, setActivePreset] = useState("isometric");
@@ -696,9 +773,19 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             }
           }
         } else {
-          setSelectedNodeId(null);
-          setSelectedMemberId(null);
-          setSelectedGroupId(null);
+          const sectionObjects = Object.values(sectionMeshMapRef.current || {});
+          const secIntersects = raycasterRef.current.intersectObjects(sectionObjects, false);
+          if (secIntersects.length > 0) {
+            const hit = secIntersects[0].object;
+            const secId = hit.userData?.sectionId;
+            if (secId && onSelectSection) {
+              onSelectSection(secId);
+            }
+          } else {
+            setSelectedNodeId(null);
+            setSelectedMemberId(null);
+            setSelectedGroupId(null);
+          }
         }
       }
       return;
@@ -780,7 +867,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       }
       return;
     }
-  }, [roof, structure, snapToNearest, onStructureNodesChange, onStructureMembersChange]);
+  }, [roof, structure, snapToNearest, onStructureNodesChange, onStructureMembersChange, onSelectSection]);
 
   // ─── Build / Update Main 3D Scene ─────────────────────────────────────────────
   useEffect(() => {
@@ -789,6 +876,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
     if (rootGroupRef.current) scene.remove(rootGroupRef.current);
     memberMeshMapRef.current = {};
+    sectionMeshMapRef.current = {};
 
     const rootGroup = new THREE.Group();
     rootGroup.name = "dynamic_rooftop_group";
@@ -831,7 +919,116 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       const roofMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.75, metalness: 0.12, side: THREE.DoubleSide });
       const edgeMat = new THREE.LineBasicMaterial({ color: 0x475569, linewidth: 1.5 });
 
-      if (roofType === "gable" && roofPitchDeg > 0) {
+      if (roofSections && roofSections.length > 0) {
+        // ── MULTI-SECTION ROOF MAPPING (Independent Planes) ──────────────────
+        // 1. Building Perimeter Walls down to ground
+        if (showBuilding && hasValidRoofPolygon) {
+          const wallGeom = new THREE.BufferGeometry();
+          const wallVertices = [];
+          for (let i = 0; i < roofPolygon.length; i++) {
+            const j = (i + 1) % roofPolygon.length;
+            const p1 = roofPolygon[i], p2 = roofPolygon[j];
+            const sec1 = roofSections.find((s) => isPointInsidePolygon(p1.x, p1.y, s.polygon)) || roofSections[0];
+            const sec2 = roofSections.find((s) => isPointInsidePolygon(p2.x, p2.y, s.polygon)) || roofSections[0];
+            const h1 = calculateSectionRoofElevationAtPoint(p1.x, p1.y, sec1, fullRoof);
+            const h2 = calculateSectionRoofElevationAtPoint(p2.x, p2.y, sec2, fullRoof);
+            const z1 = -p1.y, z2 = -p2.y;
+
+            wallVertices.push(
+              p1.x, 0, z1,  p2.x, 0, z2,  p2.x, h2, z2,
+              p1.x, 0, z1,  p2.x, h2, z2,  p1.x, h1, z1
+            );
+          }
+          wallGeom.setAttribute("position", new THREE.Float32BufferAttribute(wallVertices, 3));
+          wallGeom.computeVertexNormals();
+          const wallMesh = new THREE.Mesh(wallGeom, wallMat);
+          wallMesh.castShadow = true; wallMesh.receiveShadow = true;
+          rootGroup.add(wallMesh);
+        }
+
+        // 2. Individual Roof Planes per Section
+        if (showRoof) {
+          roofSections.forEach((sec) => {
+            if (!sec.polygon || sec.polygon.length < 3) return;
+
+            const isSelectedSec = selectedSectionId === sec.id;
+            const shape = new THREE.Shape();
+            sec.polygon.forEach((pt, idx) => {
+              if (idx === 0) shape.moveTo(pt.x, -pt.y);
+              else shape.lineTo(pt.x, -pt.y);
+            });
+            shape.closePath();
+
+            const secGeom = new THREE.ShapeGeometry(shape);
+            const posAttr = secGeom.getAttribute("position");
+            const uvAttr = secGeom.getAttribute("uv");
+
+            for (let i = 0; i < posAttr.count; i++) {
+              const px = posAttr.getX(i);
+              const pz = posAttr.getY(i);
+              const py = calculateSectionRoofElevationAtPoint(px, -pz, sec, fullRoof);
+              posAttr.setXYZ(i, px, py, pz);
+              if (uvAttr) {
+                // UV repeat scaled to real-world meters
+                uvAttr.setXY(i, px / 0.40, pz / 0.40);
+              }
+            }
+            secGeom.computeVertexNormals();
+
+            let secMat;
+            if (sec.roofType === "Tile") {
+              const tileTex = getTileRoofTexture(sec.tileConfig);
+              secMat = new THREE.MeshStandardMaterial({
+                map: tileTex,
+                roughness: 0.65,
+                metalness: 0.1,
+                side: THREE.DoubleSide,
+              });
+            } else if (sec.roofType === "Metal") {
+              secMat = new THREE.MeshStandardMaterial({
+                color: isSelectedSec ? 0x93c5fd : 0x64748b,
+                roughness: 0.35,
+                metalness: 0.8,
+                side: THREE.DoubleSide,
+              });
+            } else if (sec.roofType === "Shingle") {
+              secMat = new THREE.MeshStandardMaterial({
+                color: isSelectedSec ? 0x64748b : 0x334155,
+                roughness: 0.9,
+                metalness: 0.05,
+                side: THREE.DoubleSide,
+              });
+            } else {
+              // RCC Concrete
+              secMat = new THREE.MeshStandardMaterial({
+                color: isSelectedSec ? 0xcffafe : 0xe2e8f0,
+                roughness: 0.8,
+                metalness: 0.1,
+                side: THREE.DoubleSide,
+              });
+            }
+
+            const secMesh = new THREE.Mesh(secGeom, secMat);
+            secMesh.castShadow = true;
+            secMesh.receiveShadow = true;
+            secMesh.userData = {
+              isRoofSection: true,
+              sectionId: sec.id,
+              sectionName: sec.name,
+            };
+            rootGroup.add(secMesh);
+            sectionMeshMapRef.current[sec.id] = secMesh;
+
+            // Edge wireframe (Highlighted cyan if selected section)
+            const secEdgeGeom = new THREE.EdgesGeometry(secGeom);
+            const secEdgeMat = new THREE.LineBasicMaterial({
+              color: isSelectedSec ? 0x06b6d4 : 0x475569,
+              linewidth: isSelectedSec ? 3 : 1.5,
+            });
+            secMesh.add(new THREE.LineSegments(secEdgeGeom, secEdgeMat));
+          });
+        }
+      } else if (roofType === "gable" && roofPitchDeg > 0) {
         // Construct Gable Roof with central ridge and 2 sloping planes + triangular gable end walls
         const isLengthX = bounds.width >= bounds.length;
         const eaveH = Number(fullRoof.eave_height_m);
@@ -1182,20 +1379,38 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         activePanels.forEach((p) => {
           const pw = Number(p.width || 1.134);
           const pl = Number(p.height || 2.278);
-          const panelAzimuth = Number(p.azimuth ?? structAzimuth);
-          const transform = calculatePanel3DPosition({
-            panel: { ...p, azimuth: panelAzimuth },
-            roof: fullRoof,
-            structure: { type: structType, tilt_deg: panelTiltDeg, height_m: baseClearance, azimuth: panelAzimuth },
-          });
+
+          // Find the section this panel belongs to
+          const pSec = (roofSections && roofSections.length > 0)
+            ? (roofSections.find((s) => s.id === p.sectionId) || roofSections.find((s) => isPointInsidePolygon(p.x, p.y, s.polygon)) || roofSections[0])
+            : null;
+
+          const panelAzimuth = Number(p.azimuth ?? pSec?.azimuth ?? structAzimuth);
+          const panelPitch = pSec ? Number(pSec.pitch ?? 0) : panelTiltDeg;
+          const isSectionFlush = pSec ? (pSec.mountingType === "flush" || pSec.roofType === "Tile" || pSec.roofType === "Metal" || isFlush) : isFlush;
+          const effectiveTiltDeg = isSectionFlush ? panelPitch : Number(panelTiltDeg);
+
+          // Panel elevation on section
+          const sectionRoofElevation = pSec
+            ? calculateSectionRoofElevationAtPoint(p.x, p.y, pSec, fullRoof)
+            : calculateRoofElevationAtPoint(p.x, p.y, fullRoof);
+
+          const structClearance = isSectionFlush ? 0.12 : baseClearance;
+          const tiltRad = toRad(effectiveTiltDeg);
+          const verticalOffset = (pl / 2) * Math.sin(tiltRad);
+          const yawRad = toRad(panelAzimuth - 180);
+
+          const posX = Number(p.x || 0);
+          const posY = sectionRoofElevation + structClearance + verticalOffset + 0.035;
+          const posZ = -Number(p.y || 0);
 
           const panelGroup = new THREE.Group();
-          panelGroup.position.set(transform.x, transform.y, transform.z);
-          panelGroup.rotation.y = transform.yawRad + toRad(p.rotation || 0);
+          panelGroup.position.set(posX, posY, posZ);
+          panelGroup.rotation.y = yawRad + toRad(p.rotation || 0);
 
           // 1. PV Module Body with Monocrystalline PERC cell texture
           const panelMesh = new THREE.Mesh(new THREE.BoxGeometry(pw, 0.038, pl), moduleMaterials);
-          panelMesh.rotation.x = -transform.tiltRad;
+          panelMesh.rotation.x = -tiltRad;
           panelMesh.castShadow = true; panelMesh.receiveShadow = true;
           panelGroup.add(panelMesh);
 
@@ -1203,7 +1418,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const frameLipGeom = new THREE.BoxGeometry(pw + 0.016, 0.012, pl + 0.016);
           const frameLipMesh = new THREE.Mesh(frameLipGeom, frameMat);
           frameLipMesh.position.set(0, -0.016, 0);
-          frameLipMesh.rotation.x = -transform.tiltRad;
+          frameLipMesh.rotation.x = -tiltRad;
           panelGroup.add(frameLipMesh);
 
           rootGroup.add(panelGroup);
@@ -1226,17 +1441,27 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
           // ── FLUSH MOUNT: Mini Rails directly on roof surface ───────────────
           if (isFlush) {
+            const samplePanel = row.items?.[0]?.panel;
+            const rowSec = (roofSections && roofSections.length > 0)
+              ? (roofSections.find((s) => s.id === samplePanel?.sectionId) || roofSections.find((s) => isPointInsidePolygon(samplePanel?.x, samplePanel?.y, s.polygon)))
+              : null;
+            const isTileRoof = rowSec?.roofType === "Tile";
+            const rowPitchDeg = rowSec ? Number(rowSec.pitch ?? 0) : panelTiltDeg;
+            const effectiveRowTiltRad = isFlush ? toRad(rowPitchDeg) : tiltRad;
+
             const railLength = row.totalRowLength + 0.12;
             const railGeom = new THREE.BoxGeometry(railLength, 0.035, 0.045);
             [-row.pl * 0.28, row.pl * 0.28].forEach((vOff, railIdx) => {
               const railId = `member-row${row.rowIndex}-flush-rail-${railIdx}`;
               if (deletedMemberIdsRef.current.has(railId)) return;
 
-              const railZ = vOff * Math.cos(tiltRad);
+              const railZ = vOff * Math.cos(effectiveRowTiltRad);
               const wx = row.centerX - railZ * sinAz;
               const wy = row.centerY + railZ * cosAz;
-              const wRoofY = calculateRoofElevationAtPoint(wx, wy, fullRoof);
-              const finalY = wRoofY + 0.04;
+              const wRoofY = rowSec
+                ? calculateSectionRoofElevationAtPoint(wx, wy, rowSec, fullRoof)
+                : calculateRoofElevationAtPoint(wx, wy, fullRoof);
+              const finalY = wRoofY + (isTileRoof ? 0.08 : 0.04);
 
               const isSel = selectedMemberId === railId;
               const isGrpSel = selectedGroupId === groupId;
@@ -1245,7 +1470,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
               const railMesh = new THREE.Mesh(railGeom, rMat);
               railMesh.position.set(wx, finalY, -wy);
               railMesh.rotation.y = azRad;
-              railMesh.rotation.x = -tiltRad;
+              railMesh.rotation.x = -effectiveRowTiltRad;
               railMesh.userData = {
                 memberId: railId,
                 groupId,
@@ -1256,6 +1481,63 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
               railMesh.castShadow = true;
               rootGroup.add(railMesh);
               memberMeshMapRef.current[railId] = railMesh;
+
+              // IF TILE ROOF: Add Tile Roof Hooks under the rail! (Tile Roof → Roof Hook → Rail)
+              if (isTileRoof && row.items && row.items.length > 0) {
+                const hookMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.35, metalness: 0.85 });
+                row.items.forEach((it) => {
+                  const uPos = it.u - row.centerU;
+                  const hx = wx + uPos * cosAz;
+                  const hy = wy + uPos * sinAz;
+                  const hRoofY = rowSec
+                    ? calculateSectionRoofElevationAtPoint(hx, hy, rowSec, fullRoof)
+                    : calculateRoofElevationAtPoint(hx, hy, fullRoof);
+
+                  const hookGroup = new THREE.Group();
+                  hookGroup.position.set(hx, hRoofY, -hy);
+                  hookGroup.rotation.y = azRad;
+                  hookGroup.rotation.x = -effectiveRowTiltRad;
+
+                  // Hook Foot (bolted under tile)
+                  const footMesh = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.008, 0.12), hookMat);
+                  footMesh.position.set(0, 0.004, -0.04);
+                  hookGroup.add(footMesh);
+
+                  // Hook Arm (riser coming up through tile gap)
+                  const armMesh = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.075, 0.03), hookMat);
+                  armMesh.position.set(0, 0.04, 0);
+                  hookGroup.add(armMesh);
+
+                  // Hook Top (bracket clamping rail)
+                  const topMesh = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.012, 0.05), hookMat);
+                  topMesh.position.set(0, 0.075, 0);
+                  hookGroup.add(topMesh);
+
+                  rootGroup.add(hookGroup);
+                });
+              }
+
+              // Mid and End Clamps on top of flush rail
+              if (row.items && row.items.length > 0) {
+                const clampGeom = new THREE.BoxGeometry(0.035, 0.018, 0.045);
+                row.items.forEach((it, itIdx) => {
+                  const uPos = it.u - row.centerU;
+                  const isFirst = itIdx === 0;
+                  const uOffsets = [];
+                  if (isFirst) uOffsets.push(uPos - it.pw / 2 + 0.02);
+                  uOffsets.push(uPos + it.pw / 2 - 0.02);
+
+                  uOffsets.forEach((uCl) => {
+                    const cx = wx + uCl * cosAz;
+                    const cy = wy + uCl * sinAz;
+                    const clampMesh = new THREE.Mesh(clampGeom, clampMat);
+                    clampMesh.position.set(cx, finalY + 0.025, -cy);
+                    clampMesh.rotation.y = azRad;
+                    clampMesh.rotation.x = -effectiveRowTiltRad;
+                    rootGroup.add(clampMesh);
+                  });
+                });
+              }
             });
             return;
           }
@@ -1650,7 +1932,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
     scene.add(rootGroup);
   }, [
-    roofPolygon, roof, panels, activePanels, obstacles, walkways, structure,
+    roofPolygon, roof, roofSections, selectedSectionId, panels, activePanels, obstacles, walkways, structure,
     showPanels, showStructures, showPosts, showRoof, showBuilding, showObstacles,
     selectedMemberId, selectedGroupId, viewMode, deletedMemberIds,
   ]);

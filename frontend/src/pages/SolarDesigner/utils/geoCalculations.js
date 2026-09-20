@@ -220,6 +220,8 @@ export function isPointInPolygon(px, py, points) {
   return inside;
 }
 
+export const isPointInsidePolygon = isPointInPolygon;
+
 /**
  * Line segment intersection test between (p1, p2) and (p3, p4)
  */
@@ -584,4 +586,196 @@ export function clusterPanelsIntoRows(panels, azimuthDeg = 180) {
       azimuthDeg,
     };
   });
+}
+
+/**
+ * Simplifies a polygon by removing redundant collinear vertices along straight lines
+ */
+export function simplifyCollinearVertices(pts, eps = 1e-4) {
+  if (!pts || pts.length < 3) return pts || [];
+  const res = [];
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const prev = pts[(i - 1 + n) % n];
+    const curr = pts[i];
+    const next = pts[(i + 1) % n];
+    const cross = (curr.x - prev.x) * (next.y - curr.y) - (curr.y - prev.y) * (next.x - curr.x);
+    if (Math.abs(cross) > eps) {
+      res.push(curr);
+    }
+  }
+  return res.length >= 3 ? res : pts;
+}
+
+/**
+ * Splits a 2D closed polygon with a section cut line passing through it.
+ * Returns two closed polygons [poly1, poly2] sharing the exact cut edge vertices,
+ * or null if the line does not cross through the polygon.
+ */
+export function splitPolygonWithLine(polygon, lineStart, lineEnd) {
+  if (!polygon || polygon.length < 3) return null;
+  const pts = ensureCartesianCoordinates(polygon);
+  const n = pts.length;
+
+  const dx = Number(lineEnd.x) - Number(lineStart.x);
+  const dy = Number(lineEnd.y) - Number(lineStart.y);
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-4) return null;
+
+  // Extend line well beyond polygon bounds
+  const bounds = getPolygonBounds(pts);
+  const span = Math.max(bounds.width, bounds.length, 50) * 4;
+  const dirX = dx / len;
+  const dirY = dy / len;
+  const p1 = { x: Number(lineStart.x) - dirX * span, y: Number(lineStart.y) - dirY * span };
+  const p2 = { x: Number(lineEnd.x) + dirX * span, y: Number(lineEnd.y) + dirY * span };
+
+  function segIntersect(a1, a2, b1, b2) {
+    const x1 = a1.x, y1 = a1.y, x2 = a2.x, y2 = a2.y;
+    const x3 = b1.x, y3 = b1.y, x4 = b2.x, y4 = b2.y;
+    const denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
+    if (Math.abs(denom) < 1e-9) return null;
+    const ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
+    const ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
+    if (ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1) {
+      return { x: x1 + ua * (x2 - x1), y: y1 + ua * (y2 - y1), tEdge: ub };
+    }
+    return null;
+  }
+
+  const intersections = [];
+  for (let i = 0; i < n; i++) {
+    const nextIdx = (i + 1) % n;
+    const v1 = pts[i];
+    const v2 = pts[nextIdx];
+    const hit = segIntersect(p1, p2, v1, v2);
+    if (hit) {
+      let lat = undefined;
+      let lng = undefined;
+      if (v1.lat != null && v2.lat != null) {
+        lat = v1.lat + hit.tEdge * (v2.lat - v1.lat);
+        lng = v1.lng + hit.tEdge * (v2.lng - v1.lng);
+      }
+      intersections.push({
+        edgeIndex: i,
+        point: {
+          x: Math.round(hit.x * 1000) / 1000,
+          y: Math.round(hit.y * 1000) / 1000,
+          lat: lat != null ? Math.round(lat * 1e7) / 1e7 : undefined,
+          lng: lng != null ? Math.round(lng * 1e7) / 1e7 : undefined,
+        },
+      });
+    }
+  }
+
+  if (intersections.length !== 2) {
+    return null;
+  }
+
+  const [hitA, hitB] = intersections;
+  const idxA = hitA.edgeIndex;
+  const idxB = hitB.edgeIndex;
+  if (idxA === idxB) return null;
+
+  // Poly 1: hitA.point -> pts[idxA + 1 ... idxB] -> hitB.point
+  const poly1 = [hitA.point];
+  let curr = (idxA + 1) % n;
+  while (curr !== (idxB + 1) % n) {
+    poly1.push(pts[curr]);
+    curr = (curr + 1) % n;
+  }
+  poly1.push(hitB.point);
+
+  // Poly 2: hitB.point -> pts[idxB + 1 ... idxA] -> hitA.point
+  const poly2 = [hitB.point];
+  curr = (idxB + 1) % n;
+  while (curr !== (idxA + 1) % n) {
+    poly2.push(pts[curr]);
+    curr = (curr + 1) % n;
+  }
+  poly2.push(hitA.point);
+
+  const area1 = getCartesianPolygonArea(poly1);
+  const area2 = getCartesianPolygonArea(poly2);
+  if (area1 < 0.2 || area2 < 0.2) {
+    return null;
+  }
+
+  return [simplifyCollinearVertices(poly1), simplifyCollinearVertices(poly2)];
+}
+
+/**
+ * Merges two adjacent polygons sharing a common cut edge into a single unified polygon.
+ */
+export function mergeTwoAdjacentPolygons(polyA, polyB, eps = 0.08) {
+  if (!polyA || !polyB) return null;
+  const ptsA = ensureCartesianCoordinates(polyA);
+  const ptsB = ensureCartesianCoordinates(polyB);
+  const nA = ptsA.length;
+  const nB = ptsB.length;
+
+  function pointsMatch(p1, p2) {
+    return Math.hypot(p1.x - p2.x, p1.y - p2.y) < eps;
+  }
+
+  let matchA = -1;
+  let matchB = -1;
+  for (let i = 0; i < nA; i++) {
+    const nextA = (i + 1) % nA;
+    for (let j = 0; j < nB; j++) {
+      const nextB = (j + 1) % nB;
+      if (pointsMatch(ptsA[i], ptsB[nextB]) && pointsMatch(ptsA[nextA], ptsB[j])) {
+        matchA = i;
+        matchB = j;
+        break;
+      }
+    }
+    if (matchA !== -1) break;
+  }
+
+  if (matchA === -1) {
+    return null;
+  }
+
+  const merged = [];
+  let curA = (matchA + 1) % nA;
+  while (curA !== matchA) {
+    merged.push(ptsA[curA]);
+    curA = (curA + 1) % nA;
+  }
+  merged.push(ptsA[matchA]);
+
+  let curB = (matchB + 2) % nB;
+  while (curB !== (matchB + 1) % nB) {
+    merged.push(ptsB[curB]);
+    curB = (curB + 1) % nB;
+  }
+
+  return simplifyCollinearVertices(merged);
+}
+
+/**
+ * Calculates 3D elevation for an independent roof section plane at (x, y)
+ */
+export function calculateSectionRoofElevationAtPoint(x, y, section = {}, roofBase = {}) {
+  const pitch_deg = Number(section?.pitch ?? section?.pitch_deg ?? 0);
+  const azimuth_deg = Number(section?.azimuth ?? section?.azimuth_deg ?? 180);
+  const baseElevation = Number(section?.elevation ?? section?.elevation_m ?? roofBase?.elevation_m ?? 3.0);
+
+  if (pitch_deg <= 0) {
+    return baseElevation;
+  }
+
+  const polygon = section?.polygon;
+  const bounds = polygon && polygon.length >= 3 ? getPolygonBounds(polygon) : null;
+  const cx = bounds?.centerX ?? 0;
+  const cy = bounds?.centerY ?? 0;
+
+  const relX = x - cx;
+  const relY = y - cy;
+  const pitchRad = toRad(pitch_deg);
+  const azRad = toRad(azimuth_deg);
+  const projDist = relX * Math.sin(azRad) + relY * Math.cos(azRad);
+
+  return Math.max(0.5, baseElevation + projDist * Math.tan(pitchRad));
 }

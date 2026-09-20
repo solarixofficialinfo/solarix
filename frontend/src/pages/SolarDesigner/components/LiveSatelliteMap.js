@@ -11,7 +11,7 @@ import {
   MousePointer, PenTool, Ruler, Trash2, RotateCw, Copy, Plus,
   AlertTriangle, Navigation, CheckCircle2, Undo2, Redo2, MapPin, Check, Info, PlusCircle,
   Edit3, CheckSquare, X, Search, RefreshCw, Maximize2, Minimize2, Layers as LayersIcon,
-  Target
+  Target, Scissors
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -112,6 +112,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     setIsFullscreen,
     roofPolygon = [],
     setRoofPolygon,
+    roofSections = [],
+    selectedSectionId = null,
+    onSelectSection,
+    onSplitSection,
+    onMergeSections,
     panels = [],
     setPanels,
     obstacles = [],
@@ -378,9 +383,30 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const handleMapClickForAddPanelRef = useRef(null);
   const handleMapClickRoofRef = useRef(null);
 
+  // Section splitting and merging states
+  const [sectionLineStart, setSectionLineStart] = useState(null);
+  const sectionLineStartRef = useRef(null);
+  useEffect(() => { sectionLineStartRef.current = sectionLineStart; }, [sectionLineStart]);
+  const sectionCutPreviewLayerRef = useRef(null);
+  const pendingMergeSectionIdRef = useRef(null);
+
   useEffect(() => {
     activeToolRef.current = activeTool;
     window.__activeSolarTool = activeTool;
+  }, [activeTool]);
+
+  useEffect(() => {
+    if (activeTool !== "add_section_line") {
+      if (sectionCutPreviewLayerRef.current) {
+        sectionCutPreviewLayerRef.current.remove();
+        sectionCutPreviewLayerRef.current = null;
+      }
+      setSectionLineStart(null);
+      sectionLineStartRef.current = null;
+    }
+    if (activeTool !== "merge_section") {
+      pendingMergeSectionIdRef.current = null;
+    }
   }, [activeTool]);
 
   useEffect(() => {
@@ -915,6 +941,25 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
               rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
             }
           }
+          if ((activeToolRef.current ?? window.__activeSolarTool) === "add_section_line" && sectionLineStartRef.current && mapInstanceRef.current) {
+            const start = sectionLineStartRef.current;
+            const end = e.latlng;
+            if (sectionCutPreviewLayerRef.current) {
+              sectionCutPreviewLayerRef.current.setLatLngs([
+                [start.lat, start.lng],
+                [end.lat, end.lng]
+              ]);
+            } else {
+              sectionCutPreviewLayerRef.current = L.polyline([
+                [start.lat, start.lng],
+                [end.lat, end.lng]
+              ], {
+                color: "#f59e0b",
+                weight: 3,
+                dashArray: "6, 6"
+              }).addTo(mapInstanceRef.current);
+            }
+          }
         }
       });
 
@@ -1059,6 +1104,29 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         const tool = activeToolRef.current ?? window.__activeSolarTool;
         if (tool === "draw_roof") {
           (handleMapClickRoofRef.current ?? window.__handleSolarMapClickRoof)?.(lat, lng);
+        } else if (tool === "add_section_line") {
+          const { x, y } = latLngToCartesian(lat, lng);
+          const clickPt = { x, y, lat, lng };
+
+          if (!sectionLineStartRef.current) {
+            sectionLineStartRef.current = clickPt;
+            setSectionLineStart(clickPt);
+            toast.info("Point 1 set. Click across opposite roof edge to complete section cut.");
+          } else {
+            const startPt = sectionLineStartRef.current;
+            sectionLineStartRef.current = null;
+            setSectionLineStart(null);
+            if (sectionCutPreviewLayerRef.current) {
+              sectionCutPreviewLayerRef.current.remove();
+              sectionCutPreviewLayerRef.current = null;
+            }
+            if (Math.hypot(startPt.x - clickPt.x, startPt.y - clickPt.y) < 0.5) {
+              toast.warning("Cut line is too short. Click two distinct points across the roof.");
+              return;
+            }
+            onSplitSection?.(startPt, clickPt);
+            setActiveTool?.("select");
+          }
         } else if (tool === "add_panel") {
           (handleMapClickForAddPanelRef.current ?? window.__handleSolarMapClickAddPanel)?.(lat, lng);
         } else if (tool === "calibrate") {
@@ -1479,27 +1547,104 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       });
     }
 
-    // 2. Committed Roof Polygon
-    if (layers.roofBoundary && roofPolygon && roofPolygon.length >= 3) {
-      const validPoly = roofPolygon.filter((p) => isValidLatLng(p.lat ?? 0, p.lng ?? 0) || isValidCartesian(p));
+    // 2. Committed Roof Sections / Roof Polygon
+    if (layers.roofBoundary) {
+      if (roofSections && roofSections.length > 0) {
+        const sectionPalettes = [
+          { stroke: "#3b82f6", fill: "#60a5fa", bg: "bg-blue-900/90 text-blue-200 border-blue-400" },
+          { stroke: "#f59e0b", fill: "#fbbf24", bg: "bg-amber-900/90 text-amber-200 border-amber-400" },
+          { stroke: "#a855f7", fill: "#c084fc", bg: "bg-purple-900/90 text-purple-200 border-purple-400" },
+          { stroke: "#10b981", fill: "#34d399", bg: "bg-emerald-900/90 text-emerald-200 border-emerald-400" },
+          { stroke: "#ec4899", fill: "#f472b6", bg: "bg-pink-900/90 text-pink-200 border-pink-400" },
+          { stroke: "#06b6d4", fill: "#22d3ee", bg: "bg-cyan-900/90 text-cyan-200 border-cyan-400" },
+        ];
 
-      const polyLatLngs = validPoly.map((p) => {
-        if (isValidLatLng(p.lat, p.lng)) return [p.lat, p.lng];
-        return cartesianToLatLng(p.x, p.y);
-      });
+        roofSections.forEach((sec, sIdx) => {
+          const poly = sec.polygon;
+          if (!poly || poly.length < 3) return;
+          const validSecPoly = poly.filter((p) => isValidLatLng(p.lat ?? 0, p.lng ?? 0) || isValidCartesian(p));
+          const polyLatLngs = validSecPoly.map((p) => {
+            if (isValidLatLng(p.lat, p.lng)) return [p.lat, p.lng];
+            return cartesianToLatLng(p.x, p.y);
+          });
 
-      const polyLayer = L.polygon(polyLatLngs, {
-        color: editingRoof ? "#f59e0b" : "#ef4444",
-        weight: editingRoof ? 2.5 : 3,
-        fillColor: editingRoof ? "#fbbf24" : "#ef4444",
-        fillOpacity: editingRoof ? 0.18 : 0.22,
-        dashArray: editingRoof ? "4, 4" : undefined,
-      }).addTo(roofGroup);
+          const isSelected = selectedSectionId === sec.id;
+          const pal = sectionPalettes[sIdx % sectionPalettes.length];
 
-      polyLayer.on("click", (e) => {
-        if (editingRoof) {
-          L.DomEvent.stopPropagation(e);
-          const clickLL = e.latlng;
+          const secLayer = L.polygon(polyLatLngs, {
+            color: isSelected ? "#38bdf8" : pal.stroke,
+            weight: isSelected ? 3.5 : 2.5,
+            fillColor: pal.fill,
+            fillOpacity: isSelected ? 0.28 : 0.16,
+            dashArray: isSelected ? undefined : "4, 3",
+          }).addTo(roofGroup);
+
+          secLayer.on("click", (e) => {
+            L.DomEvent.stopPropagation(e);
+            const tool = activeToolRef.current ?? window.__activeSolarTool;
+            if (tool === "add_section_line") {
+              return;
+            }
+            if (tool === "merge_section") {
+              if (pendingMergeSectionIdRef.current && pendingMergeSectionIdRef.current !== sec.id) {
+                onMergeSections?.(pendingMergeSectionIdRef.current, sec.id);
+                pendingMergeSectionIdRef.current = null;
+                setActiveTool?.("select");
+              } else {
+                pendingMergeSectionIdRef.current = sec.id;
+                toast.info(`Selected ${sec.name}. Now click adjacent section to merge.`);
+              }
+              return;
+            }
+            onSelectSection?.(sec.id);
+          });
+
+          // Centroid badge label
+          const secBounds = getPolygonBounds(sec.polygon);
+          const centerLL = cartesianToLatLng(secBounds.centerX, secBounds.centerY);
+          const secPanelsCount = (panels || []).filter((p) => p.sectionId === sec.id && !p.hidden).length;
+
+          const labelHtml = `
+            <div class="px-2 py-0.5 rounded-md border text-[10px] font-bold shadow-md cursor-pointer whitespace-nowrap flex items-center gap-1 ${pal.bg} ${isSelected ? 'ring-2 ring-white scale-105' : 'opacity-95'}">
+              <span>${sec.name || `Sec ${sIdx + 1}`}</span>
+              <span class="opacity-75 font-mono">(${sec.pitch ?? 0}°)</span>
+              ${sec.solarEnabled === false ? '<span class="text-rose-300 font-semibold">• OFF</span>' : (secPanelsCount > 0 ? `<span class="text-amber-300 font-mono">• ${secPanelsCount}p</span>` : '')}
+            </div>
+          `;
+
+          const labelIcon = L.divIcon({
+            html: labelHtml,
+            className: "section-centroid-label",
+            iconSize: [80, 20],
+            iconAnchor: [40, 10],
+          });
+
+          const labelMarker = L.marker(centerLL, { icon: labelIcon, interactive: true }).addTo(roofGroup);
+          labelMarker.on("click", (e) => {
+            L.DomEvent.stopPropagation(e);
+            onSelectSection?.(sec.id);
+          });
+        });
+      } else if (roofPolygon && roofPolygon.length >= 3) {
+        const validPoly = roofPolygon.filter((p) => isValidLatLng(p.lat ?? 0, p.lng ?? 0) || isValidCartesian(p));
+
+        const polyLatLngs = validPoly.map((p) => {
+          if (isValidLatLng(p.lat, p.lng)) return [p.lat, p.lng];
+          return cartesianToLatLng(p.x, p.y);
+        });
+
+        const polyLayer = L.polygon(polyLatLngs, {
+          color: editingRoof ? "#f59e0b" : "#ef4444",
+          weight: editingRoof ? 2.5 : 3,
+          fillColor: editingRoof ? "#fbbf24" : "#ef4444",
+          fillOpacity: editingRoof ? 0.18 : 0.22,
+          dashArray: editingRoof ? "4, 4" : undefined,
+        }).addTo(roofGroup);
+
+        polyLayer.on("click", (e) => {
+          if (editingRoof) {
+            L.DomEvent.stopPropagation(e);
+            const clickLL = e.latlng;
           const { x, y } = latLngToCartesian(clickLL.lat, clickLL.lng);
           const poly = roofPolygonRef.current;
           if (!poly || poly.length < 2) return;
@@ -1674,8 +1819,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         } catch (e) {}
       }
     }
+  }
 
-    // 3. Obstacles
+  // 3. Obstacles
     if (layers.obstacles && Array.isArray(obstacles) && obstacles.length > 0) {
       obstacles.forEach((obs) => {
         if (!isValidCartesian(obs)) return;
@@ -1826,7 +1972,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       });
     }
   }, [
-    roofPolygon, panels, obstacles, walkways, setbackMeters,
+    roofPolygon, roofSections, selectedSectionId, onSelectSection, onMergeSections, panels, obstacles, walkways, setbackMeters,
     activeDrawPoints, layers, activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode, hoveredRowIndex, editingRoof,
     cartesianToLatLng, latLngToCartesian, handleVertexDrag, handleDeleteVertex,
     handleInsertVertexOnEdge, pushVertexHistory, changeSelectedPanelId, changeSelectedRowIndex, setPanels, setHasManualAdjustments,
@@ -2560,6 +2706,39 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
               <button
                 onClick={() => {
+                  const nextTool = activeTool === "add_section_line" ? "select" : "add_section_line";
+                  setActiveTool(nextTool);
+                  setSectionLineStart(null);
+                  setActiveDrawPoints([]);
+                }}
+                disabled={!hasRoof}
+                className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-40 ${
+                  activeTool === "add_section_line" ? "bg-amber-600 text-white shadow-sm ring-1 ring-amber-300" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                }`}
+                title="Add Section Line (Draw line across roof to split into sections)"
+              >
+                <Scissors className="w-3.5 h-3.5" />
+                <span>Add Section Line</span>
+              </button>
+
+              {roofSections && roofSections.length > 1 && (
+                <button
+                  onClick={() => {
+                    setActiveTool(activeTool === "merge_section" ? "select" : "merge_section");
+                    pendingMergeSectionIdRef.current = null;
+                  }}
+                  className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                    activeTool === "merge_section" ? "bg-purple-600 text-white shadow-sm ring-1 ring-purple-300" : "text-slate-300 hover:text-white hover:bg-slate-800"
+                  }`}
+                  title="Merge adjacent roof sections"
+                >
+                  <LayersIcon className="w-3.5 h-3.5" />
+                  <span>Merge Section</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => {
                   if (onAddPanel) {
                     onAddPanel();
                   } else {
@@ -2739,6 +2918,38 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-blue-950/95 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-blue-600 shadow-xl text-xs text-blue-200 pointer-events-auto flex items-center gap-2">
           <PlusCircle className="w-3.5 h-3.5 text-blue-400 animate-bounce shrink-0" />
           <span>Click anywhere on the open roof space to place a solar panel</span>
+        </div>
+      )}
+
+      {/* Add Section Line Floating Guidance */}
+      {activeTool === "add_section_line" && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-amber-950/95 backdrop-blur-md px-4 py-2 rounded-xl border border-amber-500 shadow-xl text-xs text-amber-200 pointer-events-auto flex items-center gap-2 animate-in fade-in">
+          <Scissors className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
+          <span>
+            {!sectionLineStart
+              ? "Click 1st point on or across the roof edge to start the split line."
+              : "Click 2nd point on the opposite roof edge to split into sections."}
+          </span>
+          <button
+            onClick={() => { setActiveTool("select"); setSectionLineStart(null); }}
+            className="ml-2 px-2 py-0.5 rounded bg-amber-900/90 hover:bg-amber-800 text-[10px] text-white font-bold"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Merge Section Floating Guidance */}
+      {activeTool === "merge_section" && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-purple-950/95 backdrop-blur-md px-4 py-2 rounded-xl border border-purple-500 shadow-xl text-xs text-purple-200 pointer-events-auto flex items-center gap-2 animate-in fade-in">
+          <LayersIcon className="w-4 h-4 text-purple-400 shrink-0" />
+          <span>Click a section, then click an adjacent section to merge them together.</span>
+          <button
+            onClick={() => setActiveTool("select")}
+            className="ml-2 px-2 py-0.5 rounded bg-purple-900/90 hover:bg-purple-800 text-[10px] text-white font-bold"
+          >
+            Cancel
+          </button>
         </div>
       )}
 
