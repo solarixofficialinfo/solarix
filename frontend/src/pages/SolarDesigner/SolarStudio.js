@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import {
   Sun, MapPin, PenTool, Box, Sparkles, Layers, ArrowLeft, ArrowRight,
   Save, FileDown, Plus, Trash2, RotateCw, RefreshCw, Check, CheckCircle2,
@@ -214,6 +215,8 @@ export default function SolarStudio() {
     setback_m: 0.5,
     edge_clearance_m: 0.5,
     walkway_m: 0.75, // India CEA standard: 75cm (750mm) clear rooftop access pathway
+    walkway_enabled: true,
+    walkway_frequency: "every_10",
     walkways: [],
     usable_area_sqm: 0,
     coverage_pct: 0,
@@ -416,8 +419,8 @@ export default function SolarStudio() {
     });
   }, [designData.roof?.setback_m, designData.setback_m]);
 
-  // Trigger Automatic Panel Layout
-  const handleAutoLayout = useCallback((customStrategy = "auto", customPolygon = null) => {
+  // Trigger Automatic Panel Layout with live recalculation support
+  const handleAutoLayout = useCallback((customStrategy = "auto", customPolygon = null, customOverrides = {}) => {
     const polygon = customPolygon || designData.roof_polygon;
     if (!polygon || polygon.length < 3) {
       toast.warning("Please draw a roof boundary on the map first.");
@@ -426,11 +429,19 @@ export default function SolarStudio() {
       return;
     }
 
+    const setback = Number(customOverrides.setback_m ?? designData.roof?.setback_m ?? designData.setback_m ?? 0.5);
+    const rowGap = Number(customOverrides.row_spacing_m ?? designData.row_spacing_m ?? 0.03);
+    const panelGap = Number(customOverrides.panel_spacing_m ?? designData.panel_spacing_m ?? 0.03);
+    const orientation = customOverrides.orientation ?? designData.orientation ?? "portrait";
+    const walkwayWidth = Number(customOverrides.walkway_m ?? designData.walkway_m ?? 0.75);
+    const walkwayEnabled = customOverrides.walkway_enabled ?? designData.walkway_enabled ?? true;
+    const walkwayFreq = customOverrides.walkway_frequency ?? designData.walkway_frequency ?? "every_10";
+
     const result = generateAutoPanelLayout({
       roofPolygon: polygon,
-      setbackMeters: Number(designData.roof?.setback_m || designData.setback_m || 0.5),
+      setbackMeters: setback,
       obstacles: designData.obstacles || [],
-      walkways: designData.walkways || [],
+      walkways: (designData.walkways || []).filter((w) => w.type !== "corridor"),
       panelSpecs: {
         make: designData.panel_make,
         model: designData.panel_model,
@@ -438,9 +449,12 @@ export default function SolarStudio() {
         length_m: designData.panel_dimensions?.length_m || 2.278,
         width_m: designData.panel_dimensions?.width_m || 1.134,
       },
-      orientation: designData.orientation || "portrait",
-      rowSpacingMeters: Number(designData.row_spacing_m || designData.panel_spacing_m || 0.03),
-      panelSpacingMeters: Number(designData.panel_spacing_m || 0.03),
+      orientation,
+      rowSpacingMeters: rowGap,
+      panelSpacingMeters: panelGap,
+      walkwayEnabled,
+      walkwayWidth,
+      walkwayFrequency: walkwayFreq,
       azimuthDegrees: Number(designData.azimuth_angle || 180),
       strategy: customStrategy,
     });
@@ -452,10 +466,57 @@ export default function SolarStudio() {
       system_kw: result.totalKw,
       usable_area_sqm: result.usableAreaSqm,
       coverage_pct: result.coveragePct,
+      walkways: [
+        ...(prev.walkways || []).filter((w) => w.type !== "corridor"),
+        ...(result.generatedWalkways || []),
+      ],
+      ...customOverrides,
     }));
 
     toast.success(`Generated layout: ${result.panelCount} panels (${result.totalKw.toFixed(2)} kWp)`);
   }, [designData]);
+
+  // Live Layout Parameter Adjustment Handler
+  const handleLayoutParamChange = useCallback((field, value) => {
+    setDesignData((prev) => {
+      const updated = { ...prev, [field]: value };
+      if (field === "setback_m") {
+        updated.roof = { ...prev.roof, setback_m: value };
+      }
+      return updated;
+    });
+
+    if (designData.roof_polygon && designData.roof_polygon.length >= 3) {
+      handleAutoLayout("auto", null, { [field]: value });
+    }
+  }, [designData.roof_polygon, handleAutoLayout]);
+
+  // Reset to Solarix Canonical Defaults
+  const handleResetLayoutDefaults = useCallback(() => {
+    const canonicalDefaults = {
+      panel_spacing_m: 0.03,
+      row_spacing_m: 0.03,
+      setback_m: 0.5,
+      walkway_m: 0.75,
+      walkway_enabled: true,
+      walkway_frequency: "every_10",
+      orientation: "portrait",
+    };
+
+    setDesignData((prev) => ({
+      ...prev,
+      ...canonicalDefaults,
+      roof: {
+        ...prev.roof,
+        setback_m: 0.5,
+      },
+    }));
+
+    if (designData.roof_polygon && designData.roof_polygon.length >= 3) {
+      handleAutoLayout("auto", null, canonicalDefaults);
+    }
+    toast.success("Restored layout defaults (0.03m gaps, 0.5m setback, 750mm walkway)");
+  }, [designData.roof_polygon, handleAutoLayout]);
 
   // Update Custom Polygon Coordinates in Manual Mode
   const handleUpdateCustomPoint = (idx, axis, val) => {
@@ -1813,34 +1874,167 @@ export default function SolarStudio() {
                     <Sparkles className="w-3.5 h-3.5" /> Auto Layout Panels
                   </Button>
 
-                  <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-[10px] font-semibold text-slate-400">Panel Gap (m)</Label>
-                      <span className="text-[10px] font-mono text-amber-300 font-bold">{Number(designData.panel_spacing_m || 0.03).toFixed(2)} m</span>
+                  {/* Spacing & Setback Controls */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[10px] font-semibold text-slate-400">Panel Gap</Label>
+                        <span className="text-[9.5px] font-mono text-amber-300 font-bold">{Number(designData.panel_spacing_m ?? 0.03).toFixed(2)}m</span>
+                      </div>
+                      <Input
+                        id="layout-panel-gap-input"
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        max="1.0"
+                        value={designData.panel_spacing_m ?? 0.03}
+                        onChange={(e) => {
+                          const gap = Math.max(0.01, parseFloat(e.target.value) || 0.03);
+                          handleLayoutParamChange("panel_spacing_m", gap);
+                        }}
+                        className="h-7 text-xs font-bold bg-slate-800 border-slate-700 text-white"
+                        placeholder="0.03"
+                      />
                     </div>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      max="0.5"
-                      value={designData.panel_spacing_m ?? 0.03}
-                      onChange={(e) => {
-                        const gap = Math.max(0.01, parseFloat(e.target.value) || 0.03);
-                        updateDesignData({ panel_spacing_m: gap, row_spacing_m: gap });
-                      }}
-                      className="h-7 text-xs font-bold bg-slate-800 border-slate-700 text-white"
-                      placeholder="0.03"
-                    />
+
+                    <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[10px] font-semibold text-slate-400">Row Gap</Label>
+                        <span className="text-[9.5px] font-mono text-amber-300 font-bold">{Number(designData.row_spacing_m ?? 0.03).toFixed(2)}m</span>
+                      </div>
+                      <Input
+                        id="layout-row-gap-input"
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        max="2.0"
+                        value={designData.row_spacing_m ?? 0.03}
+                        onChange={(e) => {
+                          const gap = Math.max(0.01, parseFloat(e.target.value) || 0.03);
+                          handleLayoutParamChange("row_spacing_m", gap);
+                        }}
+                        className="h-7 text-xs font-bold bg-slate-800 border-slate-700 text-white"
+                        placeholder="0.03"
+                      />
+                    </div>
                   </div>
 
+                  {/* Setback & Orientation */}
                   <div className="grid grid-cols-2 gap-1.5">
+                    <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[10px] font-semibold text-slate-400">Edge Setback</Label>
+                        <span className="text-[9.5px] font-mono text-cyan-300 font-bold">{Number(designData.roof?.setback_m ?? designData.setback_m ?? 0.5).toFixed(2)}m</span>
+                      </div>
+                      <Input
+                        id="layout-setback-input"
+                        type="number"
+                        step="0.05"
+                        min="0.0"
+                        max="3.0"
+                        value={designData.roof?.setback_m ?? designData.setback_m ?? 0.5}
+                        onChange={(e) => {
+                          const sb = Math.max(0, parseFloat(e.target.value) || 0);
+                          handleLayoutParamChange("setback_m", sb);
+                        }}
+                        className="h-7 text-xs font-bold bg-slate-800 border-slate-700 text-white"
+                        placeholder="0.5"
+                      />
+                    </div>
+
+                    <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 space-y-1">
+                      <Label className="text-[10px] font-semibold text-slate-400">Orientation</Label>
+                      <Select
+                        value={designData.orientation || "portrait"}
+                        onValueChange={(val) => handleLayoutParamChange("orientation", val)}
+                      >
+                        <SelectTrigger className="h-7 text-xs bg-slate-800 border-slate-700 text-white">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                          <SelectItem value="portrait">Portrait</SelectItem>
+                          <SelectItem value="landscape">Landscape</SelectItem>
+                          <SelectItem value="auto">Auto-Fit</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  {/* Walkway Corridor Configuration (CEA 750mm Standard) */}
+                  <div className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-[10px] font-bold text-slate-200">Walkway Corridor</div>
+                        <div className="text-[9px] text-slate-400">CEA 750mm Rooftop Safety Keepout</div>
+                      </div>
+                      <Switch
+                        id="layout-walkway-switch"
+                        checked={Boolean(designData.walkway_enabled ?? true)}
+                        onCheckedChange={(checked) => handleLayoutParamChange("walkway_enabled", checked)}
+                      />
+                    </div>
+
+                    {Boolean(designData.walkway_enabled ?? true) && (
+                      <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-800/80">
+                        <div>
+                          <Label className="text-[9.5px] font-semibold text-slate-400">Width (m)</Label>
+                          <Input
+                            id="layout-walkway-width-input"
+                            type="number"
+                            step="0.05"
+                            min="0.3"
+                            max="2.5"
+                            value={designData.walkway_m ?? 0.75}
+                            onChange={(e) => {
+                              const w = Math.max(0.3, parseFloat(e.target.value) || 0.75);
+                              handleLayoutParamChange("walkway_m", w);
+                            }}
+                            className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                          />
+                        </div>
+
+                        <div>
+                          <Label className="text-[9.5px] font-semibold text-slate-400">Frequency</Label>
+                          <Select
+                            value={designData.walkway_frequency || "every_10"}
+                            onValueChange={(val) => handleLayoutParamChange("walkway_frequency", val)}
+                          >
+                            <SelectTrigger id="layout-walkway-freq-select" className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                              <SelectItem value="none">None</SelectItem>
+                              <SelectItem value="every_5">Every 5 rows</SelectItem>
+                              <SelectItem value="every_10">Every 10 rows</SelectItem>
+                              <SelectItem value="every_15">Every 15 rows</SelectItem>
+                              <SelectItem value="every_20">Every 20 rows</SelectItem>
+                              <SelectItem value="custom">Custom (8 rows)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action Buttons: Add Panel, Reset to Default, Clear */}
+                  <div className="grid grid-cols-3 gap-1.5">
                     <Button
                       size="sm"
                       onClick={handleIncreasePanelCount}
-                      className="h-7 text-xs font-semibold rounded-lg bg-amber-950/60 border border-amber-700/60 text-amber-300 hover:bg-amber-900 shadow-sm"
-                      title="Add panel in nearest valid roof position preserving row continuation"
+                      className="h-7 text-[11px] font-semibold rounded-lg bg-amber-950/60 border border-amber-700/60 text-amber-300 hover:bg-amber-900 shadow-sm"
+                      title="Add panel in nearest valid roof position"
                     >
-                      <PlusCircle className="w-3 h-3 mr-1" /> + Add Panel
+                      <PlusCircle className="w-3 h-3 mr-1" /> + Panel
+                    </Button>
+                    <Button
+                      id="layout-reset-defaults-btn"
+                      size="sm"
+                      variant="outline"
+                      onClick={handleResetLayoutDefaults}
+                      className="h-7 text-[11px] font-semibold text-blue-300 hover:text-white border-blue-800/80 bg-blue-950/50 hover:bg-blue-900/70 rounded-lg"
+                      title="Restore canonical Solarix defaults (0.03m gaps, 0.5m setback, 750mm walkway)"
+                    >
+                      <RefreshCw className="w-3 h-3 mr-1" /> Defaults
                     </Button>
                     <Button
                       size="sm"
@@ -1849,9 +2043,9 @@ export default function SolarStudio() {
                         setDesignData((prev) => ({ ...prev, panels: [], panel_count: 0, system_kw: 0, coverage_pct: 0 }));
                         toast.success("Panel layout cleared");
                       }}
-                      className="h-7 text-xs text-slate-300 hover:text-red-400 border-slate-700 bg-slate-800 hover:bg-slate-700 rounded-lg"
+                      className="h-7 text-[11px] text-slate-300 hover:text-red-400 border-slate-700 bg-slate-800 hover:bg-slate-700 rounded-lg"
                     >
-                      <Undo2 className="w-3 h-3 mr-1" /> Reset
+                      <Undo2 className="w-3 h-3 mr-1" /> Clear
                     </Button>
                   </div>
 

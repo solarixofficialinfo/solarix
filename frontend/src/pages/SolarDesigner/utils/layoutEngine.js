@@ -49,6 +49,19 @@ export const OBSTACLE_TYPES = [
 ];
 
 /**
+ * Parses walkway frequency string or number into a row interval number (0 = none)
+ */
+export function parseWalkwayFrequency(val) {
+  if (!val || val === "none" || val === "None" || val === 0) return 0;
+  if (val === "every_5") return 5;
+  if (val === "every_10") return 10;
+  if (val === "every_15") return 15;
+  if (val === "every_20") return 20;
+  const num = parseInt(val, 10);
+  return isNaN(num) || num <= 0 ? 0 : num;
+}
+
+/**
  * Packs panels on a predictable, geometry-based grid within usable roof polygon
  */
 function packPanelsOnGrid({
@@ -58,39 +71,82 @@ function packPanelsOnGrid({
   pWidth,
   pLength,
   panelGap = 0.03,
+  rowGap = 0.03,
+  walkwayEnabled = false,
+  walkwayWidth = 0.75,
+  walkwayFrequency = "none",
   azimuthDegrees = 180,
   wattage = 550,
 }) {
   const bounds = getPolygonBounds(usablePolygon);
   const panels = [];
+  const generatedWalkways = [];
   let panelIdCounter = 1;
 
   const stepX = pWidth + panelGap;
-  const stepY = pLength + panelGap;
 
   // Calculate actual remaining horizontal and vertical distances
   const availableWidth = bounds.width;
   const availableLength = bounds.length;
 
   if (availableWidth < pWidth || availableLength < pLength) {
-    return [];
+    return { panels: [], generatedWalkways: [] };
   }
 
-  // Maximum complete columns and rows that can physically fit
+  // Maximum complete columns that can physically fit horizontally
   const maxCols = Math.max(1, Math.floor((availableWidth + panelGap + 1e-6) / stepX));
-  const maxRows = Math.max(1, Math.floor((availableLength + panelGap + 1e-6) / stepY));
-
-  // Center the grid symmetrically within the usable bounding box
   const totalOccupiedX = maxCols * pWidth + (maxCols - 1) * panelGap;
-  const totalOccupiedY = maxRows * pLength + (maxRows - 1) * panelGap;
   const marginX = Math.max(0, (availableWidth - totalOccupiedX) / 2);
-  const marginY = Math.max(0, (availableLength - totalOccupiedY) / 2);
-
   const startX = bounds.minX + marginX + pWidth / 2;
+
+  // Maximum complete rows that can physically fit vertically with rowGap and walkway corridors
+  const freq = walkwayEnabled ? parseWalkwayFrequency(walkwayFrequency) : 0;
+  const wWidth = walkwayEnabled ? Math.max(0.3, Number(walkwayWidth || 0.75)) : 0;
+
+  let maxRows = 0;
+  let totalOccupiedY = 0;
+  while (true) {
+    const nextN = maxRows + 1;
+    const walkwaysCount = (freq > 0 && nextN > 1) ? Math.floor((nextN - 1) / freq) : 0;
+    const requiredLength = nextN * pLength + (nextN - 1) * rowGap + walkwaysCount * wWidth;
+    if (requiredLength <= availableLength + 1e-4) {
+      maxRows = nextN;
+      totalOccupiedY = requiredLength;
+    } else {
+      break;
+    }
+  }
+
+  if (maxRows === 0 && availableLength >= pLength) {
+    maxRows = 1;
+    totalOccupiedY = pLength;
+  }
+
+  const marginY = Math.max(0, (availableLength - totalOccupiedY) / 2);
   const startY = bounds.minY + marginY + pLength / 2;
 
+  let lastWalkwayRow = -1;
+
   for (let r = 0; r < maxRows; r++) {
-    const cy = startY + r * stepY;
+    const walkwaysBefore = (freq > 0) ? Math.floor(r / freq) : 0;
+    const cy = startY + r * (pLength + rowGap) + walkwaysBefore * wWidth;
+
+    // Generate explicit walkway corridor geometry between row blocks
+    if (freq > 0 && r > 0 && r % freq === 0 && lastWalkwayRow !== r) {
+      lastWalkwayRow = r;
+      const prevCy = startY + (r - 1) * (pLength + rowGap) + (walkwaysBefore - 1) * wWidth;
+      const corridorY = (prevCy + pLength / 2 + cy - pLength / 2) / 2;
+      generatedWalkways.push({
+        id: `walkway-corridor-row-${r}`,
+        x: (bounds.minX + bounds.maxX) / 2,
+        y: Math.round(corridorY * 1000) / 1000,
+        width: Math.round(bounds.width * 1000) / 1000,
+        length: wWidth,
+        rotation: 0,
+        type: "corridor",
+      });
+    }
+
     // Row boundary verification: entire footprint must fit vertically
     if (cy - pLength / 2 < bounds.minY - 1e-4 || cy + pLength / 2 > bounds.maxY + 1e-4) {
       continue;
@@ -172,7 +228,7 @@ function packPanelsOnGrid({
     }
   }
 
-  return panels;
+  return { panels, generatedWalkways };
 }
 
 /**
@@ -180,19 +236,28 @@ function packPanelsOnGrid({
  */
 export function generateAutoPanelLayout({
   roofPolygon,
-  setbackMeters = 0.5,
+  setbackMeters,
+  setbackM,
   obstacles = [],
   walkways = [],
-  panelSpecs = DEFAULT_PANEL_SPECS,
+  panelSpecs,
+  moduleSpec,
   orientation = "portrait",
-  rowSpacingMeters = 0.03,
-  panelSpacingMeters = 0.03,
+  rowSpacingMeters,
+  rowGapM,
+  panelSpacingMeters,
+  spacingM,
+  panelGapM,
+  walkwayEnabled = false,
+  walkwayWidth = 0.75,
+  walkwayFrequency = "none",
   azimuthDegrees = 180,
   strategy = "auto",
 }) {
   if (!roofPolygon || roofPolygon.length < 3) {
     return {
       panels: [],
+      generatedWalkways: [],
       usableAreaSqm: 0,
       panelCount: 0,
       totalKw: 0,
@@ -202,12 +267,25 @@ export function generateAutoPanelLayout({
     };
   }
 
+  const effSetback = Number(setbackMeters ?? setbackM ?? 0.5);
+  const effRowSpacing = Number(rowSpacingMeters ?? rowGapM ?? 0.03);
+  const effPanelSpacing = Number(panelSpacingMeters ?? spacingM ?? panelGapM ?? 0.03);
+  const effSpecs = panelSpecs || moduleSpec || DEFAULT_PANEL_SPECS;
+
+  const effWalkwayObj = Array.isArray(walkways)
+    ? walkways.find((w) => w && (w.frequency !== undefined || w.enabled !== undefined))
+    : null;
+  const effWalkwayEnabled = walkwayEnabled || Boolean(effWalkwayObj?.enabled);
+  const effWalkwayWidth = Number(effWalkwayObj?.width ?? walkwayWidth ?? 0.75);
+  const effWalkwayFreq = effWalkwayObj?.frequency ?? walkwayFrequency ?? "none";
+
   // 1. Compute usable boundary with setback
-  const usablePolygon = computeSetbackPolygon(roofPolygon, setbackMeters);
+  const usablePolygon = computeSetbackPolygon(roofPolygon, effSetback);
   const usableAreaSqm = Math.round(getCartesianPolygonArea(usablePolygon) * 10) / 10;
   if (usableAreaSqm <= 0.5) {
     return {
       panels: [],
+      generatedWalkways: [],
       usableAreaSqm: 0,
       panelCount: 0,
       totalKw: 0,
@@ -217,12 +295,13 @@ export function generateAutoPanelLayout({
     };
   }
 
-  const wattage = Number(panelSpecs.wattage || 550);
-  const stdLength = Number(panelSpecs.length_m || 2.278);
-  const stdWidth = Number(panelSpecs.width_m || 1.134);
+  const wattage = Number(effSpecs.wattage || effSpecs.power_w || 550);
+  const stdLength = Number(effSpecs.length_m || effSpecs.height || 2.278);
+  const stdWidth = Number(effSpecs.width_m || effSpecs.width || 1.134);
 
-  // Single unified panel gap in meters
-  const panelGap = Math.max(0.01, Number(panelSpacingMeters ?? rowSpacingMeters ?? 0.03));
+  // Discrete panel spacing (along row) and row spacing (between rows)
+  const panelGap = Math.max(0.01, effPanelSpacing);
+  const rowGap = Math.max(0.01, effRowSpacing);
 
   // Orientations to evaluate
   const orientationsToTry = [];
@@ -236,26 +315,31 @@ export function generateAutoPanelLayout({
     orientationsToTry.push({ pWidth: stdLength, pLength: stdWidth, name: "landscape" });
   }
 
-  let bestPanels = [];
+  let bestResult = { panels: [], generatedWalkways: [] };
 
   for (const orient of orientationsToTry) {
     const { pWidth, pLength } = orient;
-    const candidatePanels = packPanelsOnGrid({
+    const result = packPanelsOnGrid({
       usablePolygon,
       obstacles,
       walkways,
       pWidth,
       pLength,
       panelGap,
+      rowGap,
+      walkwayEnabled: effWalkwayEnabled,
+      walkwayWidth: effWalkwayWidth,
+      walkwayFrequency: effWalkwayFreq,
       azimuthDegrees,
       wattage,
     });
 
-    if (candidatePanels.length > bestPanels.length) {
-      bestPanels = candidatePanels;
+    if (result.panels.length > bestResult.panels.length) {
+      bestResult = result;
     }
   }
 
+  const bestPanels = bestResult.panels;
   const panelCount = bestPanels.length;
   const singlePanelArea = stdWidth * stdLength;
   const coveredAreaSqm = Math.round(panelCount * singlePanelArea * 10) / 10;
@@ -266,6 +350,7 @@ export function generateAutoPanelLayout({
 
   return {
     panels: bestPanels,
+    generatedWalkways: bestResult.generatedWalkways || [],
     usableAreaSqm,
     panelCount,
     totalKw,

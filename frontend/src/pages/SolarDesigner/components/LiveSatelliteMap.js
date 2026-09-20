@@ -181,19 +181,19 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     const paneWrapper = magnifierPaneRef.current;
     if (!container || !contentWrapper || !paneWrapper) return;
 
-    const mapPane = container.querySelector(".leaflet-map-pane");
     const tilePane = container.querySelector(".leaflet-tile-pane");
-    if (!mapPane || !tilePane) return;
+    if (!tilePane) return;
 
-    const w = container.clientWidth;
-    const h = container.clientHeight;
+    const containerRect = container.getBoundingClientRect();
+    const w = containerRect.width || container.clientWidth;
+    const h = containerRect.height || container.clientHeight;
     if (w <= 0 || h <= 0) return;
 
     contentWrapper.style.width = `${w}px`;
     contentWrapper.style.height = `${h}px`;
 
-    // Keep pane wrapper aligned with mapPane transform (handles map panning)
-    paneWrapper.style.transform = mapPane.style.transform || "none";
+    // Keep pane wrapper transform neutral so container coordinates map 1:1
+    paneWrapper.style.transform = "none";
 
     const tiles = tilePane.querySelectorAll("img.leaflet-tile");
     if (tiles.length === 0) return;
@@ -201,22 +201,28 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     // Clear old visual tiles
     paneWrapper.innerHTML = "";
 
-    // Create pure visual replicates of currently rendered satellite tiles
+    // Create pure visual replicates of currently rendered satellite tiles positioned exactly in container coordinates
     tiles.forEach((t) => {
       if (!t.src) return;
+      const tileRect = t.getBoundingClientRect();
+      const left = tileRect.left - containerRect.left;
+      const top = tileRect.top - containerRect.top;
+      const width = tileRect.width || 256;
+      const height = tileRect.height || 256;
+
       const img = document.createElement("img");
       img.src = t.src;
       img.style.cssText = `
         position: absolute !important;
-        left: 0 !important;
-        top: 0 !important;
-        width: 256px !important;
-        height: 256px !important;
+        left: ${left}px !important;
+        top: ${top}px !important;
+        width: ${width}px !important;
+        height: ${height}px !important;
         max-width: none !important;
         max-height: none !important;
-        min-width: 256px !important;
-        min-height: 256px !important;
-        transform: ${t.style.transform} !important;
+        min-width: ${width}px !important;
+        min-height: ${height}px !important;
+        transform: none !important;
         display: block !important;
         visibility: visible !important;
         opacity: 1 !important;
@@ -259,12 +265,6 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     // If tiles have not been populated yet, trigger sync now
     if (paneWrapper && paneWrapper.children.length === 0) {
       syncMagnifierTiles();
-    }
-
-    // Keep pane transform synced with map pane during active pan
-    const mapPane = container.querySelector(".leaflet-map-pane");
-    if (mapPane && paneWrapper && paneWrapper.style.transform !== mapPane.style.transform) {
-      paneWrapper.style.transform = mapPane.style.transform;
     }
 
     lensEl.style.display = "block";

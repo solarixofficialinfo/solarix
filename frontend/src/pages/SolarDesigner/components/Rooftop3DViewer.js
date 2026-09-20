@@ -1265,7 +1265,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           rowMountGroup.position.set(row.centerX, frameCenterY, -row.centerY);
           rowMountGroup.rotation.y = azRad;
 
+          // Local tilted subgroup aligned directly with the PV module plane
+          // Its local X is row direction, local Z is module slope direction, local Y is normal to module
+          const tiltedSubgroup = new THREE.Group();
+          tiltedSubgroup.rotation.x = -tiltRad;
+          rowMountGroup.add(tiltedSubgroup);
+
           // 1. CONTINUOUS RAILS (Bottom Rail & Top Rail)
+          // Tilted with modules, placed strictly BELOW module frame (local y = -0.0415)
           const railLength = row.totalRowLength + 0.14;
           const railGeom = new THREE.BoxGeometry(railLength, 0.045, 0.055);
 
@@ -1278,16 +1285,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             const railId = `member-row${row.rowIndex}-${idSuffix}`;
             if (deletedMemberIdsRef.current.has(railId)) return;
 
-            const railZ = vRel * Math.cos(tiltRad);
-            const railY = -vRel * Math.sin(tiltRad) - 0.038;
-
             const isSel = selectedMemberId === railId;
             const isGrpSel = selectedGroupId === groupId;
             const rMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engRailMat : railMat;
 
             const railMesh = new THREE.Mesh(railGeom, rMat);
-            railMesh.position.set(0, railY, railZ);
-            railMesh.rotation.x = -tiltRad;
+            railMesh.position.set(0, -0.0415, vRel);
             railMesh.userData = {
               memberId: railId,
               groupId,
@@ -1296,7 +1299,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
               length: Number(railLength.toFixed(2)),
             };
             railMesh.castShadow = true;
-            rowMountGroup.add(railMesh);
+            tiltedSubgroup.add(railMesh);
             memberMeshMapRef.current[railId] = railMesh;
           });
 
@@ -1313,11 +1316,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
               uOffsets.forEach((uCl) => {
                 [+row.pl * 0.28, -row.pl * 0.28].forEach((vRel) => {
                   const clampMesh = new THREE.Mesh(clampGeom, clampMat);
-                  const clZ = vRel * Math.cos(tiltRad);
-                  const clY = -vRel * Math.sin(tiltRad) - 0.015;
-                  clampMesh.position.set(uCl, clY, clZ);
-                  clampMesh.rotation.x = -tiltRad;
-                  rowMountGroup.add(clampMesh);
+                  clampMesh.position.set(uCl, 0.018, vRel);
+                  tiltedSubgroup.add(clampMesh);
                 });
               });
             });
@@ -1329,31 +1329,19 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const basePlateGeom = new THREE.BoxGeometry(0.20, 0.022, 0.20);
           const boltGeom = new THREE.CylinderGeometry(0.008, 0.008, 0.035, 8);
 
-          // Local attachment positions along tilt
-          const frontZ = +row.pl * 0.28 * Math.cos(tiltRad);
-          const rearZ = -row.pl * 0.28 * Math.cos(tiltRad);
-          const frontYOffset = -(row.pl * 0.28) * Math.sin(tiltRad) - 0.065;
-          const rearYOffset = +(row.pl * 0.28) * Math.sin(tiltRad) - 0.065;
+          // Rafter sits immediately underneath continuous rails:
+          // Rail bottom is at local y = -0.064, rafter height = 0.08, so rafter center is at local y = -0.104
+          const rafterLocalY = -0.104;
+          const rafterBottomLocalY = -0.144;
+
+          const frontVRel = +row.pl * 0.28;
+          const rearVRel = -row.pl * 0.28;
 
           row.rafterUOffsets.forEach((uOffset, idx) => {
             const uRel = uOffset - row.centerU;
             const isEndFrame = idx === 0 || idx === row.rafterUOffsets.length - 1;
 
-            // Compute exact Cartesian coordinates of front & rear posts on roof
-            // in world space to query exact roof height at each post foot:
-            const wFrontX = row.centerX + uRel * cosAz - frontZ * sinAz;
-            const wFrontY = row.centerY + uRel * sinAz + frontZ * cosAz;
-            const roofFrontY = calculateRoofElevationAtPoint(wFrontX, wFrontY, fullRoof);
-
-            const wRearX = row.centerX + uRel * cosAz - rearZ * sinAz;
-            const wRearY = row.centerY + uRel * sinAz + rearZ * cosAz;
-            const roofRearY = calculateRoofElevationAtPoint(wRearX, wRearY, fullRoof);
-
-            // Exact post height from roof surface to rafter connection (ZERO GAP!)
-            const frontLegHeight = Math.max(0.08, frameCenterY + frontYOffset - roofFrontY);
-            const rearLegHeight = Math.max(0.08, frameCenterY + rearYOffset - roofRearY);
-
-            // A. RAFTER BEAM
+            // A. RAFTER BEAM (in tiltedSubgroup directly under rails)
             const rafterId = `member-row${row.rowIndex}-rafter-${idx}`;
             if (!deletedMemberIdsRef.current.has(rafterId)) {
               const isSel = selectedMemberId === rafterId;
@@ -1361,8 +1349,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
               const rafMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engRafterMat : rafterMat;
 
               const rafterMesh = new THREE.Mesh(rafterGeom, rafMat);
-              rafterMesh.position.set(uRel, -0.065, 0);
-              rafterMesh.rotation.x = -tiltRad;
+              rafterMesh.position.set(uRel, rafterLocalY, 0);
               rafterMesh.userData = {
                 memberId: rafterId,
                 groupId,
@@ -1371,16 +1358,40 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                 length: Number(rafterLength.toFixed(2)),
               };
               rafterMesh.castShadow = true;
-              rowMountGroup.add(rafterMesh);
+              tiltedSubgroup.add(rafterMesh);
               memberMeshMapRef.current[rafterId] = rafterMesh;
             }
+
+            // Connection nodes at rafter underside in rowMountGroup coordinates
+            // Rotate local (uRel, rafterBottomLocalY, vRel) by -tiltRad around X
+            const nodeFrontInMount = new THREE.Vector3(uRel, rafterBottomLocalY, frontVRel)
+              .applyAxisAngle(new THREE.Vector3(1, 0, 0), -tiltRad);
+            const nodeRearInMount = new THREE.Vector3(uRel, rafterBottomLocalY, rearVRel)
+              .applyAxisAngle(new THREE.Vector3(1, 0, 0), -tiltRad);
+
+            // World coordinates of front & rear nodes to query exact roof height at each post foot
+            const frontWorld = nodeFrontInMount.clone()
+              .applyAxisAngle(new THREE.Vector3(0, 1, 0), azRad);
+            const wFrontX = row.centerX + frontWorld.x;
+            const wFrontY = row.centerY - frontWorld.z;
+            const roofFrontY = calculateRoofElevationAtPoint(wFrontX, wFrontY, fullRoof);
+
+            const rearWorld = nodeRearInMount.clone()
+              .applyAxisAngle(new THREE.Vector3(0, 1, 0), azRad);
+            const wRearX = row.centerX + rearWorld.x;
+            const wRearY = row.centerY - rearWorld.z;
+            const roofRearY = calculateRoofElevationAtPoint(wRearX, wRearY, fullRoof);
+
+            // Exact post height from roof surface to rafter bottom connection (ZERO GAP!)
+            const frontLegHeight = Math.max(0.08, frameCenterY + nodeFrontInMount.y - roofFrontY);
+            const rearLegHeight = Math.max(0.08, frameCenterY + nodeRearInMount.y - roofRearY);
 
             // B. BALLAST BLOCKS (for ballasted flat roof)
             if (isBallasted && showPosts) {
               const ballastBlockGeom = new THREE.BoxGeometry(0.42, 0.22, 0.32);
-              [frontZ, rearZ].forEach((zOff) => {
+              [nodeFrontInMount, nodeRearInMount].forEach((node) => {
                 const ballast = new THREE.Mesh(ballastBlockGeom, ballastMat);
-                ballast.position.set(uRel, -(baseClearance - 0.11), zOff);
+                ballast.position.set(node.x, -(baseClearance - 0.11), node.z);
                 ballast.castShadow = true; ballast.receiveShadow = true;
                 rowMountGroup.add(ballast);
               });
@@ -1397,8 +1408,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
                 const postGeomFront = new THREE.CylinderGeometry(0.032, 0.032, frontLegHeight, 12);
                 const frontPost = new THREE.Mesh(postGeomFront, pMat);
-                // Position centered between rafter connection (frontYOffset) and roof surface
-                frontPost.position.set(uRel, frontYOffset - frontLegHeight / 2, frontZ);
+                const frontRoofInMountY = roofFrontY - frameCenterY;
+                frontPost.position.set(
+                  nodeFrontInMount.x,
+                  (nodeFrontInMount.y + frontRoofInMountY) / 2,
+                  nodeFrontInMount.z
+                );
                 frontPost.userData = {
                   memberId: frontPostId,
                   groupId,
@@ -1413,14 +1428,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
                 // Base Plate flush ON roof surface
                 const frontBase = new THREE.Mesh(basePlateGeom, basePlateMat);
-                frontBase.position.set(uRel, frontYOffset - frontLegHeight + 0.011, frontZ);
+                frontBase.position.set(nodeFrontInMount.x, frontRoofInMountY + 0.011, nodeFrontInMount.z);
                 frontBase.castShadow = true;
                 rowMountGroup.add(frontBase);
 
                 // Anchor bolts
                 [[-0.07, -0.07], [-0.07, 0.07], [0.07, -0.07], [0.07, 0.07]].forEach(([bx, bz]) => {
                   const bolt = new THREE.Mesh(boltGeom, boltMat);
-                  bolt.position.set(uRel + bx, frontYOffset - frontLegHeight + 0.026, frontZ + bz);
+                  bolt.position.set(nodeFrontInMount.x + bx, frontRoofInMountY + 0.026, nodeFrontInMount.z + bz);
                   rowMountGroup.add(bolt);
                 });
               }
@@ -1434,8 +1449,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
                 const postGeomRear = new THREE.CylinderGeometry(0.032, 0.032, rearLegHeight, 12);
                 const rearPost = new THREE.Mesh(postGeomRear, pMat);
-                // Position centered between rafter connection (rearYOffset) and roof surface (ZERO GAP!)
-                rearPost.position.set(uRel, rearYOffset - rearLegHeight / 2, rearZ);
+                const rearRoofInMountY = roofRearY - frameCenterY;
+                rearPost.position.set(
+                  nodeRearInMount.x,
+                  (nodeRearInMount.y + rearRoofInMountY) / 2,
+                  nodeRearInMount.z
+                );
                 rearPost.userData = {
                   memberId: rearPostId,
                   groupId,
@@ -1450,14 +1469,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
                 // Base Plate flush ON roof surface
                 const rearBase = new THREE.Mesh(basePlateGeom, basePlateMat);
-                rearBase.position.set(uRel, rearYOffset - rearLegHeight + 0.011, rearZ);
+                rearBase.position.set(nodeRearInMount.x, rearRoofInMountY + 0.011, nodeRearInMount.z);
                 rearBase.castShadow = true;
                 rowMountGroup.add(rearBase);
 
                 // Anchor bolts
                 [[-0.07, -0.07], [-0.07, 0.07], [0.07, -0.07], [0.07, 0.07]].forEach(([bx, bz]) => {
                   const bolt = new THREE.Mesh(boltGeom, boltMat);
-                  bolt.position.set(uRel + bx, rearYOffset - rearLegHeight + 0.026, rearZ + bz);
+                  bolt.position.set(nodeRearInMount.x + bx, rearRoofInMountY + 0.026, nodeRearInMount.z + bz);
                   rowMountGroup.add(bolt);
                 });
               }
@@ -1470,13 +1489,16 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                   const isGrpSel = selectedGroupId === groupId;
                   const bMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engBraceMat : braceMat;
 
-                  const braceSpanZ = frontZ - rearZ;
-                  const braceSpanY = rearYOffset - (frontYOffset - frontLegHeight);
-                  const braceLength = Math.hypot(braceSpanZ, braceSpanY);
+                  const pFrontFoot = new THREE.Vector3(nodeFrontInMount.x, roofFrontY - frameCenterY, nodeFrontInMount.z);
+                  const pRearTop = nodeRearInMount.clone();
+                  const braceDiff = new THREE.Vector3().subVectors(pRearTop, pFrontFoot);
+                  const braceLength = braceDiff.length();
+                  const braceMid = new THREE.Vector3().addVectors(pFrontFoot, pRearTop).multiplyScalar(0.5);
+
                   const braceGeom = new THREE.CylinderGeometry(0.02, 0.02, braceLength, 8);
                   const braceMesh = new THREE.Mesh(braceGeom, bMat);
-                  braceMesh.position.set(uRel, (frontYOffset - frontLegHeight + rearYOffset) / 2, (frontZ + rearZ) / 2);
-                  braceMesh.rotation.x = Math.atan2(braceSpanZ, braceSpanY);
+                  braceMesh.position.copy(braceMid);
+                  braceMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), braceDiff.clone().normalize());
                   braceMesh.userData = {
                     memberId: braceId,
                     groupId,
@@ -1497,22 +1519,22 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
                 // Joint 1: Front Post Top
                 const n1 = new THREE.Mesh(nodeSphGeom, nodeMat);
-                n1.position.set(uRel, frontYOffset, frontZ);
+                n1.position.copy(nodeFrontInMount);
                 rowMountGroup.add(n1);
 
                 // Joint 2: Rear Post Top
                 const n2 = new THREE.Mesh(nodeSphGeom, nodeMat);
-                n2.position.set(uRel, rearYOffset, rearZ);
+                n2.position.copy(nodeRearInMount);
                 rowMountGroup.add(n2);
 
                 // Joint 3: Front Base Anchor
                 const n3 = new THREE.Mesh(nodeSphGeom, new THREE.MeshBasicMaterial({ color: 0x10b981 }));
-                n3.position.set(uRel, frontYOffset - frontLegHeight, frontZ);
+                n3.position.set(nodeFrontInMount.x, roofFrontY - frameCenterY, nodeFrontInMount.z);
                 rowMountGroup.add(n3);
 
                 // Joint 4: Rear Base Anchor
                 const n4 = new THREE.Mesh(nodeSphGeom, new THREE.MeshBasicMaterial({ color: 0x10b981 }));
-                n4.position.set(uRel, rearYOffset - rearLegHeight, rearZ);
+                n4.position.set(nodeRearInMount.x, roofRearY - frameCenterY, nodeRearInMount.z);
                 rowMountGroup.add(n4);
               }
             }
