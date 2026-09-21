@@ -516,9 +516,13 @@ class CursorAdapter:
             else:
                 raise e
         
-        # ── Local-file merge (fallback/offline data with safe ID deduplication) ─────────────────────────────
         local_records = await LocalFileCollection(self.collection.table_name).find(self.filter, self.projection).sort(self.sort_fields).to_list(length)
         if local_records:
+            local_by_id = {str(lr.get("id")): lr for lr in local_records if isinstance(lr, dict) and lr.get("id")}
+            for i, d in enumerate(data):
+                did = str(d.get("id")) if isinstance(d, dict) else None
+                if did and did in local_by_id:
+                    data[i] = {**d, **local_by_id[did]}
             existing_ids = {str(d.get("id")) for d in data if isinstance(d, dict) and d.get("id")}
             for lr in local_records:
                 if str(lr.get("id")) not in existing_ids:
@@ -1290,13 +1294,14 @@ class CollectionAdapter:
             res = await asyncio.to_thread(builder.execute)
             if res.data:
                 doc = res.data[0]
-                if self.table_name == "companies":
+                if self.table_name in ("companies", "files"):
                     cid = doc.get("id") or (filter.get("id") if isinstance(filter, dict) else None)
                     if cid:
-                        local_doc = await LocalFileCollection("companies").find_one({"id": cid})
+                        local_doc = await LocalFileCollection(self.table_name).find_one({"id": cid})
                         if local_doc:
                             doc = {**doc, **local_doc}
-                    doc = _enrich_company_doc(doc)
+                    if self.table_name == "companies":
+                        doc = _enrich_company_doc(doc)
                 doc = self._deserialize_document(doc)
                 if projection and isinstance(projection, dict):
                     inclusions = [pk for pk, pv in projection.items() if (pv == 1 or pv is True) and pk != "_id"]
@@ -2818,6 +2823,46 @@ class LeadIn(BaseModel):
     followup_type: Optional[str] = "Call"
     other_note: Optional[str] = ""
     next_followup_at: Optional[str] = ""
+    email: Optional[str] = ""
+    state: Optional[str] = ""
+    pincode: Optional[str] = ""
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    customer_type: Optional[str] = ""
+    system_requirement: Optional[str] = ""
+    offering_amount: Optional[float] = 0.0
+    monthly_bill: Optional[Union[float, str]] = None
+    consumer_number: Optional[str] = ""
+    connection_type: Optional[str] = ""
+    roof_type: Optional[str] = ""
+    project_address: Optional[str] = ""
+    additional_message: Optional[str] = ""
+    sales_link_id: Optional[str] = ""
+    sales_link_token: Optional[str] = ""
+    documents: Optional[List[Dict[str, Any]]] = None
+
+class PublicLeadIn(BaseModel):
+    name: str
+    mobile: str
+    alt_mobile: Optional[str] = ""
+    email: Optional[str] = ""
+    address: Optional[str] = ""
+    city: Optional[str] = ""
+    state: Optional[str] = ""
+    pincode: Optional[str] = ""
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    customer_type: Optional[str] = "residential"
+    system_requirement: Optional[str] = "full_system"
+    system_kw: Optional[float] = 0.0
+    monthly_bill: Optional[Union[float, str]] = None
+    consumer_number: Optional[str] = ""
+    connection_type: Optional[str] = ""
+    roof_type: Optional[str] = ""
+    project_address: Optional[str] = ""
+    offering_amount: Optional[float] = 0.0
+    additional_message: Optional[str] = ""
+    documents: Optional[List[Dict[str, Any]]] = []
 
 class LeadCallIn(BaseModel):
     outcome: str
@@ -3348,6 +3393,29 @@ async def create_access_request(data: AccessRequestIn):
     await db.access_requests.insert_one(req_doc)
     return {"message": "Access request submitted. Your company administrator will review your request.", "status": "Pending"}
 
+async def ensure_company_sales_link(company_id: str) -> dict:
+    if not company_id:
+        return {}
+    link = await db.sales_links.find_one({"company_id": company_id, "is_active": True}, {"_id": 0})
+    if not link:
+        link = await db.sales_links.find_one({"company_id": company_id}, {"_id": 0})
+        if link:
+            await db.sales_links.update_one({"id": link["id"]}, {"$set": {"is_active": True, "updated_at": now_iso()}})
+            link["is_active"] = True
+        else:
+            token = secrets.token_urlsafe(16)
+            now = now_iso()
+            link = {
+                "id": str(uuid.uuid4()),
+                "company_id": company_id,
+                "public_token": token,
+                "is_active": True,
+                "created_at": now,
+                "updated_at": now
+            }
+            await db.sales_links.insert_one(link)
+    return link
+
 # ---------- Auth ----------
 @api_router.post("/auth/register")
 async def register_company(data: RegisterCompanyIn, response: Response):
@@ -3499,6 +3567,10 @@ async def register_company(data: RegisterCompanyIn, response: Response):
             {"$set": company_doc},
             upsert=True
         )
+        try:
+            await ensure_company_sales_link(company_id)
+        except Exception as sle:
+            logger.warning(f"Could not auto-provision sales link for company {company_id}: {sle}")
     except Exception as e:
         logger.error(f"Company upsert failed: {e}")
         raise HTTPException(status_code=400, detail="Registration could not be completed. Please try again.")
@@ -14943,7 +15015,12 @@ async def list_leads(
         query["stage"] = {"$regex": f"^{re.escape(stage)}$", "$options": "i"}
 
     if source and source != "all":
-        query["source"] = source
+        if source == "sales_link":
+            query["source"] = {"$in": ["sales_link", "Sales Link"]}
+        elif source == "manual":
+            query["source"] = {"$nin": ["sales_link", "Sales Link"]}
+        else:
+            query["source"] = source
 
     if call_status and call_status != "all":
         query["call_status"] = call_status
@@ -14964,8 +15041,8 @@ async def list_leads(
         ]
     elif followup_filter == "overdue":
         query["$or"] = [
-            {"followup_date": {"$lt": today_str, "$ne": None, "$ne": ""}},
-            {"next_followup_at": {"$lt": today_str, "$ne": None, "$ne": ""}}
+            {"followup_date": {"$lt": today_str, "$nin": [None, ""]}},
+            {"next_followup_at": {"$lt": today_str, "$nin": [None, ""]}}
         ]
     elif followup_filter == "upcoming":
         query["$or"] = [
@@ -14981,8 +15058,10 @@ async def list_leads(
         query["$or"] = [
             {"name": {"$regex": s, "$options": "i"}},
             {"mobile": {"$regex": s, "$options": "i"}},
+            {"email": {"$regex": s, "$options": "i"}},
             {"city": {"$regex": s, "$options": "i"}},
             {"lead_no": {"$regex": s, "$options": "i"}},
+            {"source": {"$regex": s, "$options": "i"}},
         ]
 
     total = await db.leads.count_documents(query)
@@ -15161,14 +15240,31 @@ async def create_lead(data: LeadIn, user=Depends(require_perm("leads", "create")
         "name": data.name.strip(),
         "mobile": data.mobile.strip(),
         "alt_mobile": (data.alt_mobile or "").strip(),
+        "email": (data.email or "").strip(),
         "city": (data.city or "").strip(),
         "address": (data.address or "").strip(),
+        "state": (data.state or "").strip(),
+        "pincode": (data.pincode or "").strip(),
+        "latitude": data.latitude,
+        "longitude": data.longitude,
         "system_kw": sys_kw,
         "estimated_kw": sys_kw,
         "proposed_price": p_price,
         "offer_price": p_price,
-        "consumer_type": (data.consumer_type or "").strip(),
+        "offering_amount": data.offering_amount if (data.offering_amount is not None and data.offering_amount > 0) else p_price,
+        "monthly_bill": data.monthly_bill,
+        "consumer_number": (data.consumer_number or "").strip(),
+        "connection_type": (data.connection_type or "").strip(),
+        "roof_type": (data.roof_type or "").strip(),
+        "project_address": (data.project_address or data.address or "").strip(),
+        "additional_message": (data.additional_message or "").strip(),
+        "customer_type": (data.customer_type or data.consumer_type or "").strip(),
+        "consumer_type": (data.consumer_type or data.customer_type or "").strip(),
+        "system_requirement": (data.system_requirement or "full_system").strip(),
         "source": data.source or "Other",
+        "sales_link_id": (data.sales_link_id or "").strip(),
+        "sales_link_token": (data.sales_link_token or "").strip(),
+        "documents": data.documents or [],
         "stage": stg,
         "status": data.status or ("Confirmed / Onboarding" if stg == "Confirmed" else "New Lead"),
         "quotation_no": (data.quotation_no or "").strip(),
@@ -15313,6 +15409,22 @@ async def update_lead(lead_id: str, data: LeadIn, user=Depends(require_perm("lea
         patch["next_followup_at"] = f"{f_date}T{data.followup_time or '10:00'}:00"
     else:
         patch["next_followup_at"] = ""
+
+    if data.email is not None: patch["email"] = (data.email or "").strip()
+    if data.state is not None: patch["state"] = (data.state or "").strip()
+    if data.pincode is not None: patch["pincode"] = (data.pincode or "").strip()
+    if data.latitude is not None: patch["latitude"] = data.latitude
+    if data.longitude is not None: patch["longitude"] = data.longitude
+    if data.customer_type is not None: patch["customer_type"] = (data.customer_type or "").strip()
+    if data.system_requirement is not None: patch["system_requirement"] = (data.system_requirement or "").strip()
+    if data.offering_amount is not None: patch["offering_amount"] = data.offering_amount
+    if data.monthly_bill is not None: patch["monthly_bill"] = data.monthly_bill
+    if data.consumer_number is not None: patch["consumer_number"] = (data.consumer_number or "").strip()
+    if data.connection_type is not None: patch["connection_type"] = (data.connection_type or "").strip()
+    if data.roof_type is not None: patch["roof_type"] = (data.roof_type or "").strip()
+    if data.project_address is not None: patch["project_address"] = (data.project_address or "").strip()
+    if data.additional_message is not None: patch["additional_message"] = (data.additional_message or "").strip()
+    if data.documents is not None: patch["documents"] = data.documents
 
     await db.leads.update_one({"id": lead_id, "company_id": cid}, {"$set": patch})
     updated = await db.leads.find_one({"id": lead_id, "company_id": cid}, {"_id": 0})
@@ -15509,6 +15621,320 @@ async def link_client_to_lead(lead_id: str, payload: Dict[str, Any], user=Depend
         }}
     )
     return {"ok": True, "message": "Lead successfully linked to client"}
+
+# ─── COMPANY-BRANDED SALES LINK & PUBLIC LEAD CAPTURE PORTAL ─────────────────
+
+@api_router.get("/sales-link")
+async def get_company_sales_link(user=Depends(get_current_user)):
+    """Retrieve or auto-provision the company's active public sales link."""
+    cid = user["company_id"]
+    link = await ensure_company_sales_link(cid)
+    comp = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
+
+    logo_file_id = comp.get("logo_file_id")
+    logo_url = None
+    if logo_file_id:
+        logo_url = f"/api/files/{logo_file_id}"
+    elif comp.get("logo_url"):
+        logo_url = comp.get("logo_url")
+
+    comp_info = {
+        "name": comp.get("company_name") or comp.get("name") or "Solar EPC Company",
+        "company_name": comp.get("company_name") or comp.get("name") or "Solar EPC Company",
+        "owner_name": comp.get("owner_name") or "",
+        "mobile": comp.get("mobile") or "",
+        "phone": comp.get("mobile") or comp.get("phone") or "",
+        "email": comp.get("email") or "",
+        "address": comp.get("address") or "",
+        "city": comp.get("city") or "",
+        "state": comp.get("state") or "",
+        "pincode": comp.get("pincode") or "",
+        "website": comp.get("website") or "",
+        "logo_url": logo_url,
+        "has_logo": bool(logo_file_id or comp.get("logo_url"))
+    }
+    return {
+        "id": link["id"],
+        "token": link["public_token"],
+        "public_token": link["public_token"],
+        "is_active": link.get("is_active", True),
+        "created_at": link.get("created_at"),
+        "company": comp_info,
+        "branding": comp_info,
+    }
+
+@api_router.post("/sales-link/regenerate")
+async def regenerate_company_sales_link(user=Depends(require_perm("leads", "edit"))):
+    """Regenerate a new unguessable public sales link token for the company."""
+    cid = user["company_id"]
+    new_token = secrets.token_urlsafe(16)
+    now = now_iso()
+
+    existing = await db.sales_links.find_one({"company_id": cid})
+    if existing:
+        await db.sales_links.update_one(
+            {"id": existing["id"]},
+            {"$set": {"public_token": new_token, "is_active": True, "updated_at": now}}
+        )
+        link_id = existing["id"]
+    else:
+        link_id = str(uuid.uuid4())
+        await db.sales_links.insert_one({
+            "id": link_id,
+            "company_id": cid,
+            "public_token": new_token,
+            "is_active": True,
+            "created_at": now,
+            "updated_at": now
+        })
+
+    await log_activity(cid, user["id"], user["name"], "Regenerated Public Sales Link", f"New Token: {new_token[:6]}...")
+    return {"id": link_id, "token": new_token, "is_active": True, "updated_at": now}
+
+@api_router.get("/public/sales/{token}")
+async def get_public_sales_info(token: str):
+    """Fetch public company branding for customer inquiry portal (no login required)."""
+    link = await db.sales_links.find_one({"public_token": token, "is_active": True})
+    if not link:
+        raise HTTPException(status_code=404, detail="Sales link not found or inactive.")
+
+    cid = link["company_id"]
+    comp = await db.companies.find_one({"id": cid}, {"_id": 0})
+    if not comp:
+        raise HTTPException(status_code=404, detail="Company profile not found.")
+
+    logo_file_id = comp.get("logo_file_id")
+    logo_url = None
+    if logo_file_id:
+        logo_url = f"/api/public/sales/{token}/logo"
+    elif comp.get("logo_url"):
+        logo_url = comp.get("logo_url")
+
+    return {
+        "company_name": comp.get("company_name") or comp.get("name") or "Solar EPC Company",
+        "owner_name": comp.get("owner_name") or "",
+        "mobile": comp.get("mobile") or "",
+        "email": comp.get("email") or "",
+        "address": comp.get("address") or "",
+        "city": comp.get("city") or "",
+        "state": comp.get("state") or "",
+        "pincode": comp.get("pincode") or "",
+        "website": comp.get("website") or "",
+        "logo_url": logo_url,
+        "has_logo": bool(logo_file_id or comp.get("logo_url"))
+    }
+
+@api_router.get("/public/sales/{token}/logo")
+async def get_public_sales_logo(token: str):
+    """Public stream endpoint for company logo, preventing exposure of internal file IDs."""
+    link = await db.sales_links.find_one({"public_token": token, "is_active": True})
+    if not link:
+        raise HTTPException(status_code=404, detail="Not found")
+    cid = link["company_id"]
+    comp = await db.companies.find_one({"id": cid}, {"_id": 0})
+    if not comp or not comp.get("logo_file_id"):
+        raise HTTPException(status_code=404, detail="Logo not available")
+
+    file_rec = await db.files.find_one({"id": comp["logo_file_id"], "is_deleted": False})
+    if not file_rec or not file_rec.get("storage_path"):
+        raise HTTPException(status_code=404, detail="Logo file not found in storage")
+
+    data, ct = get_object(file_rec["storage_path"])
+    return FastAPIResponse(content=data, media_type=ct or "image/png", headers={"Cache-Control": "public, max-age=3600"})
+
+@api_router.post("/public/sales/{token}/upload")
+async def upload_public_sales_document(token: str, file: UploadFile = File(...)):
+    """Upload customer inquiry documents directly to company tenant storage."""
+    link = await db.sales_links.find_one({"public_token": token, "is_active": True})
+    if not link:
+        raise HTTPException(status_code=404, detail="Sales link not found or inactive.")
+    cid = link["company_id"]
+
+    filename = file.filename or "document.bin"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+    allowed_exts = {"pdf", "jpg", "jpeg", "png", "webp", "doc", "docx", "xls", "xlsx", "txt"}
+    if ext not in allowed_exts:
+        raise HTTPException(status_code=400, detail=f"File format '.{ext}' is not supported. Please upload PDF, images, or documents.")
+
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (maximum 10MB per file).")
+
+    file_id = str(uuid.uuid4())
+    path = f"{APP_NAME}/{cid}/leads/{file_id}.{ext}"
+    content_type = file.content_type or "application/octet-stream"
+    result = put_object(path, data, content_type)
+
+    doc = {
+        "id": file_id,
+        "company_id": cid,
+        "uploader_id": "public_sales_link",
+        "sales_link_id": link["id"],
+        "storage_path": result["path"],
+        "original_filename": filename,
+        "content_type": content_type,
+        "size": result.get("size", len(data)),
+        "category": "leads",
+        "is_deleted": False,
+        "created_at": now_iso(),
+    }
+    await db.files.insert_one(doc)
+    return {
+        "file_id": file_id,
+        "filename": filename,
+        "content_type": content_type,
+        "size": doc["size"]
+    }
+
+@api_router.post("/public/sales/{token}/lead")
+async def submit_public_sales_lead(token: str, data: PublicLeadIn):
+    """Customer inquiry submission from public sales portal (no login required)."""
+    link = await db.sales_links.find_one({"public_token": token, "is_active": True})
+    if not link:
+        raise HTTPException(status_code=404, detail="Sales link not found or inactive.")
+    cid = link["company_id"]
+
+    clean_name = (data.name or "").strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Full Name is required.")
+
+    clean_mobile = "".join(filter(str.isdigit, data.mobile or ""))
+    if len(clean_mobile) != 10:
+        raise HTTPException(status_code=400, detail="Please enter a valid 10-digit mobile number.")
+
+    lead_id = str(uuid.uuid4())
+    lead_no = await next_lead_id(cid)
+    now_time = now_iso()
+
+    # Assign to company owner/admin
+    owner_user = await db.users.find_one({"company_id": cid, "role": {"$in": ["Admin", "Owner"]}}, {"_id": 0, "id": 1, "name": 1})
+    assigned_to = owner_user.get("id") if owner_user else "admin"
+    assigned_to_name = owner_user.get("name") if owner_user else "Company Admin"
+
+    sys_kw = float(data.system_kw or 0.0)
+    offering = float(data.offering_amount or 0.0)
+
+    # Normalize customer type
+    raw_ct = (data.customer_type or "").lower().strip()
+    if "res" in raw_ct or "home" in raw_ct:
+        norm_customer_type = "residential"
+        consumer_type_label = "Residential"
+    elif "bus" in raw_ct or "comm" in raw_ct:
+        norm_customer_type = "business"
+        consumer_type_label = "Commercial / Business"
+    elif "ind" in raw_ct:
+        norm_customer_type = "industry"
+        consumer_type_label = "Industrial"
+    else:
+        norm_customer_type = raw_ct or "residential"
+        consumer_type_label = "Residential"
+
+    lead_doc = {
+        "id": lead_id,
+        "lead_no": lead_no,
+        "company_id": cid,
+        "created_by": "public_sales_link",
+        "created_by_name": "Public Enquiry",
+        "assigned_to": assigned_to,
+        "assigned_to_name": assigned_to_name,
+        "assigned_at": now_time,
+        "assigned_by": "system",
+        "assigned_by_name": "Sales Link Portal",
+        "name": clean_name,
+        "mobile": clean_mobile,
+        "alt_mobile": (data.alt_mobile or "").strip(),
+        "email": (data.email or "").strip(),
+        "address": (data.address or "").strip(),
+        "city": (data.city or "").strip(),
+        "state": (data.state or "").strip(),
+        "pincode": (data.pincode or "").strip(),
+        "latitude": data.latitude,
+        "longitude": data.longitude,
+        "customer_type": norm_customer_type,
+        "consumer_type": consumer_type_label,
+        "system_requirement": (data.system_requirement or "full_system").strip(),
+        "system_kw": sys_kw,
+        "estimated_kw": sys_kw,
+        "proposed_price": offering,
+        "offer_price": offering,
+        "offering_amount": offering,
+        "monthly_bill": data.monthly_bill,
+        "consumer_number": (data.consumer_number or "").strip(),
+        "connection_type": (data.connection_type or "").strip(),
+        "roof_type": (data.roof_type or "").strip(),
+        "project_address": (data.project_address or data.address or "").strip(),
+        "additional_message": (data.additional_message or "").strip(),
+        "remarks": (data.additional_message or "Submitted via Public Sales Link").strip(),
+        "source": "sales_link",
+        "sales_link_id": link["id"],
+        "sales_link_token": token,
+        "stage": "New Lead",
+        "status": "New Lead",
+        "quotation_no": "",
+        "quotation_status": "Not Sent",
+        "solar_meter_required": "No",
+        "other_requirement": "",
+        "followup_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "followup_time": "10:00",
+        "followup_type": "Call",
+        "other_note": "",
+        "next_followup_at": f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}T10:00:00",
+        "call_status": "Not Called",
+        "last_contact_at": "",
+        "converted_client_id": "",
+        "converted_sol_id": "",
+        "converted_at": "",
+        "confirmed_at": "",
+        "confirmed_by": "",
+        "confirmed_by_name": "",
+        "documents": data.documents or [],
+        "created_at": now_time,
+        "updated_at": now_time,
+    }
+
+    await db.leads.insert_one(lead_doc)
+
+    # Attach lead_id to uploaded document records
+    if data.documents:
+        file_ids = [d.get("file_id") for d in data.documents if d.get("file_id")]
+        for fid in file_ids:
+            await db.files.update_one({"id": fid, "company_id": cid}, {"$set": {"lead_id": lead_id}})
+
+    # Create follow-up schedule item
+    await db.lead_followups.insert_one({
+        "id": str(uuid.uuid4()),
+        "lead_id": lead_id,
+        "company_id": cid,
+        "assigned_to": assigned_to,
+        "assigned_to_name": assigned_to_name,
+        "followup_at": lead_doc["next_followup_at"],
+        "status": "pending",
+        "notes": f"Online customer enquiry from {clean_name} ({clean_mobile}) via Public Sales Link",
+        "created_at": now_time,
+    })
+
+    # Record notification and activity
+    try:
+        await log_activity(cid, assigned_to, "Public Sales Portal", "New Sales Enquiry", f"{clean_name} ({clean_mobile}) - {sys_kw} kW")
+        await db.notifications.insert_one({
+            "id": str(uuid.uuid4()),
+            "company_id": cid,
+            "user_id": assigned_to,
+            "title": "New Sales Lead Received",
+            "message": f"{clean_name} submitted a solar enquiry for {sys_kw} kW via your Public Sales Link.",
+            "type": "lead",
+            "link": "/leads",
+            "is_read": False,
+            "created_at": now_time
+        })
+    except Exception as ne:
+        logger.warning(f"Failed to record notification for public sales lead: {ne}")
+
+    return {
+        "success": True,
+        "lead_no": lead_no,
+        "message": "Enquiry submitted successfully."
+    }
 
 # ─── EPC OPERATING SYSTEM ENHANCEMENTS (FINANCE, VENDORS, WARRANTIES, SERVICE, SEARCH) ───
 

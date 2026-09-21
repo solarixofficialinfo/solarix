@@ -49,7 +49,15 @@ const AUTH_ROUTES = [
   "/auth/verify-otp",
   "/auth/reset-password",
   "/auth/request-access",
+  "/public/sales/",
 ];
+
+export const isPublicRoute = (pathname = "") =>
+  pathname === "/login" ||
+  pathname === "/register" ||
+  pathname === "/forgot-password" ||
+  pathname.startsWith("/s/") ||
+  pathname.startsWith("/sales/");
 
 const isAuthRoute = (url = "") =>
   AUTH_ROUTES.some((r) => url.includes(r));
@@ -91,10 +99,7 @@ api.interceptors.request.use(
         // Refresh failed — clear tokens and redirect if not on a public page
         localStorage.removeItem("solarix_token");
         localStorage.removeItem("solarix_refresh_token");
-        const isPublicPage =
-          window.location.pathname === "/login" ||
-          window.location.pathname === "/register" ||
-          window.location.pathname === "/forgot-password";
+        const isPublicPage = typeof window !== "undefined" && isPublicRoute(window.location.pathname);
         if (!isPublicPage) {
           window.location.href = "/login";
         }
@@ -176,10 +181,7 @@ api.interceptors.response.use(
       // Clear session and redirect (only if not already on a public page)
       localStorage.removeItem("solarix_token");
       localStorage.removeItem("solarix_refresh_token");
-      const isPublicPage =
-        window.location.pathname === "/login" ||
-        window.location.pathname === "/register" ||
-        window.location.pathname === "/forgot-password";
+      const isPublicPage = typeof window !== "undefined" && isPublicRoute(window.location.pathname);
       if (!isPublicPage) {
         window.location.href = "/login";
       }

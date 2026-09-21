@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import api, { formatApiError } from "@/lib/api";
+import api, { API, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { usePermission } from "@/lib/permissions";
 import { useEmployeeList } from "@/hooks/useTeam";
@@ -20,7 +20,8 @@ import dayjs from "dayjs";
 import {
   Plus, Search, Phone, Calendar, Clock, UserCheck, CheckCircle2,
   Pencil, Trash2, Zap, Layers, User, AlertCircle, ExternalLink,
-  PhoneCall, ShieldAlert, Sparkles, Check, ArrowRight
+  PhoneCall, ShieldAlert, Sparkles, Check, ArrowRight,
+  Link as LinkIcon, Copy, RefreshCw, Paperclip, Download, Eye, Globe
 } from "lucide-react";
 
 import PageHeader from "@/components/PageHeader";
@@ -100,12 +101,58 @@ export default function Leads() {
   // Filters
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("all");
   const [assignedFilter, setAssignedFilter] = useState("all");
   const [followupFilter, setFollowupFilter] = useState("all");
 
   // Modals
   const [formModalOpen, setFormModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState(null);
+  const [defaultModalTab, setDefaultModalTab] = useState("basic");
+
+  // Public Sales Link State
+  const [salesLink, setSalesLink] = useState(null);
+  const [salesLinkModalOpen, setSalesLinkModalOpen] = useState(false);
+  const [regeneratingToken, setRegeneratingToken] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  // Fetch Public Sales Link
+  const fetchSalesLink = useCallback(async () => {
+    try {
+      const res = await api.get("/sales-link");
+      setSalesLink(res.data);
+    } catch (e) {
+      console.warn("Failed to fetch sales link", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSalesLink();
+  }, [fetchSalesLink]);
+
+  const handleRegenerateSalesLink = async () => {
+    if (!window.confirm("Regenerating this link will immediately invalidate the previous public link. Any prospective customer who has the old URL will no longer be able to submit. Are you sure you want to regenerate?")) {
+      return;
+    }
+    setRegeneratingToken(true);
+    try {
+      const res = await api.post("/sales-link/regenerate");
+      setSalesLink(res.data);
+      toast.success("Sales Link regenerated with new secure token!");
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setRegeneratingToken(false);
+    }
+  };
+
+  const handleCopySalesLink = () => {
+    const url = `${window.location.origin}/s/${salesLink?.public_token || ""}`;
+    navigator.clipboard.writeText(url);
+    setCopiedLink(true);
+    toast.success("Public Sales Link copied to clipboard!");
+    setTimeout(() => setCopiedLink(false), 2500);
+  };
 
   // Load Leads Data
   const loadLeads = useCallback(async () => {
@@ -116,6 +163,7 @@ export default function Leads() {
           params: {
             scope,
             stage: stageFilter !== "all" ? stageFilter : undefined,
+            source: sourceFilter !== "all" ? sourceFilter : undefined,
             assigned_to: assignedFilter !== "all" ? assignedFilter : undefined,
             followup_filter: followupFilter !== "all" ? followupFilter : undefined,
             search: search.trim() || undefined,
@@ -133,7 +181,7 @@ export default function Leads() {
     } finally {
       setLoading(false);
     }
-  }, [scope, stageFilter, assignedFilter, followupFilter, search, page]);
+  }, [scope, stageFilter, sourceFilter, assignedFilter, followupFilter, search, page]);
 
   useEffect(() => {
     loadLeads();
@@ -231,15 +279,26 @@ export default function Leads() {
                 </button>
               )}
             </div>
-            {canCreate && (
+            <div className="flex items-center gap-2">
               <Button
-                onClick={() => { setSelectedLead(null); setFormModalOpen(true); }}
-                className="bg-blue-600 hover:bg-blue-700 shadow-xs"
-                data-testid="add-lead-btn"
+                variant="outline"
+                onClick={() => setSalesLinkModalOpen(true)}
+                className="border-blue-200 text-blue-700 bg-blue-50/70 hover:bg-blue-100 shadow-xs text-xs font-semibold"
+                data-testid="public-sales-link-btn"
+                title="View and copy company-branded public sales inquiry link"
               >
-                <Plus className="w-4 h-4 mr-1.5" /> Add Lead
+                <LinkIcon className="w-3.5 h-3.5 mr-1.5 text-blue-600" /> Public Sales Link
               </Button>
-            )}
+              {canCreate && (
+                <Button
+                  onClick={() => { setSelectedLead(null); setDefaultModalTab("basic"); setFormModalOpen(true); }}
+                  className="bg-blue-600 hover:bg-blue-700 shadow-xs"
+                  data-testid="add-lead-btn"
+                >
+                  <Plus className="w-4 h-4 mr-1.5" /> Add Lead
+                </Button>
+              )}
+            </div>
           </div>
         }
       />
@@ -293,6 +352,15 @@ export default function Leads() {
                   <SelectContent>
                     <SelectItem value="all">All Stages</SelectItem>
                     {LEAD_STAGES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+
+                <Select value={sourceFilter} onValueChange={(v) => { setSourceFilter(v); setPage(1); }}>
+                  <SelectTrigger className="w-36 h-9 text-xs"><SelectValue placeholder="All Sources" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Sources</SelectItem>
+                    <SelectItem value="sales_link">Sales Link</SelectItem>
+                    <SelectItem value="manual">Manual / Other</SelectItem>
                   </SelectContent>
                 </Select>
 
@@ -371,8 +439,29 @@ export default function Leads() {
                         <tr key={lead.id} className="hover:bg-slate-50/70 transition-colors">
                           {/* Lead Name & ID */}
                           <td className="py-3 px-3.5">
-                            <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                            <div className="font-semibold text-slate-900 flex items-center gap-1.5 flex-wrap">
                               <span>{lead.name}</span>
+                              {lead.source === "sales_link" && (
+                                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-[10px] font-semibold py-0 px-1.5 flex items-center gap-1">
+                                  <LinkIcon className="w-2.5 h-2.5" /> Sales Link
+                                </Badge>
+                              )}
+                              {lead.documents && lead.documents.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedLead(lead);
+                                    setDefaultModalTab("documents");
+                                    setFormModalOpen(true);
+                                  }}
+                                  className="bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100 px-1.5 py-0.5 rounded text-[10px] font-semibold inline-flex items-center gap-1 transition"
+                                  title="View uploaded documents"
+                                >
+                                  <Paperclip className="w-2.5 h-2.5" />
+                                  {lead.documents.length} doc{lead.documents.length === 1 ? "" : "s"}
+                                </button>
+                              )}
                             </div>
                             <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono mt-0.5">
                               <span>{lead.lead_no || "—"}</span>
@@ -418,15 +507,28 @@ export default function Leads() {
                               {lead.system_kw || lead.estimated_kw ? `${lead.system_kw || lead.estimated_kw} kW` : "—"}
                             </div>
                             <div className="text-[10px] text-slate-400 capitalize">
-                              {lead.consumer_type || "Rooftop Solar"}
+                              {lead.customer_type || lead.consumer_type || "Rooftop Solar"}
+                              {lead.system_requirement && ` • ${lead.system_requirement === "KW System Only" ? "KW Only" : "Full EPC"}`}
                             </div>
                           </td>
 
                           {/* Offer / Proposed Price */}
                           <td className="py-3 px-3 font-semibold text-slate-900 tabular-nums">
-                            {lead.proposed_price || lead.offer_price
-                              ? `₹${Number(lead.proposed_price || lead.offer_price).toLocaleString("en-IN")}`
-                              : "—"}
+                            <div>
+                              {lead.proposed_price || lead.offer_price || lead.offering_amount
+                                ? `₹${Number(lead.proposed_price || lead.offer_price || lead.offering_amount).toLocaleString("en-IN")}`
+                                : "—"}
+                            </div>
+                            {lead.offering_amount && (lead.proposed_price || lead.offer_price) && (
+                              <div className="text-[10px] text-slate-400 font-normal">
+                                Target: ₹{Number(lead.offering_amount).toLocaleString("en-IN")}
+                              </div>
+                            )}
+                            {lead.monthly_bill > 0 && (
+                              <div className="text-[10px] text-slate-400 font-normal font-mono">
+                                Bill: ₹{Number(lead.monthly_bill).toLocaleString("en-IN")}/mo
+                              </div>
+                            )}
                           </td>
 
                           {/* Stage */}
@@ -602,18 +704,32 @@ export default function Leads() {
         </TabsContent>
       </Tabs>
 
-      {/* 2-TAB ADD / EDIT LEAD MODAL */}
+      {/* 3-TAB ADD / EDIT LEAD MODAL */}
       {formModalOpen && (
         <AddEditLeadModal
           initial={selectedLead}
           employees={employees}
-          onClose={() => { setFormModalOpen(false); setSelectedLead(null); }}
+          defaultTab={defaultModalTab}
+          onClose={() => { setFormModalOpen(false); setSelectedLead(null); setDefaultModalTab("basic"); }}
           onSaved={() => {
             setFormModalOpen(false);
             setSelectedLead(null);
+            setDefaultModalTab("basic");
             queryClient.invalidateQueries(queryKeys.leads.all());
             loadLeads();
           }}
+        />
+      )}
+
+      {/* PUBLIC SALES LINK MANAGEMENT MODAL */}
+      {salesLinkModalOpen && (
+        <SalesLinkModal
+          salesLink={salesLink}
+          regenerating={regeneratingToken}
+          copied={copiedLink}
+          onCopy={handleCopySalesLink}
+          onRegenerate={handleRegenerateSalesLink}
+          onClose={() => setSalesLinkModalOpen(false)}
         />
       )}
     </div>
@@ -621,11 +737,13 @@ export default function Leads() {
 }
 
 
-// ─── 2-TAB ADD / EDIT LEAD MODAL ─────────────────────────────────────────────
-function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
+// ─── 3-TAB ADD / EDIT LEAD MODAL ─────────────────────────────────────────────
+function AddEditLeadModal({ initial, employees, defaultTab = "basic", onClose, onSaved }) {
   const { user } = useAuth();
-  const [activeModalTab, setActiveModalTab] = useState("basic");
+  const [activeModalTab, setActiveModalTab] = useState(defaultTab || "basic");
   const [saving, setSaving] = useState(false);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
+  const docInputRef = useRef(null);
 
   const isAdmin = user?.role === "Admin" || user?.role === "Super Admin" || user?.role === "Platform Owner" || user?.role === "Owner";
   const canConfirm = usePermission("leads", "approve");
@@ -637,9 +755,20 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
         name: initial.name || "",
         mobile: initial.mobile || "",
         alt_mobile: initial.alt_mobile || "",
-        address: initial.address || "",
+        email: initial.email || "",
+        address: initial.address || initial.project_address || "",
         city: initial.city || "",
+        state: initial.state || "",
+        pincode: initial.pincode || "",
+        customer_type: initial.customer_type || "Residential",
+        system_requirement: initial.system_requirement || "Full Solar System",
         system_kw: initial.system_kw || initial.estimated_kw || "",
+        monthly_bill: initial.monthly_bill || "",
+        consumer_number: initial.consumer_number || "",
+        connection_type: initial.connection_type || "Single Phase",
+        roof_type: initial.roof_type || "RCC Flat",
+        offering_amount: initial.offering_amount || "",
+        additional_message: initial.additional_message || "",
         proposed_price: initial.proposed_price || initial.offer_price || "",
         stage: initial.stage || "New Lead",
         quotation_no: initial.quotation_no || "",
@@ -653,15 +782,29 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
         assigned_to_name: initial.assigned_to_name || user?.name || "",
         followup_type: initial.followup_type || "Call",
         other_note: initial.other_note || "",
+        documents: initial.documents || [],
+        source: initial.source || "manual",
+        sales_link_token: initial.sales_link_token || "",
       };
     }
     return {
       name: "",
       mobile: "",
       alt_mobile: "",
+      email: "",
       address: "",
       city: "",
+      state: "",
+      pincode: "",
+      customer_type: "Residential",
+      system_requirement: "Full Solar System",
       system_kw: "",
+      monthly_bill: "",
+      consumer_number: "",
+      connection_type: "Single Phase",
+      roof_type: "RCC Flat",
+      offering_amount: "",
+      additional_message: "",
       proposed_price: "",
       stage: "New Lead",
       quotation_no: "",
@@ -675,6 +818,9 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
       assigned_to_name: user?.name || "",
       followup_type: "Call",
       other_note: "",
+      documents: [],
+      source: "manual",
+      sales_link_token: "",
     };
   });
 
@@ -690,6 +836,44 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
   const handleScheduleNoFollowup = () => {
     setF("followup_date", "");
     setF("followup_time", "");
+  };
+
+  // Upload Document inside modal
+  const handleDocUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setUploadingDoc(true);
+    try {
+      const newDocs = [...(form.documents || [])];
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append("file", file);
+        if (form.assigned_to) formData.append("assigned_to", form.assigned_to);
+        const res = await api.post("/files", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        newDocs.push({
+          id: res.data.id,
+          original_filename: res.data.filename,
+          filename: res.data.filename,
+          size: res.data.size,
+          content_type: res.data.content_type,
+          created_at: new Date().toISOString(),
+        });
+      }
+      setF("documents", newDocs);
+      toast.success(`${files.length} document(s) uploaded successfully`);
+    } catch (err) {
+      toast.error(formatApiError(err));
+    } finally {
+      setUploadingDoc(false);
+      if (docInputRef.current) docInputRef.current.value = "";
+    }
+  };
+
+  const handleRemoveDoc = (index) => {
+    const updated = (form.documents || []).filter((_, i) => i !== index);
+    setF("documents", updated);
   };
 
   const handleSubmit = async (e) => {
@@ -711,9 +895,13 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
         ...form,
         system_kw: Number(form.system_kw || 0),
         estimated_kw: Number(form.system_kw || 0),
+        solar_capacity_kw: Number(form.system_kw || 0),
         proposed_price: Number(form.proposed_price || 0),
         offer_price: Number(form.proposed_price || 0),
+        offering_amount: form.offering_amount ? Number(form.offering_amount) : undefined,
+        monthly_bill: form.monthly_bill ? Number(form.monthly_bill) : undefined,
         followup_date: form.followup_date || null, // null when no follow-up, never 'Infinity'
+        documents: form.documents || [],
       };
 
       if (initial?.id) {
@@ -731,31 +919,62 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
     }
   };
 
+  const authToken = localStorage.getItem("solarix_token");
+
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto p-6">
         <DialogHeader>
           <DialogTitle className="text-xl font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
             {initial ? `Edit Lead: ${initial.name} (${initial.lead_no || "Draft"})` : "Add New Solar Lead"}
           </DialogTitle>
           <DialogDescription className="text-xs text-slate-500">
-            {initial ? "Modify lead details or schedule plan. Changes save directly to this existing lead." : "Record solar lead requirements and schedule the follow-up plan."}
+            {initial ? "Review or modify customer details, requirements, documents, and follow-up plan." : "Record solar lead requirements and schedule the follow-up plan."}
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 pt-2">
-          {/* 2-TAB FORM SELECTOR */}
+          {/* Public Sales Link Banner */}
+          {form.source === "sales_link" && (
+            <div className="bg-blue-50/80 border border-blue-200 rounded-2xl p-3.5 flex items-center justify-between shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+                  <LinkIcon className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-blue-950 flex items-center gap-2">
+                    Submitted via Company Public Sales Link
+                    <Badge className="bg-blue-600 text-white text-[9px] px-1.5 py-0 font-semibold">Verified Source</Badge>
+                  </div>
+                  <div className="text-[11px] text-blue-700 mt-0.5">
+                    Customer filled out your online inquiry form. All property specifications and uploaded bills are attached below.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 3-TAB FORM SELECTOR */}
           <Tabs value={activeModalTab} onValueChange={setActiveModalTab}>
-            <TabsList className="grid grid-cols-2 bg-slate-100 p-1 rounded-xl">
+            <TabsList className="grid grid-cols-3 bg-slate-100 p-1 rounded-xl">
               <TabsTrigger value="basic" className="text-xs font-semibold">
-                TAB 1 — BASIC DETAILS
+                TAB 1 — BASIC & SITE
               </TabsTrigger>
               <TabsTrigger value="schedule" className="text-xs font-semibold">
                 TAB 2 — SCHEDULE / PLAN
               </TabsTrigger>
+              <TabsTrigger value="documents" className="text-xs font-semibold flex items-center gap-1.5">
+                <Paperclip className="w-3.5 h-3.5" />
+                TAB 3 — DOCUMENTS
+                {form.documents?.length > 0 && (
+                  <span className="px-1.5 py-0.2 bg-emerald-600 text-white rounded-full text-[10px] font-bold">
+                    {form.documents.length}
+                  </span>
+                )}
+              </TabsTrigger>
             </TabsList>
 
-            {/* TAB 1: BASIC DETAILS */}
+            {/* TAB 1: BASIC & SITE DETAILS */}
             <TabsContent value="basic" className="space-y-4 pt-3">
               <div className="grid md:grid-cols-2 gap-3.5">
                 <div>
@@ -789,13 +1008,39 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
                   />
                 </div>
                 <div>
-                  <Label className="text-xs font-semibold text-slate-700">City / District</Label>
+                  <Label className="text-xs font-semibold text-slate-700">Email Address</Label>
                   <Input
-                    value={form.city}
-                    onChange={(e) => setF("city", e.target.value)}
-                    placeholder="e.g. Pune"
+                    type="email"
+                    value={form.email}
+                    onChange={(e) => setF("email", e.target.value)}
+                    placeholder="e.g. client@example.com"
                     className="mt-1 text-xs"
                   />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">Customer / Property Type</Label>
+                  <Select value={form.customer_type} onValueChange={(v) => setF("customer_type", v)}>
+                    <SelectTrigger className="mt-1 text-xs font-medium">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Residential">Residential (Home, Villa, Housing)</SelectItem>
+                      <SelectItem value="Business">Commercial / Business (Office, Hospital)</SelectItem>
+                      <SelectItem value="Industry">Industrial (Factory, Plant, Warehouse)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">Scope of Work</Label>
+                  <Select value={form.system_requirement} onValueChange={(v) => setF("system_requirement", v)}>
+                    <SelectTrigger className="mt-1 text-xs font-medium">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Full Solar System">Full Solar System (Turnkey EPC)</SelectItem>
+                      <SelectItem value="KW System Only">KW System Only (Equipment Supply)</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label className="text-xs font-semibold text-slate-700">Requested System Size (kW)</Label>
@@ -820,6 +1065,65 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
                     placeholder="e.g. 350000"
                     className="mt-1 text-xs font-mono"
                   />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">Customer Target Budget / Offer (₹)</Label>
+                  <Input
+                    type="number"
+                    step="1000"
+                    min="0"
+                    value={form.offering_amount}
+                    onChange={(e) => setF("offering_amount", e.target.value)}
+                    placeholder="e.g. 250000"
+                    className="mt-1 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">Approx. Monthly Electricity Bill (₹)</Label>
+                  <Input
+                    type="number"
+                    step="100"
+                    min="0"
+                    value={form.monthly_bill}
+                    onChange={(e) => setF("monthly_bill", e.target.value)}
+                    placeholder="e.g. 4500"
+                    className="mt-1 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">Consumer / CA Number</Label>
+                  <Input
+                    value={form.consumer_number}
+                    onChange={(e) => setF("consumer_number", e.target.value)}
+                    placeholder="e.g. 012345678901"
+                    className="mt-1 text-xs font-mono"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">Connection Phase</Label>
+                  <Select value={form.connection_type} onValueChange={(v) => setF("connection_type", v)}>
+                    <SelectTrigger className="mt-1 text-xs font-medium">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Single Phase">Single Phase (1-Phase)</SelectItem>
+                      <SelectItem value="Three Phase">Three Phase (3-Phase)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">Roof / Site Construction</Label>
+                  <Select value={form.roof_type} onValueChange={(v) => setF("roof_type", v)}>
+                    <SelectTrigger className="mt-1 text-xs font-medium">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="RCC Flat">RCC Flat Concrete Roof</SelectItem>
+                      <SelectItem value="Metal Sheet">Metal / Tin Sheet Roof</SelectItem>
+                      <SelectItem value="Slanted Tile">Slanted Tile / Pitched Roof</SelectItem>
+                      <SelectItem value="Open Ground">Open Ground Mount</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label className="text-xs font-semibold text-slate-700">Stage</Label>
@@ -871,30 +1175,58 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
                 </div>
               </div>
 
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">Site Address</Label>
-                <Textarea
-                  rows={2}
-                  value={form.address}
-                  onChange={(e) => setF("address", e.target.value)}
-                  placeholder="Plot/house number, building, landmark, village/area"
-                  className="mt-1 text-xs"
-                />
+              <div className="grid md:grid-cols-3 gap-3">
+                <div className="md:col-span-3">
+                  <Label className="text-xs font-semibold text-slate-700">Site Installation Address</Label>
+                  <Textarea
+                    rows={2}
+                    value={form.address}
+                    onChange={(e) => setF("address", e.target.value)}
+                    placeholder="Plot/house number, building, landmark, village/area"
+                    className="mt-1 text-xs"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">City / District</Label>
+                  <Input
+                    value={form.city}
+                    onChange={(e) => setF("city", e.target.value)}
+                    placeholder="e.g. Pune"
+                    className="mt-1 text-xs"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">State</Label>
+                  <Input
+                    value={form.state}
+                    onChange={(e) => setF("state", e.target.value)}
+                    placeholder="e.g. Maharashtra"
+                    className="mt-1 text-xs"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs font-semibold text-slate-700">PIN Code</Label>
+                  <Input
+                    value={form.pincode}
+                    onChange={(e) => setF("pincode", e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="e.g. 411001"
+                    maxLength={6}
+                    className="mt-1 text-xs font-mono"
+                  />
+                </div>
               </div>
 
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">Other Requirement</Label>
-                <Textarea
-                  rows={2}
-                  value={form.other_requirement}
-                  onChange={(e) => setF("other_requirement", e.target.value)}
-                  placeholder="Structure height, battery backup, specific brand preference..."
-                  className="mt-1 text-xs"
-                />
-              </div>
+              {form.additional_message && (
+                <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl">
+                  <Label className="text-xs font-bold text-amber-900 block mb-1">
+                    Customer Online Inquiry Message
+                  </Label>
+                  <p className="text-xs text-amber-800 italic">{form.additional_message}</p>
+                </div>
+              )}
 
               <div>
-                <Label className="text-xs font-semibold text-slate-700">Remarks</Label>
+                <Label className="text-xs font-semibold text-slate-700">Internal Remarks / Notes</Label>
                 <Textarea
                   rows={2}
                   value={form.remarks}
@@ -907,7 +1239,6 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
 
             {/* TAB 2: SCHEDULE / PLAN */}
             <TabsContent value="schedule" className="space-y-4 pt-3">
-              {/* Quick schedule preset buttons */}
               <div>
                 <Label className="text-xs font-semibold text-slate-700 mb-1.5 block">Schedule Options</Label>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1060,17 +1391,117 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
                   className="mt-1 text-xs"
                 />
               </div>
+            </TabsContent>
 
-              <div>
-                <Label className="text-xs font-semibold text-slate-700">Remarks</Label>
-                <Textarea
-                  rows={2}
-                  value={form.remarks}
-                  onChange={(e) => setF("remarks", e.target.value)}
-                  placeholder="Additional planning notes..."
-                  className="mt-1 text-xs"
+            {/* TAB 3: DOCUMENTS & ATTACHMENTS */}
+            <TabsContent value="documents" className="space-y-4 pt-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-xs font-bold text-slate-800">
+                    Lead Documents & Photos ({form.documents?.length || 0})
+                  </Label>
+                  <p className="text-[11px] text-slate-500">
+                    Customer uploaded electricity bills, sanction letters, and site photos.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={uploadingDoc}
+                  onClick={() => docInputRef.current?.click()}
+                  className="text-xs font-semibold h-8 border-slate-200"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1" />
+                  {uploadingDoc ? "Uploading..." : "Attach Document"}
+                </Button>
+                <input
+                  ref={docInputRef}
+                  type="file"
+                  multiple
+                  onChange={handleDocUpload}
+                  className="hidden"
                 />
               </div>
+
+              {/* Document List */}
+              {(!form.documents || form.documents.length === 0) ? (
+                <div className="border border-dashed border-slate-200 rounded-2xl p-8 text-center bg-slate-50/50">
+                  <Paperclip className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                  <div className="text-xs font-semibold text-slate-700">No Documents Attached</div>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Click "Attach Document" to add electricity bills or site survey photos.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {form.documents.map((doc, idx) => {
+                    const docId = doc.id || doc.file_id;
+                    const docName = doc.original_filename || doc.filename || `Document-${idx + 1}`;
+                    const previewUrl = `${API}/files/${docId}?download=0&auth=${authToken}`;
+                    const downloadUrl = `${API}/files/${docId}?download=1&auth=${authToken}`;
+
+                    return (
+                      <div
+                        key={docId || idx}
+                        className="p-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between hover:border-slate-300 transition-colors"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                            <FileText className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <span className="font-semibold text-xs text-slate-900 truncate block">
+                              {docName}
+                            </span>
+                            <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono mt-0.5">
+                              {doc.size && <span>{(doc.size / 1024).toFixed(1)} KB</span>}
+                              {doc.created_at && (
+                                <>
+                                  <span>•</span>
+                                  <span>{dayjs(doc.created_at).format("DD MMM YYYY")}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <a
+                            href={previewUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-1.5 text-slate-600 hover:text-emerald-700 hover:bg-slate-50 rounded-lg text-xs font-medium inline-flex items-center gap-1"
+                            title="Preview document in new tab"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline text-[11px]">View</span>
+                          </a>
+                          <a
+                            href={downloadUrl}
+                            download
+                            className="p-1.5 text-slate-600 hover:text-blue-700 hover:bg-slate-50 rounded-lg text-xs font-medium inline-flex items-center gap-1"
+                            title="Download document"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline text-[11px]">Download</span>
+                          </a>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemoveDoc(idx)}
+                            className="h-7 w-7 p-0 text-slate-400 hover:text-rose-600"
+                            title="Unattach document"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </TabsContent>
           </Tabs>
 
@@ -1083,6 +1514,150 @@ function AddEditLeadModal({ initial, employees, onClose, onSaved }) {
             </Button>
           </DialogFooter>
         </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+// ─── PUBLIC SALES LINK MANAGEMENT MODAL ──────────────────────────────────────
+function SalesLinkModal({ salesLink, regenerating, copied, onCopy, onRegenerate, onClose }) {
+  const publicToken = salesLink?.public_token || "";
+  const publicUrl = publicToken ? `${window.location.origin}/s/${publicToken}` : "";
+  const branding = salesLink?.branding || {};
+  const companyName = branding.company_name || branding.name || "Your Company";
+  const [previewLogoFailed, setPreviewLogoFailed] = useState(false);
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-xl p-6">
+        <DialogHeader>
+          <div className="flex items-center justify-between mb-1">
+            <Badge variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200 text-[10px] font-semibold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
+              Status: Active & Secure
+            </Badge>
+            <span className="text-[10px] text-slate-400 font-mono">Public Portal Token</span>
+          </div>
+          <DialogTitle className="text-xl font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
+            Company-Branded Sales Link
+          </DialogTitle>
+          <DialogDescription className="text-xs text-slate-500 leading-relaxed">
+            Share this dedicated link with prospective solar customers via WhatsApp, email, or your social media pages. Customers can submit project specifications and bills directly into your Solarix Leads module.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 pt-2">
+          {/* URL Box */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
+            <Label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+              <span>Your Public Sales Link URL</span>
+              <span className="text-[10px] text-slate-400 font-normal">Zero Solarix branding</span>
+            </Label>
+            <div className="flex items-center gap-2">
+              <Input
+                readOnly
+                value={publicUrl}
+                className="h-10 text-xs font-mono bg-white border-slate-200 rounded-xl"
+              />
+              <Button
+                type="button"
+                onClick={onCopy}
+                className={`h-10 px-3.5 text-xs font-semibold rounded-xl shrink-0 transition ${
+                  copied
+                    ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                    : "bg-blue-600 hover:bg-blue-700 text-white"
+                }`}
+              >
+                {copied ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 mr-1" /> Copied!
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 mr-1" /> Copy Link
+                  </>
+                )}
+              </Button>
+            </div>
+            <div className="flex items-center justify-between pt-1 text-[11px]">
+              <a
+                href={publicUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:underline inline-flex items-center gap-1 font-medium"
+              >
+                <ExternalLink className="w-3 h-3" /> Open Public Page in New Tab
+              </a>
+              <span className="text-slate-400">Tokens never expire until regenerated</span>
+            </div>
+          </div>
+
+          {/* Customer View Preview Card */}
+          <div className="border border-slate-200 rounded-2xl p-4 bg-white shadow-2xs space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Globe className="w-3.5 h-3.5 text-blue-600" />
+                Customer Portal Branding Preview
+              </span>
+              <Badge variant="outline" className="bg-slate-50 text-slate-600 text-[10px]">
+                100% White-Labeled
+              </Badge>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-100 flex items-center gap-3">
+              {!previewLogoFailed && branding.has_logo && publicToken ? (
+                <img
+                  src={`${API}/public/sales/${publicToken}/logo`}
+                  alt={companyName}
+                  onError={() => setPreviewLogoFailed(true)}
+                  className="w-12 h-12 object-contain rounded-xl bg-white border border-slate-200 p-1 shrink-0"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-base shadow-xs shrink-0">
+                  {companyName.slice(0, 2).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="font-bold text-sm text-slate-900 truncate">{companyName}</div>
+                <div className="text-[11px] text-slate-500 truncate">
+                  {[branding.phone, branding.email, branding.city].filter(Boolean).join(" • ") || "Authorized Solar EPC Partner"}
+                </div>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              When prospective buyers visit this link, they see your company name, logo, and contact info. No Solarix branding is visible anywhere on the public page.
+            </p>
+          </div>
+
+          {/* Token Regeneration Section */}
+          <div className="p-3 rounded-xl bg-rose-50/50 border border-rose-100 flex items-center justify-between">
+            <div className="min-w-0 pr-2">
+              <div className="text-xs font-bold text-rose-900">Regenerate Link Token</div>
+              <div className="text-[10px] text-rose-700 mt-0.5">
+                Instantly invalidates the current link. Past customers will need your new link.
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={regenerating}
+              onClick={onRegenerate}
+              className="border-rose-200 text-rose-700 hover:bg-rose-100 text-xs font-semibold h-8 shrink-0"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 mr-1 ${regenerating ? "animate-spin" : ""}`} />
+              {regenerating ? "Regenerating..." : "Regenerate"}
+            </Button>
+          </div>
+        </div>
+
+        <DialogFooter className="pt-3 border-t border-slate-100">
+          <Button type="button" onClick={onClose} className="text-xs w-full sm:w-auto">
+            Done
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

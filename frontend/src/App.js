@@ -46,6 +46,7 @@ const MaterialRequests = lazy(() => import("@/pages/MaterialRequests"));
 const SolarDesigner = lazy(() => import("@/pages/SolarDesigner"));
 const SolarStudio = lazy(() => import("@/pages/SolarDesigner/SolarStudio"));
 const ProposalGenerator = lazy(() => import("@/pages/ProposalGenerator"));
+const PublicSalesPortal = lazy(() => import("@/pages/PublicSalesPortal"));
 
 const ControlCenterLayout = lazy(() => import("@/pages/ControlCenter/ControlCenterLayout"));
 const ControlCenterDashboard = lazy(() => import("@/pages/ControlCenter/ControlCenterDashboard"));
@@ -279,6 +280,9 @@ function App() {
             <Route path="/vendor/register" element={<PublicOnly><Register /></PublicOnly>} />
             <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
             <Route path="/reset-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
+            {/* Public Company-Branded Sales / Lead Capture Portal */}
+            <Route path="/s/:token" element={<PublicSalesPortal />} />
+            <Route path="/sales/:token" element={<PublicSalesPortal />} />
             <Route path="/dashboard" element={<Protected><PermissionRoute page="dashboard"><MainTabShell activeTab="dashboard" /></PermissionRoute></Protected>} />
             <Route path="/solar-designer" element={<Protected><PermissionRoute page="solar_designer"><SolarDesigner /></PermissionRoute></Protected>} />
             <Route path="/solar-designer/new" element={<Protected><PermissionRoute page="solar_designer"><SolarStudio /></PermissionRoute></Protected>} />
