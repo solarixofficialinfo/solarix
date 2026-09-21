@@ -897,11 +897,8 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
     setPanels?.((prev) => [...prev, panelWithSection]);
     setSelectedPanelId?.(panelWithSection.id);
-    if (targetSec && onSelectSection) {
-      onSelectSection(targetSec.id);
-    }
     toast.success(`Placed Panel #${panels.length + 1}${targetSec ? ` in ${targetSec.name}` : ""}`);
-  }, [latLngToCartesian, orientation, panelSpecs, setbackMeters, rowSpacingMeters, panelSpacingMeters, panels, obstacles, walkways, azimuthDegrees, setPanels, setSelectedPanelId, roofSections, selectedSectionId, onSelectSection]);
+  }, [latLngToCartesian, orientation, panelSpecs, setbackMeters, rowSpacingMeters, panelSpacingMeters, panels, obstacles, walkways, azimuthDegrees, setPanels, setSelectedPanelId, roofSections, selectedSectionId]);
 
   useEffect(() => {
     handleMapClickForAddPanelRef.current = handleMapClickForAddPanel;

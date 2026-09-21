@@ -849,20 +849,6 @@ export function validateSectionPolygon(polygon, parentRoofPolygon = null, existi
     }
   }
 
-  // 1. Parent Roof Boundary Containment Check
-  if (parentRoofPolygon && Array.isArray(parentRoofPolygon) && parentRoofPolygon.length >= 3) {
-    const parentPts = ensureCartesianCoordinates(parentRoofPolygon);
-    for (let i = 0; i < pts.length; i++) {
-      if (!isPointInOrNearPolygon(pts[i].x, pts[i].y, parentPts, 0.20)) {
-        return { valid: false, error: "Section must be completely inside the parent roof boundary." };
-      }
-    }
-
-    const bounds = getPolygonBounds(pts);
-    if (!isPointInOrNearPolygon(bounds.centerX, bounds.centerY, parentPts, 0.20)) {
-      return { valid: false, error: "Section must be completely inside the parent roof boundary." };
-    }
-  }
 
   // Helper: checks if a point is strictly inside polygon interior (excluding shared boundary edges)
   function isPointStrictlyInside(px, py, points, borderTol = 0.08) {

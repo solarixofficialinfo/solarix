@@ -1011,9 +1011,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           if (memberId) {
             setSelectedMemberId(memberId);
             setSelectedNodeId(null);
-            if (hit.userData?.sectionId && onSelectSection) {
-              onSelectSection(hit.userData.sectionId);
-            }
             if (e.altKey || e.shiftKey) {
               setSelectedGroupId(hit.userData?.groupId || null);
             } else {
@@ -1027,16 +1024,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           if (pIntersects.length > 0) {
             const hit = pIntersects[0].object;
             const pId = hit.userData?.panelId;
-            const secId = hit.userData?.sectionId;
             if (pId) {
               changeSelectedPanelId(pId);
               const clickedP = panels.find((item) => item.id === pId);
               if (clickedP && clickedP.row != null) {
                 changeSelectedRowIndex(clickedP.row);
               }
-            }
-            if (secId && onSelectSection) {
-              onSelectSection(secId);
             }
           } else {
             const sectionObjects = Object.values(sectionMeshMapRef.current || {});

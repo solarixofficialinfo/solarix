@@ -15,7 +15,7 @@ import {
   AlertTriangle, ShieldCheck, Download, Sliders, Ruler, Maximize2, Minimize2,
   Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, ChevronUp, Eye, Focus,
   PlusCircle, Undo2, Edit3, X, HelpCircle, Bell, Grid, Layers2, Image as ImageIcon, ChevronRight, Edit2, Zap,
-  Scissors
+  Scissors, Move
 } from "lucide-react";
 import { toast } from "sonner";
 import dayjs from "dayjs";
@@ -159,6 +159,8 @@ export default function SolarStudio() {
   const [activeTool, setActiveTool] = useState("select"); // 'select' | 'draw_roof' | 'edit_roof' | 'add_panel' | 'calibrate'
   const [selectedPanelId, setSelectedPanelId] = useState(null);
   const [selectedSectionId, setSelectedSectionId] = useState(null);
+  const [isSectionSettingsOpen, setIsSectionSettingsOpen] = useState(false);
+  const [showMicroAdjust, setShowMicroAdjust] = useState(false);
   const [selectionMode, setSelectionMode] = useState("panel"); // 'panel' | 'row' | 'array'
   const [selectedRowIndex, setSelectedRowIndex] = useState(null);
   const [autoLayoutBaselinePanels, setAutoLayoutBaselinePanels] = useState(null);
@@ -457,6 +459,18 @@ export default function SolarStudio() {
     return effectiveSections.find((s) => s.id === selectedSectionId) || effectiveSections[0];
   }, [effectiveSections, selectedSectionId]);
 
+  // Explicit Section Selector: activates section and opens its inspector settings
+  const handleSelectSection = useCallback((secId) => {
+    if (secId) {
+      setSelectedSectionId(secId);
+      setIsSectionSettingsOpen(true);
+      setOpenSection(null);
+    } else {
+      setSelectedSectionId(null);
+      setIsSectionSettingsOpen(false);
+    }
+  }, []);
+
   // Split section with a line drawn across the polygon
   const handleSplitSection = useCallback((lineStart, lineEnd, targetSectionId = null) => {
     if (!lineStart || !lineEnd) return;
@@ -725,17 +739,19 @@ export default function SolarStudio() {
       return;
     }
 
-    const explicitSections = Array.isArray(designData.roof_sections) ? designData.roof_sections : [];
-    const val = validateSectionPolygon(sectionPolygon, designData.roof_polygon, explicitSections);
+    const baseSections = (Array.isArray(designData.roof_sections) && designData.roof_sections.length > 0)
+      ? designData.roof_sections
+      : effectiveSections;
+
+    const val = validateSectionPolygon(sectionPolygon, designData.roof_polygon, baseSections);
     if (!val.valid) {
       toast.error(val.error || "Invalid section polygon.");
       return;
     }
 
     // Sequential naming:
-    // If no explicit sections exist yet, the first drawn section is Section A!
     // If Section A already exists, the next is Section B, Section C, Section D...
-    const existingNames = explicitSections.map((s) => s.name || "");
+    const existingNames = baseSections.map((s) => s.name || "");
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let nextLetter = "A";
     for (let i = 0; i < alphabet.length; i++) {
@@ -746,12 +762,12 @@ export default function SolarStudio() {
       }
     }
     if (existingNames.includes(`Section ${nextLetter}`)) {
-      nextLetter = `${alphabet[explicitSections.length % 26]}${Math.floor(explicitSections.length / 26) + 1}`;
+      nextLetter = `${alphabet[baseSections.length % 26]}${Math.floor(baseSections.length / 26) + 1}`;
     }
 
     const surfaceMat = (designData.roof?.surface_material || "").toLowerCase();
     const defaultRoofType = surfaceMat.includes("tile") ? "Tile" : surfaceMat.includes("metal") ? "Metal" : "RCC";
-    const refSec = explicitSections[explicitSections.length - 1] || {};
+    const refSec = baseSections[baseSections.length - 1] || {};
 
     const newSection = {
       id: `sec_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
@@ -774,7 +790,9 @@ export default function SolarStudio() {
     };
 
     setDesignData((prev) => {
-      const current = Array.isArray(prev.roof_sections) ? prev.roof_sections : [];
+      const current = (Array.isArray(prev.roof_sections) && prev.roof_sections.length > 0)
+        ? prev.roof_sections
+        : effectiveSections;
       const nextSections = [...current, newSection];
       const metrics = recalculateRoofMetrics(
         prev.roof_polygon,
@@ -790,9 +808,11 @@ export default function SolarStudio() {
     });
 
     setSelectedSectionId(newSection.id);
+    setIsSectionSettingsOpen(true);
+    setOpenSection(null);
     setActiveTool("select");
     toast.success(`${newSection.name} created.`);
-  }, [designData]);
+  }, [designData, effectiveSections]);
 
   // Delete a specific section while preserving parent roof and sibling sections
   const handleDeleteSection = useCallback((sectionId) => {
@@ -2166,6 +2186,7 @@ export default function SolarStudio() {
                     setOpenSection(null);
                   } else {
                     setOpenSection(stage.key);
+                    setIsSectionSettingsOpen(false);
                     if (stage.key === "roof") {
                       if (!designData.roof_polygon || designData.roof_polygon.length < 3) {
                         setActiveTool("draw_roof");
@@ -2252,12 +2273,12 @@ export default function SolarStudio() {
             </span>
 
             {effectiveSections.map((sec) => {
-              const isSelected = selectedSectionId === sec.id;
+              const isSelected = (selectedSectionId || effectiveSections[0]?.id) === sec.id;
               return (
                 <button
                   key={sec.id}
                   onClick={() => {
-                    setSelectedSectionId(sec.id);
+                    handleSelectSection(sec.id);
                   }}
                   className={`px-3 py-1 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
                     isSelected
@@ -2273,6 +2294,24 @@ export default function SolarStudio() {
                 </button>
               );
             })}
+
+            {/* Explicit Section Settings Toggle */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsSectionSettingsOpen((prev) => !prev);
+                setOpenSection(null);
+              }}
+              className={`h-7 px-3 text-xs rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
+                isSectionSettingsOpen && !openSection
+                  ? "bg-cyan-600 text-white shadow-md ring-1 ring-cyan-300 border-cyan-500"
+                  : "text-cyan-400 hover:text-white bg-cyan-950/40 hover:bg-cyan-900/60 border-cyan-600/40"
+              }`}
+              title={`Edit Settings for ${activeSection?.name || "Active Section"}`}
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Section Settings</span>
+            </button>
 
             {/* + Add Section Button: ALWAYS VISIBLE */}
             <button
@@ -2333,30 +2372,49 @@ export default function SolarStudio() {
             )}
           </div>
 
-          {/* Active Tool Guidance & Done Button */}
-          {activeTool !== "select" && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-amber-300 font-semibold animate-pulse">
-                Active: {activeTool === "draw_section" ? "Drawing Section" : activeTool === "add_section_line" ? "Splitting Section" : activeTool}
-              </span>
+          <div className="flex items-center gap-2">
+            {/* Explicit Micro Adjust Launcher */}
+            {designData.panels && designData.panels.length > 0 && (
               <button
-                onClick={() => {
-                  setActiveTool("select");
-                }}
-                className="h-6 px-2.5 text-[11px] font-bold rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center gap-1 cursor-pointer shadow-sm"
+                type="button"
+                onClick={() => setShowMicroAdjust((prev) => !prev)}
+                className={`h-7 px-3 text-xs rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
+                  showMicroAdjust
+                    ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300 border-amber-400"
+                    : "text-amber-400 hover:text-white bg-amber-950/40 hover:bg-amber-900/60 border-amber-600/40"
+                }`}
+                title="Toggle manual panel/row/array micro-adjustment controls"
               >
-                <Check className="w-3 h-3" />
-                <span>Done</span>
+                <Move className="w-3.5 h-3.5" />
+                <span>Micro Adjust</span>
               </button>
-            </div>
-          )}
+            )}
+
+            {/* Active Tool Guidance & Done Button */}
+            {activeTool !== "select" && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-amber-300 font-semibold animate-pulse">
+                  Active: {activeTool === "draw_section" ? "Drawing Section" : activeTool === "add_section_line" ? "Splitting Section" : activeTool}
+                </span>
+                <button
+                  onClick={() => {
+                    setActiveTool("select");
+                  }}
+                  className="h-6 px-2.5 text-[11px] font-bold rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center gap-1 cursor-pointer shadow-sm"
+                >
+                  <Check className="w-3 h-3" />
+                  <span>Done</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
       {/* ──────────────────────────────────────────────────────────────────────────
           2C. FIXED MICRO CONTROL BAR (PANEL / ROW / ARRAY SELECTION & MICRO-MOVE)
       ────────────────────────────────────────────────────────────────────────── */}
-      {designData.panels && designData.panels.length > 0 && (
+      {showMicroAdjust && designData.panels && designData.panels.length > 0 && (
         <LayoutMicroAdjuster
           variant="fixed-bar"
           panels={designData.panels}
@@ -2391,7 +2449,7 @@ export default function SolarStudio() {
         <div className="xl:col-span-9 lg:col-span-8 flex flex-col relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl min-h-[580px] h-full">
           <div className="flex flex-row flex-1 min-h-0 w-full h-full relative overflow-hidden">
             {/* FIXED SECTION CONTROL DRAWER (Left fixed side panel) */}
-            {openSection && !selectedSectionId && (
+            {openSection && (
               <div
                 className="w-80 shrink-0 border-r border-slate-800 bg-slate-900/98 flex flex-col h-full overflow-y-auto z-20 shadow-2xl p-3.5 text-white space-y-3 animate-in fade-in slide-in-from-left-2 duration-150"
                 style={{ pointerEvents: "auto" }}
@@ -2654,7 +2712,7 @@ export default function SolarStudio() {
                       </div>
                       <Button
                         size="sm"
-                        onClick={() => setSelectedSectionId(activeSection.id)}
+                        onClick={() => handleSelectSection(activeSection.id)}
                         className="h-6 text-[10.5px] font-bold bg-cyan-600 hover:bg-cyan-500 text-slate-950 rounded-lg gap-1 px-2.5 cursor-pointer shadow-sm"
                       >
                         <Sliders className="w-3 h-3" />
@@ -3135,7 +3193,7 @@ export default function SolarStudio() {
           )}
 
           {/* PERSISTENT CANONICAL SECTION INSPECTOR (Active across 2D, 3D, and Split) */}
-          {selectedSectionId && activeSection && (
+          {!openSection && isSectionSettingsOpen && activeSection && (
             <div
               className="w-84 shrink-0 border-r border-slate-800 bg-slate-900/98 flex flex-col h-full overflow-hidden z-20 shadow-2xl animate-in fade-in slide-in-from-left-2 duration-150"
               style={{ pointerEvents: "auto" }}
@@ -3157,7 +3215,7 @@ export default function SolarStudio() {
                   </div>
                 </div>
                 <button
-                  onClick={() => setSelectedSectionId(null)}
+                  onClick={() => setIsSectionSettingsOpen(false)}
                   className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
                   title="Close Inspector"
                 >
@@ -3717,7 +3775,7 @@ export default function SolarStudio() {
               onCalibrationComplete={() => setIsCalibrated(true)}
               roofSections={effectiveSections}
               selectedSectionId={selectedSectionId}
-              onSelectSection={(id) => setSelectedSectionId(id)}
+              onSelectSection={handleSelectSection}
               onSplitSection={handleSplitSection}
               onMergeSections={handleMergeSections}
               onAddSection={handleAddSection}
@@ -3805,7 +3863,7 @@ export default function SolarStudio() {
                     roof={designData.roof}
                     roofSections={effectiveSections}
                     selectedSectionId={selectedSectionId}
-                    onSelectSection={(id) => setSelectedSectionId(id)}
+                    onSelectSection={handleSelectSection}
                     panels={designData.panels}
                     setPanels={handleSetPanels}
                     selectedPanelId={selectedPanelId}
@@ -3901,7 +3959,7 @@ export default function SolarStudio() {
                 onCaptureLocation={handleCaptureLocation}
                 roofSections={effectiveSections}
                 selectedSectionId={selectedSectionId}
-                onSelectSection={(id) => setSelectedSectionId(id)}
+                onSelectSection={handleSelectSection}
                 onSplitSection={handleSplitSection}
                 onMergeSections={handleMergeSections}
                 onAddSection={handleAddSection}
@@ -3921,7 +3979,7 @@ export default function SolarStudio() {
                     roof={designData.roof}
                     roofSections={effectiveSections}
                     selectedSectionId={selectedSectionId}
-                    onSelectSection={(id) => setSelectedSectionId(id)}
+                    onSelectSection={handleSelectSection}
                     panels={designData.panels}
                     setPanels={handleSetPanels}
                     selectedPanelId={selectedPanelId}
