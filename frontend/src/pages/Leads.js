@@ -22,7 +22,7 @@ import {
   Pencil, Trash2, Zap, Layers, User, AlertCircle, ExternalLink,
   PhoneCall, ShieldAlert, Sparkles, Check, ArrowRight,
   Link as LinkIcon, Copy, RefreshCw, Paperclip, Download, Eye, Globe,
-  FileText
+  FileText, X
 } from "lucide-react";
 
 import PageHeader from "@/components/PageHeader";
