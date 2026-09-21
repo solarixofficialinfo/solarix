@@ -15006,8 +15006,13 @@ async def list_leads(
     user_can_view_team = can_user_view_team_leads(user)
 
     if not user_can_view_team or scope == "mine":
-        # Force to current user's assigned leads
-        query["assigned_to"] = user["id"]
+        # For "mine" scope: show leads assigned to the user OR unassigned/sales_link leads
+        # (sales link enquiries may be assigned to admin fallback ID or same user)
+        uid = user["id"]
+        query["$or"] = [
+            {"assigned_to": uid},
+            {"source": {"$in": ["sales_link", "Sales Link"]}, "assigned_to": {"$in": [None, "", "admin", uid]}}
+        ]
     else:
         # User has team-wide view access and scope is "team" (or not "mine")
         if assigned_to and assigned_to != "all":
@@ -15911,9 +15916,14 @@ async def submit_public_sales_lead(token: str, data: PublicLeadIn):
     lead_no = await next_lead_id(cid)
     now_time = now_iso()
 
-    # Assign to company owner/admin
-    owner_user = await db.users.find_one({"company_id": cid, "role": {"$in": ["Admin", "Owner"]}}, {"_id": 0, "id": 1, "name": 1})
-    assigned_to = owner_user.get("id") if owner_user else "admin"
+    # Assign to company owner/admin — try Owner first, then Admin, then any user in company
+    owner_user = await db.users.find_one({"company_id": cid, "role": "Owner"}, {"_id": 0, "id": 1, "name": 1})
+    if not owner_user:
+        owner_user = await db.users.find_one({"company_id": cid, "role": "Admin"}, {"_id": 0, "id": 1, "name": 1})
+    if not owner_user:
+        owner_user = await db.users.find_one({"company_id": cid}, {"_id": 0, "id": 1, "name": 1})
+    # Never store the literal "admin" string — use None if no user found (will show under team view)
+    assigned_to = owner_user.get("id") if owner_user else None
     assigned_to_name = owner_user.get("name") if owner_user else "Company Admin"
 
     sys_kw = float(data.system_kw or data.solar_capacity_kw or 0.0)

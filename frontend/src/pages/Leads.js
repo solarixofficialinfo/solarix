@@ -21,7 +21,8 @@ import {
   Plus, Search, Phone, Calendar, Clock, UserCheck, CheckCircle2,
   Pencil, Trash2, Zap, Layers, User, AlertCircle, ExternalLink,
   PhoneCall, ShieldAlert, Sparkles, Check, ArrowRight,
-  Link as LinkIcon, Copy, RefreshCw, Paperclip, Download, Eye, Globe
+  Link as LinkIcon, Copy, RefreshCw, Paperclip, Download, Eye, Globe,
+  FileText
 } from "lucide-react";
 
 import PageHeader from "@/components/PageHeader";
