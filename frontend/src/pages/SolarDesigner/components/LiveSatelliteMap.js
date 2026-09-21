@@ -1417,7 +1417,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   useEffect(() => {
     handleMapClickRoofRef.current = handleMapClickRoof;
     window.__handleSolarMapClickRoof = handleMapClickRoof;
-  }, [handleMapClickRoof]);
+    window.__handleSolarSplitSection = onSplitSection;
+    window.__handleSolarAddSection = onAddSection;
+  }, [handleMapClickRoof, onSplitSection, onAddSection]);
 
   const handleMarkFinderPoint = useCallback(() => {
     const coords = cursorCoordsRef.current;
@@ -2871,6 +2873,23 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
                     <span>Split (Line)</span>
                   </button>
 
+                  {hasRoof && (
+                    <button
+                      onClick={() => {
+                        setActiveTool("draw_section");
+                        setActiveDrawPoints([]);
+                        toast.info(`Draw ${candidateSectionName}: click corners on map to trace section polygon, then click Finish.`);
+                      }}
+                      className={`h-7 px-2.5 rounded-lg font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                        activeTool === "draw_section" ? "bg-emerald-600 text-white shadow-sm ring-1 ring-emerald-300" : "text-emerald-400 hover:text-white hover:bg-slate-800 border border-emerald-500/40"
+                      }`}
+                      title="Add child roof section inside parent roof"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-emerald-300" />
+                      <span>+ Add Section</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={() => {
                       if (selectedPanelId) {
@@ -3235,28 +3254,6 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {/* ── 5. FLOATING LAYOUT MICRO-ADJUSTMENT TOOL ──────────────────────────── */}
-      {layers.panels && Array.isArray(panels) && panels.length > 0 && activeTool === "select" && (
-        <LayoutMicroAdjuster
-          panels={panels}
-          setPanels={setPanels}
-          roofPolygon={roofPolygon}
-          setbackMeters={setbackMeters}
-          obstacles={obstacles}
-          walkways={walkways}
-          panelSpecs={panelSpecs}
-          orientation={orientation}
-          selectionMode={activeSelectionMode}
-          setSelectionMode={changeSelectionMode}
-          selectedPanelId={activeSelectedPanelId}
-          setSelectedPanelId={changeSelectedPanelId}
-          selectedRowIndex={activeSelectedRowIndex}
-          setSelectedRowIndex={changeSelectedRowIndex}
-          autoLayoutBaselinePanels={autoLayoutBaselinePanels}
-          hasManualAdjustments={hasManualAdjustments}
-          setHasManualAdjustments={setHasManualAdjustments}
-        />
-      )}
     </div>
   );
 });

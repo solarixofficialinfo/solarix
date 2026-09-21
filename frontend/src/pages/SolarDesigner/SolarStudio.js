@@ -23,6 +23,7 @@ import dayjs from "dayjs";
 import LiveSatelliteMap from "./components/LiveSatelliteMap";
 const Rooftop3DViewer = lazy(() => import("./components/Rooftop3DViewer"));
 import DesignSummaryPanel from "./components/DesignSummaryPanel";
+import LayoutMicroAdjuster from "./components/LayoutMicroAdjuster";
 import {
   DEFAULT_PANEL_SPECS,
   OBSTACLE_TYPES,
@@ -444,6 +445,11 @@ export default function SolarStudio() {
     designData.structure?.show_structure,
   ]);
 
+  const hasRoof = Boolean(
+    (designData.roof_polygon && designData.roof_polygon.length >= 3) ||
+    (effectiveSections && effectiveSections.length > 0)
+  );
+
   // Current active / selected section object
   const activeSection = useMemo(() => {
     if (!effectiveSections || effectiveSections.length === 0) return null;
@@ -838,7 +844,8 @@ export default function SolarStudio() {
       };
     });
 
-    setSelectedSectionId(null);
+    const remainingSections = sections.filter((s) => s.id !== sectionId);
+    setSelectedSectionId(remainingSections.length > 0 ? remainingSections[0].id : null);
     setActiveTool("select");
     toast.success(`Deleted ${secName}.`);
   }, [designData.roof_sections, effectiveSections]);
@@ -2234,14 +2241,161 @@ export default function SolarStudio() {
       )}
 
       {/* ──────────────────────────────────────────────────────────────────────────
+          2B. PERSISTENT FIXED SECTION / CONTEXT BAR (ALWAYS VISIBLE WHEN ROOF EXISTS)
+      ────────────────────────────────────────────────────────────────────────── */}
+      {hasRoof && (
+        <div className="flex flex-wrap items-center justify-between gap-2.5 bg-slate-900/95 border border-slate-800 px-3.5 py-1.5 rounded-2xl shadow-md shrink-0">
+          <div className="flex items-center gap-2 overflow-x-auto py-0.5 no-scrollbar">
+            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 shrink-0 flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Sections:</span>
+            </span>
+
+            {effectiveSections.map((sec) => {
+              const isSelected = selectedSectionId === sec.id;
+              return (
+                <button
+                  key={sec.id}
+                  onClick={() => {
+                    setSelectedSectionId(sec.id);
+                  }}
+                  className={`px-3 py-1 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+                    isSelected
+                      ? "bg-cyan-500 text-slate-950 shadow-md shadow-cyan-950/50 ring-1 ring-cyan-300"
+                      : "bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700/80 border border-slate-700/60"
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${isSelected ? "bg-slate-950" : "bg-cyan-400"}`} />
+                  <span>{sec.name}</span>
+                  <span className={`text-[10px] ${isSelected ? "text-slate-900" : "text-slate-400"}`}>
+                    ({sec.tilt_deg ?? designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15}°)
+                  </span>
+                </button>
+              );
+            })}
+
+            {/* + Add Section Button: ALWAYS VISIBLE */}
+            <button
+              onClick={() => {
+                if (activeTab === "3d") setActiveTab("2d");
+                setActiveTool("draw_section");
+                toast.info("Click corners on 2D map to trace new section polygon, then click Finish.");
+              }}
+              className={`h-7 px-3 text-xs rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
+                activeTool === "draw_section"
+                  ? "bg-emerald-600 text-white shadow-md ring-1 ring-emerald-300 border-emerald-500"
+                  : "text-emerald-400 hover:text-white bg-emerald-950/40 hover:bg-emerald-900/60 border-emerald-600/40"
+              }`}
+              title="Add child roof section"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Add Section</span>
+            </button>
+
+            {/* Split Section Button */}
+            <button
+              onClick={() => {
+                if (activeTab === "3d") setActiveTab("2d");
+                const nextTool = activeTool === "add_section_line" ? "select" : "add_section_line";
+                setActiveTool(nextTool);
+                toast.info("Click 2 points across the roof on map to split it.");
+              }}
+              className={`h-7 px-3 text-xs rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
+                activeTool === "add_section_line"
+                  ? "bg-cyan-600 text-white shadow-md ring-1 ring-cyan-300 border-cyan-500"
+                  : "text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border-slate-700/60"
+              }`}
+              title="Split section with a line cut"
+            >
+              <Scissors className="w-3.5 h-3.5" />
+              <span>Split Section</span>
+            </button>
+
+            {/* Merge Sections Button (when >= 2 sections) */}
+            {effectiveSections.length >= 2 && (
+              <button
+                onClick={() => {
+                  if (selectedSectionId) {
+                    const other = effectiveSections.find((s) => s.id !== selectedSectionId);
+                    if (other) {
+                      handleMergeSections(selectedSectionId, other.id);
+                    }
+                  } else {
+                    toast.info("Select a section first, then click Merge to combine with adjacent section.");
+                  }
+                }}
+                className="h-7 px-2.5 text-xs rounded-xl font-semibold text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 flex items-center gap-1 transition cursor-pointer"
+                title="Merge selected section with adjacent section"
+              >
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                <span>Merge</span>
+              </button>
+            )}
+          </div>
+
+          {/* Active Tool Guidance & Done Button */}
+          {activeTool !== "select" && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-amber-300 font-semibold animate-pulse">
+                Active: {activeTool === "draw_section" ? "Drawing Section" : activeTool === "add_section_line" ? "Splitting Section" : activeTool}
+              </span>
+              <button
+                onClick={() => {
+                  setActiveTool("select");
+                }}
+                className="h-6 px-2.5 text-[11px] font-bold rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center gap-1 cursor-pointer shadow-sm"
+              >
+                <Check className="w-3 h-3" />
+                <span>Done</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ──────────────────────────────────────────────────────────────────────────
+          2C. FIXED MICRO CONTROL BAR (PANEL / ROW / ARRAY SELECTION & MICRO-MOVE)
+      ────────────────────────────────────────────────────────────────────────── */}
+      {designData.panels && designData.panels.length > 0 && (
+        <LayoutMicroAdjuster
+          variant="fixed-bar"
+          panels={designData.panels}
+          setPanels={handleSetPanels}
+          roofPolygon={designData.roof_polygon}
+          setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
+          obstacles={designData.obstacles}
+          walkways={designData.walkways}
+          panelSpecs={{
+            length_m: designData.panel_dimensions?.length_m || 2.278,
+            width_m: designData.panel_dimensions?.width_m || 1.134,
+            wattage: designData.panel_wattage || 550,
+          }}
+          orientation={designData.orientation}
+          selectionMode={selectionMode}
+          setSelectionMode={setSelectionMode}
+          selectedPanelId={selectedPanelId}
+          setSelectedPanelId={setSelectedPanelId}
+          selectedRowIndex={selectedRowIndex}
+          setSelectedRowIndex={setSelectedRowIndex}
+          autoLayoutBaselinePanels={autoLayoutBaselinePanels}
+          hasManualAdjustments={hasManualAdjustments}
+          setHasManualAdjustments={setHasManualAdjustments}
+        />
+      )}
+
+      {/* ──────────────────────────────────────────────────────────────────────────
           3. MAIN WORKSPACE (MAP DOMINANT ~80% + RIGHT INFO PANEL ~20%)
       ────────────────────────────────────────────────────────────────────────── */}
       <div className={`grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-2.5 flex-1 min-h-0 ${isFullscreen ? "h-full" : ""}`}>
         {/* CENTER / DOMINANT WORKSPACE (9 cols on xl = 75% width, 8 cols on lg = ~67%) */}
         <div className="xl:col-span-9 lg:col-span-8 flex flex-col relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl min-h-[580px] h-full">
-          {/* FLOATING SECTION CONTROL DRAWER (Compact floating card over map) */}
-          {openSection && !selectedSectionId && (
-            <div className="absolute top-14 left-4 z-40 w-80 bg-slate-900/95 backdrop-blur-md rounded-2xl border border-slate-700/80 shadow-2xl p-3.5 text-white space-y-3 animate-in fade-in slide-in-from-left-2 duration-150">
+          <div className="flex flex-row flex-1 min-h-0 w-full h-full relative overflow-hidden">
+            {/* FIXED SECTION CONTROL DRAWER (Left fixed side panel) */}
+            {openSection && !selectedSectionId && (
+              <div
+                className="w-80 shrink-0 border-r border-slate-800 bg-slate-900/98 flex flex-col h-full overflow-y-auto z-20 shadow-2xl p-3.5 text-white space-y-3 animate-in fade-in slide-in-from-left-2 duration-150"
+                style={{ pointerEvents: "auto" }}
+              >
               <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                 <div className="flex items-center gap-2">
                   {openSection === "location" && <MapPin className="w-4 h-4 text-blue-400" />}
@@ -2983,7 +3137,7 @@ export default function SolarStudio() {
           {/* PERSISTENT CANONICAL SECTION INSPECTOR (Active across 2D, 3D, and Split) */}
           {selectedSectionId && activeSection && (
             <div
-              className="absolute top-14 left-4 z-40 w-84 max-w-[calc(100vw-32px)] max-h-[calc(100vh-140px)] flex flex-col bg-slate-900/95 backdrop-blur-md rounded-2xl border border-cyan-500/50 shadow-2xl shadow-cyan-950/60 overflow-hidden animate-in fade-in slide-in-from-left-2 duration-150"
+              className="w-84 shrink-0 border-r border-slate-800 bg-slate-900/98 flex flex-col h-full overflow-hidden z-20 shadow-2xl animate-in fade-in slide-in-from-left-2 duration-150"
               style={{ pointerEvents: "auto" }}
             >
               {/* Header */}
@@ -3038,7 +3192,7 @@ export default function SolarStudio() {
               )}
 
               {/* Scrollable Content Body */}
-              <div className="p-3.5 space-y-3 overflow-y-auto text-xs text-white divide-y divide-slate-800/60 max-h-[calc(100vh-220px)]">
+              <div className="p-3.5 space-y-3 overflow-y-auto text-xs text-white divide-y divide-slate-800/60 flex-1 min-h-0">
                 {/* 1. Section Identity & Name */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -3502,8 +3656,10 @@ export default function SolarStudio() {
             </div>
           )}
 
-          {/* 2D SATELLITE MAP CONTAINER (Kept mounted to preserve state & prevent re-init lag) */}
-          <div className={`w-full h-full relative ${activeTab === "2d" ? "block" : "hidden"}`}>
+          {/* ── CANVAS WORKING AREA (Takes remaining space, NEVER covered by inspector) ── */}
+          <div className="flex-1 relative min-w-0 h-full overflow-hidden">
+            {/* 2D SATELLITE MAP CONTAINER (Kept mounted to preserve state & prevent re-init lag) */}
+            <div className={`w-full h-full relative ${activeTab === "2d" ? "block" : "hidden"}`}>
             <LiveSatelliteMap
               ref={liveMapRef}
               latitude={Number(designData.latitude) || 16.69512}
@@ -3573,7 +3729,7 @@ export default function SolarStudio() {
           {/* 3D VIEWER CONTAINER (Kept mounted for zero-lag switching) */}
           <div className={`w-full h-full relative ${activeTab === "3d" ? "block" : "hidden"}`}>
             {/* Top 3D View Presets Toolbar */}
-            <div className={`absolute top-4 ${selectedSectionId ? "left-92" : "left-4"} z-20 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md p-1 rounded-xl border border-slate-800 shadow-xl transition-all duration-200`}>
+            <div className="absolute top-4 left-4 z-20 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md p-1 rounded-xl border border-slate-800 shadow-xl transition-all duration-200">
               <button
                 onClick={() => setActiveTab("2d")}
                 className="px-3 py-1 text-xs font-bold rounded-lg text-slate-400 hover:text-white transition"
@@ -3797,6 +3953,8 @@ export default function SolarStudio() {
               )}
             </div>
           )}
+            </div>
+          </div>
         </div>
 
         {/* RIGHT COLUMN: COMPACT DESIGN INFORMATION & GALLERY (3 cols on xl = 25%, 4 cols on lg = 33%) */}
