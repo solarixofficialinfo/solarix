@@ -307,6 +307,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
   const hasRoof = roofPolygon && roofPolygon.length >= 3;
   const activePanels = (panels || []).filter((p) => !p.hidden);
+  const activeSec = selectedSectionId && roofSections
+    ? roofSections.find((s) => s.id === selectedSectionId)
+    : null;
 
   // 3D Panel Selection & Adjustment Fallbacks
   const [internalSelectedPanelId, setInternalSelectedPanelId] = useState(null);
@@ -330,10 +333,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const finalDy = Math.round(dy * 1000) / 1000;
 
     const currentSelectedPanel = activeSelectedPanelId ? panels.find((p) => p.id === activeSelectedPanelId) : null;
-    const activeSec = (selectedSectionId && roofSections)
-      ? roofSections.find((s) => s.id === selectedSectionId)
-      : (currentSelectedPanel?.sectionId ? roofSections.find((s) => s.id === currentSelectedPanel.sectionId) : null);
-    const targetPolygon = activeSec?.polygon || roofPolygon;
+    const targetSec = activeSec
+      || (currentSelectedPanel?.sectionId && roofSections ? roofSections.find((s) => s.id === currentSelectedPanel.sectionId) : null);
+    const targetPolygon = targetSec?.polygon || roofPolygon;
 
     if (!targetPolygon || targetPolygon.length < 3) {
       toast.warning("Roof boundary required for micro-adjustments.");
@@ -454,7 +456,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       setHasManualAdjustments?.(true);
       return;
     }
-  }, [panels, setPanels, activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode, selectedSectionId, roofSections, roofPolygon, setbackMeters, obstacles, walkways, setHasManualAdjustments]);
+  }, [panels, setPanels, activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode, activeSec, roofSections, roofPolygon, setbackMeters, obstacles, walkways, setHasManualAdjustments]);
 
   // Delete currently selected panel in 3D
   const handleDeleteSelectedPanel = useCallback(() => {
