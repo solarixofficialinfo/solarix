@@ -826,6 +826,24 @@ function AddEditLeadModal({ initial, employees, defaultTab = "basic", onClose, o
 
   const setF = (key, val) => setForm((prev) => ({ ...prev, [key]: val }));
 
+  // Ensure documents are authoritatively refreshed from get_lead_detail when viewing/editing existing lead
+  useEffect(() => {
+    let isMounted = true;
+    if (initial?.id) {
+      api.get(`/leads/${initial.id}`).then((res) => {
+        if (isMounted && res.data?.lead?.documents) {
+          setForm((prev) => ({
+            ...prev,
+            documents: res.data.lead.documents,
+          }));
+        }
+      }).catch((err) => {
+        console.warn("Could not refresh lead documents:", err);
+      });
+    }
+    return () => { isMounted = false; };
+  }, [initial?.id]);
+
   // Quick schedule handlers
   const handleScheduleToday = () => {
     setF("followup_date", dayjs().format("YYYY-MM-DD"));
@@ -1438,6 +1456,10 @@ function AddEditLeadModal({ initial, employees, defaultTab = "basic", onClose, o
                   {form.documents.map((doc, idx) => {
                     const docId = doc.id || doc.file_id;
                     const docName = doc.original_filename || doc.filename || `Document-${idx + 1}`;
+                    const isPdf = (doc.content_type || "").includes("pdf") || /\.pdf$/i.test(docName);
+                    const isImage = (doc.content_type || "").startsWith("image/") || /\.(jpg|jpeg|png|webp)$/i.test(docName);
+                    const ext = docName.includes(".") ? docName.split(".").pop().toUpperCase() : (isPdf ? "PDF" : isImage ? "IMG" : "DOC");
+                    const sizeStr = doc.size ? (doc.size < 1048576 ? `${(doc.size / 1024).toFixed(1)} KB` : `${(doc.size / 1048576).toFixed(1)} MB`) : null;
                     const previewUrl = `${API}/files/${docId}?download=0&auth=${authToken}`;
                     const downloadUrl = `${API}/files/${docId}?download=1&auth=${authToken}`;
 
@@ -1447,51 +1469,58 @@ function AddEditLeadModal({ initial, employees, defaultTab = "basic", onClose, o
                         className="p-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between hover:border-slate-300 transition-colors"
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                            isPdf ? "bg-rose-50 text-rose-600" : isImage ? "bg-blue-50 text-blue-600" : "bg-emerald-50 text-emerald-700"
+                          }`}>
                             <FileText className="w-4 h-4" />
                           </div>
                           <div className="min-w-0">
-                            <span className="font-semibold text-xs text-slate-900 truncate block">
-                              {docName}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-xs text-slate-900 truncate block">
+                                {docName}
+                              </span>
+                              <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 font-mono font-bold uppercase bg-slate-50 text-slate-600 border-slate-200">
+                                {ext}
+                              </Badge>
+                            </div>
                             <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono mt-0.5">
-                              {doc.size && <span>{(doc.size / 1024).toFixed(1)} KB</span>}
+                              {sizeStr && <span>{sizeStr}</span>}
                               {doc.created_at && (
                                 <>
                                   <span>•</span>
-                                  <span>{dayjs(doc.created_at).format("DD MMM YYYY")}</span>
+                                  <span>{dayjs(doc.created_at).format("DD MMM YYYY, HH:mm")}</span>
                                 </>
                               )}
                             </div>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1 shrink-0">
+                        <div className="flex items-center gap-1.5 shrink-0">
                           <a
                             href={previewUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="p-1.5 text-slate-600 hover:text-emerald-700 hover:bg-slate-50 rounded-lg text-xs font-medium inline-flex items-center gap-1"
-                            title="Preview document in new tab"
+                            className="px-2.5 py-1 text-slate-700 hover:text-emerald-700 bg-slate-50 hover:bg-emerald-50/60 border border-slate-200 rounded-lg text-xs font-semibold inline-flex items-center gap-1 transition-colors"
+                            title="Preview document"
                           >
                             <Eye className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline text-[11px]">View</span>
+                            <span>Preview</span>
                           </a>
                           <a
                             href={downloadUrl}
                             download
-                            className="p-1.5 text-slate-600 hover:text-blue-700 hover:bg-slate-50 rounded-lg text-xs font-medium inline-flex items-center gap-1"
+                            className="px-2.5 py-1 text-slate-700 hover:text-blue-700 bg-slate-50 hover:bg-blue-50/60 border border-slate-200 rounded-lg text-xs font-semibold inline-flex items-center gap-1 transition-colors"
                             title="Download document"
                           >
                             <Download className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline text-[11px]">Download</span>
+                            <span>Download</span>
                           </a>
                           <Button
                             type="button"
                             variant="ghost"
                             size="sm"
                             onClick={() => handleRemoveDoc(idx)}
-                            className="h-7 w-7 p-0 text-slate-400 hover:text-rose-600"
+                            className="h-7 w-7 p-0 text-slate-400 hover:text-rose-600 hover:bg-rose-50"
                             title="Unattach document"
                           >
                             <X className="w-3.5 h-3.5" />

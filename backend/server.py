@@ -2855,6 +2855,7 @@ class PublicLeadIn(BaseModel):
     customer_type: Optional[str] = "residential"
     system_requirement: Optional[str] = "full_system"
     system_kw: Optional[float] = 0.0
+    solar_capacity_kw: Optional[float] = 0.0
     monthly_bill: Optional[Union[float, str]] = None
     consumer_number: Optional[str] = ""
     connection_type: Optional[str] = ""
@@ -2862,6 +2863,7 @@ class PublicLeadIn(BaseModel):
     project_address: Optional[str] = ""
     offering_amount: Optional[float] = 0.0
     additional_message: Optional[str] = ""
+    document_ids: Optional[List[str]] = []
     documents: Optional[List[Dict[str, Any]]] = []
 
 class LeadCallIn(BaseModel):
@@ -15322,6 +15324,28 @@ async def get_lead_detail(lead_id: str, user=Depends(require_perm("leads", "view
     calls = await db.lead_call_activities.find({"lead_id": lead_id, "company_id": cid}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     followups = await db.lead_followups.find({"lead_id": lead_id, "company_id": cid}, {"_id": 0}).sort("followup_at", -1).to_list(1000)
 
+    # Reconcile documents from db.files to guarantee authoritative documents are always present
+    db_files = await db.files.find({"lead_id": lead_id, "company_id": cid, "is_deleted": False}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    if db_files:
+        files_dict = {
+            f["id"]: {
+                "id": f["id"],
+                "file_id": f["id"],
+                "original_filename": f.get("original_filename") or f.get("filename") or "Document",
+                "filename": f.get("original_filename") or f.get("filename") or "Document",
+                "content_type": f.get("content_type") or "application/octet-stream",
+                "size": f.get("size", 0),
+                "storage_path": f.get("storage_path"),
+                "created_at": f.get("created_at"),
+            }
+            for f in db_files
+        }
+        for d in (lead.get("documents") or []):
+            d_id = d.get("id") or d.get("file_id")
+            if d_id and d_id not in files_dict:
+                files_dict[d_id] = d
+        lead["documents"] = list(files_dict.values())
+
     return {
         "lead": lead,
         "calls": calls,
@@ -15770,21 +15794,51 @@ async def upload_public_sales_document(token: str, file: UploadFile = File(...))
         "company_id": cid,
         "uploader_id": "public_sales_link",
         "sales_link_id": link["id"],
+        "lead_id": None,
         "storage_path": result["path"],
         "original_filename": filename,
+        "filename": filename,
         "content_type": content_type,
         "size": result.get("size", len(data)),
         "category": "leads",
+        "source": "sales_link",
+        "status": "staged",
         "is_deleted": False,
         "created_at": now_iso(),
     }
     await db.files.insert_one(doc)
     return {
+        "id": file_id,
         "file_id": file_id,
         "filename": filename,
+        "original_filename": filename,
         "content_type": content_type,
-        "size": doc["size"]
+        "size": doc["size"],
+        "created_at": doc["created_at"],
     }
+
+@api_router.delete("/public/sales/{token}/upload/{file_id}")
+async def delete_staged_public_sales_document(token: str, file_id: str):
+    """Allow prospective customer to remove an uploaded staged file before form submission."""
+    link = await db.sales_links.find_one({"public_token": token, "is_active": True})
+    if not link:
+        raise HTTPException(status_code=404, detail="Sales link not found or inactive.")
+    cid = link["company_id"]
+
+    rec = await db.files.find_one({"id": file_id, "company_id": cid, "is_deleted": False})
+    if not rec:
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    if rec.get("lead_id"):
+        raise HTTPException(status_code=403, detail="Cannot delete document already committed to a lead.")
+
+    try:
+        delete_object(rec["storage_path"])
+    except Exception as e:
+        logger.warning(f"Failed deleting staged object from storage {rec.get('storage_path')}: {e}")
+
+    await db.files.delete_one({"id": file_id, "company_id": cid})
+    return {"ok": True, "file_id": file_id}
 
 @api_router.post("/public/sales/{token}/lead")
 async def submit_public_sales_lead(token: str, data: PublicLeadIn):
@@ -15811,7 +15865,7 @@ async def submit_public_sales_lead(token: str, data: PublicLeadIn):
     assigned_to = owner_user.get("id") if owner_user else "admin"
     assigned_to_name = owner_user.get("name") if owner_user else "Company Admin"
 
-    sys_kw = float(data.system_kw or 0.0)
+    sys_kw = float(data.system_kw or data.solar_capacity_kw or 0.0)
     offering = float(data.offering_amount or 0.0)
 
     # Normalize customer type
@@ -15828,6 +15882,51 @@ async def submit_public_sales_lead(token: str, data: PublicLeadIn):
     else:
         norm_customer_type = raw_ct or "residential"
         consumer_type_label = "Residential"
+
+    # Reconcile document attachments from both document_ids and documents
+    file_ids = []
+    if data.document_ids:
+        file_ids.extend([fid for fid in data.document_ids if fid])
+    if data.documents:
+        file_ids.extend([d.get("file_id") or d.get("id") for d in data.documents if (d.get("file_id") or d.get("id"))])
+
+    seen_ids = set()
+    unique_file_ids = []
+    for fid in file_ids:
+        if fid and fid not in seen_ids:
+            seen_ids.add(fid)
+            unique_file_ids.append(fid)
+
+    attached_docs = []
+    if unique_file_ids:
+        # Find matching files in db.files for this tenant
+        file_records = await db.files.find({
+            "id": {"$in": unique_file_ids},
+            "company_id": cid,
+            "is_deleted": False
+        }).to_list(100)
+
+        for f in file_records:
+            await db.files.update_one(
+                {"id": f["id"], "company_id": cid},
+                {"$set": {
+                    "lead_id": lead_id,
+                    "status": "active",
+                    "category": "leads",
+                    "source": "sales_link",
+                    "updated_at": now_time
+                }}
+            )
+            attached_docs.append({
+                "id": f["id"],
+                "file_id": f["id"],
+                "original_filename": f.get("original_filename") or f.get("filename") or "Document",
+                "filename": f.get("original_filename") or f.get("filename") or "Document",
+                "content_type": f.get("content_type") or "application/octet-stream",
+                "size": f.get("size", 0),
+                "storage_path": f.get("storage_path"),
+                "created_at": f.get("created_at") or now_time,
+            })
 
     lead_doc = {
         "id": lead_id,
@@ -15887,18 +15986,12 @@ async def submit_public_sales_lead(token: str, data: PublicLeadIn):
         "confirmed_at": "",
         "confirmed_by": "",
         "confirmed_by_name": "",
-        "documents": data.documents or [],
+        "documents": attached_docs,
         "created_at": now_time,
         "updated_at": now_time,
     }
 
     await db.leads.insert_one(lead_doc)
-
-    # Attach lead_id to uploaded document records
-    if data.documents:
-        file_ids = [d.get("file_id") for d in data.documents if d.get("file_id")]
-        for fid in file_ids:
-            await db.files.update_one({"id": fid, "company_id": cid}, {"$set": {"lead_id": lead_id}})
 
     # Create follow-up schedule item
     await db.lead_followups.insert_one({

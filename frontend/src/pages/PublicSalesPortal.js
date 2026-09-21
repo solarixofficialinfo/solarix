@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import axios from "axios";
 import { API } from "@/lib/api";
 import { searchLocations, getCurrentLocationDetails } from "@/lib/locationService";
@@ -13,7 +13,8 @@ import { toast } from "sonner";
 import {
   Sun, CheckCircle2, MapPin, Phone, Mail, Building2, Home, Factory,
   UploadCloud, FileText, X, ArrowRight, ArrowLeft, Loader2, Check,
-  AlertCircle, ShieldCheck, Zap, Sparkles, Navigation
+  AlertCircle, ShieldCheck, Zap, Navigation, Image as ImageIcon,
+  CheckCircle, FileCheck, RefreshCw, Eye
 } from "lucide-react";
 
 export default function PublicSalesPortal() {
@@ -23,12 +24,12 @@ export default function PublicSalesPortal() {
   const [branding, setBranding] = useState(null);
   const [logoFailed, setLogoFailed] = useState(false);
 
-  // Form State
+  // Form Step: 1 = Customer Details, 2 = Solar Requirement, 3 = Documents & Submit, 4 = Success
   const [currentStep, setCurrentStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
   const [submittedLead, setSubmittedLead] = useState(null);
 
-  // Step 1: Customer & Site Details
+  // Step 1: Customer Details
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
   const [email, setEmail] = useState("");
@@ -40,16 +41,18 @@ export default function PublicSalesPortal() {
   const [latitude, setLatitude] = useState(null);
   const [longitude, setLongitude] = useState(null);
 
-  // Location Autocomplete State
+  // Location Autocomplete & GPS State
   const [locSuggestions, setLocSuggestions] = useState([]);
   const [locLoading, setLocLoading] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [gpsLoading, setGpsLoading] = useState(false);
   const searchTimeoutRef = useRef(null);
 
-  // Step 2: System Requirements & Commercials
+  // Step 2: Solar Requirement
   const [systemRequirement, setSystemRequirement] = useState("Full Solar System");
   const [systemKw, setSystemKw] = useState("5");
+  const [customKw, setCustomKw] = useState("");
+  const [isCustomCapacity, setIsCustomCapacity] = useState(false);
   const [monthlyBill, setMonthlyBill] = useState("");
   const [consumerNumber, setConsumerNumber] = useState("");
   const [connectionType, setConnectionType] = useState("Single Phase");
@@ -57,9 +60,10 @@ export default function PublicSalesPortal() {
   const [offeringAmount, setOfferingAmount] = useState("");
   const [additionalMessage, setAdditionalMessage] = useState("");
 
-  // Document Uploads
-  const [selectedFiles, setSelectedFiles] = useState([]); // [{ file, id, name, size, progress, uploaded, error }]
-  const [uploadProgressOverall, setUploadProgressOverall] = useState(0);
+  // Step 3: Documents Uploads & Progress
+  // Array of: { id, file_id, name, size, content_type, progress, uploaded, uploading, error, blobUrl }
+  const [uploadedFiles, setUploadedFiles] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
 
   // 1. Fetch Company Branding on Mount
@@ -141,32 +145,147 @@ export default function PublicSalesPortal() {
     }
   };
 
-  // File Upload Handlers (No artificial limit; 10MB per file infrastructure limit)
-  const handleFileSelect = (e) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
-    const newItems = files.map((file) => ({
-      file,
-      name: file.name,
-      size: file.size,
-      progress: 0,
-      uploaded: false,
-      uploadedFileId: null,
-      error: null,
-    }));
-    setSelectedFiles((prev) => [...prev, ...newItems]);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+  // Capacity selection
+  const standardCapacities = ["3", "5", "8", "10", "15", "25", "50", "100"];
+  const handleSelectCapacity = (kw) => {
+    setIsCustomCapacity(false);
+    setSystemKw(kw);
+    setCustomKw("");
+  };
+  const handleCustomCapacityChange = (val) => {
+    setIsCustomCapacity(true);
+    setCustomKw(val);
+    setSystemKw(val);
   };
 
-  const handleRemoveFile = (index) => {
-    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+  // Immediate Document Upload Handler
+  const uploadSingleFile = async (fileItem) => {
+    const formData = new FormData();
+    formData.append("file", fileItem.rawFile);
+
+    try {
+      const res = await axios.post(`${API}/public/sales/${token}/upload`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setUploadedFiles((prev) =>
+              prev.map((f) => (f.tempKey === fileItem.tempKey ? { ...f, progress: percent } : f))
+            );
+          }
+        },
+      });
+
+      const data = res.data;
+      const finalId = data.id || data.file_id;
+      setUploadedFiles((prev) =>
+        prev.map((f) =>
+          f.tempKey === fileItem.tempKey
+            ? {
+                ...f,
+                id: finalId,
+                file_id: finalId,
+                name: data.filename || data.original_filename || f.name,
+                size: data.size || f.size,
+                content_type: data.content_type || f.content_type,
+                progress: 100,
+                uploaded: true,
+                uploading: false,
+              }
+            : f
+        )
+      );
+    } catch (err) {
+      console.error("File upload error:", err);
+      const errMsg = err.response?.data?.detail || "Upload failed";
+      setUploadedFiles((prev) =>
+        prev.map((f) =>
+          f.tempKey === fileItem.tempKey
+            ? { ...f, error: errMsg, uploading: false }
+            : f
+        )
+      );
+      toast.error(`Failed to upload ${fileItem.name}: ${errMsg}`);
+    }
+  };
+
+  const handleFilesAdded = (filesList) => {
+    const files = Array.from(filesList || []);
+    if (!files.length) return;
+
+    const newItems = files.map((file) => {
+      const tempKey = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const blobUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
+      return {
+        tempKey,
+        rawFile: file,
+        name: file.name,
+        size: file.size,
+        content_type: file.type || "application/octet-stream",
+        progress: 0,
+        uploaded: false,
+        uploading: true,
+        error: null,
+        blobUrl,
+      };
+    });
+
+    setUploadedFiles((prev) => [...prev, ...newItems]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+
+    // Trigger upload for each new file
+    newItems.forEach((item) => {
+      uploadSingleFile(item);
+    });
+  };
+
+  // Remove uploaded file & call backend DELETE to prevent orphan storage
+  const handleRemoveUploadedFile = async (indexToRemove) => {
+    const target = uploadedFiles[indexToRemove];
+    if (!target) return;
+
+    // Remove from UI immediately
+    setUploadedFiles((prev) => prev.filter((_, i) => i !== indexToRemove));
+
+    // If already stored on server, invoke delete endpoint to clean up staged file
+    const fileId = target.id || target.file_id;
+    if (fileId) {
+      try {
+        await axios.delete(`${API}/public/sales/${token}/upload/${fileId}`);
+      } catch (e) {
+        console.warn("Could not delete staged file from server:", e);
+      }
+    }
+    if (target.blobUrl) {
+      try { URL.revokeObjectURL(target.blobUrl); } catch (_) {}
+    }
+  };
+
+  // Drag and drop handlers
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (e.dataTransfer && e.dataTransfer.files) {
+      handleFilesAdded(e.dataTransfer.files);
+    }
   };
 
   // Step 1 Validation & Next
   const handleStep1Next = (e) => {
     e.preventDefault();
     if (!name.trim()) {
-      toast.error("Please enter your name");
+      toast.error("Please enter your full name");
       return;
     }
     const cleanMobile = mobile.replace(/\D/g, "");
@@ -178,57 +297,50 @@ export default function PublicSalesPortal() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  // Final Submission
-  const handleSubmitInquiry = async (e) => {
+  // Step 2 Validation & Next
+  const handleStep2Next = (e) => {
     e.preventDefault();
+    const kwNum = Number(systemKw);
+    if (!kwNum || kwNum <= 0) {
+      toast.error("Please select or enter a valid solar system capacity (kW)");
+      return;
+    }
+    setCurrentStep(3);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // Step 3 Final Submission
+  const handleSubmitEnquiry = async (e) => {
+    e.preventDefault();
+
+    // Check if any file is still actively uploading
+    const stillUploading = uploadedFiles.some((f) => f.uploading);
+    if (stillUploading) {
+      toast.error("Please wait for all documents to finish uploading before submitting.");
+      return;
+    }
+
     setSubmitting(true);
     try {
-      // 1. Upload files first if any
-      const uploadedDocIds = [];
-      const updatedFiles = [...selectedFiles];
+      // Collect valid uploaded document IDs & metadata
+      const documentIds = [];
+      const documentsMeta = [];
 
-      for (let i = 0; i < updatedFiles.length; i++) {
-        const item = updatedFiles[i];
-        if (item.uploaded && item.uploadedFileId) {
-          uploadedDocIds.push(item.uploadedFileId);
-          continue;
-        }
-
-        const formData = new FormData();
-        formData.append("file", item.file);
-
-        try {
-          const upRes = await axios.post(`${API}/public/sales/${token}/upload`, formData, {
-            headers: { "Content-Type": "multipart/form-data" },
-            onUploadProgress: (progressEvent) => {
-              if (progressEvent.total) {
-                const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                setSelectedFiles((current) =>
-                  current.map((f, idx) => (idx === i ? { ...f, progress: percent } : f))
-                );
-              }
-            },
+      uploadedFiles.forEach((f) => {
+        const fId = f.id || f.file_id;
+        if (fId && f.uploaded) {
+          documentIds.push(fId);
+          documentsMeta.push({
+            id: fId,
+            file_id: fId,
+            filename: f.name,
+            original_filename: f.name,
+            content_type: f.content_type,
+            size: f.size,
           });
-          const fileData = upRes.data;
-          uploadedDocIds.push(fileData.id);
-          setSelectedFiles((current) =>
-            current.map((f, idx) =>
-              idx === i ? { ...f, uploaded: true, uploadedFileId: fileData.id, progress: 100 } : f
-            )
-          );
-        } catch (uploadErr) {
-          console.error("Document upload error:", uploadErr);
-          const msg = uploadErr.response?.data?.detail || "Upload failed";
-          setSelectedFiles((current) =>
-            current.map((f, idx) => (idx === i ? { ...f, error: msg } : f))
-          );
-          toast.error(`Failed to upload ${item.name}: ${msg}`);
-          setSubmitting(false);
-          return;
         }
-      }
+      });
 
-      // 2. Submit Lead
       const payload = {
         name: name.trim(),
         mobile: mobile.trim(),
@@ -248,750 +360,911 @@ export default function PublicSalesPortal() {
         longitude: longitude || undefined,
         offering_amount: Number(offeringAmount) || undefined,
         additional_message: additionalMessage.trim() || undefined,
-        document_ids: uploadedDocIds,
+        document_ids: documentIds,
+        documents: documentsMeta,
       };
 
       const res = await axios.post(`${API}/public/sales/${token}/lead`, payload);
       setSubmittedLead(res.data?.lead || { lead_no: "CONFIRMED", name });
-      toast.success("Solar inquiry submitted successfully!");
+      setCurrentStep(4);
+      toast.success("Solar enquiry submitted successfully!");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
       console.error("Lead submission error:", err);
-      const detail = err.response?.data?.detail || "Failed to submit solar inquiry. Please try again.";
+      const detail = err.response?.data?.detail || "Failed to submit solar inquiry. Please check details and try again.";
       toast.error(detail);
     } finally {
       setSubmitting(false);
     }
   };
 
+  const handleResetForNewEnquiry = () => {
+    setName("");
+    setMobile("");
+    setEmail("");
+    setCustomerType("Residential");
+    setAddress("");
+    setCity("");
+    setStateName(branding?.state || "");
+    setPincode("");
+    setLatitude(null);
+    setLongitude(null);
+    setSystemRequirement("Full Solar System");
+    setSystemKw("5");
+    setCustomKw("");
+    setIsCustomCapacity(false);
+    setMonthlyBill("");
+    setConsumerNumber("");
+    setConnectionType("Single Phase");
+    setRoofType("RCC Flat");
+    setOfferingAmount("");
+    setAdditionalMessage("");
+    setUploadedFiles([]);
+    setSubmittedLead(null);
+    setCurrentStep(1);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  // Helper formatting for file size
+  const formatFileSize = (bytes) => {
+    if (!bytes || bytes === 0) return "0 KB";
+    const k = 1024;
+    if (bytes < k * k) {
+      return `${(bytes / k).toFixed(1)} KB`;
+    }
+    return `${(bytes / (k * k)).toFixed(1)} MB`;
+  };
+
   // Loading State
   if (brandingLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-14 h-14 rounded-2xl bg-white shadow-md flex items-center justify-center mb-4 border border-slate-100">
-          <Loader2 className="w-7 h-7 text-emerald-600 animate-spin" />
-        </div>
-        <h2 className="text-base font-semibold text-slate-800">Connecting to Solar Portal...</h2>
-        <p className="text-xs text-slate-500 mt-1 max-w-xs">Loading authorized company details & verified quotation form.</p>
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-slate-600">
+        <Loader2 className="w-8 h-8 animate-spin text-emerald-600 mb-3" />
+        <p className="text-xs font-semibold tracking-wide uppercase text-slate-500">Loading Solar Quotation Portal...</p>
       </div>
     );
   }
 
-  // Error State: Invalid or Revoked Link
+  // Error State
   if (brandingError || !branding) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-16 h-16 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mb-4">
-          <AlertCircle className="w-8 h-8" />
+        <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mb-3">
+          <AlertCircle className="w-6 h-6" />
         </div>
-        <h1 className="text-xl font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-          Sales Link Unavailable
-        </h1>
-        <p className="text-sm text-slate-600 max-w-md mt-2">
-          {brandingError || "This sales inquiry link is no longer active or the URL is incorrect."}
-        </p>
-        <p className="text-xs text-slate-400 mt-4">
-          Please contact your solar installation provider directly to request an updated inquiry link.
+        <h1 className="text-lg font-bold text-slate-900 mb-1">Inquiry Portal Unavailable</h1>
+        <p className="text-xs text-slate-500 max-w-sm mb-5">
+          {brandingError || "This solar inquiry link has expired or is no longer active. Please contact the solar company directly."}
         </p>
       </div>
     );
   }
 
-  const companyName = branding.company_name || branding.name || "Authorized Solar EPC";
-  const logoUrl = `${API}/public/sales/${token}/logo`;
-
-  // Render Confirmation State
-  if (submittedLead) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-50 via-emerald-50/20 to-slate-100 py-10 px-4 flex items-center justify-center">
-        <div className="max-w-xl w-full">
-          {/* Header Card */}
-          <Card className="p-8 text-center border-slate-200/80 shadow-lg bg-white rounded-3xl relative overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600" />
-
-            {/* Check Animation / Icon */}
-            <div className="w-20 h-20 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-5 ring-8 ring-emerald-50/50">
-              <CheckCircle2 className="w-10 h-10" />
-            </div>
-
-            <Badge variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200 px-3 py-1 text-xs font-semibold uppercase tracking-wider mb-2">
-              Inquiry Received Successfully
-            </Badge>
-
-            <h1 className="text-2xl font-bold text-slate-900 mt-2" style={{ fontFamily: "Outfit" }}>
-              Thank You, {submittedLead.name}!
-            </h1>
-
-            <p className="text-sm text-slate-600 mt-2 max-w-md mx-auto leading-relaxed">
-              Your solar project inquiry has been securely submitted to <strong>{companyName}</strong>. Our engineering team is reviewing your requirements and will contact you at <strong>{submittedLead.mobile}</strong> shortly.
-            </p>
-
-            {/* Inquiry Summary Pill */}
-            <div className="my-6 p-4 rounded-2xl bg-slate-50 border border-slate-100 text-left space-y-2">
-              <div className="flex items-center justify-between text-xs text-slate-500 pb-2 border-b border-slate-200/60">
-                <span>Inquiry Reference</span>
-                <span className="font-mono font-bold text-slate-900">{submittedLead.lead_no || "CONFIRMED"}</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div>
-                  <span className="text-slate-400 block text-[11px]">System Capacity</span>
-                  <span className="font-semibold text-slate-800">{submittedLead.system_kw || systemKw} kW Solar</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[11px]">Customer Type</span>
-                  <span className="font-semibold text-slate-800">{submittedLead.customer_type || customerType}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[11px]">Location</span>
-                  <span className="font-semibold text-slate-800 truncate block">
-                    {submittedLead.city || city ? `${submittedLead.city || city}, ${submittedLead.state || stateName}` : "India"}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[11px]">Attached Docs</span>
-                  <span className="font-semibold text-slate-800">
-                    {selectedFiles.length} file{selectedFiles.length === 1 ? "" : "s"} uploaded
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Company Contact Information */}
-            <div className="pt-4 border-t border-slate-100 flex flex-col items-center gap-2">
-              <div className="text-xs text-slate-500 font-medium">Need immediate assistance? Reach our office directly:</div>
-              <div className="flex items-center gap-4 flex-wrap justify-center text-xs">
-                {branding.phone && (
-                  <a href={`tel:${branding.phone}`} className="flex items-center gap-1.5 text-emerald-700 hover:underline font-semibold">
-                    <Phone className="w-3.5 h-3.5" /> {branding.phone}
-                  </a>
-                )}
-                {branding.email && (
-                  <a href={`mailto:${branding.email}`} className="flex items-center gap-1.5 text-emerald-700 hover:underline">
-                    <Mail className="w-3.5 h-3.5" /> {branding.email}
-                  </a>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-8">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setSubmittedLead(null);
-                  setCurrentStep(1);
-                  setSelectedFiles([]);
-                  setName("");
-                  setMobile("");
-                  setEmail("");
-                  setAddress("");
-                }}
-                className="text-xs text-slate-700 border-slate-200 hover:bg-slate-50 rounded-xl"
-              >
-                Submit Another Solar Inquiry
-              </Button>
-            </div>
-          </Card>
-        </div>
-      </div>
-    );
-  }
+  const companyName = branding.company_name || "Solar EPC Solutions";
+  const logoUrl = branding.logo_url ? `${API}${branding.logo_url}` : null;
+  const initialLetter = companyName.charAt(0).toUpperCase();
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 via-slate-50 to-emerald-50/20 text-slate-800 py-8 px-4 font-sans">
-      <div className="max-w-2xl mx-auto space-y-6">
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 font-sans antialiased py-6 px-3 sm:px-6">
+      <div className="max-w-4xl mx-auto">
 
-        {/* ─── COMPANY BRANDED HEADER (ZERO SOLAIX BRANDING) ─────────────────── */}
-        <header className="bg-white rounded-3xl border border-slate-200/80 p-6 shadow-sm relative overflow-hidden">
-          <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 text-center sm:text-left">
-            {/* Company Logo or Initials Avatar */}
-            {!logoFailed && branding.has_logo ? (
-              <img
-                src={logoUrl}
-                alt={companyName}
-                onError={() => setLogoFailed(true)}
-                className="w-16 h-16 sm:w-20 sm:h-20 object-contain rounded-2xl p-1 bg-white border border-slate-100 shadow-2xs shrink-0"
-              />
-            ) : (
-              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-700 text-white flex items-center justify-center font-bold text-2xl shadow-sm shrink-0">
-                {companyName.slice(0, 2).toUpperCase()}
-              </div>
-            )}
+        {/* ─── COMPACT COMPANY HEADER (ZERO SOLARIX BRANDING) ──────────────────── */}
+        <header className="bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-5 shadow-xs mb-5">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3.5 min-w-0">
+              {/* Logo / Monogram */}
+              {logoUrl && !logoFailed ? (
+                <img
+                  src={logoUrl}
+                  alt={companyName}
+                  onError={() => setLogoFailed(true)}
+                  className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl object-contain border border-slate-100 p-0.5 bg-white shrink-0"
+                />
+              ) : (
+                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-lg shrink-0 shadow-xs">
+                  {initialLetter}
+                </div>
+              )}
 
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-center sm:justify-start gap-2 flex-wrap mb-1">
-                <Badge variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200 text-[10px] font-semibold flex items-center gap-1 py-0.5">
-                  <ShieldCheck className="w-3 h-3 text-emerald-600" /> Verified Solar EPC
-                </Badge>
-                {branding.city && (
-                  <span className="text-slate-400 text-xs flex items-center gap-1">
-                    <MapPin className="w-3 h-3" /> {branding.city}{branding.state ? `, ${branding.state}` : ""}
+              {/* Company Info */}
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight truncate">
+                    {companyName}
+                  </h1>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/60">
+                    <ShieldCheck className="w-3 h-3" /> Verified EPC
                   </span>
-                )}
+                </div>
+                <div className="flex items-center gap-3 text-xs text-slate-500 mt-0.5 flex-wrap">
+                  {(branding.city || branding.state) && (
+                    <span className="flex items-center gap-1">
+                      <MapPin className="w-3 h-3 text-slate-400" />
+                      {[branding.city, branding.state].filter(Boolean).join(", ")}
+                    </span>
+                  )}
+                  {branding.mobile && (
+                    <span className="flex items-center gap-1">
+                      <Phone className="w-3 h-3 text-slate-400" />
+                      {branding.mobile}
+                    </span>
+                  )}
+                  {branding.email && (
+                    <span className="hidden md:flex items-center gap-1">
+                      <Mail className="w-3 h-3 text-slate-400" />
+                      {branding.email}
+                    </span>
+                  )}
+                </div>
               </div>
+            </div>
 
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight" style={{ fontFamily: "Outfit" }}>
-                {companyName}
-              </h1>
-
-              <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-lg">
-                Request a custom solar rooftop assessment & engineering quotation. Free site survey & guaranteed DISCOM subsidy support.
-              </p>
-
-              {/* Direct Company Contact Bar */}
-              <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-center sm:justify-start gap-4 flex-wrap text-xs text-slate-600">
-                {branding.phone && (
-                  <a href={`tel:${branding.phone}`} className="flex items-center gap-1.5 hover:text-emerald-700 font-medium">
-                    <Phone className="w-3.5 h-3.5 text-emerald-600" /> {branding.phone}
-                  </a>
-                )}
-                {branding.email && (
-                  <a href={`mailto:${branding.email}`} className="flex items-center gap-1.5 hover:text-emerald-700">
-                    <Mail className="w-3.5 h-3.5 text-emerald-600" /> {branding.email}
-                  </a>
-                )}
-              </div>
+            {/* Portal Action Tag */}
+            <div className="hidden sm:flex flex-col items-end">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Direct Portal</span>
+              <span className="text-xs font-semibold text-emerald-800">Solar Quotation Request</span>
             </div>
           </div>
         </header>
 
-        {/* ─── 2-STEP PROGRESS BAR ────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between px-2">
-          <button
-            type="button"
-            onClick={() => setCurrentStep(1)}
-            className={`flex items-center gap-2 text-xs font-semibold transition ${currentStep === 1 ? "text-emerald-700" : "text-slate-500 hover:text-slate-800"}`}
-          >
-            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${currentStep === 1 ? "bg-emerald-600 text-white" : "bg-emerald-100 text-emerald-800"}`}>
-              {currentStep > 1 ? <Check className="w-3.5 h-3.5" /> : "1"}
+        {/* ─── SUCCESS SCREEN (STEP 4) ───────────────────────────────────────── */}
+        {currentStep === 4 && (
+          <Card className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-10 shadow-xs text-center">
+            {/* Logo / Monogram */}
+            <div className="flex justify-center mb-4">
+              {logoUrl && !logoFailed ? (
+                <img
+                  src={logoUrl}
+                  alt={companyName}
+                  className="w-14 h-14 rounded-2xl object-contain border border-slate-100 p-1 bg-white"
+                />
+              ) : (
+                <div className="w-14 h-14 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold text-2xl shadow-xs">
+                  {initialLetter}
+                </div>
+              )}
             </div>
-            <span>Step 1: Your Site Details</span>
-          </button>
 
-          <div className="h-0.5 flex-1 mx-4 bg-slate-200">
-            <div className={`h-full bg-emerald-600 transition-all duration-300 ${currentStep === 2 ? "w-full" : "w-0"}`} />
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (name && mobile) setCurrentStep(2);
-            }}
-            className={`flex items-center gap-2 text-xs font-semibold transition ${currentStep === 2 ? "text-emerald-700" : "text-slate-400"}`}
-          >
-            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${currentStep === 2 ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600"}`}>
-              2
+            <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-3">
+              <CheckCircle2 className="w-7 h-7" />
             </div>
-            <span>Step 2: Solar System & Docs</span>
-          </button>
-        </div>
 
-        {/* ─── MAIN FORM CARD ─────────────────────────────────────────────────── */}
-        <Card className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 sm:p-8">
+            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight mb-1">
+              Thank you, {submittedLead?.name || name}!
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-600 max-w-md mx-auto mb-5">
+              Your solar quotation enquiry has been submitted directly to <strong className="font-semibold text-slate-800">{companyName}</strong>. Our engineering team will review your site specifications and contact you shortly.
+            </p>
 
-          {/* STEP 1: CUSTOMER & SITE DETAILS */}
-          {currentStep === 1 && (
-            <form onSubmit={handleStep1Next} className="space-y-6">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                  Customer & Property Information
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Tell us who you are and where the solar power plant is to be installed.
-                </p>
+            {/* Reference Badge */}
+            <div className="inline-flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 mb-6">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Enquiry Reference:</span>
+              <span className="text-xs font-mono font-bold text-slate-900">
+                {submittedLead?.lead_no || "CONFIRMED"}
+              </span>
+            </div>
+
+            {/* Submitted Summary Grid */}
+            <div className="max-w-md mx-auto bg-slate-50/70 border border-slate-200/80 rounded-xl p-4 text-left text-xs mb-6 space-y-2">
+              <div className="flex justify-between border-b border-slate-200/60 pb-1.5">
+                <span className="text-slate-500">System Capacity</span>
+                <span className="font-semibold text-slate-900">{systemKw} kW ({systemRequirement})</span>
               </div>
-
-              {/* Customer Type Radio Cards */}
-              <div>
-                <Label className="text-xs font-bold text-slate-700 block mb-2">Customer / Property Type *</Label>
-                <div className="grid grid-cols-3 gap-3">
-                  {[
-                    { key: "Residential", label: "Residential", desc: "Home, Villa, Apartment", icon: Home },
-                    { key: "Business", label: "Commercial", desc: "Office, Hospital, Shop", icon: Building2 },
-                    { key: "Industry", label: "Industrial", desc: "Factory, Plant, Shed", icon: Factory },
-                  ].map((t) => {
-                    const Icon = t.icon;
-                    const isSelected = customerType === t.key;
-                    return (
-                      <button
-                        key={t.key}
-                        type="button"
-                        onClick={() => setCustomerType(t.key)}
-                        className={`p-3.5 rounded-2xl text-left border-2 transition-all flex flex-col justify-between ${
-                          isSelected
-                            ? "border-emerald-600 bg-emerald-50/50 shadow-xs"
-                            : "border-slate-200 hover:border-slate-300 bg-white"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <Icon className={`w-5 h-5 ${isSelected ? "text-emerald-700" : "text-slate-400"}`} />
-                          <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${isSelected ? "border-emerald-600 bg-emerald-600" : "border-slate-300"}`}>
-                            {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                          </div>
-                        </div>
-                        <div>
-                          <div className={`text-xs font-bold ${isSelected ? "text-emerald-950" : "text-slate-800"}`}>
-                            {t.label}
-                          </div>
-                          <div className="text-[10px] text-slate-500 mt-0.5 leading-tight">{t.desc}</div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+              <div className="flex justify-between border-b border-slate-200/60 pb-1.5">
+                <span className="text-slate-500">Customer Type</span>
+                <span className="font-semibold text-slate-900">{customerType}</span>
               </div>
-
-              {/* Personal Details */}
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs font-semibold text-slate-700">Full Name *</Label>
-                  <Input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. Ramesh Patil"
-                    required
-                    className="mt-1 h-11 text-sm rounded-xl"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs font-semibold text-slate-700">Mobile Number * (10 Digits)</Label>
-                  <div className="relative mt-1">
-                    <span className="absolute left-3.5 top-3 text-xs font-semibold text-slate-400 select-none">
-                      +91
-                    </span>
-                    <Input
-                      value={mobile}
-                      onChange={(e) => setMobile(e.target.value.replace(/\D/g, "").slice(0, 10))}
-                      placeholder="9876543210"
-                      maxLength={10}
-                      required
-                      className="h-11 pl-12 text-sm font-mono rounded-xl"
-                    />
-                  </div>
-                </div>
-                <div className="sm:col-span-2">
-                  <Label className="text-xs font-semibold text-slate-700">Email Address (Optional)</Label>
-                  <Input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="e.g. ramesh@example.com"
-                    className="mt-1 h-11 text-sm rounded-xl"
-                  />
-                </div>
+              <div className="flex justify-between border-b border-slate-200/60 pb-1.5">
+                <span className="text-slate-500">Installation Location</span>
+                <span className="font-semibold text-slate-900 truncate max-w-[240px]">
+                  {[city, stateName].filter(Boolean).join(", ") || address || "Provided"}
+                </span>
               </div>
-
-              {/* Site Address & Location Auto-Fill */}
-              <div className="space-y-2 relative">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-semibold text-slate-700">Site Installation Address</Label>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={gpsLoading}
-                    onClick={handleUseCurrentLocation}
-                    className="h-7 px-2 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 font-semibold"
-                  >
-                    {gpsLoading ? (
-                      <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
-                    ) : (
-                      <Navigation className="w-3.5 h-3.5 mr-1" />
-                    )}
-                    Use Current Location
-                  </Button>
-                </div>
-
-                <div className="relative">
-                  <Input
-                    value={address}
-                    onChange={(e) => handleAddressChange(e.target.value)}
-                    onFocus={() => { if (locSuggestions.length > 0) setShowSuggestions(true); }}
-                    placeholder="Type locality, street, PIN code or city to auto-detect..."
-                    className="h-11 text-sm rounded-xl pr-8"
-                  />
-                  {locLoading && (
-                    <div className="absolute right-3 top-3">
-                      <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />
-                    </div>
-                  )}
-
-                  {/* Autocomplete Dropdown */}
-                  {showSuggestions && locSuggestions.length > 0 && (
-                    <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden max-h-56 overflow-y-auto">
-                      {locSuggestions.map((item, idx) => (
-                        <button
-                          key={idx}
-                          type="button"
-                          onClick={() => handleSelectLocation(item)}
-                          className="w-full text-left px-3.5 py-2.5 text-xs hover:bg-slate-50 flex items-start gap-2 border-b border-slate-100 last:border-b-0 transition"
-                        >
-                          <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                          <div>
-                            <div className="font-semibold text-slate-800">
-                              {item.title || item.city || item.name || item.description}
-                            </div>
-                            <div className="text-[11px] text-slate-500">
-                              {[item.city, item.state, item.pincode].filter(Boolean).join(", ")}
-                            </div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-3 gap-2.5 pt-1">
-                  <div>
-                    <Label className="text-[11px] text-slate-500 font-medium">City / District</Label>
-                    <Input
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      placeholder="e.g. Pune"
-                      className="mt-1 h-9 text-xs rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-[11px] text-slate-500 font-medium">State</Label>
-                    <Input
-                      value={stateName}
-                      onChange={(e) => setStateName(e.target.value)}
-                      placeholder="e.g. Maharashtra"
-                      className="mt-1 h-9 text-xs rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-[11px] text-slate-500 font-medium">PIN Code</Label>
-                    <Input
-                      value={pincode}
-                      onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                      placeholder="e.g. 411001"
-                      maxLength={6}
-                      className="mt-1 h-9 text-xs font-mono rounded-lg"
-                    />
-                  </div>
-                </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Documents Attached</span>
+                <span className="font-semibold text-slate-900">
+                  {uploadedFiles.filter((f) => f.uploaded).length} file(s)
+                </span>
               </div>
+            </div>
 
-              {/* Action */}
-              <div className="pt-2">
-                <Button
-                  type="submit"
-                  className="w-full h-12 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-md flex items-center justify-center gap-2"
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleResetForNewEnquiry}
+              className="text-xs font-semibold h-10 px-5 border-slate-300 hover:bg-slate-50"
+            >
+              <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Submit Another Enquiry
+            </Button>
+          </Card>
+        )}
+
+        {/* ─── ACTIVE FORM STEPS (1, 2, 3) ───────────────────────────────────── */}
+        {currentStep <= 3 && (
+          <div className="space-y-5">
+            {/* ─── PROGRESS STEPPER ────────────────────────────────────────────── */}
+            <div className="bg-white border border-slate-200/80 rounded-2xl p-3 sm:p-4 shadow-xs">
+              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                {/* Step 1 */}
+                <div
+                  onClick={() => setCurrentStep(1)}
+                  className={`flex items-center justify-center gap-2 p-2 rounded-xl transition-all cursor-pointer ${
+                    currentStep === 1
+                      ? "bg-emerald-50 text-emerald-800 font-bold border border-emerald-200/60"
+                      : currentStep > 1
+                      ? "text-slate-700 font-medium hover:bg-slate-50"
+                      : "text-slate-400"
+                  }`}
                 >
-                  Continue to Solar Requirements <ArrowRight className="w-4 h-4" />
-                </Button>
-              </div>
-            </form>
-          )}
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] shrink-0 ${
+                    currentStep > 1 ? "bg-emerald-600 text-white font-bold" : currentStep === 1 ? "bg-emerald-600 text-white font-bold" : "bg-slate-100 text-slate-500"
+                  }`}>
+                    {currentStep > 1 ? "✓" : "1"}
+                  </span>
+                  <span className="truncate">01 Customer</span>
+                </div>
 
-          {/* STEP 2: SYSTEM REQUIREMENTS & DOCUMENTS */}
-          {currentStep === 2 && (
-            <form onSubmit={handleSubmitInquiry} className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                    Solar System & Energy Needs
+                {/* Step 2 */}
+                <div
+                  onClick={() => {
+                    if (name.trim() && mobile.replace(/\D/g, "").length >= 10) {
+                      setCurrentStep(2);
+                    } else {
+                      toast.error("Please complete Name and 10-digit Mobile in Step 1 first");
+                    }
+                  }}
+                  className={`flex items-center justify-center gap-2 p-2 rounded-xl transition-all cursor-pointer ${
+                    currentStep === 2
+                      ? "bg-emerald-50 text-emerald-800 font-bold border border-emerald-200/60"
+                      : currentStep > 2
+                      ? "text-slate-700 font-medium hover:bg-slate-50"
+                      : "text-slate-400"
+                  }`}
+                >
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] shrink-0 ${
+                    currentStep > 2 ? "bg-emerald-600 text-white font-bold" : currentStep === 2 ? "bg-emerald-600 text-white font-bold" : "bg-slate-100 text-slate-500"
+                  }`}>
+                    {currentStep > 2 ? "✓" : "2"}
+                  </span>
+                  <span className="truncate">02 Solar Requirement</span>
+                </div>
+
+                {/* Step 3 */}
+                <div
+                  onClick={() => {
+                    if (name.trim() && mobile.replace(/\D/g, "").length >= 10 && Number(systemKw) > 0) {
+                      setCurrentStep(3);
+                    } else {
+                      toast.error("Please verify Customer & Solar Requirement steps first");
+                    }
+                  }}
+                  className={`flex items-center justify-center gap-2 p-2 rounded-xl transition-all cursor-pointer ${
+                    currentStep === 3
+                      ? "bg-emerald-50 text-emerald-800 font-bold border border-emerald-200/60"
+                      : "text-slate-400"
+                  }`}
+                >
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] shrink-0 ${
+                    currentStep === 3 ? "bg-emerald-600 text-white font-bold" : "bg-slate-100 text-slate-500"
+                  }`}>
+                    3
+                  </span>
+                  <span className="truncate">03 Documents & Submit</span>
+                </div>
+              </div>
+            </div>
+
+            {/* ─── STEP 1: CUSTOMER DETAILS ────────────────────────────────────── */}
+            {currentStep === 1 && (
+              <Card className="bg-white border border-slate-200/80 rounded-2xl p-5 sm:p-7 shadow-xs">
+                <div className="mb-5 pb-3 border-b border-slate-100">
+                  <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
+                    Step 1: Customer Details & Site Location
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Specify your solar capacity requirement and attach relevant photos or bills.
+                    Provide your contact details and where the solar system will be installed.
                   </p>
                 </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setCurrentStep(1)}
-                  className="text-xs text-slate-500 hover:text-slate-800"
-                >
-                  <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Edit Site Details
-                </Button>
-              </div>
 
-              {/* System Requirement Choice */}
-              <div>
-                <Label className="text-xs font-bold text-slate-700 block mb-2">Scope of Work *</Label>
-                <div className="grid grid-cols-2 gap-3">
-                  {[
-                    {
-                      key: "Full Solar System",
-                      title: "Full Solar System (Turnkey EPC)",
-                      desc: "Complete setup: panels, inverter, mounting structure, cabling, and DISCOM net-metering approvals.",
-                    },
-                    {
-                      key: "KW System Only",
-                      title: "Equipment Supply Only",
-                      desc: "Supply of solar PV modules and inverter equipment for self-installation or sub-contractors.",
-                    },
-                  ].map((opt) => {
-                    const isSelected = systemRequirement === opt.key;
-                    return (
+                <form onSubmit={handleStep1Next} className="space-y-4">
+                  {/* Row 1: Full Name & Mobile Number */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700 flex items-center gap-1">
+                        Full Name <span className="text-rose-500">*</span>
+                      </Label>
+                      <Input
+                        required
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="e.g. Rajesh Sharma"
+                        className="mt-1 h-10 text-xs text-slate-900 border-slate-200 focus:border-emerald-600"
+                      />
+                    </div>
+
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700 flex items-center gap-1">
+                        Mobile Number <span className="text-rose-500">*</span>
+                      </Label>
+                      <div className="relative mt-1">
+                        <span className="absolute left-3 top-2.5 text-xs font-semibold text-slate-500 select-none">
+                          +91
+                        </span>
+                        <Input
+                          required
+                          type="tel"
+                          maxLength={10}
+                          value={mobile}
+                          onChange={(e) => setMobile(e.target.value.replace(/\D/g, ""))}
+                          placeholder="9876543210"
+                          className="pl-11 h-10 text-xs font-mono text-slate-900 border-slate-200 focus:border-emerald-600"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Email & Customer Type */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Email Address <span className="text-slate-400 text-[10px] font-normal">(Optional)</span>
+                      </Label>
+                      <Input
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="rajesh@example.com"
+                        className="mt-1 h-10 text-xs text-slate-900 border-slate-200 focus:border-emerald-600"
+                      />
+                    </div>
+
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700 mb-1 block">
+                        Customer / Property Type <span className="text-rose-500">*</span>
+                      </Label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {[
+                          { id: "Residential", label: "Residential", icon: Home },
+                          { id: "Commercial", label: "Commercial", icon: Building2 },
+                          { id: "Industrial", label: "Industrial", icon: Factory },
+                        ].map((t) => {
+                          const IconComp = t.icon;
+                          const active = customerType === t.id;
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => setCustomerType(t.id)}
+                              className={`h-10 px-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 border transition-all ${
+                                active
+                                  ? "bg-emerald-50 text-emerald-800 border-emerald-500 shadow-2xs"
+                                  : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
+                              }`}
+                            >
+                              <IconComp className={`w-3.5 h-3.5 ${active ? "text-emerald-600" : "text-slate-400"}`} />
+                              <span className="truncate">{t.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ─── PROJECT LOCATION SECTION ───────────────────────────────── */}
+                  <div className="pt-3 border-t border-slate-100">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Project Site Address <span className="text-slate-400 text-[10px] font-normal">(Search or enter)</span>
+                      </Label>
                       <button
-                        key={opt.key}
                         type="button"
-                        onClick={() => setSystemRequirement(opt.key)}
-                        className={`p-3.5 rounded-2xl text-left border-2 transition-all flex flex-col justify-between ${
-                          isSelected
-                            ? "border-emerald-600 bg-emerald-50/50 shadow-xs"
-                            : "border-slate-200 hover:border-slate-300 bg-white"
-                        }`}
+                        onClick={handleUseCurrentLocation}
+                        disabled={gpsLoading}
+                        className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 transition-colors"
                       >
-                        <div className="flex items-center justify-between mb-1.5">
-                          <Zap className={`w-4 h-4 ${isSelected ? "text-emerald-700" : "text-slate-400"}`} />
-                          <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${isSelected ? "border-emerald-600 bg-emerald-600" : "border-slate-300"}`}>
-                            {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                          </div>
-                        </div>
-                        <div>
-                          <div className={`text-xs font-bold ${isSelected ? "text-emerald-950" : "text-slate-800"}`}>
-                            {opt.title}
-                          </div>
-                          <div className="text-[10px] text-slate-500 mt-1 leading-snug">{opt.desc}</div>
-                        </div>
+                        {gpsLoading ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Navigation className="w-3 h-3" />
+                        )}
+                        Use Current Location
                       </button>
-                    );
-                  })}
-                </div>
-              </div>
+                    </div>
 
-              {/* Solar Capacity Required (kW) */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <Label className="text-xs font-bold text-slate-700">Solar Plant Capacity (kW) *</Label>
-                  <span className="text-xs font-mono font-bold text-emerald-700">{systemKw} kW</span>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap mb-2">
-                  {["3", "5", "8", "10", "15", "25", "50", "100"].map((kw) => (
+                    <div className="relative">
+                      <Input
+                        value={address}
+                        onChange={(e) => handleAddressChange(e.target.value)}
+                        onFocus={() => { if (locSuggestions.length > 0) setShowSuggestions(true); }}
+                        placeholder="Search landmark, building, society, or enter address..."
+                        className="h-10 text-xs text-slate-900 border-slate-200 focus:border-emerald-600 pr-8"
+                      />
+                      {locLoading && (
+                        <div className="absolute right-2.5 top-3 text-slate-400">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        </div>
+                      )}
+
+                      {/* Autocomplete Dropdown */}
+                      {showSuggestions && locSuggestions.length > 0 && (
+                        <div className="absolute z-20 left-0 right-0 top-full mt-1 bg-white rounded-xl shadow-lg border border-slate-200 max-h-48 overflow-y-auto divide-y divide-slate-100">
+                          {locSuggestions.map((item, idx) => (
+                            <div
+                              key={idx}
+                              onClick={() => handleSelectLocation(item)}
+                              className="p-2.5 text-xs text-slate-700 hover:bg-emerald-50/50 hover:text-emerald-900 cursor-pointer flex items-center gap-2"
+                            >
+                              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span className="truncate">{item.address || item.description || item.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Compact City, State, PIN Code Row */}
+                    <div className="grid grid-cols-3 gap-3 mt-3">
+                      <div>
+                        <Label className="text-[11px] font-medium text-slate-600">City</Label>
+                        <Input
+                          value={city}
+                          onChange={(e) => setCity(e.target.value)}
+                          placeholder="e.g. Surat"
+                          className="mt-1 h-9 text-xs text-slate-900 border-slate-200"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-[11px] font-medium text-slate-600">State</Label>
+                        <Input
+                          value={stateName}
+                          onChange={(e) => setStateName(e.target.value)}
+                          placeholder="e.g. Gujarat"
+                          className="mt-1 h-9 text-xs text-slate-900 border-slate-200"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-[11px] font-medium text-slate-600">PIN Code</Label>
+                        <Input
+                          maxLength={6}
+                          value={pincode}
+                          onChange={(e) => setPincode(e.target.value.replace(/\D/g, ""))}
+                          placeholder="e.g. 395007"
+                          className="mt-1 h-9 text-xs font-mono text-slate-900 border-slate-200"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Step 1 Actions */}
+                  <div className="pt-4 flex justify-end">
                     <Button
-                      key={kw}
+                      type="submit"
+                      className="h-10 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-xs flex items-center gap-1.5"
+                    >
+                      Continue to Solar Requirement <ArrowRight className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </form>
+              </Card>
+            )}
+
+            {/* ─── STEP 2: SOLAR REQUIREMENT ───────────────────────────────────── */}
+            {currentStep === 2 && (
+              <Card className="bg-white border border-slate-200/80 rounded-2xl p-5 sm:p-7 shadow-xs">
+                <div className="mb-5 pb-3 border-b border-slate-100">
+                  <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
+                    Step 2: Solar System Specifications
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Select your desired capacity and system details to help us size your plant.
+                  </p>
+                </div>
+
+                <form onSubmit={handleStep2Next} className="space-y-4">
+                  {/* Scope / Requirement */}
+                  <div>
+                    <Label className="text-xs font-semibold text-slate-700 mb-1.5 block">
+                      Scope / Requirement
+                    </Label>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      {[
+                        { id: "Full Solar System", label: "Full Solar System", sub: "Turnkey EPC (Supply, Installation & Net Metering)" },
+                        { id: "Equipment Supply Only", label: "Equipment Supply Only", sub: "Modules, Inverters & BOS supply only" },
+                      ].map((s) => {
+                        const active = systemRequirement === s.id;
+                        return (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => setSystemRequirement(s.id)}
+                            className={`p-3 rounded-xl text-left border transition-all ${
+                              active
+                                ? "bg-emerald-50 text-emerald-950 border-emerald-500 shadow-2xs"
+                                : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
+                            }`}
+                          >
+                            <div className="text-xs font-bold">{s.label}</div>
+                            <div className="text-[10px] text-slate-500 mt-0.5 leading-snug">{s.sub}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* System Capacity Quick Values Chips */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <Label className="text-xs font-semibold text-slate-700">
+                        System Capacity <span className="text-rose-500">*</span>
+                      </Label>
+                      <span className="text-[11px] font-bold text-emerald-700 font-mono">
+                        Selected: {systemKw || 0} kW
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {standardCapacities.map((kw) => {
+                        const active = !isCustomCapacity && systemKw === kw;
+                        return (
+                          <button
+                            key={kw}
+                            type="button"
+                            onClick={() => handleSelectCapacity(kw)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                              active
+                                ? "bg-emerald-600 text-white border-emerald-600 shadow-2xs"
+                                : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-white hover:border-slate-300"
+                            }`}
+                          >
+                            {kw} kW
+                          </button>
+                        );
+                      })}
+                      <div className="inline-flex items-center gap-1">
+                        <Input
+                          type="number"
+                          step="0.5"
+                          min="1"
+                          max="10000"
+                          value={isCustomCapacity ? customKw : ""}
+                          onChange={(e) => handleCustomCapacityChange(e.target.value)}
+                          placeholder="Custom kW"
+                          className={`w-24 h-8 text-xs font-mono border-slate-200 ${
+                            isCustomCapacity ? "border-emerald-600 bg-emerald-50/50 font-bold" : ""
+                          }`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Clean Grid of Fields */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                    {/* Monthly Bill */}
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Monthly Electricity Bill (₹)
+                      </Label>
+                      <Input
+                        type="number"
+                        step="100"
+                        min="0"
+                        value={monthlyBill}
+                        onChange={(e) => setMonthlyBill(e.target.value)}
+                        placeholder="e.g. 4500"
+                        className="mt-1 h-10 text-xs font-mono text-slate-900 border-slate-200 focus:border-emerald-600"
+                      />
+                    </div>
+
+                    {/* Consumer Number */}
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Consumer / CA Number <span className="text-slate-400 text-[10px] font-normal">(From electricity bill)</span>
+                      </Label>
+                      <Input
+                        value={consumerNumber}
+                        onChange={(e) => setConsumerNumber(e.target.value)}
+                        placeholder="e.g. 012345678901"
+                        className="mt-1 h-10 text-xs font-mono text-slate-900 border-slate-200 focus:border-emerald-600"
+                      />
+                    </div>
+
+                    {/* Electrical Phase */}
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Electrical Connection Phase
+                      </Label>
+                      <select
+                        value={connectionType}
+                        onChange={(e) => setConnectionType(e.target.value)}
+                        className="mt-1 w-full h-10 px-3 bg-white text-xs text-slate-900 border border-slate-200 rounded-xl focus:border-emerald-600 outline-none"
+                      >
+                        <option value="Single Phase">Single Phase (1-Phase)</option>
+                        <option value="Three Phase">Three Phase (3-Phase)</option>
+                        <option value="HT Connection">HT Connection (11kV / 33kV)</option>
+                      </select>
+                    </div>
+
+                    {/* Roof / Site Construction */}
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Roof / Site Construction
+                      </Label>
+                      <select
+                        value={roofType}
+                        onChange={(e) => setRoofType(e.target.value)}
+                        className="mt-1 w-full h-10 px-3 bg-white text-xs text-slate-900 border border-slate-200 rounded-xl focus:border-emerald-600 outline-none"
+                      >
+                        <option value="RCC Flat">RCC Flat Roof</option>
+                        <option value="Industrial Metal Shed">Industrial Metal Shed (Tin / Trapezoidal)</option>
+                        <option value="Tiled Roof">Tiled / Sloped Roof</option>
+                        <option value="Ground Mount">Ground Mount System</option>
+                        <option value="Carport / Canopy">Carport / Canopy Structure</option>
+                        <option value="Other">Other / Special Construction</option>
+                      </select>
+                    </div>
+
+                    {/* Target Budget / Offering Amount */}
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Target Budget / Offering Amount (₹) <span className="text-slate-400 text-[10px] font-normal">(Optional)</span>
+                      </Label>
+                      <Input
+                        type="number"
+                        step="5000"
+                        min="0"
+                        value={offeringAmount}
+                        onChange={(e) => setOfferingAmount(e.target.value)}
+                        placeholder="e.g. 250000"
+                        className="mt-1 h-10 text-xs font-mono text-slate-900 border-slate-200 focus:border-emerald-600"
+                      />
+                    </div>
+
+                    {/* Additional Requirements */}
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Special Requirements / Notes
+                      </Label>
+                      <Textarea
+                        rows={1}
+                        value={additionalMessage}
+                        onChange={(e) => setAdditionalMessage(e.target.value)}
+                        placeholder="e.g. Battery backup needed, rooftop shadow after 4 PM"
+                        className="mt-1 min-h-[40px] text-xs text-slate-900 border-slate-200 focus:border-emerald-600 resize-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Step 2 Actions */}
+                  <div className="pt-4 flex items-center justify-between border-t border-slate-100">
+                    <Button
                       type="button"
                       variant="outline"
-                      size="sm"
-                      onClick={() => setSystemKw(kw)}
-                      className={`text-xs rounded-xl h-8 px-3 font-semibold ${
-                        systemKw === kw
-                          ? "bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700"
-                          : "border-slate-200 text-slate-700 hover:bg-slate-50"
-                      }`}
+                      onClick={() => setCurrentStep(1)}
+                      className="h-10 px-4 text-xs text-slate-700 rounded-xl border-slate-200"
                     >
-                      {kw} kW
+                      <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back
                     </Button>
-                  ))}
-                </div>
-                <Input
-                  type="number"
-                  step="0.5"
-                  min="1"
-                  value={systemKw}
-                  onChange={(e) => setSystemKw(e.target.value)}
-                  placeholder="Or enter custom kW size..."
-                  className="h-10 text-sm font-mono rounded-xl"
-                  required
-                />
-              </div>
-
-              {/* Electricity Bill & Consumer Details */}
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs font-semibold text-slate-700">Approx. Monthly Electricity Bill (₹)</Label>
-                  <Input
-                    type="number"
-                    step="100"
-                    min="0"
-                    value={monthlyBill}
-                    onChange={(e) => setMonthlyBill(e.target.value)}
-                    placeholder="e.g. 4500"
-                    className="mt-1 h-10 text-sm font-mono rounded-xl"
-                  />
-                  <p className="text-[10px] text-slate-400 mt-1">Used to calculate savings and payback period.</p>
-                </div>
-                <div>
-                  <Label className="text-xs font-semibold text-slate-700">Consumer / CA Number (Optional)</Label>
-                  <Input
-                    value={consumerNumber}
-                    onChange={(e) => setConsumerNumber(e.target.value)}
-                    placeholder="From electricity bill"
-                    className="mt-1 h-10 text-sm font-mono rounded-xl"
-                  />
-                  <p className="text-[10px] text-slate-400 mt-1">DISCOM connection account number.</p>
-                </div>
-              </div>
-
-              {/* Connection Type & Roof Type */}
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs font-semibold text-slate-700">Electrical Connection Phase</Label>
-                  <div className="grid grid-cols-2 gap-2 mt-1">
-                    {["Single Phase", "Three Phase"].map((ph) => (
-                      <button
-                        key={ph}
-                        type="button"
-                        onClick={() => setConnectionType(ph)}
-                        className={`h-9 text-xs rounded-xl border font-semibold transition ${
-                          connectionType === ph
-                            ? "bg-emerald-50 text-emerald-800 border-emerald-500"
-                            : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                        }`}
-                      >
-                        {ph}
-                      </button>
-                    ))}
+                    <Button
+                      type="submit"
+                      className="h-10 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-xs flex items-center gap-1.5"
+                    >
+                      Continue to Documents & Submit <ArrowRight className="w-3.5 h-3.5" />
+                    </Button>
                   </div>
-                </div>
+                </form>
+              </Card>
+            )}
 
-                <div>
-                  <Label className="text-xs font-semibold text-slate-700">Roof / Site Construction</Label>
-                  <div className="grid grid-cols-2 gap-2 mt-1">
-                    {["RCC Flat", "Metal Sheet", "Slanted Tile", "Open Ground"].map((rf) => (
-                      <button
-                        key={rf}
-                        type="button"
-                        onClick={() => setRoofType(rf)}
-                        className={`h-9 text-xs rounded-xl border font-semibold transition ${
-                          roofType === rf
-                            ? "bg-emerald-50 text-emerald-800 border-emerald-500"
-                            : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                        }`}
-                      >
-                        {rf}
-                      </button>
-                    ))}
+            {/* ─── STEP 3: DOCUMENTS, REVIEW & SUBMIT ─────────────────────────── */}
+            {currentStep === 3 && (
+              <div className="space-y-5">
+                {/* ─── SECTION 1: DOCUMENTS & PHOTOS ─── */}
+                <Card className="bg-white border border-slate-200/80 rounded-2xl p-5 sm:p-7 shadow-xs">
+                  <div className="mb-4">
+                    <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
+                      Documents & Photos
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Upload electricity bills, roof photos, sanction letters or other documents that help us prepare your quotation.
+                    </p>
                   </div>
-                </div>
-              </div>
 
-              {/* Budget / Offering & Notes */}
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs font-semibold text-slate-700">Target Budget / Offering Price (₹)</Label>
-                  <Input
-                    type="number"
-                    step="5000"
-                    min="0"
-                    value={offeringAmount}
-                    onChange={(e) => setOfferingAmount(e.target.value)}
-                    placeholder="e.g. 250000"
-                    className="mt-1 h-10 text-sm font-mono rounded-xl"
-                  />
-                  <p className="text-[10px] text-slate-400 mt-1">Optional budget expectation for this installation.</p>
-                </div>
-                <div>
-                  <Label className="text-xs font-semibold text-slate-700">Additional Site Notes / Remarks</Label>
-                  <Textarea
-                    rows={2}
-                    value={additionalMessage}
-                    onChange={(e) => setAdditionalMessage(e.target.value)}
-                    placeholder="Any shadow obstacles, specific panel brands, or preferred installation timeline..."
-                    className="mt-1 text-xs rounded-xl"
-                  />
-                </div>
-              </div>
-
-              {/* Multi-Document Upload (No artificial count limit) */}
-              <div className="space-y-3 pt-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-bold text-slate-800">
-                    Upload Documents / Photos (No Limit)
-                  </Label>
-                  <span className="text-[11px] text-slate-400">Up to 10MB per file</span>
-                </div>
-
-                <div
-                  onClick={() => fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-slate-200 hover:border-emerald-500 bg-slate-50/60 hover:bg-emerald-50/20 rounded-2xl p-6 text-center cursor-pointer transition-all group"
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx"
-                    onChange={handleFileSelect}
-                    className="hidden"
-                  />
-                  <div className="w-10 h-10 rounded-full bg-white shadow-2xs text-emerald-600 flex items-center justify-center mx-auto mb-2 group-hover:scale-110 transition-transform">
-                    <UploadCloud className="w-5 h-5" />
+                  {/* Clean Upload Dropzone */}
+                  <div
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${
+                      isDragging
+                        ? "border-emerald-500 bg-emerald-50/40 scale-[0.99]"
+                        : "border-slate-200 hover:border-emerald-500 bg-slate-50/50 hover:bg-emerald-50/10"
+                    }`}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept=".pdf,.jpg,.jpeg,.png,.webp,image/*,application/pdf"
+                      onChange={(e) => handleFilesAdded(e.target.files)}
+                      className="hidden"
+                    />
+                    <div className="w-10 h-10 rounded-full bg-white shadow-2xs text-emerald-600 flex items-center justify-center mx-auto mb-2">
+                      <UploadCloud className="w-5 h-5" />
+                    </div>
+                    <div className="text-xs font-bold text-slate-800">
+                      + Add Documents
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Drop files here or click to browse
+                    </p>
+                    <div className="text-[10px] text-slate-400 font-medium mt-1">
+                      PDF, JPG, PNG, WEBP • Up to 10 MB per file • No file-count limit
+                    </div>
                   </div>
-                  <div className="text-xs font-bold text-slate-800">
-                    Click or Drag to Upload Files
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    Attach electricity bills, roof photos, or sanction letters to expedite your quotation.
-                  </p>
-                </div>
 
-                {/* Selected Files List */}
-                {selectedFiles.length > 0 && (
-                  <div className="space-y-2 pt-1">
-                    {selectedFiles.map((f, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center justify-between p-2.5 rounded-xl border border-slate-200 bg-white text-xs"
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <FileText className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <div className="min-w-0">
-                            <span className="font-semibold text-slate-800 truncate block">
-                              {f.name}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-mono">
-                              {(f.size / 1024).toFixed(1)} KB
-                              {f.progress > 0 && f.progress < 100 && ` • Uploading: ${f.progress}%`}
-                              {f.uploaded && " • Ready"}
-                              {f.error && ` • Error: ${f.error}`}
-                            </span>
+                  {/* Uploaded Files Listing */}
+                  {uploadedFiles.length > 0 && (
+                    <div className="space-y-2 mt-4">
+                      {uploadedFiles.map((fileItem, idx) => {
+                        const isImage = fileItem.content_type?.startsWith("image/") || /\.(jpg|jpeg|png|webp)$/i.test(fileItem.name);
+                        const isPdf = fileItem.content_type?.includes("pdf") || /\.pdf$/i.test(fileItem.name);
+
+                        return (
+                          <div
+                            key={fileItem.tempKey || idx}
+                            className="p-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between text-xs hover:border-slate-300 transition-colors"
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                                isPdf ? "bg-rose-50 text-rose-600" : isImage ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-600"
+                              }`}>
+                                {isImage ? <ImageIcon className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
+                              </div>
+
+                              <div className="min-w-0">
+                                <span className="font-semibold text-slate-900 truncate block">
+                                  {fileItem.name}
+                                </span>
+                                <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono mt-0.5">
+                                  <span>{formatFileSize(fileItem.size)}</span>
+                                  <span>•</span>
+                                  {fileItem.uploading ? (
+                                    <span className="text-emerald-700 flex items-center gap-1 font-semibold">
+                                      <Loader2 className="w-3 h-3 animate-spin" /> Uploading {fileItem.progress}%
+                                    </span>
+                                  ) : fileItem.uploaded ? (
+                                    <span className="text-emerald-700 flex items-center gap-1 font-semibold">
+                                      <Check className="w-3 h-3 text-emerald-600" /> Uploaded
+                                    </span>
+                                  ) : fileItem.error ? (
+                                    <span className="text-rose-600 font-semibold">Error: {fileItem.error}</span>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0">
+                              {fileItem.blobUrl && (
+                                <a
+                                  href={fileItem.blobUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="p-1.5 text-slate-500 hover:text-emerald-700 hover:bg-slate-50 rounded-lg text-[11px] font-medium inline-flex items-center gap-1"
+                                  title="Preview file"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </a>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveUploadedFile(idx)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                                title="Remove file"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleRemoveFile(idx)}
-                          className="h-7 w-7 p-0 text-slate-400 hover:text-rose-600"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex items-center gap-3 pt-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setCurrentStep(1)}
-                  disabled={submitting}
-                  className="h-12 px-5 text-xs text-slate-700 rounded-xl"
-                >
-                  <ArrowLeft className="w-4 h-4 mr-1.5" /> Back
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={submitting}
-                  className="flex-1 h-12 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl shadow-md flex items-center justify-center gap-2"
-                >
-                  {submitting ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" /> Submitting Inquiry...
-                    </>
-                  ) : (
-                    <>
-                      Submit Solar Inquiry to {companyName} <Check className="w-4 h-4" />
-                    </>
+                        );
+                      })}
+                    </div>
                   )}
-                </Button>
-              </div>
-            </form>
-          )}
+                </Card>
 
-        </Card>
+                {/* ─── SECTION 2: REVIEW BEFORE SUBMIT ─── */}
+                <Card className="bg-white border border-slate-200/80 rounded-2xl p-5 sm:p-6 shadow-xs">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-bold text-slate-900 tracking-tight">
+                      Review Enquiry Summary
+                    </h3>
+                    <span className="text-[11px] text-slate-400 font-medium">Verify before submitting</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50/70 border border-slate-200/80 rounded-xl p-3.5 text-xs">
+                    {/* Customer */}
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Customer</span>
+                      <div className="font-bold text-slate-900 truncate">{name}</div>
+                      <div className="text-slate-600 font-mono text-[11px]">{mobile}</div>
+                      <div className="text-slate-500 text-[11px]">{customerType}</div>
+                    </div>
+
+                    {/* Location */}
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Site Location</span>
+                      <div className="font-semibold text-slate-800 truncate">
+                        {[city, stateName].filter(Boolean).join(", ") || "Location Specified"}
+                      </div>
+                      <div className="text-slate-500 text-[11px] truncate">{address || "No street address"}</div>
+                      {pincode && <div className="text-slate-400 text-[11px] font-mono">PIN: {pincode}</div>}
+                    </div>
+
+                    {/* Solar Requirement */}
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Solar Requirement</span>
+                      <div className="font-bold text-emerald-800">{systemKw} kW Capacity</div>
+                      <div className="text-slate-600 text-[11px] truncate">{systemRequirement}</div>
+                      <div className="text-slate-500 text-[11px]">{roofType} • {connectionType}</div>
+                    </div>
+
+                    {/* Commercials & Docs */}
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Commercials & Docs</span>
+                      {offeringAmount ? (
+                        <div className="font-bold text-slate-900">Budget: ₹{Number(offeringAmount).toLocaleString("en-IN")}</div>
+                      ) : (
+                        <div className="text-slate-500 text-[11px]">Budget: Standard EPC</div>
+                      )}
+                      {monthlyBill && (
+                        <div className="text-slate-600 text-[11px]">Bill: ₹{Number(monthlyBill).toLocaleString("en-IN")}/mo</div>
+                      )}
+                      <div className="text-emerald-700 font-semibold text-[11px]">
+                        {uploadedFiles.filter((f) => f.uploaded).length} Document(s) Attached
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Submit Action Buttons */}
+                  <div className="pt-4 flex items-center justify-between border-t border-slate-100 mt-4">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setCurrentStep(2)}
+                      disabled={submitting}
+                      className="h-10 px-4 text-xs text-slate-700 rounded-xl border-slate-200"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back
+                    </Button>
+
+                    <Button
+                      type="button"
+                      onClick={handleSubmitEnquiry}
+                      disabled={submitting}
+                      className="h-11 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm rounded-xl shadow-sm flex items-center gap-2"
+                    >
+                      {submitting ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" /> Submitting Enquiry...
+                        </>
+                      ) : (
+                        <>
+                          Submit Enquiry to {companyName} <Check className="w-4 h-4" />
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </Card>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ─── FOOTER TRUST NOTE ─────────────────────────────────────────────── */}
-        <div className="text-center text-[11px] text-slate-400 py-4 flex items-center justify-center gap-1.5">
+        <footer className="text-center text-[11px] text-slate-400 py-6 flex items-center justify-center gap-1.5">
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
           <span>Your contact details and site data are submitted directly to {companyName}.</span>
-        </div>
+        </footer>
 
       </div>
     </div>
