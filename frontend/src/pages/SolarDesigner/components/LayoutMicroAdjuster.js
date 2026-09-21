@@ -593,6 +593,72 @@ export default function LayoutMicroAdjuster({
     toast.success(`Restored auto-layout (${autoLayoutBaselinePanels.length} panels)`);
   };
 
+  const handleResetToAutoLayout = handleResetLocal;
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ROTATE SELECTION HANDLER
+  // ─────────────────────────────────────────────────────────────────────────────
+  const handleRotateSelection = useCallback(
+    (deg = 15) => {
+      if (selectionMode === "panel") {
+        if (!selectedPanelId || !currentSelectedPanel) {
+          toast.info("Please click a panel to select it first.");
+          return;
+        }
+        setPanels((prev) =>
+          prev.map((p) =>
+            p.id === selectedPanelId
+              ? { ...p, rotation: ((Number(p.rotation) || 0) + deg) % 360 }
+              : p
+          )
+        );
+        setHasManualAdjustments?.(true);
+        toast.success(`Rotated panel by +${deg}°`);
+        return;
+      }
+
+      if (selectionMode === "row") {
+        if (selectedRowIndex == null || !currentSelectedRow) {
+          toast.info("Please select a row first.");
+          return;
+        }
+        const rowPanelIds = new Set(currentSelectedRow.panels.map((p) => p.id));
+        setPanels((prev) =>
+          prev.map((p) =>
+            rowPanelIds.has(p.id)
+              ? { ...p, rotation: ((Number(p.rotation) || 0) + deg) % 360 }
+              : p
+          )
+        );
+        setHasManualAdjustments?.(true);
+        toast.success(`Rotated row by +${deg}°`);
+        return;
+      }
+
+      if (selectionMode === "array") {
+        if (!panels || panels.length === 0) return;
+        setPanels((prev) =>
+          prev.map((p) => ({
+            ...p,
+            rotation: ((Number(p.rotation) || 0) + deg) % 360,
+          }))
+        );
+        setHasManualAdjustments?.(true);
+        toast.success(`Rotated array by +${deg}°`);
+      }
+    },
+    [
+      selectionMode,
+      selectedPanelId,
+      currentSelectedPanel,
+      selectedRowIndex,
+      currentSelectedRow,
+      panels,
+      setPanels,
+      setHasManualAdjustments,
+    ]
+  );
+
   if (variant === "fixed-bar") {
     return (
       <div className="flex flex-wrap items-center justify-between gap-2.5 bg-slate-900/95 border border-slate-800 px-3.5 py-1.5 rounded-2xl shadow-md text-xs text-white shrink-0">
