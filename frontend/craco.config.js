@@ -78,8 +78,8 @@ let webpackConfig = {
               },
               chartVendor: {
                 name: 'vendor-charts',
-                test: /[\\/]node_modules[\\/](recharts|d3-.*)[\\/]/,
-                chunks: 'async',
+                test: /[\\/]node_modules[\\/](recharts|victory-vendor|d3-.*)[\\/]/,
+                chunks: 'all',
                 priority: 50,
                 enforce: true,
               },
