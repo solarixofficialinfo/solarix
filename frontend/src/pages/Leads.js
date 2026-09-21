@@ -896,6 +896,32 @@ function AddEditLeadModal({ initial, employees, defaultTab = "basic", onClose, o
     setF("documents", updated);
   };
 
+  const handleDocDownload = async (doc) => {
+    const docId = doc.id || doc.file_id;
+    const filename = doc.original_filename || doc.filename || `document_${docId?.slice(0, 8)}`;
+    const token = localStorage.getItem("solarix_token");
+    try {
+      const res = await fetch(`${API}/files/${docId}?download=1`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        toast.error("Download failed: " + (await res.text()));
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error("Download failed. Please try again.");
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.name.trim()) {
@@ -1508,15 +1534,15 @@ function AddEditLeadModal({ initial, employees, defaultTab = "basic", onClose, o
                             <Eye className="w-3.5 h-3.5" />
                             <span>Preview</span>
                           </a>
-                          <a
-                            href={downloadUrl}
-                            download
+                          <button
+                            type="button"
+                            onClick={() => handleDocDownload(doc)}
                             className="px-2.5 py-1 text-slate-700 hover:text-blue-700 bg-slate-50 hover:bg-blue-50/60 border border-slate-200 rounded-lg text-xs font-semibold inline-flex items-center gap-1 transition-colors"
                             title="Download document"
                           >
                             <Download className="w-3.5 h-3.5" />
                             <span>Download</span>
-                          </a>
+                          </button>
                           <Button
                             type="button"
                             variant="ghost"

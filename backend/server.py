@@ -2469,7 +2469,10 @@ def _map_path_to_bucket_and_name(path: str) -> tuple:
         "template": "customer-documents",
         "clients": "customer-documents",
         "client": "customer-documents",
-        "general": "customer-documents"
+        "general": "customer-documents",
+        "leads": "customer-documents",
+        "sales_link": "customer-documents",
+        "lead": "customer-documents",
     }
     
     bucket = bucket_map.get(category, "customer-documents")
