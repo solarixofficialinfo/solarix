@@ -19,6 +19,7 @@ import {
 
 export default function PublicSalesPortal() {
   const { token } = useParams();
+  const cleanToken = (token || "").trim().split("?")[0].split("#")[0].replace(/\/+$/, "");
   const [brandingLoading, setBrandingLoading] = useState(true);
   const [brandingError, setBrandingError] = useState(null);
   const [branding, setBranding] = useState(null);
@@ -73,7 +74,7 @@ export default function PublicSalesPortal() {
       setBrandingLoading(true);
       setBrandingError(null);
       try {
-        const res = await axios.get(`${API}/public/sales/${token}`);
+        const res = await axios.get(`${API}/public/sales/${cleanToken}`);
         if (isMounted) {
           setBranding(res.data);
           if (res.data?.state) setStateName(res.data.state);
@@ -87,9 +88,9 @@ export default function PublicSalesPortal() {
         if (isMounted) setBrandingLoading(false);
       }
     };
-    if (token) fetchBranding();
+    if (cleanToken) fetchBranding();
     return () => { isMounted = false; };
-  }, [token]);
+  }, [cleanToken]);
 
   // Address Autocomplete Search
   const handleAddressChange = (val) => {
@@ -164,7 +165,7 @@ export default function PublicSalesPortal() {
     formData.append("file", fileItem.rawFile);
 
     try {
-      const res = await axios.post(`${API}/public/sales/${token}/upload`, formData, {
+      const res = await axios.post(`${API}/public/sales/${cleanToken}/upload`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
         onUploadProgress: (progressEvent) => {
           if (progressEvent.total) {
@@ -251,7 +252,7 @@ export default function PublicSalesPortal() {
     const fileId = target.id || target.file_id;
     if (fileId) {
       try {
-        await axios.delete(`${API}/public/sales/${token}/upload/${fileId}`);
+        await axios.delete(`${API}/public/sales/${cleanToken}/upload/${fileId}`);
       } catch (e) {
         console.warn("Could not delete staged file from server:", e);
       }
@@ -364,7 +365,7 @@ export default function PublicSalesPortal() {
         documents: documentsMeta,
       };
 
-      const res = await axios.post(`${API}/public/sales/${token}/lead`, payload);
+      const res = await axios.post(`${API}/public/sales/${cleanToken}/lead`, payload);
       setSubmittedLead(res.data?.lead || { lead_no: "CONFIRMED", name });
       setCurrentStep(4);
       toast.success("Solar enquiry submitted successfully!");

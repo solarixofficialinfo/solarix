@@ -147,7 +147,8 @@ export default function Leads() {
   };
 
   const handleCopySalesLink = () => {
-    const url = `${window.location.origin}/s/${salesLink?.public_token || ""}`;
+    const activeToken = salesLink?.public_token || salesLink?.token || "";
+    const url = `${window.location.origin}/s/${activeToken}`;
     navigator.clipboard.writeText(url);
     setCopiedLink(true);
     toast.success("Public Sales Link copied to clipboard!");
@@ -1551,7 +1552,7 @@ function AddEditLeadModal({ initial, employees, defaultTab = "basic", onClose, o
 
 // ─── PUBLIC SALES LINK MANAGEMENT MODAL ──────────────────────────────────────
 function SalesLinkModal({ salesLink, regenerating, copied, onCopy, onRegenerate, onClose }) {
-  const publicToken = salesLink?.public_token || "";
+  const publicToken = salesLink?.public_token || salesLink?.token || "";
   const publicUrl = publicToken ? `${window.location.origin}/s/${publicToken}` : "";
   const branding = salesLink?.branding || {};
   const companyName = branding.company_name || branding.name || "Your Company";

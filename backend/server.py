@@ -15712,13 +15712,64 @@ async def regenerate_company_sales_link(user=Depends(require_perm("leads", "edit
             "updated_at": now
         })
 
+    comp = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
+    logo_file_id = comp.get("logo_file_id")
+    logo_url = f"/api/files/{logo_file_id}" if logo_file_id else comp.get("logo_url")
+    comp_info = {
+        "name": comp.get("company_name") or comp.get("name") or "Solar EPC Company",
+        "company_name": comp.get("company_name") or comp.get("name") or "Solar EPC Company",
+        "owner_name": comp.get("owner_name") or "",
+        "mobile": comp.get("mobile") or "",
+        "phone": comp.get("mobile") or comp.get("phone") or "",
+        "email": comp.get("email") or "",
+        "address": comp.get("address") or "",
+        "city": comp.get("city") or "",
+        "state": comp.get("state") or "",
+        "pincode": comp.get("pincode") or "",
+        "website": comp.get("website") or "",
+        "logo_url": logo_url,
+        "has_logo": bool(logo_file_id or comp.get("logo_url"))
+    }
+
     await log_activity(cid, user["id"], user["name"], "Regenerated Public Sales Link", f"New Token: {new_token[:6]}...")
-    return {"id": link_id, "token": new_token, "is_active": True, "updated_at": now}
+    return {
+        "id": link_id,
+        "token": new_token,
+        "public_token": new_token,
+        "is_active": True,
+        "created_at": now,
+        "updated_at": now,
+        "company": comp_info,
+        "branding": comp_info
+    }
+
+async def find_active_sales_link(token: str) -> Optional[dict]:
+    """Resolve active sales link by token, company_id, or auto-provision if valid company."""
+    clean_token = (token or "").strip().split("?")[0].split("#")[0].rstrip("/")
+    if not clean_token or clean_token.lower() in ("undefined", "null", ""):
+        return None
+
+    # 1. Match public_token directly
+    link = await db.sales_links.find_one({"public_token": clean_token, "is_active": True})
+    if link:
+        return link
+
+    # 2. Match company_id directly (handles user visiting with company UUID)
+    link = await db.sales_links.find_one({"company_id": clean_token, "is_active": True})
+    if link:
+        return link
+
+    # 3. Auto-provision if clean_token is a registered company_id
+    comp = await db.companies.find_one({"id": clean_token}, {"_id": 0})
+    if comp:
+        return await ensure_company_sales_link(clean_token)
+
+    return None
 
 @api_router.get("/public/sales/{token}")
 async def get_public_sales_info(token: str):
     """Fetch public company branding for customer inquiry portal (no login required)."""
-    link = await db.sales_links.find_one({"public_token": token, "is_active": True})
+    link = await find_active_sales_link(token)
     if not link:
         raise HTTPException(status_code=404, detail="Sales link not found or inactive.")
 
@@ -15751,7 +15802,7 @@ async def get_public_sales_info(token: str):
 @api_router.get("/public/sales/{token}/logo")
 async def get_public_sales_logo(token: str):
     """Public stream endpoint for company logo, preventing exposure of internal file IDs."""
-    link = await db.sales_links.find_one({"public_token": token, "is_active": True})
+    link = await find_active_sales_link(token)
     if not link:
         raise HTTPException(status_code=404, detail="Not found")
     cid = link["company_id"]
@@ -15769,7 +15820,7 @@ async def get_public_sales_logo(token: str):
 @api_router.post("/public/sales/{token}/upload")
 async def upload_public_sales_document(token: str, file: UploadFile = File(...)):
     """Upload customer inquiry documents directly to company tenant storage."""
-    link = await db.sales_links.find_one({"public_token": token, "is_active": True})
+    link = await find_active_sales_link(token)
     if not link:
         raise HTTPException(status_code=404, detail="Sales link not found or inactive.")
     cid = link["company_id"]
@@ -15820,7 +15871,7 @@ async def upload_public_sales_document(token: str, file: UploadFile = File(...))
 @api_router.delete("/public/sales/{token}/upload/{file_id}")
 async def delete_staged_public_sales_document(token: str, file_id: str):
     """Allow prospective customer to remove an uploaded staged file before form submission."""
-    link = await db.sales_links.find_one({"public_token": token, "is_active": True})
+    link = await find_active_sales_link(token)
     if not link:
         raise HTTPException(status_code=404, detail="Sales link not found or inactive.")
     cid = link["company_id"]
@@ -15843,7 +15894,7 @@ async def delete_staged_public_sales_document(token: str, file_id: str):
 @api_router.post("/public/sales/{token}/lead")
 async def submit_public_sales_lead(token: str, data: PublicLeadIn):
     """Customer inquiry submission from public sales portal (no login required)."""
-    link = await db.sales_links.find_one({"public_token": token, "is_active": True})
+    link = await find_active_sales_link(token)
     if not link:
         raise HTTPException(status_code=404, detail="Sales link not found or inactive.")
     cid = link["company_id"]
