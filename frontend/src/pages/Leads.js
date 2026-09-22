@@ -111,25 +111,29 @@ export default function Leads() {
   const [selectedLead, setSelectedLead] = useState(null);
   const [defaultModalTab, setDefaultModalTab] = useState("basic");
 
-  // Public Sales Link State
+  // Public Sales Link State (Ephemeral in-memory state, loaded on-demand only)
   const [salesLink, setSalesLink] = useState(null);
   const [salesLinkModalOpen, setSalesLinkModalOpen] = useState(false);
+  const [loadingSalesLink, setLoadingSalesLink] = useState(false);
   const [regeneratingToken, setRegeneratingToken] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
 
-  // Fetch Public Sales Link
-  const fetchSalesLink = useCallback(async () => {
-    try {
-      const res = await api.get("/sales-link");
-      setSalesLink(res.data);
-    } catch (e) {
-      console.warn("Failed to fetch sales link", e);
+  // On-demand fetch when user clicks "Public Sales Link"
+  const handleOpenSalesLink = async () => {
+    setSalesLinkModalOpen(true);
+    if (!salesLink) {
+      setLoadingSalesLink(true);
+      try {
+        const res = await api.get("/sales-link");
+        setSalesLink(res.data);
+      } catch (e) {
+        console.warn("Failed to fetch sales link", e);
+        toast.error("Could not load sales link details");
+      } finally {
+        setLoadingSalesLink(false);
+      }
     }
-  }, []);
-
-  useEffect(() => {
-    fetchSalesLink();
-  }, [fetchSalesLink]);
+  };
 
   const handleRegenerateSalesLink = async () => {
     if (!window.confirm("Regenerating this link will immediately invalidate the previous public link. Any prospective customer who has the old URL will no longer be able to submit. Are you sure you want to regenerate?")) {
@@ -284,7 +288,7 @@ export default function Leads() {
             <div className="flex items-center gap-2">
               <Button
                 variant="outline"
-                onClick={() => setSalesLinkModalOpen(true)}
+                onClick={handleOpenSalesLink}
                 className="border-blue-200 text-blue-700 bg-blue-50/70 hover:bg-blue-100 shadow-xs text-xs font-semibold"
                 data-testid="public-sales-link-btn"
                 title="View and copy company-branded public sales inquiry link"
@@ -727,6 +731,7 @@ export default function Leads() {
       {salesLinkModalOpen && (
         <SalesLinkModal
           salesLink={salesLink}
+          loading={loadingSalesLink}
           regenerating={regeneratingToken}
           copied={copiedLink}
           onCopy={handleCopySalesLink}
@@ -1578,7 +1583,7 @@ function AddEditLeadModal({ initial, employees, defaultTab = "basic", onClose, o
 
 
 // ─── PUBLIC SALES LINK MANAGEMENT MODAL ──────────────────────────────────────
-function SalesLinkModal({ salesLink, regenerating, copied, onCopy, onRegenerate, onClose }) {
+function SalesLinkModal({ salesLink, loading, regenerating, copied, onCopy, onRegenerate, onClose }) {
   const publicToken = salesLink?.public_token || salesLink?.token || "";
   const publicUrl = publicToken ? `${window.location.origin}/s/${publicToken}` : "";
   const branding = salesLink?.branding || {};
@@ -1604,7 +1609,13 @@ function SalesLinkModal({ salesLink, regenerating, copied, onCopy, onRegenerate,
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 pt-2">
+        {loading ? (
+          <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-500 text-xs">
+            <RefreshCw className="w-5 h-5 animate-spin text-blue-600" />
+            <span>Loading company sales link...</span>
+          </div>
+        ) : (
+          <div className="space-y-4 pt-2">
           {/* URL Box */}
           <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
             <Label className="text-xs font-bold text-slate-700 flex items-center justify-between">
@@ -1709,6 +1720,7 @@ function SalesLinkModal({ salesLink, regenerating, copied, onCopy, onRegenerate,
             </Button>
           </div>
         </div>
+        )}
 
         <DialogFooter className="pt-3 border-t border-slate-100">
           <Button type="button" onClick={onClose} className="text-xs w-full sm:w-auto">

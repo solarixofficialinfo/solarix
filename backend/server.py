@@ -1616,13 +1616,19 @@ class CollectionAdapter:
             res = builder.execute()
         except Exception as e:
             err_str = str(e)
-            if "PGRST204" in err_str or "Could not find the" in err_str:
+            if "PGRST204" in err_str or "Could not find the" in err_str or "42703" in err_str or "does not exist" in err_str:
                 logger.warning(f"Supabase table '{self._supabase_table_name}' missing schema column on update. Updating locally: {err_str}")
                 await LocalFileCollection(self.table_name).update_one(filter, update, upsert=upsert)
                 unsupported = set()
                 if "Could not find the '" in err_str:
                     col = err_str.split("Could not find the '")[1].split("'")[0]
                     unsupported.add(col)
+                elif "column " in err_str and " does not exist" in err_str:
+                    try:
+                        col = err_str.split("column ")[1].split(" does not exist")[0].split(".")[-1].strip().strip('"').strip("'")
+                        unsupported.add(col)
+                    except Exception:
+                        pass
                 if self.table_name == "products":
                     unsupported.update({"high_value_goods", "serial_number_required", "opening_stock", "rate"})
                 patch_clean = {k: v for k, v in patch.items() if k not in unsupported}
@@ -3421,6 +3427,7 @@ async def ensure_company_sales_link(company_id: str) -> dict:
             await db.sales_links.insert_one(link)
     return link
 
+
 # ---------- Auth ----------
 @api_router.post("/auth/register")
 async def register_company(data: RegisterCompanyIn, response: Response):
@@ -3572,10 +3579,6 @@ async def register_company(data: RegisterCompanyIn, response: Response):
             {"$set": company_doc},
             upsert=True
         )
-        try:
-            await ensure_company_sales_link(company_id)
-        except Exception as sle:
-            logger.warning(f"Could not auto-provision sales link for company {company_id}: {sle}")
     except Exception as e:
         logger.error(f"Company upsert failed: {e}")
         raise HTTPException(status_code=400, detail="Registration could not be completed. Please try again.")
