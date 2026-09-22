@@ -15,9 +15,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Briefcase, Clock, ShieldCheck, CheckCircle2, Zap, Plus, Camera, Eye, MapPin, ImageIcon, FileText, Trash2, ArrowUp, ArrowDown } from "lucide-react";
+import {
+  Briefcase, Clock, ShieldCheck, CheckCircle2, Zap, Plus, Camera, Eye, MapPin,
+  ImageIcon, FileText, Trash2, ArrowUp, ArrowDown, RotateCcw, AlertCircle,
+  XCircle, User, Calendar, Search, Cpu
+} from "lucide-react";
 import dayjs from "dayjs";
 import PageHeader from "@/components/PageHeader";
+import ManagementBar from "@/components/ManagementBar";
 import { formatUnit, getStandardizedUnitOptions } from "@/lib/units";
 
 const TASK_TYPES = [
@@ -342,15 +347,30 @@ export default function ProjectExecution() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6 pb-12">
       <PageHeader
         title="Project Execution"
         subtitle="Control the complete installation workflow for onboarded clients."
         badge={`${filteredProjects.length} Projects`}
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              invalidateProjects();
+              queryClient.invalidateQueries({ queryKey: ["verifications"] });
+              toast.success("Refreshed project execution data");
+            }}
+            className="h-9 px-3 text-xs gap-1.5 border-slate-200 text-slate-600 hover:text-slate-900 shadow-xs"
+            title="Refresh projects and verifications"
+          >
+            <RotateCcw className="w-3.5 h-3.5" /> Refresh
+          </Button>
+        }
       />
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3" data-testid="proj-stats-grid">
         {cards.map((c) => {
           const Icon = c.icon;
           const iconStyles = {
@@ -364,111 +384,122 @@ export default function ProjectExecution() {
           return (
             <Card
               key={c.label}
-              className="p-4 bg-white border border-slate-200/80 rounded-xl shadow-2xs transition-all duration-200 hover:shadow-xs hover:border-slate-300"
+              className="p-4 border-slate-200 card-lift"
               data-testid={`proj-stat-${c.label.replace(/\s/g, "-").toLowerCase()}`}
             >
-              <div className="flex items-center justify-between">
-                <div className={`w-9 h-9 rounded-lg ${iconStyles} border flex items-center justify-center`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">{c.label}</div>
+                <div className={`w-8 h-8 rounded-lg ${iconStyles} border flex items-center justify-center shrink-0`}>
                   <Icon className="w-4 h-4" />
                 </div>
               </div>
-              <div className="mt-3">
-                <div className="text-2xl font-bold tabular-nums text-slate-900 tracking-tight" style={{ fontFamily: "Outfit, sans-serif" }}>
-                  {c.v}
-                </div>
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mt-1">
-                  {c.label}
-                </div>
+              <div className="text-2xl font-bold text-slate-900 tabular-nums" style={{ fontFamily: "Outfit, sans-serif" }}>
+                {c.v}
               </div>
             </Card>
           );
         })}
       </div>
 
-      {/* Inline Filter Bar */}
-      <Card className="p-3 border-slate-200/90 bg-slate-50/70 rounded-xl shadow-2xs">
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 items-center">
-          <Input
-            placeholder="Search Client / Sol ID / Consumer..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-9 text-xs bg-white border-slate-200 focus:border-blue-500 rounded-lg shadow-2xs"
-            data-testid="filter-search"
-          />
-          <Select value={selectedStage} onValueChange={setSelectedStage}>
-            <SelectTrigger className="h-9 text-xs bg-white border-slate-200 rounded-lg shadow-2xs">
-              <SelectValue placeholder="Stage: All" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="All">All Stages</SelectItem>
-              {TASK_TYPES.map((st) => (
-                <SelectItem key={st} value={st}>{st}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={selectedStatus} onValueChange={setSelectedStatus}>
-            <SelectTrigger className="h-9 text-xs bg-white border-slate-200 rounded-lg shadow-2xs">
-              <SelectValue placeholder="Status: All" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="All">All Statuses</SelectItem>
-              <SelectItem value="pending">Pending</SelectItem>
-              <SelectItem value="in_progress">In Progress</SelectItem>
-              <SelectItem value="completed">Completed</SelectItem>
-              <SelectItem value="approved">Approved</SelectItem>
-              <SelectItem value="rejected">Rejected</SelectItem>
-              <SelectItem value="rework">Rework / Retry</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
-            <SelectTrigger className="h-9 text-xs bg-white border-slate-200 rounded-lg shadow-2xs">
-              <SelectValue placeholder="Assigned User: All" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="All">All Assigned Users</SelectItem>
-              {employees.map((emp) => (
-                <SelectItem key={emp.id} value={emp.id}>{emp.name || emp.full_name || emp.email}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <div className="flex items-center gap-2">
-            <Select value={selectedDateRange} onValueChange={setSelectedDateRange}>
-              <SelectTrigger className="h-9 text-xs bg-white border-slate-200 rounded-lg shadow-2xs flex-1">
-                <SelectValue placeholder="Date Range" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Time</SelectItem>
-                <SelectItem value="today">Today</SelectItem>
-                <SelectItem value="7days">Last 7 Days</SelectItem>
-                <SelectItem value="30days">Last 30 Days</SelectItem>
-              </SelectContent>
-            </Select>
-            {isFiltered && (
-              <Button size="sm" variant="ghost" onClick={resetFilters} className="h-9 px-2.5 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg font-medium" data-testid="clear-filters-btn">
-                Clear
-              </Button>
-            )}
-          </div>
-        </div>
-      </Card>
+      {/* Management Bar & Filters */}
+      <ManagementBar
+        search={searchQuery}
+        onSearchChange={setSearchQuery}
+        searchPlaceholder="Search Client / Sol ID / Consumer..."
+        searchTestId="filter-search"
+        hasActiveFilters={isFiltered}
+        onClear={resetFilters}
+        clearTestId="clear-filters-btn"
+        totalCount={projects.length}
+        filteredCount={filteredProjects.length}
+      >
+        <Select value={selectedStage} onValueChange={setSelectedStage}>
+          <SelectTrigger className="w-40 h-9 text-xs border-slate-200 bg-white" data-testid="filter-stage">
+            <SelectValue placeholder="All Stages" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="All">All Stages</SelectItem>
+            {TASK_TYPES.map((st) => (
+              <SelectItem key={st} value={st}>{st}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="bg-slate-100 p-1 border border-slate-200/80 rounded-xl h-auto flex flex-wrap gap-1">
-          {visibleTabs.map((t) => (
-            <TabsTrigger
-              key={t.id}
-              value={t.id}
-              data-testid={t.testId}
-              className="text-xs px-3.5 py-1.5 rounded-lg data-[state=active]:bg-white data-[state=active]:text-blue-700 data-[state=active]:shadow-2xs font-medium transition-all"
-            >
-              <span>{t.label}</span>
-              {t.badge ? (
-                <span className="ml-1.5 px-1.5 py-0.2 text-[10px] font-bold rounded-full bg-blue-100 text-blue-800">
-                  {t.badge}
-                </span>
-              ) : null}
-            </TabsTrigger>
-          ))}
+        <Select value={selectedStatus} onValueChange={setSelectedStatus}>
+          <SelectTrigger className="w-36 h-9 text-xs border-slate-200 bg-white" data-testid="filter-status">
+            <SelectValue placeholder="All Statuses" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="All">All Statuses</SelectItem>
+            <SelectItem value="pending">Pending</SelectItem>
+            <SelectItem value="in_progress">In Progress</SelectItem>
+            <SelectItem value="completed">Completed</SelectItem>
+            <SelectItem value="approved">Approved</SelectItem>
+            <SelectItem value="rejected">Rejected</SelectItem>
+            <SelectItem value="rework">Rework / Retry</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
+          <SelectTrigger className="w-44 h-9 text-xs border-slate-200 bg-white" data-testid="filter-employee">
+            <SelectValue placeholder="All Assigned Users" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="All">All Assigned Users</SelectItem>
+            {employees.map((emp) => (
+              <SelectItem key={emp.id} value={emp.id}>{emp.name || emp.full_name || emp.email}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select value={selectedDateRange} onValueChange={setSelectedDateRange}>
+          <SelectTrigger className="w-36 h-9 text-xs border-slate-200 bg-white" data-testid="filter-date">
+            <SelectValue placeholder="All Time" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Time</SelectItem>
+            <SelectItem value="today">Today</SelectItem>
+            <SelectItem value="7days">Last 7 Days</SelectItem>
+            <SelectItem value="30days">Last 30 Days</SelectItem>
+          </SelectContent>
+        </Select>
+      </ManagementBar>
+
+      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
+        <TabsList className="bg-white border border-slate-200 p-1 rounded-xl shadow-xs flex flex-wrap gap-1">
+          {visibleTabs.map((t) => {
+            const tabIcons = {
+              projects: Briefcase,
+              verifications: ShieldCheck,
+              rejected: AlertCircle,
+              retry: RotateCcw,
+            };
+            const TabIcon = tabIcons[t.id] || Briefcase;
+            const iconColors = {
+              projects: "text-blue-600",
+              verifications: "text-indigo-600",
+              rejected: "text-rose-600",
+              retry: "text-amber-600",
+            };
+            const iColor = iconColors[t.id] || "text-blue-600";
+
+            return (
+              <TabsTrigger
+                key={t.id}
+                value={t.id}
+                data-testid={t.testId}
+                className="text-xs font-semibold gap-1.5 px-4 py-2 rounded-lg data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700 data-[state=active]:shadow-xs transition-all flex items-center"
+              >
+                <TabIcon className={`w-3.5 h-3.5 ${iColor}`} />
+                <span>{t.label}</span>
+                {t.badge ? (
+                  <span className="ml-1.5 px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-blue-600 text-white">
+                    {t.badge}
+                  </span>
+                ) : null}
+              </TabsTrigger>
+            );
+          })}
         </TabsList>
 
         {visibleTabs.length === 0 && (
@@ -480,26 +511,29 @@ export default function ProjectExecution() {
         {canProjectAssignment && (
           <div style={{ display: tab === "projects" ? "block" : "none" }}>
             {loadedTabs.has("projects") && (
-              <Card className="border border-slate-200/90 rounded-xl shadow-2xs overflow-hidden bg-white mt-3">
+              <Card className="border border-slate-200 shadow-xs overflow-hidden bg-white">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm" data-testid="projects-table">
-                    <thead className="bg-slate-50/90 border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-500 border-b border-slate-200">
                       <tr>
-                        <th className="text-left px-4 py-3 font-semibold">Client</th>
-                        <th className="text-left px-4 py-3 font-semibold">Mobile</th>
-                        <th className="text-left px-4 py-3 font-semibold">System (kW)</th>
-                        <th className="text-left px-4 py-3 font-semibold">Current Stage</th>
-                        <th className="text-left px-4 py-3 font-semibold">Assigned Team</th>
-                        <th className="text-left px-4 py-3 font-semibold">Updated</th>
-                        <th className="text-right px-4 py-3 font-semibold">Actions</th>
+                        <th className="text-left px-4 py-3">Client</th>
+                        <th className="text-left px-4 py-3">Mobile</th>
+                        <th className="text-left px-4 py-3">System (kW)</th>
+                        <th className="text-left px-4 py-3">Current Stage</th>
+                        <th className="text-left px-4 py-3">Assigned Team</th>
+                        <th className="text-left px-4 py-3">Updated</th>
+                        <th className="text-right px-4 py-3">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {paginated.length === 0 && (
                         <tr>
                           <td colSpan={7} className="px-4 py-12 text-center text-slate-500">
-                            <div className="max-w-xs mx-auto text-center space-y-1">
-                              <div className="text-sm font-semibold text-slate-700">No onboarded projects yet</div>
+                            <div className="max-w-xs mx-auto text-center space-y-1.5">
+                              <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-2">
+                                <Briefcase className="w-5 h-5" />
+                              </div>
+                              <div className="text-sm font-semibold text-slate-800" style={{ fontFamily: "Outfit, sans-serif" }}>No onboarded projects yet</div>
                               <div className="text-xs text-slate-400">Mark Onboarding complete on a client to add them here.</div>
                             </div>
                           </td>
@@ -540,7 +574,7 @@ export default function ProjectExecution() {
                         const stageBadgeCls = getStageBadgeStyle(current);
 
                         return (
-                          <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
+                          <tr key={p.id} className="hover:bg-slate-50/80 transition-colors">
                             <td className="px-4 py-3.5 whitespace-nowrap">
                               <Link to={`/client-data/${p.id}`} className="font-semibold text-slate-900 hover:text-blue-600 transition-colors block text-xs">
                                 {p.full_name}
@@ -578,7 +612,7 @@ export default function ProjectExecution() {
                             </td>
                             <td className="px-4 py-3.5 text-right whitespace-nowrap">
                               {canProjectAssignment && (
-                                <Button size="sm" onClick={() => openAssign(p)} className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium h-8 px-3 rounded-lg shadow-2xs transition-all active:scale-[0.98]" data-testid={`assign-${p.id}`}>
+                                <Button size="sm" onClick={() => openAssign(p)} className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold h-8 px-3 rounded-lg shadow-xs transition-all active:scale-[0.98]" data-testid={`assign-${p.id}`}>
                                   <Plus className="w-3.5 h-3.5 mr-1" /> Assign Work
                                 </Button>
                               )}
@@ -591,14 +625,14 @@ export default function ProjectExecution() {
                 </div>
 
                 {totalPages > 1 && (
-                  <div className="px-4 py-3 border-t border-slate-100 bg-slate-50/40 flex items-center justify-between flex-wrap gap-2 text-xs">
+                  <div className="px-4 py-3 border-t border-slate-200 bg-slate-50/50 flex items-center justify-between flex-wrap gap-2 text-xs">
                     <div className="text-slate-500">
                       Showing <span className="font-semibold text-slate-700">{(projectPage - 1) * itemsPerPage + 1}</span> to <span className="font-semibold text-slate-700">{Math.min(projectPage * itemsPerPage, filteredProjects.length)}</span> of <span className="font-semibold text-slate-700">{filteredProjects.length}</span> projects
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => setProjectPage(p => Math.max(1, p - 1))} disabled={projectPage === 1}>Previous</Button>
+                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-slate-200 bg-white shadow-2xs" onClick={() => setProjectPage(p => Math.max(1, p - 1))} disabled={projectPage === 1}>Previous</Button>
                       <span className="text-xs text-slate-600 px-2 font-medium">Page {projectPage} of {totalPages}</span>
-                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg" onClick={() => setProjectPage(p => Math.min(totalPages, p + 1))} disabled={projectPage === totalPages}>Next</Button>
+                      <Button variant="outline" size="sm" className="h-8 text-xs rounded-lg border-slate-200 bg-white shadow-2xs" onClick={() => setProjectPage(p => Math.min(totalPages, p + 1))} disabled={projectPage === totalPages}>Next</Button>
                     </div>
                   </div>
                 )}
@@ -610,7 +644,7 @@ export default function ProjectExecution() {
         {canVerification && (
           <div style={{ display: tab === "verifications" ? "block" : "none" }}>
             {loadedTabs.has("verifications") && loadingTab ? (
-              <Card className="border-slate-200 p-6 space-y-4 animate-pulse">
+              <Card className="border border-slate-200 shadow-xs overflow-hidden bg-white p-6 space-y-4 animate-pulse">
                 {[1, 2, 3].map((x) => (
                   <div key={x} className="flex justify-between items-center py-4 border-b border-slate-100 last:border-none">
                     <div className="space-y-2 flex-1">
@@ -625,29 +659,85 @@ export default function ProjectExecution() {
                 ))}
               </Card>
             ) : (
-              <Card className="border-slate-200">
+              <Card className="border border-slate-200 shadow-xs overflow-hidden bg-white">
                 <div className="divide-y divide-slate-100">
                   {verifs.length === 0 && <div className="p-8 text-center text-slate-500">No verifications submitted yet.</div>}
                   {verifs.map((v) => (
-                    <div key={v.id} className="p-5 flex items-start gap-4 flex-wrap" data-testid={`verif-${v.id}`}>
-                      <div className="flex-1 min-w-[280px]">
-                        <div className="flex items-center gap-2">
-                          <div className="font-semibold text-slate-900">{v.client_name}</div>
-                          <span className="text-xs text-slate-500">{v.sol_id}</span>
-                          <Badge variant="outline" className={v.status === "approved" ? "bg-emerald-50 text-emerald-700" : v.status === "rejected" || v.status === "rework" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}>{v.status}</Badge>
-                        </div>
-                        <div className="text-xs text-slate-500 mt-0.5">Submitted by {v.submitted_by_name} · {dayjs(v.created_at).format("MMM D, h:mm A")}</div>
-                        <div className="text-sm text-slate-700 mt-2">{Object.keys(v.photos || {}).length} photos · {v.inverters?.length || 0} inverters</div>
-                        {v.gps && <div className="text-xs text-slate-500">GPS: {v.gps}</div>}
-                        {v.notes && <div className="text-sm text-slate-600 mt-1">{v.notes}</div>}
+                    <div key={v.id} className="p-5 flex items-start gap-4 flex-wrap hover:bg-slate-50/50 transition-colors" data-testid={`verif-${v.id}`}>
+                      <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center justify-center shrink-0">
+                        <ShieldCheck className="w-5 h-5" />
                       </div>
-                      <div className="flex gap-2 flex-wrap">
+                      <div className="flex-1 min-w-[280px]">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="font-semibold text-slate-900 text-sm" style={{ fontFamily: "Outfit, sans-serif" }}>{v.client_name}</div>
+                          <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600">{v.sol_id}</span>
+                          <Badge variant="outline" className={v.status === "approved" ? "bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold text-[11px]" : v.status === "rejected" || v.status === "rework" ? "bg-rose-50 text-rose-700 border-rose-200 font-semibold text-[11px]" : "bg-amber-50 text-amber-700 border-amber-200 font-semibold text-[11px]"}>{v.status}</Badge>
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
+                          <User className="w-3.5 h-3.5 text-slate-400" />
+                          <span>Submitted by {v.submitted_by_name}</span>
+                          <span>·</span>
+                          <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                          <span>{dayjs(v.created_at).format("MMM D, YYYY · h:mm A")}</span>
+                        </div>
+                        <div className="flex items-center gap-3 mt-2.5 flex-wrap text-xs text-slate-600">
+                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200">
+                            <Camera className="w-3.5 h-3.5 text-slate-400" />
+                            <span>{Object.keys(v.photos || {}).length} photos</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200">
+                            <Cpu className="w-3.5 h-3.5 text-amber-500" />
+                            <span>{v.inverters?.length || 0} inverters</span>
+                          </div>
+                          {v.gps && (
+                            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200 font-mono text-[11px]">
+                              <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                              <span>{v.gps}</span>
+                            </div>
+                          )}
+                        </div>
+                        {v.notes && (
+                          <div className="text-xs text-slate-600 mt-2 p-2 bg-slate-50 rounded-lg border border-slate-200 max-w-xl">
+                            {v.notes}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-2 flex-wrap items-center">
                         <VerificationDetailsButton verification={v} />
                         {v.status === "pending" && (
                           <>
-                            {canRetry && <Button size="sm" variant="outline" onClick={() => reviewVerif(v.id, "rework")} data-testid={`verif-rework-${v.id}`}>Request Rework</Button>}
-                            {canReject && <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50 font-semibold" onClick={() => { setRejectTargetVerif(v); setRejectReason(""); }} data-testid={`verif-reject-${v.id}`}>Reject</Button>}
-                            {canApproval && <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 font-semibold" onClick={() => reviewVerif(v.id, "approved")} data-testid={`verif-approve-${v.id}`}>Approve</Button>}
+                            {canRetry && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-amber-300 text-amber-700 hover:bg-amber-50 font-semibold shadow-xs"
+                                onClick={() => reviewVerif(v.id, "rework")}
+                                data-testid={`verif-rework-${v.id}`}
+                              >
+                                <RotateCcw className="w-3.5 h-3.5 mr-1" /> Request Rework
+                              </Button>
+                            )}
+                            {canReject && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-rose-600 border-rose-300 hover:bg-rose-50 font-semibold shadow-xs"
+                                onClick={() => { setRejectTargetVerif(v); setRejectReason(""); }}
+                                data-testid={`verif-reject-${v.id}`}
+                              >
+                                <XCircle className="w-3.5 h-3.5 mr-1" /> Reject
+                              </Button>
+                            )}
+                            {canApproval && (
+                              <Button
+                                size="sm"
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs"
+                                onClick={() => reviewVerif(v.id, "approved")}
+                                data-testid={`verif-approve-${v.id}`}
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Approve
+                              </Button>
+                            )}
                           </>
                         )}
                       </div>
@@ -661,28 +751,37 @@ export default function ProjectExecution() {
 
         {canReject && (
           <div style={{ display: tab === "rejected" ? "block" : "none" }}>
-            <Card className="border-slate-200">
+            <Card className="border border-slate-200 shadow-xs overflow-hidden bg-white">
               <div className="divide-y divide-slate-100">
                 {verifs.filter(v => v.status === "rejected").length === 0 && (
                   <div className="p-8 text-center text-slate-500">No rejected verifications found.</div>
                 )}
                 {verifs.filter(v => v.status === "rejected").map((v) => (
-                  <div key={`rej-v-${v.id}`} className="p-5 flex items-start gap-4 flex-wrap" data-testid={`rejected-verif-${v.id}`}>
+                  <div key={`rej-v-${v.id}`} className="p-5 flex items-start gap-4 flex-wrap hover:bg-slate-50/50 transition-colors" data-testid={`rejected-verif-${v.id}`}>
+                    <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 border border-rose-100 flex items-center justify-center shrink-0">
+                      <AlertCircle className="w-5 h-5" />
+                    </div>
                     <div className="flex-1 min-w-[280px]">
-                      <div className="flex items-center gap-2">
-                        <div className="font-semibold text-slate-900">{v.client_name}</div>
-                        <span className="text-xs text-slate-500">{v.sol_id}</span>
-                        <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 font-bold text-[11px]">REJECTED VERIFICATION</Badge>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="font-semibold text-slate-900 text-sm" style={{ fontFamily: "Outfit, sans-serif" }}>{v.client_name}</div>
+                        <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600">{v.sol_id}</span>
+                        <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-200 font-bold text-[11px]">REJECTED VERIFICATION</Badge>
                       </div>
-                      <div className="text-xs text-slate-500 mt-0.5">Submitted by {v.submitted_by_name} · {dayjs(v.created_at).format("MMM D, h:mm A")}</div>
+                      <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
+                        <User className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Submitted by {v.submitted_by_name}</span>
+                        <span>·</span>
+                        <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                        <span>{dayjs(v.created_at).format("MMM D, YYYY · h:mm A")}</span>
+                      </div>
                       {v.rejection_reason && (
-                        <div className="mt-2 p-2.5 bg-red-50/80 border border-red-200 rounded-lg text-xs text-red-900 leading-relaxed">
-                          <strong className="font-semibold text-red-800">Rejection Reason:</strong> {v.rejection_reason}
+                        <div className="mt-2.5 p-3 bg-rose-50/90 border border-rose-200 rounded-lg text-xs text-rose-900 leading-relaxed">
+                          <strong className="font-semibold text-rose-800">Rejection Reason:</strong> {v.rejection_reason}
                         </div>
                       )}
-                      {v.notes && <div className="text-xs text-slate-600 mt-1">{v.notes}</div>}
+                      {v.notes && <div className="text-xs text-slate-600 mt-1.5">{v.notes}</div>}
                       {v.reassignment_history && v.reassignment_history.length > 0 && (
-                        <div className="mt-2 text-[11px] text-slate-500 bg-slate-50 p-2 rounded border border-slate-200">
+                        <div className="mt-2 text-[11px] text-slate-500 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
                           <span className="font-semibold text-slate-700">Reassignment History:</span>{" "}
                           {v.reassignment_history.map((h, i) => (
                             <span key={i} className="inline-block mr-2">
@@ -697,7 +796,7 @@ export default function ProjectExecution() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="border-blue-300 text-blue-700 hover:bg-blue-50 font-semibold"
+                        className="border-blue-300 text-blue-700 hover:bg-blue-50 font-semibold shadow-xs"
                         onClick={() => { setReassignTargetVerif(v); setReassignTo(v.assigned_to || ""); setReassignNotes(""); }}
                         data-testid={`verif-reassign-${v.id}`}
                       >
@@ -706,7 +805,7 @@ export default function ProjectExecution() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold"
+                        className="border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold shadow-xs"
                         onClick={() => handleCancelVerif(v.id)}
                         data-testid={`verif-cancel-${v.id}`}
                       >
@@ -722,25 +821,43 @@ export default function ProjectExecution() {
 
         {canRetry && (
           <div style={{ display: tab === "retry" ? "block" : "none" }}>
-            <Card className="border-slate-200">
+            <Card className="border border-slate-200 shadow-xs overflow-hidden bg-white">
               <div className="divide-y divide-slate-100">
                 {verifs.filter(v => v.status === "rework" || v.status === "retry").length === 0 && (
                   <div className="p-8 text-center text-slate-500">No items flagged for rework/retry.</div>
                 )}
                 {verifs.filter(v => v.status === "rework" || v.status === "retry").map((v) => (
-                  <div key={`retry-v-${v.id}`} className="p-5 flex items-start gap-4 flex-wrap" data-testid={`retry-verif-${v.id}`}>
-                    <div className="flex-1 min-w-[280px]">
-                      <div className="flex items-center gap-2">
-                        <div className="font-semibold text-slate-900">{v.client_name}</div>
-                        <span className="text-xs text-slate-500">{v.sol_id}</span>
-                        <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">REWORK REQUESTED</Badge>
-                      </div>
-                      <div className="text-xs text-slate-500 mt-0.5">Submitted by {v.submitted_by_name} · {dayjs(v.created_at).format("MMM D, h:mm A")}</div>
-                      {v.notes && <div className="text-sm text-slate-600 mt-1">{v.notes}</div>}
+                  <div key={`retry-v-${v.id}`} className="p-5 flex items-start gap-4 flex-wrap hover:bg-slate-50/50 transition-colors" data-testid={`retry-verif-${v.id}`}>
+                    <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center shrink-0">
+                      <RotateCcw className="w-5 h-5" />
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex-1 min-w-[280px]">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="font-semibold text-slate-900 text-sm" style={{ fontFamily: "Outfit, sans-serif" }}>{v.client_name}</div>
+                        <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600">{v.sol_id}</span>
+                        <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 font-bold text-[11px]">REWORK REQUESTED</Badge>
+                      </div>
+                      <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
+                        <User className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Submitted by {v.submitted_by_name}</span>
+                        <span>·</span>
+                        <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                        <span>{dayjs(v.created_at).format("MMM D, YYYY · h:mm A")}</span>
+                      </div>
+                      {v.notes && <div className="text-xs text-slate-600 mt-2 p-2 bg-slate-50 rounded-lg border border-slate-200 max-w-xl">{v.notes}</div>}
+                    </div>
+                    <div className="flex gap-2 items-center">
                       <VerificationDetailsButton verification={v} />
-                      {canApproval && <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => reviewVerif(v.id, "approved")} data-testid={`verif-retry-approve-${v.id}`}>Approve</Button>}
+                      {canApproval && (
+                        <Button
+                          size="sm"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs"
+                          onClick={() => reviewVerif(v.id, "approved")}
+                          data-testid={`verif-retry-approve-${v.id}`}
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Approve
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ))}

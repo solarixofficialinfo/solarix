@@ -880,6 +880,17 @@ VALID_COMPANY_COLUMNS = {
     "logo_file_id", "documents", "trial_start", "trial_end", "plan", "created_at", "status"
 }
 
+VALID_FILES_COLUMNS = {
+    "id", "company_id", "uploader_id", "storage_path",
+    "original_filename", "content_type", "size", "category",
+    "is_deleted", "created_at"
+}
+
+def _clean_files_doc(doc: dict) -> dict:
+    if not isinstance(doc, dict):
+        return doc
+    return {k: v for k, v in doc.items() if k in VALID_FILES_COLUMNS}
+
 def _prepare_company_supabase_payload(payload: dict) -> dict:
     if not isinstance(payload, dict):
         return payload
@@ -1397,6 +1408,18 @@ class CollectionAdapter:
             document = _clean_outward_doc(document)
         elif self.table_name == "clients":
             document = _prepare_client_supabase_payload(document)
+        elif self.table_name == "companies":
+            document = _prepare_company_supabase_payload(document)
+        elif self.table_name == "files":
+            if not document.get("original_filename") and document.get("filename"):
+                document["original_filename"] = document["filename"]
+            supa_doc = _clean_files_doc(document)
+            try:
+                supabase.table(self._supabase_table_name).insert(supa_doc, returning="minimal").execute()
+            except Exception as e_supa:
+                logger.warning(f"files table insert warning: {e_supa}")
+            await LocalFileCollection(self.table_name).insert_one(document)
+            return InsertOneResult(document.get("id"))
         
         while True:
             try:
@@ -1583,6 +1606,8 @@ class CollectionAdapter:
             patch = _clean_outward_doc(patch)
         elif self.table_name == "companies":
             patch = _prepare_company_supabase_payload(patch)
+        elif self.table_name == "files":
+            patch = _clean_files_doc(patch)
 
         if self.table_name == "clients":
             try:
@@ -3407,24 +3432,67 @@ async def create_access_request(data: AccessRequestIn):
 async def ensure_company_sales_link(company_id: str) -> dict:
     if not company_id:
         return {}
-    link = await db.sales_links.find_one({"company_id": company_id, "is_active": True}, {"_id": 0})
-    if not link:
-        link = await db.sales_links.find_one({"company_id": company_id}, {"_id": 0})
-        if link:
-            await db.sales_links.update_one({"id": link["id"]}, {"$set": {"is_active": True, "updated_at": now_iso()}})
-            link["is_active"] = True
-        else:
-            token = secrets.token_urlsafe(16)
-            now = now_iso()
+
+    # 1. First check company profile documents field (authoritative permanent storage in Supabase)
+    comp = await db.companies.find_one({"id": company_id}, {"_id": 0})
+    comp_docs = {}
+    if comp:
+        raw_docs = comp.get("documents")
+        if isinstance(raw_docs, dict):
+            comp_docs = dict(raw_docs)
+        elif isinstance(raw_docs, str):
+            try:
+                parsed = json.loads(raw_docs)
+                if isinstance(parsed, dict):
+                    comp_docs = parsed
+            except Exception:
+                pass
+
+    existing_token = comp_docs.get("public_token")
+    if existing_token:
+        # Token already permanently established in Supabase company record
+        link = await db.sales_links.find_one({"public_token": existing_token}, {"_id": 0})
+        if not link:
             link = {
                 "id": str(uuid.uuid4()),
                 "company_id": company_id,
-                "public_token": token,
+                "public_token": existing_token,
                 "is_active": True,
-                "created_at": now,
-                "updated_at": now
+                "created_at": comp.get("created_at") or now_iso(),
+                "updated_at": now_iso()
             }
             await db.sales_links.insert_one(link)
+        return link
+
+    # 2. Check if a sales_link was previously created in db.sales_links
+    link = await db.sales_links.find_one({"company_id": company_id, "is_active": True}, {"_id": 0})
+    if not link:
+        link = await db.sales_links.find_one({"company_id": company_id}, {"_id": 0})
+
+    if link:
+        token = link.get("public_token") or link.get("token")
+        if token:
+            comp_docs["public_token"] = token
+            await db.companies.update_one({"id": company_id}, {"$set": {"documents": comp_docs}})
+            if not link.get("is_active"):
+                await db.sales_links.update_one({"id": link["id"]}, {"$set": {"is_active": True, "updated_at": now_iso()}})
+                link["is_active"] = True
+            return link
+
+    # 3. Create once if brand new and permanently persist to Supabase company documents
+    token = secrets.token_urlsafe(16)
+    now = now_iso()
+    link = {
+        "id": str(uuid.uuid4()),
+        "company_id": company_id,
+        "public_token": token,
+        "is_active": True,
+        "created_at": now,
+        "updated_at": now
+    }
+    comp_docs["public_token"] = token
+    await db.companies.update_one({"id": company_id}, {"$set": {"documents": comp_docs}})
+    await db.sales_links.insert_one(link)
     return link
 
 
@@ -4602,6 +4670,7 @@ async def delete_company(response: Response, user=Depends(get_current_user)):
     return {"ok": True, "detail": "Company and all associated accounts/records permanently deleted."}
 
 # ---------- Files ----------
+@api_router.post("/files")
 @api_router.post("/files/upload")
 async def upload_file(file: UploadFile = File(...), category: str = Form("general"), user=Depends(require_active_subscription())):
     filename = file.filename or ""
@@ -4637,7 +4706,7 @@ async def upload_file(file: UploadFile = File(...), category: str = Form("genera
 @api_router.get("/files/{file_id}")
 async def download_file(file_id: str, request: Request, auth: Optional[str] = Query(None), download: Optional[int] = Query(None)):
     token = request.cookies.get("access_token") or auth
-    if token:
+    if token and isinstance(token, str):
         if "?download=" in token:
             token = token.split("?download=")[0]
         if "&download=" in token:
@@ -4645,6 +4714,8 @@ async def download_file(file_id: str, request: Request, auth: Optional[str] = Qu
         if "?" in token:
             token = token.split("?")[0]
         token = token.strip()
+    else:
+        token = ""
 
     if not token:
         auth_header = request.headers.get("Authorization", "")
@@ -4705,6 +4776,25 @@ async def download_file(file_id: str, request: Request, auth: Optional[str] = Qu
     })
 
     if not rec:
+        # Fallback check inside company's leads documents
+        lead_match = await db.leads.find_one({
+            "company_id": company_id,
+            "documents": {"$elemMatch": {"$or": [{"id": clean_id}, {"file_id": clean_id}, {"id": file_id}, {"file_id": file_id}]}}
+        }, {"_id": 0, "documents": 1})
+        if lead_match and lead_match.get("documents"):
+            for doc_item in lead_match["documents"]:
+                if doc_item.get("id") in (file_id, clean_id) or doc_item.get("file_id") in (file_id, clean_id):
+                    rec = {
+                        "id": file_id,
+                        "company_id": company_id,
+                        "storage_path": doc_item.get("storage_path"),
+                        "original_filename": doc_item.get("original_filename") or doc_item.get("filename"),
+                        "content_type": doc_item.get("content_type") or "application/octet-stream",
+                        "size": doc_item.get("size", 0)
+                    }
+                    break
+
+    if not rec:
         # Fallback check across tenant context for user uploaded document
         rec = await db.files.find_one({
             "$or": [
@@ -4727,9 +4817,17 @@ async def download_file(file_id: str, request: Request, auth: Optional[str] = Qu
             logger.warning(f"Failed get_object for rec storage_path {rec.get('storage_path')}: {e}")
 
     if not data:
-        # Direct storage fallback paths including generated invoices and documents
+        # Direct storage fallback paths including leads, generated invoices and documents
         candidate_paths = [
             file_id,
+            f"{APP_NAME}/{company_id}/leads/{file_id}",
+            f"{APP_NAME}/{company_id}/leads/{clean_id}",
+            f"{APP_NAME}/{company_id}/leads/{clean_id}.pdf",
+            f"{APP_NAME}/{company_id}/leads/{clean_id}.png",
+            f"{APP_NAME}/{company_id}/leads/{clean_id}.jpg",
+            f"{APP_NAME}/{company_id}/leads/{clean_id}.jpeg",
+            f"{APP_NAME}/{company_id}/leads/{clean_id}.webp",
+            f"{APP_NAME}/{company_id}/leads/{clean_id}.docx",
             f"{APP_NAME}/{company_id}/generated/{file_id}",
             f"{APP_NAME}/{company_id}/generated/{clean_id}.pdf",
             f"{APP_NAME}/{company_id}/generated/{clean_id}.docx",
@@ -4755,19 +4853,24 @@ async def download_file(file_id: str, request: Request, auth: Optional[str] = Qu
     if not data:
         # Check local disk cache fallback
         import os
-        for ext in ["", ".pdf", ".docx", ".png", ".jpg"]:
-            local_p = os.path.join(os.path.dirname(__file__), "storage_cache", str(company_id), "generated", f"{clean_id}{ext}")
-            if os.path.exists(local_p):
-                try:
-                    with open(local_p, "rb") as lf:
-                        data = lf.read()
-                        if ext == ".docx":
-                            ct = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        elif ext == ".pdf":
-                            ct = "application/pdf"
-                        break
-                except Exception:
-                    pass
+        for subfolder in ["generated", "leads", "general"]:
+            for ext in ["", ".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp"]:
+                local_p = os.path.join(os.path.dirname(__file__), "storage_cache", str(company_id), subfolder, f"{clean_id}{ext}")
+                if os.path.exists(local_p):
+                    try:
+                        with open(local_p, "rb") as lf:
+                            data = lf.read()
+                            if ext == ".docx":
+                                ct = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            elif ext == ".pdf":
+                                ct = "application/pdf"
+                            elif ext in (".png", ".jpg", ".jpeg", ".webp"):
+                                ct = f"image/{ext.replace('.', '').replace('jpg', 'jpeg')}"
+                            break
+                    except Exception:
+                        pass
+            if data:
+                break
 
     if not data:
         raise HTTPException(status_code=404, detail="Document file is unavailable in storage.")
@@ -15337,11 +15440,13 @@ async def get_lead_detail(lead_id: str, user=Depends(require_perm("leads", "view
 
     # Reconcile documents from db.files to guarantee authoritative documents are always present
     db_files = await db.files.find({"lead_id": lead_id, "company_id": cid, "is_deleted": False}, {"_id": 0}).sort("created_at", -1).to_list(100)
-    if db_files:
-        files_dict = {
-            f["id"]: {
-                "id": f["id"],
-                "file_id": f["id"],
+    files_dict = {}
+    for f in db_files:
+        f_id = f.get("id")
+        if f_id:
+            files_dict[f_id] = {
+                "id": f_id,
+                "file_id": f_id,
                 "original_filename": f.get("original_filename") or f.get("filename") or "Document",
                 "filename": f.get("original_filename") or f.get("filename") or "Document",
                 "content_type": f.get("content_type") or "application/octet-stream",
@@ -15349,13 +15454,21 @@ async def get_lead_detail(lead_id: str, user=Depends(require_perm("leads", "view
                 "storage_path": f.get("storage_path"),
                 "created_at": f.get("created_at"),
             }
-            for f in db_files
-        }
-        for d in (lead.get("documents") or []):
-            d_id = d.get("id") or d.get("file_id")
-            if d_id and d_id not in files_dict:
-                files_dict[d_id] = d
-        lead["documents"] = list(files_dict.values())
+    for d in (lead.get("documents") or []):
+        d_id = d.get("id") or d.get("file_id")
+        if d_id and d_id not in files_dict:
+            fname = d.get("original_filename") or d.get("filename") or "Document"
+            files_dict[d_id] = {
+                "id": d_id,
+                "file_id": d_id,
+                "original_filename": fname,
+                "filename": fname,
+                "content_type": d.get("content_type") or "application/octet-stream",
+                "size": d.get("size", 0),
+                "storage_path": d.get("storage_path"),
+                "created_at": d.get("created_at"),
+            }
+    lead["documents"] = list(files_dict.values())
 
     return {
         "lead": lead,
@@ -15724,6 +15837,17 @@ async def regenerate_company_sales_link(user=Depends(require_perm("leads", "edit
         })
 
     comp = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
+    comp_docs = comp.get("documents")
+    if isinstance(comp_docs, str):
+        try:
+            comp_docs = json.loads(comp_docs)
+        except Exception:
+            comp_docs = {}
+    if not isinstance(comp_docs, dict):
+        comp_docs = {}
+    comp_docs["public_token"] = new_token
+    await db.companies.update_one({"id": cid}, {"$set": {"documents": comp_docs}})
+
     logo_file_id = comp.get("logo_file_id")
     logo_url = f"/api/files/{logo_file_id}" if logo_file_id else comp.get("logo_url")
     comp_info = {
@@ -15760,20 +15884,45 @@ async def find_active_sales_link(token: str) -> Optional[dict]:
     if not clean_token or clean_token.lower() in ("undefined", "null", ""):
         return None
 
-    # 1. Match public_token directly
+    # 1. Match company_id directly (handles user visiting with company UUID)
+    comp = await db.companies.find_one({"id": clean_token}, {"_id": 0})
+    if comp:
+        return await ensure_company_sales_link(clean_token)
+
+    # 2. Match public_token directly in db.sales_links
     link = await db.sales_links.find_one({"public_token": clean_token, "is_active": True})
     if link:
         return link
 
-    # 2. Match company_id directly (handles user visiting with company UUID)
+    # 3. Match company_id directly in db.sales_links
     link = await db.sales_links.find_one({"company_id": clean_token, "is_active": True})
     if link:
         return link
 
-    # 3. Auto-provision if clean_token is a registered company_id
-    comp = await db.companies.find_one({"id": clean_token}, {"_id": 0})
-    if comp:
-        return await ensure_company_sales_link(clean_token)
+    # 4. Match public_token inside companies.documents
+    try:
+        supa_res = supabase.table("companies").select("id").filter("documents->>public_token", "eq", clean_token).limit(1).execute()
+        if supa_res.data and len(supa_res.data) > 0:
+            return await ensure_company_sales_link(supa_res.data[0]["id"])
+    except Exception as e_supa:
+        logger.warning(f"Failed querying Supabase company by documents token: {e_supa}")
+
+    # 5. Local memory/cache scan for documents.public_token
+    all_comps = await db.companies.find({}, {"_id": 0, "id": 1, "documents": 1}).to_list(1000)
+    for c in all_comps:
+        cdocs = c.get("documents")
+        if isinstance(cdocs, str):
+            try:
+                cdocs = json.loads(cdocs)
+            except Exception:
+                cdocs = None
+        if isinstance(cdocs, dict) and cdocs.get("public_token") == clean_token:
+            return await ensure_company_sales_link(c["id"])
+
+    # 6. Fallback match in sales_links without is_active check
+    link = await db.sales_links.find_one({"public_token": clean_token})
+    if link:
+        return link
 
     return None
 
@@ -15995,6 +16144,42 @@ async def submit_public_sales_lead(token: str, data: PublicLeadIn):
                 "created_at": f.get("created_at") or now_time,
             })
 
+    # Also capture metadata for files submitted in data.documents
+    if data.documents:
+        existing_doc_ids = {d.get("id") or d.get("file_id") for d in attached_docs}
+        for d in data.documents:
+            fid = d.get("file_id") or d.get("id")
+            if fid and fid not in existing_doc_ids:
+                fname = d.get("original_filename") or d.get("filename") or "Document"
+                ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+                storage_p = f"{APP_NAME}/{cid}/leads/{fid}.{ext}" if ext else f"{APP_NAME}/{cid}/leads/{fid}"
+                doc_obj = {
+                    "id": fid,
+                    "file_id": fid,
+                    "original_filename": fname,
+                    "filename": fname,
+                    "content_type": d.get("content_type") or "application/octet-stream",
+                    "size": d.get("size", 0),
+                    "storage_path": storage_p,
+                    "created_at": d.get("created_at") or now_time,
+                }
+                attached_docs.append(doc_obj)
+                await db.files.update_one(
+                    {"id": fid, "company_id": cid},
+                    {"$set": {
+                        "lead_id": lead_id,
+                        "status": "active",
+                        "category": "leads",
+                        "source": "sales_link",
+                        "original_filename": fname,
+                        "storage_path": storage_p,
+                        "content_type": doc_obj["content_type"],
+                        "size": doc_obj["size"],
+                        "updated_at": now_time
+                    }},
+                    upsert=True
+                )
+
     lead_doc = {
         "id": lead_id,
         "lead_no": lead_no,
@@ -16091,8 +16276,11 @@ async def submit_public_sales_lead(token: str, data: PublicLeadIn):
         logger.warning(f"Failed to record notification for public sales lead: {ne}")
 
     return {
+        "ok": True,
         "success": True,
+        "lead_id": lead_id,
         "lead_no": lead_no,
+        "lead": lead_doc,
         "message": "Enquiry submitted successfully."
     }
 

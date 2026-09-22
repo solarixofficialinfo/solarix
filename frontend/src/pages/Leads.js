@@ -904,16 +904,11 @@ function AddEditLeadModal({ initial, employees, defaultTab = "basic", onClose, o
   const handleDocDownload = async (doc) => {
     const docId = doc.id || doc.file_id;
     const filename = doc.original_filename || doc.filename || `document_${docId?.slice(0, 8)}`;
-    const token = localStorage.getItem("solarix_token");
     try {
-      const res = await fetch(`${API}/files/${docId}?download=1`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await api.get(`/files/${docId}?download=1`, {
+        responseType: "blob",
       });
-      if (!res.ok) {
-        toast.error("Download failed: " + (await res.text()));
-        return;
-      }
-      const blob = await res.blob();
+      const blob = new Blob([res.data]);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -923,7 +918,7 @@ function AddEditLeadModal({ initial, employees, defaultTab = "basic", onClose, o
       a.remove();
       URL.revokeObjectURL(url);
     } catch (err) {
-      toast.error("Download failed. Please try again.");
+      toast.error("Download failed: " + formatApiError(err));
     }
   };
 
@@ -1657,7 +1652,7 @@ function SalesLinkModal({ salesLink, loading, regenerating, copied, onCopy, onRe
               >
                 <ExternalLink className="w-3 h-3" /> Open Public Page in New Tab
               </a>
-              <span className="text-slate-400">Tokens never expire until regenerated</span>
+              <span className="text-emerald-600 font-medium">Permanent company link • Never expires</span>
             </div>
           </div>
 
@@ -1699,25 +1694,20 @@ function SalesLinkModal({ salesLink, loading, regenerating, copied, onCopy, onRe
             </p>
           </div>
 
-          {/* Token Regeneration Section */}
-          <div className="p-3 rounded-xl bg-rose-50/50 border border-rose-100 flex items-center justify-between">
+          {/* Permanent Company Link Status */}
+          <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200 flex items-center justify-between">
             <div className="min-w-0 pr-2">
-              <div className="text-xs font-bold text-rose-900">Regenerate Link Token</div>
-              <div className="text-[10px] text-rose-700 mt-0.5">
-                Instantly invalidates the current link. Past customers will need your new link.
+              <div className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                Permanent Company Link Active
+              </div>
+              <div className="text-[10px] text-emerald-700 mt-0.5">
+                Dedicated exclusively to {companyName}. This link is permanent and never expires across reboots, logins, or page refreshes.
               </div>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={regenerating}
-              onClick={onRegenerate}
-              className="border-rose-200 text-rose-700 hover:bg-rose-100 text-xs font-semibold h-8 shrink-0"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 mr-1 ${regenerating ? "animate-spin" : ""}`} />
-              {regenerating ? "Regenerating..." : "Regenerate"}
-            </Button>
+            <Badge variant="outline" className="bg-white text-emerald-800 border-emerald-300 text-[10px] font-semibold shrink-0">
+              Permanent
+            </Badge>
           </div>
         </div>
         )}

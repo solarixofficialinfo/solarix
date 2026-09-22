@@ -7,8 +7,10 @@ export default function ManagementBar({
   search,
   onSearchChange,
   searchPlaceholder = "Search by name, ID, phone...",
+  searchTestId,
   children,
   onClear,
+  clearTestId,
   hasActiveFilters = false,
   totalCount,
   filteredCount,
@@ -27,6 +29,7 @@ export default function ManagementBar({
                 value={search || ""}
                 onChange={(e) => onSearchChange(e.target.value)}
                 placeholder={searchPlaceholder}
+                data-testid={searchTestId}
                 className="pl-9 pr-8 h-9 text-xs border-slate-200 bg-slate-50/50 focus:bg-white transition-colors"
               />
               {search && (
@@ -50,7 +53,8 @@ export default function ManagementBar({
               variant="ghost"
               size="sm"
               onClick={onClear}
-              className="h-9 px-2.5 text-xs text-slate-500 hover:text-slate-900 hover:bg-slate-100 gap-1.5"
+              data-testid={clearTestId}
+              className="h-9 px-2.5 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 gap-1.5"
             >
               <X className="w-3.5 h-3.5" /> Clear Filters
             </Button>

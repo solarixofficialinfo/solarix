@@ -200,6 +200,65 @@ function getTileRoofTexture(tileConfig = {}) {
   return texture;
 }
 
+// Procedural solid 3D sloped roof slab geometry with uniform thickness and perimeter fascia
+function createPitchedSlabGeometry(polygon, sec, fullRoof, slabThickness = 0.25) {
+  const shapePts = polygon.map((pt) => new THREE.Vector2(pt.x, -pt.y));
+  const triangles = THREE.ShapeUtils.triangulateShape(shapePts, []);
+  const positions = [];
+  const uvs = [];
+
+  // 1. Top surface triangles (facing up)
+  for (const tri of triangles) {
+    for (let k = 0; k < 3; k++) {
+      const idx = tri[k];
+      const pt = polygon[idx];
+      const z = -pt.y;
+      const y = calculateSectionRoofElevationAtPoint(pt.x, pt.y, sec, fullRoof);
+      positions.push(pt.x, y, z);
+      uvs.push(pt.x / 0.40, z / 0.40);
+    }
+  }
+
+  // 2. Bottom surface triangles (facing down, reversed winding)
+  for (const tri of triangles) {
+    for (let k = 2; k >= 0; k--) {
+      const idx = tri[k];
+      const pt = polygon[idx];
+      const z = -pt.y;
+      const y = calculateSectionRoofElevationAtPoint(pt.x, pt.y, sec, fullRoof) - slabThickness;
+      positions.push(pt.x, y, z);
+      uvs.push(pt.x / 0.40, z / 0.40);
+    }
+  }
+
+  // 3. Perimeter fascia faces (connecting top and bottom boundaries)
+  const n = polygon.length;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const p1 = polygon[i];
+    const p2 = polygon[j];
+    const z1 = -p1.y, z2 = -p2.y;
+    const y1Top = calculateSectionRoofElevationAtPoint(p1.x, p1.y, sec, fullRoof);
+    const y2Top = calculateSectionRoofElevationAtPoint(p2.x, p2.y, sec, fullRoof);
+    const y1Bot = y1Top - slabThickness;
+    const y2Bot = y2Top - slabThickness;
+
+    // Triangle 1: p1_top, p1_bot, p2_bot
+    positions.push(p1.x, y1Top, z1,  p1.x, y1Bot, z1,  p2.x, y2Bot, z2);
+    uvs.push(0, 1,  0, 0,  1, 0);
+
+    // Triangle 2: p1_top, p2_bot, p2_top
+    positions.push(p1.x, y1Top, z1,  p2.x, y2Bot, z2,  p2.x, y2Top, z2);
+    uvs.push(0, 1,  1, 0,  1, 1);
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geom.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geom.computeVertexNormals();
+  return geom;
+}
+
 const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   {
     roofPolygon = [],
@@ -1154,8 +1213,11 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const roofPitchRad = toRad(roofPitchDeg);
 
     const hasValidRoofPolygon = Boolean(roofPolygon && roofPolygon.length >= 3);
+    const hasValidRoofSections = Boolean(roofSections && roofSections.length > 0);
     const bounds = hasValidRoofPolygon
       ? getPolygonBounds(roofPolygon)
+      : (hasValidRoofSections && roofSections[0]?.polygon?.length >= 3)
+      ? getPolygonBounds(roofSections[0].polygon)
       : { minX: 0, maxX: 10, minY: 0, maxY: 10, width: 10, length: 10 };
     const cx = (bounds.minX + bounds.maxX) / 2;
     const cy = (bounds.minY + bounds.maxY) / 2;
@@ -1179,89 +1241,97 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     }
 
     // ── 1. Building Walls + Roof Slab ──────────────────────────────────────────
-    if (hasValidRoofPolygon) {
+    if (hasValidRoofPolygon || hasValidRoofSections) {
       const wallMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.9, metalness: 0.05, side: THREE.DoubleSide });
       const roofMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.75, metalness: 0.12, side: THREE.DoubleSide });
       const edgeMat = new THREE.LineBasicMaterial({ color: 0x475569, linewidth: 1.5 });
 
       if (roofSections && roofSections.length > 0) {
-        // ── MULTI-SECTION ROOF MAPPING (Independent Planes) ──────────────────
-        // 1. Building Perimeter Walls down to ground
-        if (showBuilding && hasValidRoofPolygon) {
-          const wallGeom = new THREE.BufferGeometry();
-          const wallVertices = [];
-          for (let i = 0; i < roofPolygon.length; i++) {
-            const j = (i + 1) % roofPolygon.length;
-            const p1 = roofPolygon[i], p2 = roofPolygon[j];
-            const sec1 = roofSections.find((s) => isPointInOrNearPolygon(p1.x, p1.y, s.polygon, 0.25)) || roofSections[0];
-            const sec2 = roofSections.find((s) => isPointInOrNearPolygon(p2.x, p2.y, s.polygon, 0.25)) || roofSections[0];
-            const h1 = calculateSectionRoofElevationAtPoint(p1.x, p1.y, sec1, fullRoof);
-            const h2 = calculateSectionRoofElevationAtPoint(p2.x, p2.y, sec2, fullRoof);
-            const z1 = -p1.y, z2 = -p2.y;
+        // ── MULTI-SECTION ROOF MAPPING (Independent Solid Sections) ──────────
+        // 1. Building Perimeter Walls down to ground for every section
+        if (showBuilding) {
+          roofSections.forEach((sec) => {
+            if (!sec.polygon || sec.polygon.length < 3) return;
 
-            wallVertices.push(
-              p1.x, 0, z1,  p2.x, 0, z2,  p2.x, h2, z2,
-              p1.x, 0, z1,  p2.x, h2, z2,  p1.x, h1, z1
-            );
-          }
-          wallGeom.setAttribute("position", new THREE.Float32BufferAttribute(wallVertices, 3));
-          wallGeom.computeVertexNormals();
-          const wallMesh = new THREE.Mesh(wallGeom, wallMat);
-          wallMesh.castShadow = true; wallMesh.receiveShadow = true;
-          rootGroup.add(wallMesh);
-        }
+            // Check if section is placed on top of another parent section (e.g. mumty or cabin)
+            let baseH = 0;
+            const cxSec = sec.polygon.reduce((sum, p) => sum + p.x, 0) / sec.polygon.length;
+            const cySec = sec.polygon.reduce((sum, p) => sum + p.y, 0) / sec.polygon.length;
+            for (const other of roofSections) {
+              if (other.id === sec.id) continue;
+              if (other.polygon && other.polygon.length >= 3 && isPointInsidePolygon(cxSec, cySec, other.polygon)) {
+                baseH = Number(other.elevation ?? buildingElevationM);
+                break;
+              }
+            }
 
-        // 2. Unified Base Building Roof Slab
-        if (showRoof && hasValidRoofPolygon) {
-          const baseShape = new THREE.Shape();
-          roofPolygon.forEach((pt, idx) => {
-            if (idx === 0) baseShape.moveTo(pt.x, -pt.y);
-            else baseShape.lineTo(pt.x, -pt.y);
+            const wallGeom = new THREE.BufferGeometry();
+            const wallVertices = [];
+            const n = sec.polygon.length;
+            for (let i = 0; i < n; i++) {
+              const j = (i + 1) % n;
+              const p1 = sec.polygon[i];
+              const p2 = sec.polygon[j];
+              const h1 = calculateSectionRoofElevationAtPoint(p1.x, p1.y, sec, fullRoof);
+              const h2 = calculateSectionRoofElevationAtPoint(p2.x, p2.y, sec, fullRoof);
+              const z1 = -p1.y;
+              const z2 = -p2.y;
+
+              if (h1 > baseH || h2 > baseH) {
+                wallVertices.push(
+                  p1.x, baseH, z1,  p2.x, baseH, z2,  p2.x, h2, z2,
+                  p1.x, baseH, z1,  p2.x, h2, z2,     p1.x, h1, z1
+                );
+              }
+            }
+
+            if (wallVertices.length > 0) {
+              wallGeom.setAttribute("position", new THREE.Float32BufferAttribute(wallVertices, 3));
+              wallGeom.computeVertexNormals();
+              const wallMesh = new THREE.Mesh(wallGeom, wallMat);
+              wallMesh.castShadow = true;
+              wallMesh.receiveShadow = true;
+              rootGroup.add(wallMesh);
+            }
           });
-          baseShape.closePath();
-          const baseGeom = new THREE.ShapeGeometry(baseShape);
-          const basePos = baseGeom.getAttribute("position");
-          for (let i = 0; i < basePos.count; i++) {
-            const px = basePos.getX(i);
-            const pz = basePos.getY(i);
-            basePos.setXYZ(i, px, buildingElevationM, pz);
-          }
-          baseGeom.computeVertexNormals();
-          const baseMesh = new THREE.Mesh(baseGeom, roofMat);
-          baseMesh.castShadow = true;
-          baseMesh.receiveShadow = true;
-          rootGroup.add(baseMesh);
         }
 
-        // 3. Individual Roof Planes per Section
+        // 2. Authoritative Solid Roof Slabs (per section with thickness and authentic materials)
         if (showRoof) {
           roofSections.forEach((sec) => {
             if (!sec.polygon || sec.polygon.length < 3) return;
 
             const isSelectedSec = selectedSectionId === sec.id;
-            const shape = new THREE.Shape();
-            sec.polygon.forEach((pt, idx) => {
-              if (idx === 0) shape.moveTo(pt.x, -pt.y);
-              else shape.lineTo(pt.x, -pt.y);
-            });
-            shape.closePath();
+            const secPitch = Number(sec.pitch ?? 0);
+            const secElevation = Number(sec.elevation ?? buildingElevationM ?? 3.0);
 
-            const secGeom = new THREE.ShapeGeometry(shape);
-            const posAttr = secGeom.getAttribute("position");
-            const uvAttr = secGeom.getAttribute("uv");
+            let secGeom;
+            let isFlatSlab = false;
 
-            for (let i = 0; i < posAttr.count; i++) {
-              const px = posAttr.getX(i);
-              const pz = posAttr.getY(i);
-              const py = calculateSectionRoofElevationAtPoint(px, -pz, sec, fullRoof);
-              const finalY = sec.pitch <= 0 ? Math.max(py, buildingElevationM + 0.005) : py;
-              posAttr.setXYZ(i, px, finalY, pz);
-              if (uvAttr) {
-                // UV repeat scaled to real-world meters
-                uvAttr.setXY(i, px / 0.40, pz / 0.40);
-              }
+            if (secPitch <= 0) {
+              // Flat Roof: Extrude solid 3D slab with beveled edges (matching Section A standard)
+              isFlatSlab = true;
+              const shape = new THREE.Shape();
+              sec.polygon.forEach((pt, idx) => {
+                if (idx === 0) shape.moveTo(pt.x, -pt.y);
+                else shape.lineTo(pt.x, -pt.y);
+              });
+              shape.closePath();
+
+              const roofExtrudeSettings = {
+                steps: 1,
+                depth: 0.35,
+                bevelEnabled: true,
+                bevelThickness: 0.06,
+                bevelSize: 0.06,
+                bevelSegments: 2,
+              };
+              secGeom = new THREE.ExtrudeGeometry(shape, roofExtrudeSettings);
+              secGeom.rotateX(Math.PI / 2);
+            } else {
+              // Pitched Roof: Construct 3D sloped slab with solid thickness
+              secGeom = createPitchedSlabGeometry(sec.polygon, sec, fullRoof, 0.25);
             }
-            secGeom.computeVertexNormals();
 
             let secMat;
             if (sec.roofType === "Tile") {
@@ -1272,14 +1342,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                 metalness: 0.1,
                 side: THREE.DoubleSide,
               });
-            } else if (sec.roofType === "Metal") {
+            } else if (sec.roofType === "Metal" || sec.roofType === "Tin / Metal") {
               secMat = new THREE.MeshStandardMaterial({
                 color: isSelectedSec ? 0x93c5fd : 0x64748b,
                 roughness: 0.35,
                 metalness: 0.8,
                 side: THREE.DoubleSide,
               });
-            } else if (sec.roofType === "Shingle") {
+            } else if (sec.roofType === "Shingle" || sec.roofType === "Asbestos") {
               secMat = new THREE.MeshStandardMaterial({
                 color: isSelectedSec ? 0x64748b : 0x334155,
                 roughness: 0.9,
@@ -1287,9 +1357,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                 side: THREE.DoubleSide,
               });
             } else {
-              // RCC Concrete
+              // RCC Concrete: authentic light-slate concrete body
               secMat = new THREE.MeshStandardMaterial({
-                color: isSelectedSec ? 0xcffafe : 0xe2e8f0,
+                color: 0xe2e8f0,
                 roughness: 0.8,
                 metalness: 0.1,
                 side: THREE.DoubleSide,
@@ -1297,6 +1367,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             }
 
             const secMesh = new THREE.Mesh(secGeom, secMat);
+            if (isFlatSlab) {
+              secMesh.position.y = secElevation;
+            }
             secMesh.castShadow = true;
             secMesh.receiveShadow = true;
             secMesh.userData = {
@@ -1307,15 +1380,13 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             rootGroup.add(secMesh);
             sectionMeshMapRef.current[sec.id] = secMesh;
 
-            // Edge wireframe (Highlighted cyan only when section is selected)
-            if (isSelectedSec) {
-              const secEdgeGeom = new THREE.EdgesGeometry(secGeom);
-              const secEdgeMat = new THREE.LineBasicMaterial({
-                color: 0x06b6d4,
-                linewidth: 3,
-              });
-              secMesh.add(new THREE.LineSegments(secEdgeGeom, secEdgeMat));
-            }
+            // 3D Slab Edge Lines: Highlighted cyan on selection, slate edge outline when unselected
+            const secEdgeGeom = new THREE.EdgesGeometry(secGeom);
+            const secEdgeMat = new THREE.LineBasicMaterial({
+              color: isSelectedSec ? 0x06b6d4 : 0x64748b,
+              linewidth: isSelectedSec ? 2.5 : 1.5,
+            });
+            secMesh.add(new THREE.LineSegments(secEdgeGeom, secEdgeMat));
           });
         }
       } else if (roofType === "gable" && roofPitchDeg > 0) {
