@@ -21,7 +21,36 @@ import { toast } from "sonner";
 import dayjs from "dayjs";
 
 import LiveSatelliteMap from "./components/LiveSatelliteMap";
-const Rooftop3DViewer = lazy(() => import("./components/Rooftop3DViewer"));
+
+// Safely load Rooftop3DViewer with automatic recovery from stale deployment chunk errors
+const Rooftop3DViewer = lazy(async () => {
+  try {
+    const mod = await import("./components/Rooftop3DViewer");
+    try { sessionStorage.removeItem("solarix_3d_chunk_retried"); } catch (_) {}
+    return mod;
+  } catch (err) {
+    const isChunkError =
+      err?.name === "ChunkLoadError" ||
+      /loading chunk|missing:|\.chunk\.js|dynamically imported module/i.test(err?.message || "");
+
+    if (isChunkError) {
+      let alreadyRetried = false;
+      try {
+        alreadyRetried = sessionStorage.getItem("solarix_3d_chunk_retried") === "true";
+      } catch (_) {}
+
+      if (!alreadyRetried) {
+        try {
+          sessionStorage.setItem("solarix_3d_chunk_retried", "true");
+        } catch (_) {}
+        console.warn("[SolarStudio] Stale 3D visualizer chunk detected after deployment update. Auto-reloading to fetch updated assets...", err);
+        window.location.reload();
+        return new Promise(() => {}); // Suspend while reload occurs
+      }
+    }
+    throw err;
+  }
+});
 import DesignSummaryPanel from "./components/DesignSummaryPanel";
 import LayoutMicroAdjuster from "./components/LayoutMicroAdjuster";
 import {
@@ -114,25 +143,74 @@ class Viewer3DErrorBoundary extends React.Component {
   }
   render() {
     if (this.state.hasError) {
+      const error = this.state.error;
+      const errorMessage = error?.message || "";
+      const isChunkLoad =
+        error?.name === "ChunkLoadError" ||
+        /loading chunk|missing:|\.chunk\.js|dynamically imported module/i.test(errorMessage);
+      const isWebGL =
+        !isChunkLoad &&
+        /webgl|context creation|browser does not support webgl|webgl2|getcontext/i.test(errorMessage);
+      const isThreeInit =
+        !isChunkLoad &&
+        !isWebGL &&
+        (/three|webglrenderer|scene|camera|perspectivecamera/i.test(errorMessage) ||
+          /three/i.test(error?.stack || ""));
+
+      let title = "3D Visualizer Notice";
+      let description = `A runtime error occurred in the 3D viewer (${errorMessage || "Runtime error"}).`;
+      let reloadAction = null;
+
+      if (isChunkLoad) {
+        title = "3D Asset Update Required";
+        description = `A new version of Solarix was deployed or a 3D module failed to download (${errorMessage}). Reload the page to load the updated 3D visualizer.`;
+        reloadAction = (
+          <Button
+            size="sm"
+            onClick={() => {
+              try { sessionStorage.removeItem("solarix_3d_chunk_retried"); } catch (_) {}
+              window.location.reload();
+            }}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-1.5 rounded-xl shadow-xs"
+          >
+            ↻ Reload Application
+          </Button>
+        );
+      } else if (isWebGL) {
+        title = "3D WebGL Acceleration Unavailable";
+        description = `3D WebGL acceleration is unavailable in this environment (${errorMessage || "WebGL context creation failed"}). Please ensure WebGL is enabled in your browser or continue with the 2D Designer.`;
+      } else if (isThreeInit) {
+        title = "3D Graphics Engine Error";
+        description = `The 3D graphics engine encountered an error while initializing the 3D scene (${errorMessage}).`;
+      }
+
       return (
         <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-white p-6 text-center z-30">
           <div className="w-12 h-12 rounded-2xl bg-indigo-950 border border-indigo-700/60 flex items-center justify-center mb-3 text-indigo-400 font-bold">
             3D
           </div>
-          <h4 className="text-sm font-bold text-slate-200 mb-1">3D Visualizer Notice</h4>
+          <h4 className="text-sm font-bold text-slate-200 mb-1">{title}</h4>
           <p className="text-xs text-slate-400 max-w-sm mb-4">
-            3D WebGL acceleration is unavailable in this environment ({this.state.error?.message || "WebGL context creation failed"}).
+            {description}
           </p>
-          <Button
-            size="sm"
-            onClick={() => {
-              this.setState({ hasError: false, error: null });
-              this.props.onSwitchTo2D?.();
-            }}
-            className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-1.5 rounded-xl"
-          >
-            ← Return to 2D Satellite Designer
-          </Button>
+          <div className="flex items-center gap-2">
+            {reloadAction}
+            <Button
+              size="sm"
+              variant={reloadAction ? "outline" : "default"}
+              onClick={() => {
+                this.setState({ hasError: false, error: null });
+                this.props.onSwitchTo2D?.();
+              }}
+              className={
+                reloadAction
+                  ? "border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 text-xs font-semibold px-4 py-1.5 rounded-xl"
+                  : "bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-1.5 rounded-xl"
+              }
+            >
+              ← Return to 2D Satellite Designer
+            </Button>
+          </div>
         </div>
       );
     }
@@ -3967,47 +4045,49 @@ export default function SolarStudio() {
                 onUpdateSectionPolygon={handleUpdateSectionPolygon}
               />
               {hasOpened3D && (
-                <Suspense fallback={
-                  <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-2">
-                    <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                    <span className="text-xs">Initializing 3D Visualizer…</span>
-                  </div>
-                }>
-                  <Rooftop3DViewer
-                    ref={viewer3dRef}
-                    roofPolygon={designData.roof_polygon}
-                    roof={designData.roof}
-                    roofSections={effectiveSections}
-                    selectedSectionId={selectedSectionId}
-                    onSelectSection={handleSelectSection}
-                    panels={designData.panels}
-                    setPanels={handleSetPanels}
-                    selectedPanelId={selectedPanelId}
-                    setSelectedPanelId={setSelectedPanelId}
-                    selectionMode={selectionMode}
-                    setSelectionMode={setSelectionMode}
-                    selectedRowIndex={selectedRowIndex}
-                    setSelectedRowIndex={setSelectedRowIndex}
-                    hasManualAdjustments={hasManualAdjustments}
-                    setHasManualAdjustments={setHasManualAdjustments}
-                    setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
-                    onUpdateSection={handleUpdateSection}
-                    obstacles={designData.obstacles}
-                    structure={{
-                      ...designData.structure,
-                      azimuth: Number(designData.azimuth_angle || 180),
-                    }}
-                    structureNodes={designData.structure_nodes || []}
-                    structureMembers={designData.structure_members || []}
-                    onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
-                    onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
-                    onSwitchTo2D={() => {
-                      setActiveTab("2d");
-                      setActiveTool("draw_roof");
-                    }}
-                    onApplyTemplateRoof={handleApplyDefaultRoofTemplate}
-                  />
-                </Suspense>
+                <Viewer3DErrorBoundary onSwitchTo2D={() => { setActiveTab("2d"); setActiveTool("draw_roof"); }}>
+                  <Suspense fallback={
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-slate-400 gap-2">
+                      <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                      <span className="text-xs">Initializing 3D Visualizer…</span>
+                    </div>
+                  }>
+                    <Rooftop3DViewer
+                      ref={viewer3dRef}
+                      roofPolygon={designData.roof_polygon}
+                      roof={designData.roof}
+                      roofSections={effectiveSections}
+                      selectedSectionId={selectedSectionId}
+                      onSelectSection={handleSelectSection}
+                      panels={designData.panels}
+                      setPanels={handleSetPanels}
+                      selectedPanelId={selectedPanelId}
+                      setSelectedPanelId={setSelectedPanelId}
+                      selectionMode={selectionMode}
+                      setSelectionMode={setSelectionMode}
+                      selectedRowIndex={selectedRowIndex}
+                      setSelectedRowIndex={setSelectedRowIndex}
+                      hasManualAdjustments={hasManualAdjustments}
+                      setHasManualAdjustments={setHasManualAdjustments}
+                      setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
+                      onUpdateSection={handleUpdateSection}
+                      obstacles={designData.obstacles}
+                      structure={{
+                        ...designData.structure,
+                        azimuth: Number(designData.azimuth_angle || 180),
+                      }}
+                      structureNodes={designData.structure_nodes || []}
+                      structureMembers={designData.structure_members || []}
+                      onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
+                      onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
+                      onSwitchTo2D={() => {
+                        setActiveTab("2d");
+                        setActiveTool("draw_roof");
+                      }}
+                      onApplyTemplateRoof={handleApplyDefaultRoofTemplate}
+                    />
+                  </Suspense>
+                </Viewer3DErrorBoundary>
               )}
             </div>
           )}
