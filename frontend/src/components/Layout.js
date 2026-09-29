@@ -199,7 +199,8 @@ export default function Layout({ children }) {
     {
       title: "DOCUMENTS",
       items: [
-        { to: "/proposal-generator", label: "Proposal Generator", icon: FileCheck, key: "sales_documents" },
+        { to: "/quotation", label: "Quotations / Proposals", icon: FileCheck, key: "sales_documents" },
+        { to: "/proposal-generator", label: "Proposal Generator", icon: FileText, key: "sales_documents" },
         { to: "/sales-documents", label: "Sales Documents", icon: FileText, key: "sales_documents" },
         { to: "/templates", label: "Document Templates", icon: FileText, key: "documents" },
         { to: "/purchase-orders", label: "Purchase Orders", icon: FileText, key: "purchase_orders" },

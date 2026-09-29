@@ -307,6 +307,7 @@ function App() {
             <Route path="/proposal-generator" element={<Protected><PermissionRoute page="sales_documents"><ProposalGenerator /></PermissionRoute></Protected>} />
             <Route path="/proposals" element={<Navigate to="/proposal-generator" replace />} />
             <Route path="/quotation" element={<Protected><PermissionRoute page="sales_documents"><Quotation /></PermissionRoute></Protected>} />
+            <Route path="/quotations" element={<Navigate to="/quotation" replace />} />
             <Route path="/tax-invoice" element={<Protected><PermissionRoute page="sales_documents"><TaxInvoice /></PermissionRoute></Protected>} />
             <Route path="/delivery-bill" element={<Protected><PermissionRoute page="sales_documents"><DeliveryBill /></PermissionRoute></Protected>} />
             <Route path="/sales-documents" element={<Protected><PermissionRoute page="sales_documents"><SalesDocuments /></PermissionRoute></Protected>} />

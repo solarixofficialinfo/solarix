@@ -3458,7 +3458,7 @@ async def ensure_company_sales_link(company_id: str) -> dict:
                 "company_id": company_id,
                 "public_token": existing_token,
                 "is_active": True,
-                "created_at": comp.get("created_at") or now_iso(),
+                "created_at": (comp.get("created_at") if comp else None) or now_iso(),
                 "updated_at": now_iso()
             }
             await db.sales_links.insert_one(link)
@@ -6479,7 +6479,11 @@ async def generate_public_document(payload: Dict[str, Any], user=Depends(require
         if client_doc and not doc_data.get("client"):
             doc_data["client"] = client_doc
         if fmt_type == "docx":
-            pdf_bytes = await asyncio.to_thread(pdf_generator.generate_docx, doc_type, doc_data, company_doc)
+            if doc_type == "quotation" and (doc_data.get("template") in ("S1", "S2") or doc_data.get("solar_system") or doc_data.get("customer")):
+                import solar_quotation_engine
+                pdf_bytes = await asyncio.to_thread(solar_quotation_engine.generate_quotation_docx, doc_data, company_doc, doc_data.get("template") or "S1")
+            else:
+                pdf_bytes = await asyncio.to_thread(pdf_generator.generate_docx, doc_type, doc_data, company_doc)
             gen_content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else:
             pdf_bytes = await asyncio.to_thread(pdf_generator.generate_document, doc_type, doc_data, company_doc)
@@ -6685,6 +6689,232 @@ async def delete_generated_document(file_id: str, user=Depends(get_current_user)
     )
     await log_activity(user["company_id"], user["id"], user["name"], f"Deleted Generated Document", file_rec.get("original_filename", ""))
     return {"status": "success"}
+
+
+# ==================== SOLAR QUOTATION & PROPOSAL MODULE ====================
+import solar_quotation_engine
+
+@api_router.get("/quotations")
+async def list_quotations(search: Optional[str] = None, user=Depends(get_current_user)):
+    """List all saved quotations / proposals for current company."""
+    if not has_perm(user, "sales_documents", "view"):
+        raise HTTPException(status_code=403, detail="Missing permission: sales_documents.view")
+    q: Dict[str, Any] = {"company_id": user["company_id"]}
+    if search:
+        regex = {"$regex": re.escape(search.strip()), "$options": "i"}
+        q["$or"] = [
+            {"reference_no": regex},
+            {"quote_number": regex},
+            {"customer.name": regex},
+            {"customer.phone": regex},
+            {"customer_name": regex},
+            {"project.location": regex}
+        ]
+    quotations = await db.quotations.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return quotations
+
+@api_router.get("/quotations/next-number")
+async def get_next_quotation_number(user=Depends(get_current_user)):
+    """Suggest next sequential quotation reference number (GVP/QTN/YYYY/XXXX)."""
+    cid = user["company_id"]
+    year = datetime.now().year
+    pfx = f"GVP/QTN/{year}/"
+    max_num = 0
+    cur = db.quotations.find({"company_id": cid, "reference_no": {"$regex": f"^GVP/QTN/{year}/"}}, {"_id": 0, "reference_no": 1})
+    async for r in cur:
+        val = r.get("reference_no") or ""
+        m = re.search(r"(\d+)\s*$", val)
+        if m:
+            try:
+                n = int(m.group(1))
+                if n > max_num: max_num = n
+            except Exception: pass
+    cur_f = db.files.find({"company_id": cid, "doc_type": "quotation"}, {"_id": 0, "document_number": 1})
+    async for rf in cur_f:
+        val = rf.get("document_number") or ""
+        if val.startswith(pfx):
+            m = re.search(r"(\d+)\s*$", val)
+            if m:
+                try:
+                    n = int(m.group(1))
+                    if n > max_num: max_num = n
+                except Exception: pass
+    next_num = max_num + 1
+    suggested = f"{pfx}{next_num:04d}"
+    return {"next_number": next_num, "suggested": suggested}
+
+@api_router.get("/quotations/{id}")
+async def get_quotation_by_id(id: str, user=Depends(get_current_user)):
+    """Fetch single quotation by ID."""
+    if not has_perm(user, "sales_documents", "view"):
+        raise HTTPException(status_code=403, detail="Missing permission: sales_documents.view")
+    doc = await db.quotations.find_one({"id": id, "company_id": user["company_id"]}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    return doc
+
+@api_router.post("/quotations")
+async def create_or_save_quotation(payload: Dict[str, Any], user=Depends(get_current_user)):
+    """Create or save draft/completed quotation."""
+    if not has_perm(user, "sales_documents", "create"):
+        raise HTTPException(status_code=403, detail="Missing permission: sales_documents.create")
+    q_id = payload.get("id") or str(uuid.uuid4())
+    existing = await db.quotations.find_one({"id": q_id, "company_id": user["company_id"]})
+    now_str = now_iso()
+    doc_to_save = {
+        **payload,
+        "id": q_id,
+        "company_id": user["company_id"],
+        "user_id": user["id"],
+        "updated_at": now_str,
+    }
+    if not existing:
+        doc_to_save["created_at"] = now_str
+        doc_to_save.setdefault("status", "draft")
+        await db.quotations.insert_one(doc_to_save)
+        await log_activity(user["company_id"], user["id"], user["name"], "Created Quotation", payload.get("reference_no") or q_id)
+    else:
+        await db.quotations.update_one({"id": q_id, "company_id": user["company_id"]}, {"$set": doc_to_save})
+        await log_activity(user["company_id"], user["id"], user["name"], "Updated Quotation", payload.get("reference_no") or q_id)
+    saved = await db.quotations.find_one({"id": q_id, "company_id": user["company_id"]}, {"_id": 0})
+    return saved
+
+@api_router.put("/quotations/{id}")
+async def update_quotation_endpoint(id: str, payload: Dict[str, Any], user=Depends(get_current_user)):
+    """Update existing quotation."""
+    if not has_perm(user, "sales_documents", "create"):
+        raise HTTPException(status_code=403, detail="Missing permission: sales_documents.create")
+    existing = await db.quotations.find_one({"id": id, "company_id": user["company_id"]})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    doc_to_save = {
+        **payload,
+        "id": id,
+        "company_id": user["company_id"],
+        "updated_at": now_iso()
+    }
+    await db.quotations.update_one({"id": id, "company_id": user["company_id"]}, {"$set": doc_to_save})
+    await log_activity(user["company_id"], user["id"], user["name"], "Updated Quotation", payload.get("reference_no") or id)
+    return await db.quotations.find_one({"id": id, "company_id": user["company_id"]}, {"_id": 0})
+
+@api_router.delete("/quotations/{id}")
+async def delete_quotation_endpoint(id: str, user=Depends(get_current_user)):
+    """Delete a saved quotation and its associated generated file."""
+    if not has_perm(user, "sales_documents", "delete"):
+        raise HTTPException(status_code=403, detail="Missing permission: sales_documents.delete")
+    existing = await db.quotations.find_one({"id": id, "company_id": user["company_id"]})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if existing.get("generated_file_id"):
+        file_rec = await db.files.find_one({"id": existing["generated_file_id"], "company_id": user["company_id"]})
+        if file_rec:
+            try:
+                delete_object(file_rec["storage_path"])
+            except Exception as e:
+                logger.warning(f"Could not delete storage object: {e}")
+            await db.files.delete_one({"id": existing["generated_file_id"]})
+    await db.quotations.delete_one({"id": id, "company_id": user["company_id"]})
+    await log_activity(user["company_id"], user["id"], user["name"], "Deleted Quotation", existing.get("reference_no") or id)
+    return {"status": "success"}
+
+@api_router.post("/quotations/generate")
+async def generate_quotation_document_endpoint(payload: Dict[str, Any], user=Depends(get_current_user)):
+    """Generate Word (.docx) proposal from S1 or S2 template using centralized quotation data model."""
+    if not has_perm(user, "sales_documents", "create"):
+        raise HTTPException(status_code=403, detail="Missing permission: sales_documents.create")
+
+    # Check monthly document generations quota
+    from plan_config import check_plan_limit, increment_usage
+    chk_gen = await check_plan_limit(user["company_id"], "document_generations", increment=1, db=db)
+    if not chk_gen["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_gen["message"])
+
+    company_doc = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}
+    company_doc = await _enrich_company_doc_with_logo(company_doc)
+
+    q_id = payload.get("id") or payload.get("quotation_id")
+    quotation_data = payload.get("quotation") or payload.get("doc_data") or payload
+    if q_id and not payload.get("quotation"):
+        stored_q = await db.quotations.find_one({"id": q_id, "company_id": user["company_id"]}, {"_id": 0})
+        if stored_q:
+            quotation_data = {**stored_q, **payload}
+
+    tpl_type = (payload.get("template") or quotation_data.get("template") or "S1").upper().strip()
+    if tpl_type not in ("S1", "S2"):
+        tpl_type = "S1"
+
+    docx_bytes = await asyncio.to_thread(
+        solar_quotation_engine.generate_quotation_docx,
+        quotation_data,
+        company_doc,
+        tpl_type
+    )
+
+    content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ref_no = quotation_data.get("reference_no") or quotation_data.get("quote_number") or "QTN"
+    clean_ref = re.sub(r"[^A-Za-z0-9_-]", "_", ref_no)
+    cust = quotation_data.get("customer") or {}
+    cust_name = cust.get("name") or quotation_data.get("customer_name") or "Customer"
+    clean_cust = re.sub(r"[^A-Za-z0-9_-]", "_", cust_name)
+    date_str = quotation_data.get("date") or datetime.now().strftime("%Y-%m-%d")
+    filename = f"{clean_cust}_Solar_Proposal_{tpl_type}_{clean_ref}_{date_str}.docx"
+
+    file_id = str(uuid.uuid4())
+    storage_path = f"{APP_NAME}/{user['company_id']}/generated/{file_id}.docx"
+    result = put_object(storage_path, docx_bytes, content_type)
+
+    # Clean up duplicate if any
+    await _cleanup_duplicate_document(user["company_id"], "quotation", ref_no)
+
+    await db.files.insert_one({
+        "id": file_id,
+        "company_id": user["company_id"],
+        "uploader_id": user["id"],
+        "storage_path": result["path"],
+        "original_filename": filename,
+        "content_type": content_type,
+        "size": result.get("size", len(docx_bytes)),
+        "category": "generated",
+        "is_deleted": False,
+        "created_at": now_iso(),
+        "doc_type": "quotation",
+        "document_number": ref_no,
+        "client_name": cust_name,
+        "prepared_by": quotation_data.get("prepared_by") or user["name"],
+        "status": "Active"
+    })
+
+    # Save or update quotation in db.quotations
+    if not q_id:
+        q_id = str(uuid.uuid4())
+    quotation_data["id"] = q_id
+    quotation_data["company_id"] = user["company_id"]
+    quotation_data["user_id"] = user["id"]
+    quotation_data["status"] = "generated"
+    quotation_data["template"] = tpl_type
+    quotation_data["generated_file_id"] = file_id
+    quotation_data["generated_filename"] = filename
+    quotation_data["updated_at"] = now_iso()
+    quotation_data.setdefault("created_at", now_iso())
+
+    await db.quotations.update_one(
+        {"id": q_id, "company_id": user["company_id"]},
+        {"$set": quotation_data},
+        upsert=True
+    )
+
+    await increment_usage(user["company_id"], "document_generations", 1, db=db)
+    await log_activity(user["company_id"], user["id"], user["name"], f"Generated Quotation ({tpl_type})", f"{ref_no} — {cust_name}")
+
+    return {
+        "id": file_id,
+        "filename": filename,
+        "label": f"Solar Proposal ({tpl_type})",
+        "doc_type": "quotation",
+        "document_number": ref_no,
+        "quotation_id": q_id
+    }
+
 
 
 # ==================== DISCOM & DOCUMENT MAPPINGS ====================
@@ -16260,7 +16490,7 @@ async def submit_public_sales_lead(token: str, data: PublicLeadIn):
 
     # Record notification and activity
     try:
-        await log_activity(cid, assigned_to, "Public Sales Portal", "New Sales Enquiry", f"{clean_name} ({clean_mobile}) - {sys_kw} kW")
+        await log_activity(cid, assigned_to or "system", "Public Sales Portal", "New Sales Enquiry", f"{clean_name} ({clean_mobile}) - {sys_kw} kW")
         await db.notifications.insert_one({
             "id": str(uuid.uuid4()),
             "company_id": cid,
