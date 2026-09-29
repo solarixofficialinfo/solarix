@@ -2,7 +2,7 @@ import React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Edit, Sparkles, Download, CheckCircle2, User, Layers, Sun, DollarSign, CreditCard, Boxes, Clock, CheckSquare, ScrollText, FileCheck, FileDown } from "lucide-react";
+import { FileText, Edit, Sparkles, Download, CheckCircle2, User, Layers, Sun, DollarSign, CreditCard, Boxes, Clock, CheckSquare, ScrollText, FileCheck, FileDown, Info } from "lucide-react";
 import { formatINR, formatNumberIN } from "../defaults";
 
 export default function Step10Review({
@@ -380,33 +380,53 @@ export default function Step10Review({
             </Button>
           </div>
 
-          {/* Download Options */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Button
-              onClick={() => onGenerate(false)}
-              disabled={busy}
-              className="h-11 text-xs font-bold gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-xs"
-              data-testid="btn-generate-quotation"
-            >
-              <FileCheck className="w-4 h-4" />
-              {busy ? "Generating..." : `Word (.docx) — Format ${selectedTemplate}`}
-            </Button>
-
-            <Button
-              onClick={() => onGeneratePdf(false)}
-              disabled={busy}
-              variant="outline"
-              className="h-11 text-xs font-bold gap-2 border-blue-300 text-blue-700 hover:bg-blue-50 shadow-xs"
-              data-testid="btn-generate-pdf"
-            >
-              <FileDown className="w-4 h-4" />
-              {busy ? "Converting..." : `PDF Download — Format ${selectedTemplate}`}
-            </Button>
+          {/* Export Info & Server Requirement Banner */}
+          <div className="rounded-lg bg-slate-50 border border-slate-200/90 p-3.5 text-[11px] text-slate-600 flex items-start gap-2.5">
+            <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="font-semibold text-slate-800">Export Information</div>
+              <p className="text-slate-500 leading-relaxed">
+                <span className="font-semibold text-slate-700">Word (.docx):</span> Instant download, preserves all custom styling, dynamic tables, and project financials without any server dependencies.
+              </p>
+              <p className="text-slate-500 leading-relaxed">
+                <span className="font-semibold text-slate-700">PDF Download:</span> Requires <span className="font-medium text-slate-700">LibreOffice</span> installed on the host/server. If not installed on the server, please download the Word (.docx) file and export to PDF from Microsoft Word or Google Docs.
+              </p>
+            </div>
           </div>
 
-          <p className="text-[10px] text-slate-400 text-center">
-            Word (.docx) preserves full template formatting. PDF requires LibreOffice on the server.
-          </p>
+          {/* Download Options */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1">
+              <Button
+                onClick={() => onGenerate(false)}
+                disabled={busy}
+                className="h-11 text-xs font-bold gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-xs w-full"
+                data-testid="btn-generate-quotation"
+              >
+                <FileCheck className="w-4 h-4" />
+                {busy ? "Generating..." : `Word (.docx) — Format ${selectedTemplate}`}
+              </Button>
+              <span className="text-[10px] text-center text-emerald-600 font-semibold">
+                ✓ Recommended · Instant Download
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <Button
+                onClick={() => onGeneratePdf(false)}
+                disabled={busy}
+                variant="outline"
+                className="h-11 text-xs font-bold gap-2 border-slate-300 text-slate-700 hover:bg-slate-50 shadow-xs w-full"
+                data-testid="btn-generate-pdf"
+              >
+                <FileDown className="w-4 h-4" />
+                {busy ? "Converting..." : `PDF Download — Format ${selectedTemplate}`}
+              </Button>
+              <span className="text-[10px] text-center text-slate-400">
+                Requires LibreOffice on server
+              </span>
+            </div>
+          </div>
         </CardContent>
       </Card>
     </div>
