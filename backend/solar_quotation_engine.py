@@ -10,6 +10,8 @@ import re
 import copy
 import logging
 import zipfile
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -36,7 +38,7 @@ def _resolve_template_path(template_name: str) -> Path:
     clean_name = template_name.upper().strip()
     if not clean_name.startswith("S"):
         clean_name = "S1"
-    
+
     candidates = [
         TEMPLATES_DIR / f"{clean_name}.docx",
         TEMPLATES_DIR / f"{clean_name}.dotx",
@@ -100,15 +102,14 @@ def format_indian_number(n: Any, show_decimals: bool = False) -> str:
         if rest:
             groups.insert(0, rest)
         res = ",".join(groups) + "," + last3
-    if is_neg:
-        res = "-" + res
-    return res + dec_part
+    result = ("-" if is_neg else "") + res + dec_part
+    return result
 
 
-def format_inr(n: Any, show_symbol: bool = True) -> str:
-    """Formats amount with INR currency symbol (₹2,60,000)."""
+def format_inr(n: Any) -> str:
+    """Returns Indian Rupee formatted string without ₹ symbol (for in-document use)."""
     formatted = format_indian_number(n)
-    return f"₹{formatted}" if show_symbol else formatted
+    return formatted
 
 
 def number_to_words_inr(amount: float) -> str:
@@ -132,39 +133,38 @@ def number_to_words_inr(amount: float) -> str:
             res += units[n // 100] + " Hundred "
             n %= 100
         if n >= 20:
-            res += tens[n // 10] + " "
-            n %= 10
-        if n > 0:
+            res += tens[n // 10] + " " + units[n % 10] + " "
+        elif n > 0:
             res += units[n] + " "
         return res.strip()
 
-    crores = val // 10000000
-    val %= 10000000
-    lakhs = val // 100000
-    val %= 100000
-    thousands = val // 1000
+    words = ""
+    crore = val // 10_000_000
+    val %= 10_000_000
+    lakh = val // 100_000
+    val %= 100_000
+    thousand = val // 1000
     val %= 1000
-    remaining = val
+    rest = val
 
-    parts = []
-    if crores:
-        parts.append(convert_upto_thousand(crores) + " Crore")
-    if lakhs:
-        parts.append(convert_upto_thousand(lakhs) + " Lakh")
-    if thousands:
-        parts.append(convert_upto_thousand(thousands) + " Thousand")
-    if remaining:
-        parts.append(convert_upto_thousand(remaining))
+    if crore:
+        words += convert_upto_thousand(crore) + " Crore "
+    if lakh:
+        words += convert_upto_thousand(lakh) + " Lakh "
+    if thousand:
+        words += convert_upto_thousand(thousand) + " Thousand "
+    if rest:
+        words += convert_upto_thousand(rest)
 
-    return "Rupees " + " ".join(parts).strip() + " Only"
+    return f"Rupees {words.strip()} Only"
 
 
 def _set_cell_background(cell, hex_color: str):
     tcPr = cell._tc.get_or_add_tcPr()
-    shd = OxmlElement('w:shd')
-    shd.set(qn('w:val'), 'clear')
-    shd.set(qn('w:color'), 'auto')
-    shd.set(qn('w:fill'), hex_color)
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), hex_color)
     tcPr.append(shd)
 
 
@@ -195,30 +195,101 @@ def _set_cell_margins(cell, top=120, bottom=120, left=160, right=160):
     tcPr.append(tcMar)
 
 
-def _apply_replacements_to_paragraph(p, replacements: Dict[str, str]):
+def _apply_replacements_to_paragraph(p: Any, replacements: Dict[str, str]):
     """
     Substitutes placeholder strings inside a paragraph run-by-run.
     Handles exact guillemet placeholders «...» cleanly while preserving run formatting.
+    Also handles split-run placeholders (where «TAG starts in one run and » closes in another).
     """
     text = p.text
     if "«" not in text:
         return
 
-    # Pass 1: Try run-level substitution (preserves font, bold, color, size)
+    # Pass 1: Run-level substitution (preserves font, bold, color, size)
     for k, v in replacements.items():
         if k in text:
             for r in p.runs:
                 if k in r.text:
                     r.text = r.text.replace(k, v)
 
-    # Pass 2: If placeholder spans multiple runs, replace in whole paragraph text
-    if "«" in p.text:
-        updated = p.text
+    # Refresh text after pass 1
+    text = p.text
+
+    # Pass 2: If «...» placeholder spans multiple runs, rebuild paragraph text
+    if "«" in text:
+        updated = text
         for k, v in replacements.items():
             if k in updated:
                 updated = updated.replace(k, v)
-        if updated != p.text:
-            p.text = updated
+        if updated != text:
+            # Preserve first run formatting and set text on paragraph
+            if p.runs:
+                first_run = p.runs[0]
+                fmt = {
+                    "name": first_run.font.name,
+                    "size": first_run.font.size,
+                    "bold": first_run.bold,
+                }
+                p.clear()
+                r = p.add_run(updated)
+                if fmt["name"]:
+                    r.font.name = fmt["name"]
+                if fmt["size"]:
+                    r.font.size = fmt["size"]
+                if fmt["bold"]:
+                    r.bold = fmt["bold"]
+            else:
+                p.text = updated
+
+    # Pass 3: Handle split-run placeholders where the open «TAG and the close » are in DIFFERENT runs
+    # e.g. run1.text == "«BOS Warranty" and run2.text == "» more text"
+    # We join consecutive runs and check for cross-run placeholders
+    runs = p.runs
+    if len(runs) > 1 and "«" in p.text:
+        # Build a combined run-text map
+        combined = "".join(r.text for r in runs)
+        new_combined = combined
+        for k, v in replacements.items():
+            if k in new_combined:
+                new_combined = new_combined.replace(k, v)
+        if new_combined != combined and p.runs:
+            # Set only the first run to the combined text and clear the rest
+            p.runs[0].text = new_combined
+            for r in p.runs[1:]:
+                r.text = ""
+
+
+def _apply_replacements_in_xml(element: Any, replacements: Dict[str, str]):
+    """
+    Applies replacements directly to all w:t nodes in an XML element subtree.
+    Handles cases where placeholders span merged text nodes (e.g., in shapes/textboxes).
+    """
+    W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    for t_node in element.iter("{%s}t" % W_NS):
+        if t_node.text:
+            for k, v in replacements.items():
+                if k in t_node.text:
+                    t_node.text = t_node.text.replace(k, v)
+
+    # Also handle partially-split placeholders by scanning w:p nodes
+    for p_elem in element.iter("{%s}p" % W_NS):
+        t_nodes = list(p_elem.iter("{%s}t" % W_NS))
+        if not t_nodes:
+            continue
+        combined = "".join(t.text or "" for t in t_nodes)
+        if "«" not in combined:
+            continue
+        new_combined = combined
+        for k, v in replacements.items():
+            if k in new_combined:
+                new_combined = new_combined.replace(k, v)
+        if new_combined != combined:
+            # Put all text in first t_node, clear the rest
+            t_nodes[0].text = new_combined
+            for t in t_nodes[1:]:
+                t.text = ""
+
 
 
 def _build_payment_terms_table(doc: Any, payment_terms: List[Dict[str, Any]], total_cost: float):
@@ -250,7 +321,7 @@ def _build_payment_terms_table(doc: Any, payment_terms: List[Dict[str, Any]], to
         amount_val = item.get("amount")
         if amount_val is None or str(amount_val).strip() == "" or amount_val == 0:
             amount_val = round((total_cost * pct_val) / 100)
-        
+
         bg_col = "F8FAFC" if row_idx % 2 == 1 else "FFFFFF"
 
         values = [
@@ -332,6 +403,59 @@ def _build_bom_table(doc: Any, bom_items: List[Dict[str, Any]]):
             for r in p.runs:
                 r.font.name = "Arial"
                 r.font.size = Pt(8.0)
+                if col_idx == 1:
+                    r.font.bold = True
+                    r.font.color.rgb = RGBColor(15, 23, 42)
+                else:
+                    r.font.color.rgb = RGBColor(51, 65, 85)
+
+    for row in table.rows:
+        for idx, width in enumerate(col_widths):
+            row.cells[idx].width = width
+
+    return table
+
+
+def _build_timeline_table(doc: Any, timeline_items: List[Dict[str, Any]]) -> Any:
+    """Creates a clean Project Timeline table."""
+    headers = ["#", "Project Stage / Milestone", "Target Duration"]
+    col_widths = [Inches(0.5), Inches(4.2), Inches(2.3)]
+
+    table = doc.add_table(rows=len(timeline_items) + 1, cols=3)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    hdr_cells = table.rows[0].cells
+    for i, title in enumerate(headers):
+        hdr_cells[i].text = title
+        _set_cell_background(hdr_cells[i], "1E3A5F")
+        _set_cell_margins(hdr_cells[i], top=120, bottom=120, left=140, right=140)
+        p = hdr_cells[i].paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER if i == 0 else WD_ALIGN_PARAGRAPH.LEFT
+        for r in p.runs:
+            r.font.name = "Arial"
+            r.font.size = Pt(8.5)
+            r.font.bold = True
+            r.font.color.rgb = RGBColor(255, 255, 255)
+
+    for row_idx, item in enumerate(timeline_items):
+        row_cells = table.rows[row_idx + 1].cells
+        bg_col = "F0F4FF" if row_idx % 2 == 0 else "FFFFFF"
+
+        seq = str(item.get("sequence") or item.get("seq") or row_idx + 1)
+        stage = str(item.get("stage") or item.get("milestone") or f"Stage {row_idx + 1}")
+        duration = str(item.get("duration") or item.get("days") or "TBD")
+
+        values = [seq, stage, duration]
+        for col_idx, val in enumerate(values):
+            row_cells[col_idx].text = val
+            _set_cell_background(row_cells[col_idx], bg_col)
+            _set_cell_borders(row_cells[col_idx], top="CBD5E1", bottom="CBD5E1")
+            _set_cell_margins(row_cells[col_idx], top=90, bottom=90, left=130, right=130)
+            p = row_cells[col_idx].paragraphs[0]
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER if col_idx == 0 else WD_ALIGN_PARAGRAPH.LEFT
+            for r in p.runs:
+                r.font.name = "Arial"
+                r.font.size = Pt(8.5)
                 if col_idx == 1:
                     r.font.bold = True
                     r.font.color.rgb = RGBColor(15, 23, 42)
@@ -458,7 +582,6 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
     sys_type = proj.get("system_type") or proj.get("systemType") or "Grid Connected Solar PV System"
 
     # Financials / Calculations
-    # Calculate price if not provided
     price_per_kw = float(comm.get("price_per_kw") or comm.get("pricePerKW") or fin.get("price_per_kw") or 2600)
     calc_project_cost = round(size_kw_num * price_per_kw) if price_per_kw > 0 else 260000
     project_cost = float(comm.get("price") or comm.get("total_cost") or fin.get("project_cost") or calc_project_cost)
@@ -476,7 +599,7 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
 
     # Equipment specs
     panel_wp = panel.get("watt_peak") or panel.get("wattPeak") or "590 Wp"
-    if str(panel_wp).isdigit():
+    if str(panel_wp).replace(".", "").isdigit():
         panel_wp = f"{panel_wp} Wp"
     panel_qty = str(panel.get("quantity") or panel.get("panelQuantity") or "170")
     panel_make = panel.get("make") or panel.get("brand") or "Adani Solar / Waaree"
@@ -499,67 +622,73 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
     bos_desc = bos.get("description") or "Complete ACDB, DCDB, Earthing Electrodes & Lightning Protection"
     bos_warranty = bos.get("warranty") or "5 Years Complete Balance of System Warranty"
 
-    # 2. Build the Replacement Dictionary
+    # 2. Build the Replacement Dictionary — ALL placeholders found in S1 & S2
     replacements = {
+        # Core identity
         "«Reference No.»": ref_no,
         "«Date»": quote_date,
         "«Project Size (kW)»": size_kw_str,
+        # Customer
         "«Customer Name»": cust_name,
         "«Customer Address»": cust_addr,
         "«Customer Phone»": cust_phone,
         "«Customer Mail»": cust_mail,
+        # Company
         "«Company Name»": c_name,
         "«Company Address»": c_addr,
         "«Company Phone»": c_phone,
         "«Company Mail»": c_mail,
         "«Company POC»": c_poc,
         "«Company GST»": c_gst,
+        # Project
         "«Structure Type»": struct_type,
         "«Type»": sys_type,
+        # Financials
         "«Pay Back Period»": payback_str,
         "«Annual Generation»": format_indian_number(annual_gen),
         "«Annual Saving»": format_indian_number(annual_saving),
         "«Project Cost»": format_indian_number(project_cost),
         "«Tree Saved»": format_indian_number(tree_saved),
         "«Co2 Reduction»": format_indian_number(co2_red),
-        # S2 extra equipment placeholders
+        # S2 equipment placeholders (also appear in drawing XML text nodes)
         "«Watt Peak»": panel_wp,
         "«No. of Panels»": panel_qty,
         "«Panel Make/Brand»": panel_make,
         "«Panel Type»": panel_type,
+        "«Panel Warranty»": panel_warranty,
         "«Size (kW)»": inv_size,
         "«Quantity»": inv_qty,
         "«Inverter Make/Brand»": inv_make,
         "«Phase»": inv_phase,
+        "«Inverter Warranty»": inv_warranty,
         "«Cable Make/Brand»": cable_make,
         "«AC»": cable_ac,
         "«DC»": cable_dc,
-        "«Panel Warranty»": panel_warranty,
-        "«Inverter Warranty»": inv_warranty,
-        "«BOS Warranty»": bos_warranty,
-        "«BOS Warranty": bos_warranty,
         "«Structure Description»": struct_desc,
+        # BOS Warranty — appears WITHOUT closing » in S2 XML runs (split across paragraphs)
+        # Map both full form and the partial form that appears in raw runs
+        "«BOS Warranty»": bos_warranty,
+        "«BOS Warranty": bos_warranty,   # partial without closing »
     }
 
-    # 3. Replace placeholders across all paragraphs and tables
+    # 3. Replace placeholders across all paragraphs
     for p in doc.paragraphs:
         _apply_replacements_to_paragraph(p, replacements)
 
+    # 4. Replace placeholders in all table cells
     for t in doc.tables:
         for row in t.rows:
             for cell in row.cells:
                 for p in cell.paragraphs:
                     _apply_replacements_to_paragraph(p, replacements)
 
-    # Also replace in XML textboxes (timeline boxes, etc.)
-    for tx_p in doc.element.xpath('//w:txbxContent//w:p'):
-        for k, v in replacements.items():
-            for t_node in tx_p.xpath('.//w:t'):
-                if t_node.text and k in t_node.text:
-                    t_node.text = t_node.text.replace(k, v)
+    # 5. Replace in all drawing/shape XML (textboxes, SmartArt, etc.)
+    _apply_replacements_in_xml(doc.element, replacements)
 
-    # 4. Populate Dynamic Sections using template structure
-    # Default Payment Terms
+
+
+    # 6. Populate Dynamic Sections by matching paragraph anchor text
+    # Build default dynamic data
     payment_terms = comm.get("payment_terms") or comm.get("paymentTerms") or [
         {"stage": "Advance / Booking", "percent": 20, "description": "Along with purchase order & engineering sign-off"},
         {"stage": "Material Delivery", "percent": 60, "description": "Upon delivery of solar panels, inverter & structure at site"},
@@ -567,7 +696,6 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
         {"stage": "Commissioning", "percent": 5, "description": "Upon final testing, inspection & net-metering commissioning"},
     ]
 
-    # Default BOM
     bom_items = quotation_data.get("bom") or quotation_data.get("bill_of_material") or [
         {"item": "Solar PV Modules", "specification": f"{panel_wp} {panel_type}", "make": panel_make, "quantity": panel_qty, "unit": "Nos"},
         {"item": "Grid-Tied Solar Inverter", "specification": f"{inv_size} {inv_phase}", "make": inv_make, "quantity": inv_qty, "unit": "Nos"},
@@ -586,6 +714,13 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
         "ifsc": "HDFC0001234",
         "branch": "Main Commercial Branch"
     }
+
+    timeline_items = quotation_data.get("timeline") or [
+        {"sequence": 1, "stage": "Finalization of Design and Drawings", "duration": "7 Days"},
+        {"sequence": 2, "stage": "Engineering, Procurement, and Supply of Material", "duration": "15 Days"},
+        {"sequence": 3, "stage": "Solar Plant Installation", "duration": "20 Days"},
+        {"sequence": 4, "stage": "Commissioning and Testing", "duration": "14 Days"},
+    ]
 
     scope_items = quotation_data.get("scope_of_work") or quotation_data.get("scopeOfWork") or [
         "Site feasibility assessment, 3D shadow analysis, and detailed engineering design.",
@@ -608,60 +743,73 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
         "Force Majeure: Standard industry force majeure clauses apply to unpreventable natural delays.",
     ]
 
-    # Inject dynamic content into template sections
-    for i, p in enumerate(doc.paragraphs):
+    # Inject dynamic content by matching paragraph anchor text
+    paragraphs = list(doc.paragraphs)
+    for i, p in enumerate(paragraphs):
         p_text = p.text.strip()
+        # Normalize HTML entities that appear in template (e.g. &amp; -> &)
+        p_text_norm = p_text.replace("&amp;", "&")
 
-        # Commercial offer price summary
-        if "Price Quote & Payment schedule for" in p_text:
+        # --- Commercial price summary (appears before payment table) ---
+        if "Price Quote" in p_text and "Payment schedule" in p_text:
             p_price = doc.add_paragraph()
             p_price.paragraph_format.space_before = Pt(4)
             p_price.paragraph_format.space_after = Pt(6)
             run1 = p_price.add_run("System Size: ")
             run1.bold = True
-            p_price.add_run(f"{size_kw_str}   |   ")
+            run1.font.name = "Arial"
+            run1.font.size = Pt(9)
+            p_price.add_run(f"{size_kw_str}   |   ").font.name = "Arial"
             run2 = p_price.add_run("Rate per kW: ")
             run2.bold = True
-            p_price.add_run(f"{format_inr(price_per_kw)}/kW   |   ")
+            run2.font.name = "Arial"
+            run2.font.size = Pt(9)
+            r2b = p_price.add_run(f"{format_inr(price_per_kw)}/kW   |   ")
+            r2b.font.name = "Arial"
             run3 = p_price.add_run("Total Cost: ")
             run3.bold = True
+            run3.font.name = "Arial"
+            run3.font.size = Pt(9)
             run3.font.color.rgb = RGBColor(2, 132, 199)
             run4 = p_price.add_run(f"{format_inr(project_cost)} ({number_to_words_inr(project_cost)})")
             run4.bold = True
+            run4.font.name = "Arial"
+            run4.font.size = Pt(9)
+            run4.font.color.rgb = RGBColor(2, 132, 199)
             p._p.addnext(p_price._p)
 
-        # Payment terms table
-        elif p_text == "Payment Terms:":
+        # --- Payment Terms table ---
+        elif p_text_norm == "Payment Terms:":
             tbl = _build_payment_terms_table(doc, payment_terms, project_cost)
             p._p.addnext(tbl._tbl)
 
-        # Bank / Account details
-        elif p_text in ("Account Details:", "Bank Details:"):
+        # --- Bank / Account details ---
+        elif p_text_norm in ("Account Details:", "Bank Details:"):
             p_bank = _build_bank_details_block(doc, bank_details, c_name)
             p._p.addnext(p_bank._p)
 
-        # Bill of Material (S1 BOM table)
-        elif p_text == "Bill of Material" and tpl_type == "S1":
+        # --- Bill of Material (S1 only — S2 doesn't have a BOM section) ---
+        elif p_text_norm == "Bill of Material" and tpl_type == "S1":
             tbl_bom = _build_bom_table(doc, bom_items)
             p._p.addnext(tbl_bom._tbl)
 
-        # Scope of Work
-        elif p_text == "Scope of Work":
-            paras = _build_list_block(doc, scope_items, numbered=False)
+        # --- Scope of Work ---
+        elif p_text_norm == "Scope of Work":
+            paras_block = _build_list_block(doc, scope_items, numbered=False)
             curr = p
-            for sp in paras:
+            for sp in paras_block:
                 curr._p.addnext(sp._p)
                 curr = sp
 
-        # Terms & Conditions
-        elif p_text in ("Terms & Conditions", "General Terms & Conditions"):
-            paras = _build_list_block(doc, terms_items, numbered=True)
+        # --- Terms & Conditions (both S1 "Terms & Conditions" and S2 "General Terms & Conditions") ---
+        elif p_text_norm in ("Terms & Conditions", "General Terms & Conditions", "Terms &amp; Conditions", "General Terms &amp; Conditions"):
+            paras_block = _build_list_block(doc, terms_items, numbered=True)
             curr = p
-            for tp in paras:
+            for tp in paras_block:
                 curr._p.addnext(tp._p)
                 curr = tp
 
-    # 5. Final Quality Assertion: Check for any remaining unresolved «...»
+    # 7. Final Quality Assertion: Check for any remaining unresolved «...»
     unresolved = []
     for p in doc.paragraphs:
         matches = re.findall(r'«[^»]+»?', p.text)
@@ -671,13 +819,75 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
 
     if unresolved:
         logger.warning(f"Unresolved placeholders in {tpl_type}: {set(unresolved)}")
-        # Clean up any leftover stray guillemets gracefully so no user sees raw «tag»
+        # Clean up any leftover stray guillemets gracefully
         for p in doc.paragraphs:
             if "«" in p.text:
-                cleaned = re.sub(r'«[^»]+»?', '', p.text)
-                p.text = cleaned
+                cleaned = re.sub(r'«[^»]*»?', '', p.text)
+                if p.runs:
+                    p.runs[0].text = cleaned
+                    for r in p.runs[1:]:
+                        r.text = ""
 
-    # 6. Save to Bytes
+        # Also clean in XML text nodes
+        for t_node in doc.element.xpath('.//w:t', namespaces={'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}):
+            if t_node.text and "«" in t_node.text:
+                t_node.text = re.sub(r'«[^»]*»?', '', t_node.text)
+
+    # 8. Save to Bytes
     out_buf = io.BytesIO()
     doc.save(out_buf)
     return out_buf.getvalue()
+
+
+def generate_quotation_pdf(quotation_data: Dict[str, Any], company_data: Dict[str, Any], template_type: str = "S1") -> bytes:
+    """
+    Generates a PDF by first creating the DOCX and then converting via LibreOffice.
+    Returns PDF bytes on success, raises RuntimeError if conversion fails.
+    """
+    docx_bytes = generate_quotation_docx(quotation_data, company_data, template_type)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        docx_path = Path(tmpdir) / "quotation.docx"
+        pdf_path = Path(tmpdir) / "quotation.pdf"
+        docx_path.write_bytes(docx_bytes)
+
+        # Try LibreOffice headless conversion
+        lo_candidates = [
+            "libreoffice",
+            "soffice",
+            "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+            "/usr/lib/libreoffice/program/soffice",
+        ]
+        converted = False
+        for lo in lo_candidates:
+            try:
+                result = subprocess.run(
+                    [lo, "--headless", "--convert-to", "pdf", "--outdir", tmpdir, str(docx_path)],
+                    capture_output=True,
+                    timeout=60,
+                )
+                if result.returncode == 0 and pdf_path.exists():
+                    converted = True
+                    break
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+
+        if converted and pdf_path.exists():
+            return pdf_path.read_bytes()
+
+        # Fallback: try docx2pdf if installed
+        try:
+            from docx2pdf import convert as d2p_convert
+            d2p_convert(str(docx_path), str(pdf_path))
+            if pdf_path.exists():
+                return pdf_path.read_bytes()
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"docx2pdf conversion failed: {e}")
+
+    raise RuntimeError(
+        "PDF conversion failed: LibreOffice is not installed or not found. "
+        "Install with: brew install libreoffice  (macOS) or apt install libreoffice (Linux). "
+        "DOCX download is available as an alternative."
+    )

@@ -2,7 +2,7 @@ import React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FileText, Edit, Sparkles, Download, CheckCircle2, User, Layers, Sun, DollarSign, CreditCard, Boxes, Clock, CheckSquare, ScrollText, FileCheck } from "lucide-react";
+import { FileText, Edit, Sparkles, Download, CheckCircle2, User, Layers, Sun, DollarSign, CreditCard, Boxes, Clock, CheckSquare, ScrollText, FileCheck, FileDown } from "lucide-react";
 import { formatINR, formatNumberIN } from "../defaults";
 
 export default function Step10Review({
@@ -10,9 +10,11 @@ export default function Step10Review({
   updateQuotation,
   onGoToStep,
   onGenerate,
+  onGeneratePdf,
   onSaveDraft,
   busy,
   generatedDoc,
+  generatedPdf,
 }) {
   const cust = quotation.customer || {};
   const comp = quotation.company || {};
@@ -110,32 +112,60 @@ export default function Step10Review({
         </CardContent>
       </Card>
 
-      {/* Generated File Success Box if generated */}
-      {generatedDoc && (
-        <Card className="border-emerald-200 bg-emerald-50/50 rounded-xl shadow-xs">
-          <CardContent className="p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <div>
-                <h4 className="text-xs font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                  Proposal Successfully Generated!
-                </h4>
-                <div className="text-xs text-slate-600 font-mono mt-0.5">
-                  {generatedDoc.filename}
+      {/* Generated File Success Boxes */}
+      {(generatedDoc || generatedPdf) && (
+        <div className="space-y-3">
+          {generatedDoc && (
+            <Card className="border-emerald-200 bg-emerald-50/50 rounded-xl shadow-xs">
+              <CardContent className="p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
+                      Word Document Ready
+                    </h4>
+                    <div className="text-xs text-slate-600 font-mono mt-0.5">
+                      {generatedDoc.filename}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-
-            <Button
-              onClick={() => onGenerate(true)}
-              className="h-9 px-4 text-xs font-bold gap-2 bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs"
-            >
-              <Download className="w-4 h-4" /> Download Document (.docx)
-            </Button>
-          </CardContent>
-        </Card>
+                <Button
+                  onClick={() => onGenerate(true)}
+                  className="h-9 px-4 text-xs font-bold gap-2 bg-emerald-700 hover:bg-emerald-800 text-white shadow-xs"
+                >
+                  <Download className="w-4 h-4" /> Download (.docx)
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+          {generatedPdf && (
+            <Card className="border-blue-200 bg-blue-50/50 rounded-xl shadow-xs">
+              <CardContent className="p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+                    <FileDown className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
+                      PDF Document Ready
+                    </h4>
+                    <div className="text-xs text-slate-600 font-mono mt-0.5">
+                      {generatedPdf.filename}
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  onClick={() => onGeneratePdf(true)}
+                  className="h-9 px-4 text-xs font-bold gap-2 bg-blue-700 hover:bg-blue-800 text-white shadow-xs"
+                >
+                  <Download className="w-4 h-4" /> Download (.pdf)
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       )}
 
       {/* Structured Review Sections with [Edit] Jump Links */}
@@ -329,37 +359,54 @@ export default function Step10Review({
 
       {/* Main Generation & Draft Actions Bar */}
       <Card className="border-slate-200/80 shadow-md bg-white rounded-xl">
-        <CardContent className="p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div>
-            <div className="text-xs font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-              Ready to Export Proposal
+        <CardContent className="p-5 flex flex-col gap-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
+                Ready to Export Proposal
+              </div>
+              <div className="text-[11px] text-slate-500">
+                Using selected template: <span className="font-bold text-blue-700">{selectedTemplate}</span>
+              </div>
             </div>
-            <div className="text-[11px] text-slate-500">
-              Using selected template: <span className="font-bold text-blue-700">{selectedTemplate}</span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 w-full sm:w-auto">
             <Button
               variant="outline"
               onClick={onSaveDraft}
               disabled={busy}
-              className="h-10 px-4 text-xs font-semibold text-slate-700 border-slate-300 hover:bg-slate-50 flex-1 sm:flex-initial"
+              className="h-10 px-4 text-xs font-semibold text-slate-700 border-slate-300 hover:bg-slate-50"
               data-testid="btn-save-draft"
             >
               Save Draft
             </Button>
+          </div>
 
+          {/* Download Options */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Button
               onClick={() => onGenerate(false)}
               disabled={busy}
-              className="h-10 px-6 text-xs font-bold gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-xs flex-1 sm:flex-initial"
+              className="h-11 text-xs font-bold gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-xs"
               data-testid="btn-generate-quotation"
             >
               <FileCheck className="w-4 h-4" />
-              {busy ? "Generating..." : `Generate Proposal (${selectedTemplate})`}
+              {busy ? "Generating..." : `Word (.docx) — Format ${selectedTemplate}`}
+            </Button>
+
+            <Button
+              onClick={() => onGeneratePdf(false)}
+              disabled={busy}
+              variant="outline"
+              className="h-11 text-xs font-bold gap-2 border-blue-300 text-blue-700 hover:bg-blue-50 shadow-xs"
+              data-testid="btn-generate-pdf"
+            >
+              <FileDown className="w-4 h-4" />
+              {busy ? "Converting..." : `PDF Download — Format ${selectedTemplate}`}
             </Button>
           </div>
+
+          <p className="text-[10px] text-slate-400 text-center">
+            Word (.docx) preserves full template formatting. PDF requires LibreOffice on the server.
+          </p>
         </CardContent>
       </Card>
     </div>

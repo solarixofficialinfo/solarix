@@ -50,6 +50,7 @@ export default function QuotationWizard({
   const [quotation, setQuotation] = useState(() => initialQuotation);
   const [busy, setBusy] = useState(false);
   const [generatedDoc, setGeneratedDoc] = useState(null);
+  const [generatedPdf, setGeneratedPdf] = useState(null);
 
   // Centralized quotation state updater with auto-recalculation of dependent metrics
   const updateQuotation = (partial) => {
@@ -122,7 +123,7 @@ export default function QuotationWizard({
     }
   };
 
-  // Generate document (S1 or S2)
+  // Generate DOCX document (S1 or S2)
   const handleGenerate = async (downloadOnly = false) => {
     if (downloadOnly && generatedDoc?.id) {
       downloadFile(generatedDoc.id, generatedDoc.filename || "Solar_Proposal.docx");
@@ -157,6 +158,51 @@ export default function QuotationWizard({
       }
     } catch (err) {
       toast.error(formatApiError(err) || "Failed to generate quotation document.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Generate PDF document (S1 or S2)
+  const handleGeneratePdf = async (downloadOnly = false) => {
+    if (downloadOnly && generatedPdf?.id) {
+      downloadFile(generatedPdf.id, generatedPdf.filename || "Solar_Proposal.pdf");
+      return;
+    }
+
+    try {
+      setBusy(true);
+      const payload = {
+        quotation_id: quotation.id,
+        template: quotation.template || "S1",
+        quotation: quotation,
+      };
+
+      const res = await api.post("/quotations/generate-pdf", payload);
+      const doc = res.data;
+      setGeneratedPdf(doc);
+      toast.success(`PDF generated successfully in Format ${quotation.template || "S1"}!`);
+
+      if (doc?.id) {
+        downloadFile(doc.id, doc.filename || "Solar_Proposal.pdf");
+      }
+
+      if (onSaveComplete) {
+        onSaveComplete({
+          ...quotation,
+          status: "generated",
+          generated_pdf_id: doc.id,
+          generated_pdf_filename: doc.filename,
+        });
+      }
+    } catch (err) {
+      const msg = formatApiError(err) || "PDF generation failed.";
+      // Provide a helpful user-facing message if LibreOffice is not installed
+      if (msg.toLowerCase().includes("libreoffice")) {
+        toast.error("PDF conversion requires LibreOffice on the server. Please download the Word (.docx) version instead.", { duration: 6000 });
+      } else {
+        toast.error(msg);
+      }
     } finally {
       setBusy(false);
     }
@@ -324,9 +370,11 @@ export default function QuotationWizard({
             updateQuotation={updateQuotation}
             onGoToStep={handleGoToStep}
             onGenerate={handleGenerate}
+            onGeneratePdf={handleGeneratePdf}
             onSaveDraft={handleSaveDraft}
             busy={busy}
             generatedDoc={generatedDoc}
+            generatedPdf={generatedPdf}
           />
         )}
       </div>

@@ -6917,6 +6917,89 @@ async def generate_quotation_document_endpoint(payload: Dict[str, Any], user=Dep
 
 
 
+@api_router.post("/quotations/generate-pdf")
+async def generate_quotation_pdf_endpoint(payload: Dict[str, Any], user=Depends(get_current_user)):
+    """Generate PDF proposal from S1 or S2 template using centralized quotation data model.
+    Converts DOCX → PDF via LibreOffice headless. Falls back with clear error if not installed.
+    """
+    if not has_perm(user, "sales_documents", "create"):
+        raise HTTPException(status_code=403, detail="Missing permission: sales_documents.create")
+
+    from plan_config import check_plan_limit, increment_usage
+    chk_gen = await check_plan_limit(user["company_id"], "document_generations", increment=1, db=db)
+    if not chk_gen["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_gen["message"])
+
+    company_doc = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}
+    company_doc = await _enrich_company_doc_with_logo(company_doc)
+
+    q_id = payload.get("id") or payload.get("quotation_id")
+    quotation_data = payload.get("quotation") or payload.get("doc_data") or payload
+    if q_id and not payload.get("quotation"):
+        stored_q = await db.quotations.find_one({"id": q_id, "company_id": user["company_id"]}, {"_id": 0})
+        if stored_q:
+            quotation_data = {**stored_q, **payload}
+
+    tpl_type = (payload.get("template") or quotation_data.get("template") or "S1").upper().strip()
+    if tpl_type not in ("S1", "S2"):
+        tpl_type = "S1"
+
+    try:
+        pdf_bytes = await asyncio.to_thread(
+            solar_quotation_engine.generate_quotation_pdf,
+            quotation_data,
+            company_doc,
+            tpl_type
+        )
+    except RuntimeError as conv_err:
+        raise HTTPException(status_code=500, detail=str(conv_err))
+
+    content_type = "application/pdf"
+    ref_no = quotation_data.get("reference_no") or quotation_data.get("quote_number") or "QTN"
+    clean_ref = re.sub(r"[^A-Za-z0-9_-]", "_", ref_no)
+    cust = quotation_data.get("customer") or {}
+    cust_name = cust.get("name") or quotation_data.get("customer_name") or "Customer"
+    clean_cust = re.sub(r"[^A-Za-z0-9_-]", "_", cust_name)
+    date_str = quotation_data.get("date") or datetime.now().strftime("%Y-%m-%d")
+    filename = f"{clean_cust}_Solar_Proposal_{tpl_type}_{clean_ref}_{date_str}.pdf"
+
+    file_id = str(uuid.uuid4())
+    storage_path = f"{APP_NAME}/{user['company_id']}/generated/{file_id}.pdf"
+    result = put_object(storage_path, pdf_bytes, content_type)
+
+    await _cleanup_duplicate_document(user["company_id"], "quotation_pdf", ref_no)
+
+    await db.files.insert_one({
+        "id": file_id,
+        "company_id": user["company_id"],
+        "uploader_id": user["id"],
+        "storage_path": result["path"],
+        "original_filename": filename,
+        "content_type": content_type,
+        "size": result.get("size", len(pdf_bytes)),
+        "category": "generated",
+        "is_deleted": False,
+        "created_at": now_iso(),
+        "doc_type": "quotation_pdf",
+        "document_number": ref_no,
+        "client_name": cust_name,
+        "prepared_by": quotation_data.get("prepared_by") or user["name"],
+        "status": "Active"
+    })
+
+    await increment_usage(user["company_id"], "document_generations", 1, db=db)
+    await log_activity(user["company_id"], user["id"], user["name"], f"Generated PDF Quotation ({tpl_type})", f"{ref_no} — {cust_name}")
+
+    return {
+        "id": file_id,
+        "filename": filename,
+        "label": f"Solar Proposal PDF ({tpl_type})",
+        "doc_type": "quotation_pdf",
+        "document_number": ref_no,
+        "quotation_id": q_id
+    }
+
+
 # ==================== DISCOM & DOCUMENT MAPPINGS ====================
 @api_router.get("/discoms")
 async def list_discoms_endpoint(
