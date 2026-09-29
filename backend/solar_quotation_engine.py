@@ -875,10 +875,11 @@ def generate_quotation_pdf(quotation_data: Dict[str, Any], company_data: Dict[st
         if converted and pdf_path.exists():
             return pdf_path.read_bytes()
 
-        # Fallback: try docx2pdf if installed
+        # Fallback: try docx2pdf if installed (optional dependency)
         try:
-            from docx2pdf import convert as d2p_convert
-            d2p_convert(str(docx_path), str(pdf_path))
+            import importlib
+            d2p = importlib.import_module("docx2pdf")
+            d2p.convert(str(docx_path), str(pdf_path))  # type: ignore[attr-defined]
             if pdf_path.exists():
                 return pdf_path.read_bytes()
         except ImportError:
