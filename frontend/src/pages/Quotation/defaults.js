@@ -172,30 +172,71 @@ export const getInitialQuotation = (companyData = null) => {
  * Calculates dependent metrics based on size_kw, price_per_kw, and tariff_rate.
  * Ensures ONE central source of truth for all derived values.
  */
-export const calculateDerivedQuotationMetrics = (q) => {
+export const calculateDerivedQuotationMetrics = (q, prev = null) => {
   const sizeKw = Math.max(0, Number(q.project?.size_kw) || 0);
-  const pricePerKw = Math.max(0, Number(q.commercial?.price_per_kw ?? q.financials?.price_per_kw) || 0);
-  const tariffRate = Math.max(1, Number(q.financials?.tariff_rate) || 8.0);
+  const prevSizeKw = prev ? Math.max(0, Number(prev.project?.size_kw) || 0) : null;
+  const sizeChanged = prevSizeKw !== null && prevSizeKw !== sizeKw;
+
+  let pricePerKw = Math.max(0, Number(q.commercial?.price_per_kw ?? q.financials?.price_per_kw) || 0);
+  const prevPricePerKw = prev ? Math.max(0, Number(prev.commercial?.price_per_kw ?? prev.financials?.price_per_kw) || 0) : null;
+  const rateChanged = prevPricePerKw !== null && prevPricePerKw !== pricePerKw;
+
+  const tariffRate = Math.max(0.5, Number(q.financials?.tariff_rate) || 8.0);
+  const prevTariff = prev ? Math.max(0.5, Number(prev.financials?.tariff_rate) || 8.0) : null;
+  const tariffChanged = prevTariff !== null && prevTariff !== tariffRate;
 
   // Exact formula: Project Size × Price per kW = Project Cost
-  const projectCost = Math.round(sizeKw * pricePerKw);
+  let projectCost;
+  if (sizeChanged || rateChanged || q.financials?.project_cost === undefined || q.financials?.project_cost === null) {
+    projectCost = Math.round(sizeKw * pricePerKw);
+  } else {
+    // Respect explicit user project cost
+    projectCost = Number(q.financials?.project_cost || q.commercial?.price) || Math.round(sizeKw * pricePerKw);
+    if (sizeKw > 0 && Math.abs(projectCost - Math.round(sizeKw * pricePerKw)) > 1) {
+      pricePerKw = Math.round((projectCost / sizeKw) * 100) / 100;
+    }
+  }
 
   // Benchmark generation: ~1500 kWh / kWp / year
-  const annualGen = Math.round(sizeKw * 1500);
-  const monthlyGen = Math.round(annualGen / 12);
+  let annualGen;
+  if (sizeChanged || q.financials?.annual_generation === undefined || q.financials?.annual_generation === null) {
+    annualGen = Math.round(sizeKw * 1500);
+  } else {
+    annualGen = Number(q.financials?.annual_generation) || Math.round(sizeKw * 1500);
+  }
+  const monthlyGen = q.financials?.monthly_generation && !sizeChanged
+    ? Number(q.financials.monthly_generation)
+    : Math.round(annualGen / 12);
 
   // Annual savings: annualGen * tariff
-  const annualSaving = Math.round(annualGen * tariffRate);
-  const monthlySaving = Math.round(annualSaving / 12);
+  let annualSaving;
+  if (sizeChanged || tariffChanged || q.financials?.annual_saving === undefined || q.financials?.annual_saving === null) {
+    annualSaving = Math.round(annualGen * tariffRate);
+  } else {
+    annualSaving = Number(q.financials?.annual_saving) || Math.round(annualGen * tariffRate);
+  }
+  const monthlySaving = q.financials?.monthly_saving && !sizeChanged && !tariffChanged
+    ? Number(q.financials.monthly_saving)
+    : Math.round(annualSaving / 12);
 
   // Payback period in years
-  const paybackYears = annualSaving > 0 && projectCost > 0
-    ? Math.round((projectCost / annualSaving) * 10) / 10
-    : 3.5;
+  let paybackYears;
+  if (q.financials?.payback_years && !sizeChanged && !rateChanged && !tariffChanged) {
+    paybackYears = Number(q.financials.payback_years);
+  } else {
+    paybackYears = annualSaving > 0 && projectCost > 0
+      ? Math.round((projectCost / annualSaving) * 10) / 10
+      : 3.5;
+  }
 
   // Environmental offsets
-  const treeSaved = Math.round(sizeKw * 16);
-  const co2Reduction = Math.round(sizeKw * 1.4 * 10) / 10;
+  const treeSaved = q.financials?.tree_saved && !sizeChanged
+    ? Number(q.financials.tree_saved)
+    : Math.round(sizeKw * 16);
+
+  const co2Reduction = q.financials?.co2_reduction && !sizeChanged
+    ? Number(q.financials.co2_reduction)
+    : Math.round(sizeKw * 1.4 * 10) / 10;
 
   // Auto-calculated panel count if panel wattage is known (e.g. 590W)
   const rawWp = String(q.solar_system?.panel?.watt_peak || "590").replace(/[^0-9]/g, "");
@@ -240,11 +281,11 @@ export const calculateDerivedQuotationMetrics = (q) => {
       ...q.solar_system,
       panel: {
         ...q.solar_system?.panel,
-        quantity: q.solar_system?.panel?.quantity || suggestedPanelQty,
+        quantity: sizeChanged ? suggestedPanelQty : (q.solar_system?.panel?.quantity || suggestedPanelQty),
       },
       inverter: {
         ...q.solar_system?.inverter,
-        size_kw: q.solar_system?.inverter?.size_kw || `${sizeKw} kW`,
+        size_kw: sizeChanged ? `${sizeKw} kW` : (q.solar_system?.inverter?.size_kw || `${sizeKw} kW`),
       },
     },
   };

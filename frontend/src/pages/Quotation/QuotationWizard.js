@@ -57,7 +57,7 @@ export default function QuotationWizard({
     setQuotation((prev) => {
       const merged = { ...prev, ...partial };
       // Always maintain synchronous calculations across the single state tree
-      return calculateDerivedQuotationMetrics(merged);
+      return calculateDerivedQuotationMetrics(merged, prev);
     });
   };
 

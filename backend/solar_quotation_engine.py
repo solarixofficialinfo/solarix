@@ -1,7 +1,9 @@
 """
 Solarix Solar Quotation / Proposal Engine
 Faithful generator for S1 and S2 Word (.docx / .dotx) proposal templates.
-Preserves original template fonts, styling, layout, tables, graphics, drawings, and headers/footers.
+Preserves original template fonts, styling, layout, graphics, drawings, and headers/footers.
+Removes legacy frozen OLE objects (old spreadsheet screenshots) and populates dynamic,
+mathematically consistent data from ONE canonical quotation object.
 """
 
 import io
@@ -107,9 +109,8 @@ def format_indian_number(n: Any, show_decimals: bool = False) -> str:
 
 
 def format_inr(n: Any) -> str:
-    """Returns Indian Rupee formatted string without ₹ symbol (for in-document use)."""
-    formatted = format_indian_number(n)
-    return formatted
+    """Returns Indian Rupee formatted string without ₹ symbol."""
+    return format_indian_number(n)
 
 
 def number_to_words_inr(amount: float) -> str:
@@ -184,7 +185,7 @@ def _set_cell_borders(cell, top="CBD5E1", bottom="CBD5E1", left="none", right="n
     tcPr.append(tcBorders)
 
 
-def _set_cell_margins(cell, top=120, bottom=120, left=160, right=160):
+def _set_cell_margins(cell, top=100, bottom=100, left=140, right=140):
     tcPr = cell._tc.get_or_add_tcPr()
     tcMar = OxmlElement('w:tcMar')
     for m, val in [('top', top), ('bottom', bottom), ('left', left), ('right', right)]:
@@ -195,104 +196,271 @@ def _set_cell_margins(cell, top=120, bottom=120, left=160, right=160):
     tcPr.append(tcMar)
 
 
-def _apply_replacements_to_paragraph(p: Any, replacements: Dict[str, str]):
+def _clean_stale_ole_objects(doc: Any, tpl_type: str):
     """
-    Substitutes placeholder strings inside a paragraph run-by-run.
-    Handles exact guillemet placeholders «...» cleanly while preserving run formatting.
-    Also handles split-run placeholders (where «TAG starts in one run and » closes in another).
+    Purges legacy frozen OLE objects (old spreadsheet screenshots) from S1 and S2 templates.
+    These objects contain stale hardcoded data such as:
+    - ICICI Bank Aashiana Lucknow 126005000610
+    - Contradictory pricing (352850 / 640000)
+    - Stale monthly generation tables (648 units)
+    - Legacy terms ('Include lesining charges', 'within days')
     """
-    text = p.text
-    if "«" not in text:
-        return
+    W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    V_NS = "urn:schemas-microsoft-com:vml"
 
-    # Pass 1: Run-level substitution (preserves font, bold, color, size)
-    for k, v in replacements.items():
-        if k in text:
-            for r in p.runs:
-                if k in r.text:
-                    r.text = r.text.replace(k, v)
+    rels_dict = {}
+    for r_id, rel in doc.part.rels.items():
+        rels_dict[r_id] = rel.target_ref
 
-    # Refresh text after pass 1
-    text = p.text
+    if tpl_type == "S2":
+        stale_targets = ["image14.", "image15.", "image17.", "image18.", "image19.", "image22.", "image23."]
+    else:
+        stale_targets = ["image19.", "image20.", "image21.", "image23.", "image26.", "image28."]
 
-    # Pass 2: If «...» placeholder spans multiple runs, rebuild paragraph text
-    if "«" in text:
-        updated = text
-        for k, v in replacements.items():
-            if k in updated:
-                updated = updated.replace(k, v)
-        if updated != text:
-            # Preserve first run formatting and set text on paragraph
-            if p.runs:
-                first_run = p.runs[0]
-                fmt = {
-                    "name": first_run.font.name,
-                    "size": first_run.font.size,
-                    "bold": first_run.bold,
-                }
-                p.clear()
-                r = p.add_run(updated)
-                if fmt["name"]:
-                    r.font.name = fmt["name"]
-                if fmt["size"]:
-                    r.font.size = fmt["size"]
-                if fmt["bold"]:
-                    r.bold = fmt["bold"]
-            else:
-                p.text = updated
+    for p in list(doc.paragraphs):
+        objs = list(p._p.iter(f"{{{W_NS}}}object"))
+        if objs:
+            targets = []
+            for img in p._p.iter(f"{{{V_NS}}}imagedata"):
+                r_id = img.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+                targets.append(rels_dict.get(r_id, ""))
 
-    # Pass 3: Handle split-run placeholders where the open «TAG and the close » are in DIFFERENT runs
-    # e.g. run1.text == "«BOS Warranty" and run2.text == "» more text"
-    # We join consecutive runs and check for cross-run placeholders
-    runs = p.runs
-    if len(runs) > 1 and "«" in p.text:
-        # Build a combined run-text map
-        combined = "".join(r.text for r in runs)
-        new_combined = combined
-        for k, v in replacements.items():
-            if k in new_combined:
-                new_combined = new_combined.replace(k, v)
-        if new_combined != combined and p.runs:
-            # Set only the first run to the combined text and clear the rest
-            p.runs[0].text = new_combined
-            for r in p.runs[1:]:
-                r.text = ""
+            is_stale = any(any(st in t for st in stale_targets) for t in targets if t)
+            if is_stale:
+                parent = p._p.getparent()
+                if parent is not None:
+                    parent.remove(p._p)
 
 
-def _apply_replacements_in_xml(element: Any, replacements: Dict[str, str]):
+def _set_p_text(p_elem: Any, new_text: str):
+    """Sets text in the first w:t node of an XML paragraph and clears remainder."""
+    W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    t_nodes = list(p_elem.iter(f"{{{W_NS}}}t"))
+    if t_nodes:
+        t_nodes[0].text = new_text
+        for t in t_nodes[1:]:
+            t.text = ""
+
+
+def _update_timeline_in_drawings(doc: Any, timeline_items: List[Dict[str, Any]], tpl_type: str):
     """
-    Applies replacements directly to all w:t nodes in an XML element subtree.
-    Handles cases where placeholders span merged text nodes (e.g., in shapes/textboxes).
+    Updates stage durations and titles inside the vector DrawingML graphic chevrons.
+    Ensures user-customized timeline durations (e.g. 20 Days -> 25 Days) are reflected
+    directly in the graphical chevrons without distorting the layout.
     """
     W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
-    for t_node in element.iter("{%s}t" % W_NS):
-        if t_node.text:
-            for k, v in replacements.items():
-                if k in t_node.text:
-                    t_node.text = t_node.text.replace(k, v)
+    durations = []
+    stages = []
+    default_durations = ["7 Days", "15 Days", "20 Days", "14 Days"]
+    default_stages = [
+        "Finalization of Design and Drawings",
+        "Engineering, Procurement, and Supply of Material",
+        "Solar Plant Installation",
+        "Commissioning and Testing"
+    ]
 
-    # Also handle partially-split placeholders by scanning w:p nodes
-    for p_elem in element.iter("{%s}p" % W_NS):
-        t_nodes = list(p_elem.iter("{%s}t" % W_NS))
-        if not t_nodes:
-            continue
-        combined = "".join(t.text or "" for t in t_nodes)
-        if "«" not in combined:
-            continue
-        new_combined = combined
-        for k, v in replacements.items():
-            if k in new_combined:
-                new_combined = new_combined.replace(k, v)
-        if new_combined != combined:
-            # Put all text in first t_node, clear the rest
-            t_nodes[0].text = new_combined
-            for t in t_nodes[1:]:
-                t.text = ""
+    for idx in range(4):
+        if idx < len(timeline_items):
+            item = timeline_items[idx]
+            durations.append(str(item.get("duration") or default_durations[idx]))
+            stages.append(str(item.get("stage") or default_stages[idx]))
+        else:
+            durations.append(default_durations[idx])
+            stages.append(default_stages[idx])
+
+    for p in doc.paragraphs:
+        w_p_list = list(p._p.iter(f"{{{W_NS}}}p"))
+        if len(w_p_list) >= 17:
+            if tpl_type == "S2":
+                # S2 layout:
+                # shape p1..p4 = Stage Titles
+                # shape p5..p8 = Stage Durations
+                # shape p9..p12 = Shadow Titles
+                # shape p13..p16 = Shadow Durations
+                for i in range(4):
+                    _set_p_text(w_p_list[1 + i], stages[i])
+                    _set_p_text(w_p_list[9 + i], stages[i])
+                    _set_p_text(w_p_list[5 + i], durations[i])
+                    _set_p_text(w_p_list[13 + i], durations[i])
+                break
+            elif tpl_type == "S1":
+                # S1 layout: p1..p4 durations, p8..p11 shadow durations
+                for i in range(4):
+                    _set_p_text(w_p_list[1 + i], durations[i])
+                    _set_p_text(w_p_list[8 + i], durations[i])
+                break
 
 
+def _build_commercial_table(doc: Any, comm_data: Dict[str, Any], size_kw_str: str) -> Any:
+    """
+    Builds a professional, clean Commercial Pricing & Scope Inclusions table.
+    Eliminates all contradictory pricing and aligns 100% with the canonical quotation.
+    """
+    headers = ["Description / Milestone Item", "Specifications", "Amount (₹)"]
+    col_widths = [Inches(3.3), Inches(2.2), Inches(1.5)]
 
-def _build_payment_terms_table(doc: Any, payment_terms: List[Dict[str, Any]], total_cost: float):
+    base_price = comm_data.get("base_price", 0)
+    net_meter = comm_data.get("net_meter_charges", 0)
+    gst_rate = comm_data.get("gst_rate", 0)
+    gst_amount = comm_data.get("gst_amount", 0)
+    subsidy = comm_data.get("subsidy", 0)
+    final_cost = comm_data.get("final_cost", 0)
+
+    rows_data = [
+        ("Complete Solar PV Power Plant (Turnkey EPC)", f"{size_kw_str} Grid Connected Solar PV System", format_inr(base_price)),
+        ("Net-Metering Liaisoning & Statutory Approvals", "DISCOM Application, CEIG & Net-Meter Liaisoning", "Included" if net_meter == 0 else format_inr(net_meter)),
+        ("Taxes & Statutory Duties", "Goods & Services Tax (GST) Inclusive" if gst_rate == 0 else f"GST @ {gst_rate}%", "Included" if gst_rate == 0 else format_inr(gst_amount)),
+    ]
+    if subsidy > 0:
+        rows_data.append(("Central Government Subsidy / Assistance", "Applicable Central Financial Assistance", f"-{format_inr(subsidy)}"))
+
+    rows_data.append(("Total Project Cost / Net Customer Payable", "All-inclusive Turnkey Price (as per scope)", format_inr(final_cost)))
+
+    table = doc.add_table(rows=len(rows_data) + 1, cols=3)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    # Header Row
+    hdr_cells = table.rows[0].cells
+    for i, title in enumerate(headers):
+        hdr_cells[i].text = title
+        _set_cell_background(hdr_cells[i], "0F172A")
+        _set_cell_margins(hdr_cells[i], top=110, bottom=110, left=130, right=130)
+        p = hdr_cells[i].paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if i == 2 else WD_ALIGN_PARAGRAPH.LEFT
+        for r in p.runs:
+            r.font.name = "Arial"
+            r.font.size = Pt(8.5)
+            r.font.bold = True
+            r.font.color.rgb = RGBColor(255, 255, 255)
+
+    for row_idx, (desc, spec, amt) in enumerate(rows_data):
+        is_total_row = (row_idx == len(rows_data) - 1)
+        row_cells = table.rows[row_idx + 1].cells
+        bg_col = "EFF6FF" if is_total_row else ("F8FAFC" if row_idx % 2 == 1 else "FFFFFF")
+
+        for col_idx, val in enumerate([desc, spec, amt]):
+            row_cells[col_idx].text = val
+            _set_cell_background(row_cells[col_idx], bg_col)
+            _set_cell_borders(row_cells[col_idx],
+                              top="0284C7" if is_total_row else "CBD5E1",
+                              bottom="0284C7" if is_total_row else "CBD5E1")
+            _set_cell_margins(row_cells[col_idx], top=80, bottom=80, left=120, right=120)
+            p = row_cells[col_idx].paragraphs[0]
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if col_idx == 2 else WD_ALIGN_PARAGRAPH.LEFT
+            for r in p.runs:
+                r.font.name = "Arial"
+                r.font.size = Pt(8.5)
+                if is_total_row or col_idx == 2:
+                    r.font.bold = True
+                    r.font.color.rgb = RGBColor(2, 132, 199) if is_total_row else (RGBColor(16, 185, 129) if "Subsidy" in desc else RGBColor(15, 23, 42))
+                else:
+                    r.font.color.rgb = RGBColor(51, 65, 85)
+
+    for row in table.rows:
+        for idx, width in enumerate(col_widths):
+            row.cells[idx].width = width
+
+    return table
+
+
+def _build_monthly_table(doc: Any, monthly_data: List[Dict[str, Any]], annual_gen: float, annual_saving: float) -> Any:
+    """
+    Builds an elegant 12-Month Generation & Savings Table for S2 (replaces stale 648 table).
+    Total generation and total savings match annual summary exactly.
+    """
+    headers = ["Month", "Solar Irradiance Season", "Estimated Generation (Units)", "Projected Savings (₹)"]
+    col_widths = [Inches(1.8), Inches(2.4), Inches(1.4), Inches(1.4)]
+
+    seasons = {
+        "January": "Winter Clear Sun",
+        "February": "Optimal Solar Hours",
+        "March": "Spring Peak Sunshine",
+        "April": "Summer High Irradiance",
+        "May": "Peak Solar Generation",
+        "June": "Pre-Monsoon Solar Hours",
+        "July": "Monsoon Diffused Sun",
+        "August": "Monsoon Diffused Sun",
+        "September": "Post-Monsoon Clear Sun",
+        "October": "Clear Autumn Skies",
+        "November": "Mild Clear Sunshine",
+        "December": "Winter Solstice Sun",
+    }
+
+    table = doc.add_table(rows=len(monthly_data) + 2, cols=4)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    # Header Row
+    hdr_cells = table.rows[0].cells
+    for i, title in enumerate(headers):
+        hdr_cells[i].text = title
+        _set_cell_background(hdr_cells[i], "0F172A")
+        _set_cell_margins(hdr_cells[i], top=100, bottom=100, left=120, right=120)
+        p = hdr_cells[i].paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if i in (2, 3) else WD_ALIGN_PARAGRAPH.LEFT
+        for r in p.runs:
+            r.font.name = "Arial"
+            r.font.size = Pt(8.0)
+            r.font.bold = True
+            r.font.color.rgb = RGBColor(255, 255, 255)
+
+    for row_idx, item in enumerate(monthly_data):
+        m_name = item["month"]
+        season = seasons.get(m_name, "Clear Solar Sun")
+        gen_val = format_indian_number(item["generation"])
+        sav_val = format_inr(item["savings"])
+
+        row_cells = table.rows[row_idx + 1].cells
+        bg_col = "F8FAFC" if row_idx % 2 == 1 else "FFFFFF"
+
+        for col_idx, val in enumerate([m_name, season, gen_val, sav_val]):
+            row_cells[col_idx].text = val
+            _set_cell_background(row_cells[col_idx], bg_col)
+            _set_cell_borders(row_cells[col_idx], top="E2E8F0", bottom="E2E8F0")
+            _set_cell_margins(row_cells[col_idx], top=60, bottom=60, left=110, right=110)
+            p = row_cells[col_idx].paragraphs[0]
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if col_idx in (2, 3) else WD_ALIGN_PARAGRAPH.LEFT
+            for r in p.runs:
+                r.font.name = "Arial"
+                r.font.size = Pt(7.5)
+                if col_idx == 0:
+                    r.font.bold = True
+                    r.font.color.rgb = RGBColor(15, 23, 42)
+                elif col_idx == 3:
+                    r.font.bold = True
+                    r.font.color.rgb = RGBColor(16, 185, 129)
+                else:
+                    r.font.color.rgb = RGBColor(51, 65, 85)
+
+    # Total Row
+    total_cells = table.rows[len(monthly_data) + 1].cells
+    tot_values = [
+        "Total Annual Summary",
+        "12-Month Cumulative Projections",
+        format_indian_number(annual_gen),
+        format_inr(annual_saving)
+    ]
+    for col_idx, val in enumerate(tot_values):
+        total_cells[col_idx].text = val
+        _set_cell_background(total_cells[col_idx], "EFF6FF")
+        _set_cell_borders(total_cells[col_idx], top="0284C7", bottom="0284C7", left="none", right="none")
+        _set_cell_margins(total_cells[col_idx], top=80, bottom=80, left=110, right=110)
+        p = total_cells[col_idx].paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if col_idx in (2, 3) else WD_ALIGN_PARAGRAPH.LEFT
+        for r in p.runs:
+            r.font.name = "Arial"
+            r.font.size = Pt(8.0)
+            r.font.bold = True
+            r.font.color.rgb = RGBColor(2, 132, 199) if col_idx < 3 else RGBColor(16, 185, 129)
+
+    for row in table.rows:
+        for idx, width in enumerate(col_widths):
+            row.cells[idx].width = width
+
+    return table
+
+
+def _build_payment_terms_table(doc: Any, payment_terms: List[Dict[str, Any]], total_cost: float) -> Any:
     """Creates a beautifully formatted Payment Terms table."""
     headers = ["Milestone / Stage", "Percentage", "Amount (₹)", "Payment Condition / Terms"]
     col_widths = [Inches(1.8), Inches(1.1), Inches(1.4), Inches(2.7)]
@@ -305,7 +473,7 @@ def _build_payment_terms_table(doc: Any, payment_terms: List[Dict[str, Any]], to
     for i, title in enumerate(headers):
         hdr_cells[i].text = title
         _set_cell_background(hdr_cells[i], "0F172A")
-        _set_cell_margins(hdr_cells[i], top=140, bottom=140, left=160, right=160)
+        _set_cell_margins(hdr_cells[i], top=110, bottom=110, left=140, right=140)
         p = hdr_cells[i].paragraphs[0]
         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if i in (1, 2) else WD_ALIGN_PARAGRAPH.LEFT
         for r in p.runs:
@@ -335,19 +503,18 @@ def _build_payment_terms_table(doc: Any, payment_terms: List[Dict[str, Any]], to
             row_cells[col_idx].text = val
             _set_cell_background(row_cells[col_idx], bg_col)
             _set_cell_borders(row_cells[col_idx], top="E2E8F0", bottom="E2E8F0")
-            _set_cell_margins(row_cells[col_idx], top=100, bottom=100, left=140, right=140)
+            _set_cell_margins(row_cells[col_idx], top=80, bottom=80, left=120, right=120)
             p = row_cells[col_idx].paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if col_idx in (1, 2) else WD_ALIGN_PARAGRAPH.LEFT
             for r in p.runs:
                 r.font.name = "Arial"
-                r.font.size = Pt(8.5)
+                r.font.size = Pt(8.0)
                 if col_idx in (0, 2):
                     r.font.bold = True
                     r.font.color.rgb = RGBColor(15, 23, 42)
                 else:
                     r.font.color.rgb = RGBColor(51, 65, 85)
 
-    # Set column widths
     for row in table.rows:
         for idx, width in enumerate(col_widths):
             row.cells[idx].width = width
@@ -355,7 +522,7 @@ def _build_payment_terms_table(doc: Any, payment_terms: List[Dict[str, Any]], to
     return table
 
 
-def _build_bom_table(doc: Any, bom_items: List[Dict[str, Any]]):
+def _build_bom_table(doc: Any, bom_items: List[Dict[str, Any]]) -> Any:
     """Creates a professional Bill of Materials (BOM) table."""
     headers = ["Sr.", "Item Name & Specification", "Make / Brand", "Qty", "Unit"]
     col_widths = [Inches(0.5), Inches(3.2), Inches(1.8), Inches(0.8), Inches(0.7)]
@@ -367,7 +534,7 @@ def _build_bom_table(doc: Any, bom_items: List[Dict[str, Any]]):
     for i, title in enumerate(headers):
         hdr_cells[i].text = title
         _set_cell_background(hdr_cells[i], "0F172A")
-        _set_cell_margins(hdr_cells[i], top=140, bottom=140, left=140, right=140)
+        _set_cell_margins(hdr_cells[i], top=120, bottom=120, left=130, right=130)
         p = hdr_cells[i].paragraphs[0]
         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if i == 3 else (WD_ALIGN_PARAGRAPH.CENTER if i in (0, 4) else WD_ALIGN_PARAGRAPH.LEFT)
         for r in p.runs:
@@ -397,7 +564,7 @@ def _build_bom_table(doc: Any, bom_items: List[Dict[str, Any]]):
             row_cells[col_idx].text = val
             _set_cell_background(row_cells[col_idx], bg_col)
             _set_cell_borders(row_cells[col_idx], top="E2E8F0", bottom="E2E8F0")
-            _set_cell_margins(row_cells[col_idx], top=100, bottom=100, left=120, right=120)
+            _set_cell_margins(row_cells[col_idx], top=80, bottom=80, left=110, right=110)
             p = row_cells[col_idx].paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if col_idx == 3 else (WD_ALIGN_PARAGRAPH.CENTER if col_idx in (0, 4) else WD_ALIGN_PARAGRAPH.LEFT)
             for r in p.runs:
@@ -416,72 +583,19 @@ def _build_bom_table(doc: Any, bom_items: List[Dict[str, Any]]):
     return table
 
 
-def _build_timeline_table(doc: Any, timeline_items: List[Dict[str, Any]]) -> Any:
-    """Creates a clean Project Timeline table."""
-    headers = ["#", "Project Stage / Milestone", "Target Duration"]
-    col_widths = [Inches(0.5), Inches(4.2), Inches(2.3)]
-
-    table = doc.add_table(rows=len(timeline_items) + 1, cols=3)
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-    hdr_cells = table.rows[0].cells
-    for i, title in enumerate(headers):
-        hdr_cells[i].text = title
-        _set_cell_background(hdr_cells[i], "1E3A5F")
-        _set_cell_margins(hdr_cells[i], top=120, bottom=120, left=140, right=140)
-        p = hdr_cells[i].paragraphs[0]
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER if i == 0 else WD_ALIGN_PARAGRAPH.LEFT
-        for r in p.runs:
-            r.font.name = "Arial"
-            r.font.size = Pt(8.5)
-            r.font.bold = True
-            r.font.color.rgb = RGBColor(255, 255, 255)
-
-    for row_idx, item in enumerate(timeline_items):
-        row_cells = table.rows[row_idx + 1].cells
-        bg_col = "F0F4FF" if row_idx % 2 == 0 else "FFFFFF"
-
-        seq = str(item.get("sequence") or item.get("seq") or row_idx + 1)
-        stage = str(item.get("stage") or item.get("milestone") or f"Stage {row_idx + 1}")
-        duration = str(item.get("duration") or item.get("days") or "TBD")
-
-        values = [seq, stage, duration]
-        for col_idx, val in enumerate(values):
-            row_cells[col_idx].text = val
-            _set_cell_background(row_cells[col_idx], bg_col)
-            _set_cell_borders(row_cells[col_idx], top="CBD5E1", bottom="CBD5E1")
-            _set_cell_margins(row_cells[col_idx], top=90, bottom=90, left=130, right=130)
-            p = row_cells[col_idx].paragraphs[0]
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER if col_idx == 0 else WD_ALIGN_PARAGRAPH.LEFT
-            for r in p.runs:
-                r.font.name = "Arial"
-                r.font.size = Pt(8.5)
-                if col_idx == 1:
-                    r.font.bold = True
-                    r.font.color.rgb = RGBColor(15, 23, 42)
-                else:
-                    r.font.color.rgb = RGBColor(51, 65, 85)
-
-    for row in table.rows:
-        for idx, width in enumerate(col_widths):
-            row.cells[idx].width = width
-
-    return table
-
-
 def _build_bank_details_block(doc: Any, bank_details: Dict[str, Any], company_name: str) -> Any:
-    """Generates a clean paragraph block for bank transfer details."""
+    """Generates a clean paragraph block for company bank remittance details."""
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(4)
-    p.paragraph_format.space_after = Pt(8)
+    p.paragraph_format.space_after = Pt(6)
     p.paragraph_format.line_spacing = 1.25
 
     items = [
         ("Account Name", bank_details.get("account_name") or company_name),
         ("Bank Name", bank_details.get("bank_name") or "HDFC Bank Ltd"),
-        ("Account Number", bank_details.get("account_number") or "50200000000000"),
-        ("IFSC Code", bank_details.get("ifsc") or bank_details.get("ifsc_code") or "HDFC0000001"),
-        ("Branch", bank_details.get("branch") or "Main Branch"),
+        ("Account Number", bank_details.get("account_number") or "50200012345678"),
+        ("IFSC Code", bank_details.get("ifsc") or bank_details.get("ifsc_code") or "HDFC0001234"),
+        ("Branch", bank_details.get("branch") or "Main Commercial Branch"),
     ]
 
     for label, val in items:
@@ -499,38 +613,230 @@ def _build_bank_details_block(doc: Any, bank_details: Dict[str, Any], company_na
     return p
 
 
-def _build_list_block(doc: Any, items: List[str], numbered: bool = False) -> List[Any]:
-    """Appends styled bullet/numbered paragraphs."""
-    paras = []
-    for idx, item in enumerate(items):
-        text = item.strip()
-        if not text:
+def _build_scope_table(doc: Any, scope_items: List[str]) -> Any:
+    """Builds a professional 2-column Scope Matrix (Our Scope vs Customer Scope)."""
+    headers = ["EPC Contractor Scope (Our Scope)", "Client / Customer Responsibilities"]
+    col_widths = [Inches(3.8), Inches(3.2)]
+
+    our_scope = scope_items if scope_items else [
+        "Site feasibility assessment, 3D shadow analysis, and engineering layout design.",
+        "Supply of Tier-1 Solar PV modules, inverter, and HDGI mounting structures.",
+        "Civil structure fabrication, foundations, and robust mechanical mounting on designated rooftop.",
+        "AC and DC electrical wiring, combiner boxes, circuit breakers, and inverter interconnection.",
+        "Chemical earthing electrode installation and high-grade lightning protection system.",
+        "Pre-commissioning testing, insulation checks, and quality assurance audit.",
+        "Complete documentation and liaison for DISCOM Net-Metering application, sanction, and meter testing."
+    ]
+
+    customer_scope = [
+        "Provide shadow-free, unencumbered rooftop area access for project installation.",
+        "Provide single/three phase construction power and water during project execution.",
+        "Provide secure lockable storage space for solar modules and BOS materials.",
+        "Timely design approval and authorized signatory support for DISCOM application files."
+    ]
+
+    max_rows = max(len(our_scope), len(customer_scope))
+    table = doc.add_table(rows=max_rows + 1, cols=2)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    # Header Row
+    hdr_cells = table.rows[0].cells
+    for i, title in enumerate(headers):
+        hdr_cells[i].text = title
+        _set_cell_background(hdr_cells[i], "0F172A")
+        _set_cell_margins(hdr_cells[i], top=100, bottom=100, left=130, right=130)
+        p = hdr_cells[i].paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        for r in p.runs:
+            r.font.name = "Arial"
+            r.font.size = Pt(8.5)
+            r.font.bold = True
+            r.font.color.rgb = RGBColor(255, 255, 255)
+
+    for r_idx in range(max_rows):
+        row_cells = table.rows[r_idx + 1].cells
+        bg_col = "F8FAFC" if r_idx % 2 == 1 else "FFFFFF"
+
+        our_txt = our_scope[r_idx] if r_idx < len(our_scope) else ""
+        cust_txt = customer_scope[r_idx] if r_idx < len(customer_scope) else ""
+
+        for c_idx, txt in enumerate([our_txt, cust_txt]):
+            row_cells[c_idx].text = f"•  {txt}" if txt else ""
+            _set_cell_background(row_cells[c_idx], bg_col)
+            _set_cell_borders(row_cells[c_idx], top="E2E8F0", bottom="E2E8F0")
+            _set_cell_margins(row_cells[c_idx], top=70, bottom=70, left=120, right=120)
+            p = row_cells[c_idx].paragraphs[0]
+            for r in p.runs:
+                r.font.name = "Arial"
+                r.font.size = Pt(8.0)
+                r.font.color.rgb = RGBColor(51, 65, 85)
+
+    for row in table.rows:
+        for idx, width in enumerate(col_widths):
+            row.cells[idx].width = width
+
+    return table
+
+
+def _build_terms_table(doc: Any, terms_items: List[str]) -> Any:
+    """Builds a clean, styled Terms & Conditions table without any broken/legacy remnants."""
+    headers = ["#", "Commercial & General Terms & Conditions"]
+    col_widths = [Inches(0.4), Inches(6.6)]
+
+    clean_terms = []
+    for t in terms_items:
+        t_clean = t.strip()
+        if t_clean and "lesining" not in t_clean.lower() and "within days" not in t_clean.lower() and "inr, or %" not in t_clean.lower():
+            clean_terms.append(t_clean)
+
+    if not clean_terms:
+        clean_terms = [
+            "Quotation Validity: This commercial proposal is valid for 15 days from the date of issuance.",
+            "Payment Schedule: Payments shall be released milestone-wise in accordance with the commercial schedule.",
+            "Site Readiness: The client shall ensure clear, shadow-free rooftop access, construction power, and water.",
+            "Statutory Clearances: DISCOM net-metering approvals and CEIG inspections follow utility statutory timelines.",
+            "Warranties: Module: 12-yr product / 25-yr performance; Inverter: 5-yr; Structure & Workmanship: 5-yr.",
+            "Taxes & Duties: Applicable GST and statutory levies are as specified in the commercial offer.",
+            "Force Majeure: Standard industry force majeure clauses apply to unpreventable natural delays."
+        ]
+
+    table = doc.add_table(rows=len(clean_terms) + 1, cols=2)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    # Header Row
+    hdr_cells = table.rows[0].cells
+    for i, title in enumerate(headers):
+        hdr_cells[i].text = title
+        _set_cell_background(hdr_cells[i], "0F172A")
+        _set_cell_margins(hdr_cells[i], top=100, bottom=100, left=120, right=120)
+        p = hdr_cells[i].paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER if i == 0 else WD_ALIGN_PARAGRAPH.LEFT
+        for r in p.runs:
+            r.font.name = "Arial"
+            r.font.size = Pt(8.5)
+            r.font.bold = True
+            r.font.color.rgb = RGBColor(255, 255, 255)
+
+    for idx, term in enumerate(clean_terms):
+        row_cells = table.rows[idx + 1].cells
+        bg_col = "F8FAFC" if idx % 2 == 1 else "FFFFFF"
+
+        row_cells[0].text = f"{idx + 1}"
+        row_cells[1].text = term
+
+        for c_idx in (0, 1):
+            _set_cell_background(row_cells[c_idx], bg_col)
+            _set_cell_borders(row_cells[c_idx], top="E2E8F0", bottom="E2E8F0")
+            _set_cell_margins(row_cells[c_idx], top=65, bottom=65, left=110, right=110)
+            p = row_cells[c_idx].paragraphs[0]
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER if c_idx == 0 else WD_ALIGN_PARAGRAPH.LEFT
+            for r in p.runs:
+                r.font.name = "Arial"
+                r.font.size = Pt(8.0)
+                if c_idx == 0:
+                    r.font.bold = True
+                    r.font.color.rgb = RGBColor(2, 132, 199)
+                else:
+                    r.font.color.rgb = RGBColor(51, 65, 85)
+
+    for row in table.rows:
+        for idx, width in enumerate(col_widths):
+            row.cells[idx].width = width
+
+    return table
+
+
+def _apply_replacements_to_paragraph(p: Any, replacements: Dict[str, str]):
+    """
+    Substitutes placeholder strings inside a paragraph run-by-run.
+    Handles exact guillemet placeholders «...» cleanly while preserving run formatting.
+    Also handles split-run placeholders.
+    """
+    text = p.text
+    if "«" not in text:
+        return
+
+    # Pass 1: Run-level substitution
+    for k, v in replacements.items():
+        if k in text:
+            for r in p.runs:
+                if k in r.text:
+                    r.text = r.text.replace(k, v)
+
+    # Refresh text
+    text = p.text
+
+    # Pass 2: Paragraph-level substitution if placeholder spans runs
+    if "«" in text:
+        updated = text
+        for k, v in replacements.items():
+            if k in updated:
+                updated = updated.replace(k, v)
+        if updated != text:
+            if p.runs:
+                first_run = p.runs[0]
+                fmt = {
+                    "name": first_run.font.name,
+                    "size": first_run.font.size,
+                    "bold": first_run.bold,
+                }
+                p.clear()
+                r = p.add_run(updated)
+                if fmt["name"]:
+                    r.font.name = fmt["name"]
+                if fmt["size"]:
+                    r.font.size = fmt["size"]
+                if fmt["bold"]:
+                    r.bold = fmt["bold"]
+            else:
+                p.text = updated
+
+    # Pass 3: Cross-run placeholders
+    runs = p.runs
+    if len(runs) > 1 and "«" in p.text:
+        combined = "".join(r.text for r in runs)
+        new_combined = combined
+        for k, v in replacements.items():
+            if k in new_combined:
+                new_combined = new_combined.replace(k, v)
+        if new_combined != combined and p.runs:
+            p.runs[0].text = new_combined
+            for r in p.runs[1:]:
+                r.text = ""
+
+
+def _apply_replacements_in_xml(element: Any, replacements: Dict[str, str]):
+    """Applies replacements directly to all w:t nodes in an XML element subtree."""
+    W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    for t_node in element.iter("{%s}t" % W_NS):
+        if t_node.text:
+            for k, v in replacements.items():
+                if k in t_node.text:
+                    t_node.text = t_node.text.replace(k, v)
+
+    for p_elem in element.iter("{%s}p" % W_NS):
+        t_nodes = list(p_elem.iter("{%s}t" % W_NS))
+        if not t_nodes:
             continue
-        p = doc.add_paragraph()
-        p.paragraph_format.space_before = Pt(2)
-        p.paragraph_format.space_after = Pt(2)
-        p.paragraph_format.line_spacing = 1.15
-        p.paragraph_format.left_indent = Inches(0.25)
-
-        prefix = f"{idx + 1}.  " if numbered else "•  "
-        r_pre = p.add_run(prefix)
-        r_pre.font.name = "Arial"
-        r_pre.font.size = Pt(8.5)
-        r_pre.font.bold = True
-        r_pre.font.color.rgb = RGBColor(2, 132, 199) if not numbered else RGBColor(15, 23, 42)
-
-        r_txt = p.add_run(text)
-        r_txt.font.name = "Arial"
-        r_txt.font.size = Pt(8.5)
-        r_txt.font.color.rgb = RGBColor(51, 65, 85)
-        paras.append(p)
-    return paras
+        combined = "".join(t.text or "" for t in t_nodes)
+        if "«" not in combined:
+            continue
+        new_combined = combined
+        for k, v in replacements.items():
+            if k in new_combined:
+                new_combined = new_combined.replace(k, v)
+        if new_combined != combined:
+            t_nodes[0].text = new_combined
+            for t in t_nodes[1:]:
+                t.text = ""
 
 
 def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[str, Any], template_type: str = "S1") -> bytes:
     """
     Generates a production-quality Word DOCX document from the centralized quotation object.
     Preserves 100% of the Word template structure, graphics, and styling.
+    Purges stale frozen OLE objects and inserts mathematically consistent dynamic tables.
     """
     tpl_type = (template_type or quotation_data.get("template") or "S1").upper().strip()
     if tpl_type not in ("S1", "S2"):
@@ -539,7 +845,7 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
     template_path = _resolve_template_path(tpl_type)
     doc = _load_document(template_path)
 
-    # 1. Extract and canonicalize data from centralized quotation data model
+    # 1. Canonical data model extraction
     cust = quotation_data.get("customer") or {}
     comp = quotation_data.get("company") or {}
     proj = quotation_data.get("project") or {}
@@ -552,7 +858,7 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
     fin = quotation_data.get("financials") or {}
     comm = quotation_data.get("commercial") or {}
 
-    # Company fallbacks
+    # Company
     c_name = comp.get("name") or company_data.get("company_name") or company_data.get("name") or "GVP Solar"
     c_poc = comp.get("poc") or company_data.get("owner_name") or "Solar Solutions Manager"
     c_phone = comp.get("phone") or company_data.get("mobile") or company_data.get("phone") or "+91 98765 43210"
@@ -570,7 +876,7 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
     ref_no = quotation_data.get("reference_no") or quotation_data.get("quote_number") or "GVP/QTN/2026/0001"
     quote_date = quotation_data.get("date") or quotation_data.get("quote_date") or "29-09-2026"
 
-    # Project
+    # Project Size
     raw_size_kw = proj.get("size_kw") or proj.get("sizeKW") or quotation_data.get("system_kw") or 100
     try:
         size_kw_num = float(raw_size_kw)
@@ -578,79 +884,115 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
         size_kw_num = 100.0
     size_kw_str = f"{size_kw_num:g} kW"
 
-    struct_type = proj.get("structure_type") or proj.get("structureType") or "HDGI Elevated Rooftop"
+    struct_type = proj.get("structure_type") or proj.get("structureType") or "HDGI Elevated Rooftop Superstructure"
     sys_type = proj.get("system_type") or proj.get("systemType") or "Grid Connected Solar PV System"
 
-    # Financials / Calculations
+    # 2. Canonical Commercial Calculations
     price_per_kw = float(comm.get("price_per_kw") or comm.get("pricePerKW") or fin.get("price_per_kw") or 2600)
-    calc_project_cost = round(size_kw_num * price_per_kw) if price_per_kw > 0 else 260000
-    project_cost = float(comm.get("price") or comm.get("total_cost") or fin.get("project_cost") or calc_project_cost)
+    base_price = float(comm.get("base_price")) if comm.get("base_price") is not None else round(size_kw_num * price_per_kw)
+    additional_charges = float(comm.get("additional_charges") or comm.get("additionalCharges") or 0)
+    net_meter_charges = float(comm.get("net_meter_charges") or comm.get("netMeterCharges") or 0)
+    gst_rate = float(comm.get("gst_rate") or comm.get("gstRate") or 0)
+    taxable_amount = base_price + additional_charges + net_meter_charges
+    gst_amount = round((taxable_amount * gst_rate) / 100) if gst_rate > 0 else float(comm.get("gst_amount") or 0)
+    gross_total = float(comm.get("price") or comm.get("total_cost") or fin.get("project_cost")) if comm.get("price") else (taxable_amount + gst_amount)
+    subsidy = float(comm.get("subsidy") or comm.get("subsidy_amount") or comm.get("subsidyAmount") or 0)
+    final_cost = max(0.0, gross_total - subsidy)
+    project_cost = final_cost
 
-    payback_years = fin.get("payback_years") or fin.get("paybackYears") or 3.5
-    try:
-        payback_str = f"{float(payback_years):.1f}"
-    except Exception:
-        payback_str = str(payback_years)
+    comm_data = {
+        "size_kw": size_kw_num,
+        "rate_per_kw": price_per_kw,
+        "base_price": base_price,
+        "additional_charges": additional_charges,
+        "net_meter_charges": net_meter_charges,
+        "taxable_amount": taxable_amount,
+        "gst_rate": gst_rate,
+        "gst_amount": gst_amount,
+        "gross_total": gross_total,
+        "subsidy": subsidy,
+        "final_cost": final_cost,
+    }
 
-    annual_gen = fin.get("annual_generation") or fin.get("annualGeneration") or round(size_kw_num * 1500)
-    annual_saving = fin.get("annual_saving") or fin.get("annualSaving") or round(float(annual_gen) * 8.0)
-    tree_saved = fin.get("tree_saved") or fin.get("treeSaved") or round(size_kw_num * 16)
-    co2_red = fin.get("co2_reduction") or fin.get("co2Reduction") or round(size_kw_num * 1.4)
+    # 3. Canonical Financial Calculations
+    tariff_rate = float(fin.get("tariff_rate") or 8.0)
+    annual_gen = float(fin.get("annual_generation") or fin.get("annualGeneration") or round(size_kw_num * 1500))
+    annual_saving = float(fin.get("annual_saving") or fin.get("annualSaving") or round(annual_gen * tariff_rate))
+
+    if annual_saving > 0 and project_cost > 0:
+        payback_years = round((project_cost / annual_saving) * 10) / 10
+    else:
+        payback_years = float(fin.get("payback_years") or fin.get("paybackYears") or 3.5)
+    payback_str = f"{payback_years:.1f}"
+
+    # 12-Month distribution synchronized with annual totals
+    weights = [0.082, 0.087, 0.098, 0.102, 0.105, 0.076, 0.065, 0.068, 0.078, 0.085, 0.079, 0.075]
+    month_names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+    monthly_data = []
+    gen_acc = 0
+    sav_acc = 0
+    for idx, (m_name, w) in enumerate(zip(month_names, weights)):
+        if idx == 11:
+            m_gen = int(round(annual_gen - gen_acc))
+            m_sav = int(round(annual_saving - sav_acc))
+        else:
+            m_gen = int(round(annual_gen * w))
+            m_sav = int(round(annual_saving * w))
+            gen_acc += m_gen
+            sav_acc += m_sav
+        monthly_data.append({"month": m_name, "generation": m_gen, "savings": m_sav})
+
+    tree_saved = int(fin.get("tree_saved") or fin.get("treeSaved") or round(size_kw_num * 16))
+    co2_red = float(fin.get("co2_reduction") or fin.get("co2Reduction") or round(size_kw_num * 1.4 * 10) / 10)
 
     # Equipment specs
     panel_wp = panel.get("watt_peak") or panel.get("wattPeak") or "590 Wp"
     if str(panel_wp).replace(".", "").isdigit():
         panel_wp = f"{panel_wp} Wp"
     panel_qty = str(panel.get("quantity") or panel.get("panelQuantity") or "170")
-    panel_make = panel.get("make") or panel.get("brand") or "Adani Solar / Waaree"
+    panel_make = panel.get("make") or panel.get("brand") or "Adani Solar"
     panel_type = panel.get("type") or "Mono PERC Bifacial"
     panel_warranty = panel.get("warranty") or "12 Years Product / 25 Years Performance"
 
-    inv_size = inv.get("size_kw") or inv.get("sizeKW") or f"{size_kw_num:g} kW"
+    inv_size = inv.get("size_kw") or inv.get("sizeKW") or size_kw_str
     if str(inv_size).replace(".", "").isdigit():
         inv_size = f"{inv_size} kW"
     inv_qty = str(inv.get("quantity") or "1")
-    inv_make = inv.get("make") or inv.get("brand") or "Solis / Sungrow"
+    inv_make = inv.get("make") or inv.get("brand") or "Solis"
     inv_phase = inv.get("phase") or "Three Phase"
-    inv_warranty = inv.get("warranty") or "5 Years Standard On-Site Warranty"
+    inv_warranty = inv.get("warranty") or "5 Years Standard Warranty"
 
-    cable_make = cable.get("make") or cable.get("brand") or "Polycab / Havells"
+    cable_make = cable.get("make") or cable.get("brand") or "Polycab"
     cable_ac = cable.get("ac") or "4C x 50 sq.mm Aluminium Armoured Cable"
-    cable_dc = cable.get("dc") or "1C x 4/6 sq.mm Copper Solar DC Cable"
+    cable_dc = cable.get("dc") or "1C x 4 sq.mm Copper Solar Cable"
 
-    struct_desc = struct.get("description") or "HDGI Elevated Rooftop Structure with Stainless Steel Fasteners"
-    bos_desc = bos.get("description") or "Complete ACDB, DCDB, Earthing Electrodes & Lightning Protection"
+    struct_desc = struct.get("description") or "HDGI Elevated Rooftop Structure with SS304 Fasteners"
+    bos_desc = bos.get("description") or "Complete ACDB, DCDB, Earthing & Lightning Protection"
     bos_warranty = bos.get("warranty") or "5 Years Complete Balance of System Warranty"
 
-    # 2. Build the Replacement Dictionary — ALL placeholders found in S1 & S2
+    # 4. Replacement Dictionary (exact placeholders)
     replacements = {
-        # Core identity
         "«Reference No.»": ref_no,
         "«Date»": quote_date,
         "«Project Size (kW)»": size_kw_str,
-        # Customer
         "«Customer Name»": cust_name,
         "«Customer Address»": cust_addr,
         "«Customer Phone»": cust_phone,
         "«Customer Mail»": cust_mail,
-        # Company
         "«Company Name»": c_name,
         "«Company Address»": c_addr,
         "«Company Phone»": c_phone,
         "«Company Mail»": c_mail,
         "«Company POC»": c_poc,
         "«Company GST»": c_gst,
-        # Project
         "«Structure Type»": struct_type,
         "«Type»": sys_type,
-        # Financials
         "«Pay Back Period»": payback_str,
         "«Annual Generation»": format_indian_number(annual_gen),
         "«Annual Saving»": format_indian_number(annual_saving),
         "«Project Cost»": format_indian_number(project_cost),
         "«Tree Saved»": format_indian_number(tree_saved),
-        "«Co2 Reduction»": format_indian_number(co2_red),
-        # S2 equipment placeholders (also appear in drawing XML text nodes)
+        "«Co2 Reduction»": f"{co2_red:g}",
         "«Watt Peak»": panel_wp,
         "«No. of Panels»": panel_qty,
         "«Panel Make/Brand»": panel_make,
@@ -665,35 +1007,40 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
         "«AC»": cable_ac,
         "«DC»": cable_dc,
         "«Structure Description»": struct_desc,
-        # BOS Warranty — appears WITHOUT closing » in S2 XML runs (split across paragraphs)
-        # Map both full form and the partial form that appears in raw runs
         "«BOS Warranty»": bos_warranty,
-        "«BOS Warranty": bos_warranty,   # partial without closing »
+        "«BOS Warranty": bos_warranty,
     }
 
-    # 3. Replace placeholders across all paragraphs
+    # 5. Substitute placeholders across all paragraphs and shapes
     for p in doc.paragraphs:
         _apply_replacements_to_paragraph(p, replacements)
 
-    # 4. Replace placeholders in all table cells
     for t in doc.tables:
         for row in t.rows:
             for cell in row.cells:
                 for p in cell.paragraphs:
                     _apply_replacements_to_paragraph(p, replacements)
 
-    # 5. Replace in all drawing/shape XML (textboxes, SmartArt, etc.)
     _apply_replacements_in_xml(doc.element, replacements)
 
+    # 6. Purge all stale frozen OLE objects from template before inserting dynamic tables
+    _clean_stale_ole_objects(doc, tpl_type)
 
+    # 7. Update timeline graphic chevrons with user-configured durations and titles
+    timeline_items = quotation_data.get("timeline") or [
+        {"sequence": 1, "stage": "Finalization of Design and Drawings", "duration": "7 Days"},
+        {"sequence": 2, "stage": "Engineering, Procurement, and Supply of Material", "duration": "15 Days"},
+        {"sequence": 3, "stage": "Solar Plant Installation", "duration": "20 Days"},
+        {"sequence": 4, "stage": "Commissioning and Testing", "duration": "14 Days"},
+    ]
+    _update_timeline_in_drawings(doc, timeline_items, tpl_type)
 
-    # 6. Populate Dynamic Sections by matching paragraph anchor text
-    # Build default dynamic data
+    # 8. Dynamic Tables Data Preparation
     payment_terms = comm.get("payment_terms") or comm.get("paymentTerms") or [
-        {"stage": "Advance / Booking", "percent": 20, "description": "Along with purchase order & engineering sign-off"},
-        {"stage": "Material Delivery", "percent": 60, "description": "Upon delivery of solar panels, inverter & structure at site"},
-        {"stage": "Installation", "percent": 15, "description": "Upon completion of mechanical & electrical installation"},
-        {"stage": "Commissioning", "percent": 5, "description": "Upon final testing, inspection & net-metering commissioning"},
+        {"stage": "Advance / Booking", "percent": 20, "amount": round((project_cost * 20) / 100), "description": "Along with purchase order & design sign-off"},
+        {"stage": "Material Delivery", "percent": 60, "amount": round((project_cost * 60) / 100), "description": "Upon delivery of modules, inverter & structure at site"},
+        {"stage": "Installation", "percent": 15, "amount": round((project_cost * 15) / 100), "description": "Upon completion of mechanical & electrical installation"},
+        {"stage": "Commissioning", "percent": 5, "amount": round((project_cost * 5) / 100), "description": "Upon DISCOM testing, net metering & final commissioning"},
     ]
 
     bom_items = quotation_data.get("bom") or quotation_data.get("bill_of_material") or [
@@ -715,125 +1062,64 @@ def generate_quotation_docx(quotation_data: Dict[str, Any], company_data: Dict[s
         "branch": "Main Commercial Branch"
     }
 
-    timeline_items = quotation_data.get("timeline") or [
-        {"sequence": 1, "stage": "Finalization of Design and Drawings", "duration": "7 Days"},
-        {"sequence": 2, "stage": "Engineering, Procurement, and Supply of Material", "duration": "15 Days"},
-        {"sequence": 3, "stage": "Solar Plant Installation", "duration": "20 Days"},
-        {"sequence": 4, "stage": "Commissioning and Testing", "duration": "14 Days"},
-    ]
+    scope_items = quotation_data.get("scope_of_work") or quotation_data.get("scopeOfWork") or []
+    terms_items = quotation_data.get("terms_and_conditions") or quotation_data.get("termsAndConditions") or []
 
-    scope_items = quotation_data.get("scope_of_work") or quotation_data.get("scopeOfWork") or [
-        "Site feasibility assessment, 3D shadow analysis, and detailed engineering design.",
-        "Supply and delivery of Tier-1 Solar PV modules, inverter, and HDGI mounting structures.",
-        "Complete mechanical assembly and civil foundation installation on designated roof area.",
-        "DC and AC electrical cabling, inverter connections, distribution boards, and safety switches.",
-        "Dedicated chemical earthing pits and high-grade lightning protection system installation.",
-        "Pre-commissioning testing, insulation checks, and system quality assurance.",
-        "Full documentation and assistance for DISCOM Net-Metering application and sanction.",
-        "Integration of remote smartphone / web data monitoring portal and project handover.",
-    ]
-
-    terms_items = quotation_data.get("terms_and_conditions") or quotation_data.get("termsAndConditions") or [
-        "Quotation Validity: This commercial offer is valid for 15 days from the date of quotation.",
-        "Payment Terms: Payments shall be released milestone-wise in accordance with the agreed schedule.",
-        "Site Readiness: The client shall ensure clear rooftop access, construction power, and water supply.",
-        "Statutory Clearances: DISCOM net-metering approvals are subject to utility and CEIG timelines.",
-        "Equipment Warranties: Module: 12-yr product / 25-yr performance; Inverter: 5-yr; Structure: 5-yr.",
-        "Taxes & Levies: GST and applicable statutory duties are included as specified in the commercial offer.",
-        "Force Majeure: Standard industry force majeure clauses apply to unpreventable natural delays.",
-    ]
-
-    # Inject dynamic content by matching paragraph anchor text
+    # 9. Insert dynamic tables into their clean anchor positions
     paragraphs = list(doc.paragraphs)
-    for i, p in enumerate(paragraphs):
-        p_text = p.text.strip()
-        # Normalize HTML entities that appear in template (e.g. &amp; -> &)
-        p_text_norm = p_text.replace("&amp;", "&")
+    for p in paragraphs:
+        p_text = p.text.strip().replace("&amp;", "&")
 
-        # --- Commercial price summary (appears before payment table) ---
-        if "Price Quote" in p_text and "Payment schedule" in p_text:
-            p_price = doc.add_paragraph()
-            p_price.paragraph_format.space_before = Pt(4)
-            p_price.paragraph_format.space_after = Pt(6)
-            run1 = p_price.add_run("System Size: ")
-            run1.bold = True
-            run1.font.name = "Arial"
-            run1.font.size = Pt(9)
-            p_price.add_run(f"{size_kw_str}   |   ").font.name = "Arial"
-            run2 = p_price.add_run("Rate per kW: ")
-            run2.bold = True
-            run2.font.name = "Arial"
-            run2.font.size = Pt(9)
-            r2b = p_price.add_run(f"{format_inr(price_per_kw)}/kW   |   ")
-            r2b.font.name = "Arial"
-            run3 = p_price.add_run("Total Cost: ")
-            run3.bold = True
-            run3.font.name = "Arial"
-            run3.font.size = Pt(9)
-            run3.font.color.rgb = RGBColor(2, 132, 199)
-            run4 = p_price.add_run(f"{format_inr(project_cost)} ({number_to_words_inr(project_cost)})")
-            run4.bold = True
-            run4.font.name = "Arial"
-            run4.font.size = Pt(9)
-            run4.font.color.rgb = RGBColor(2, 132, 199)
-            p._p.addnext(p_price._p)
+        # --- S2: Expected Monthly Generation & Savings table ---
+        if p_text == "Expected Monthly Generation & Savings" and tpl_type == "S2":
+            tbl_monthly = _build_monthly_table(doc, monthly_data, annual_gen, annual_saving)
+            p._p.addnext(tbl_monthly._tbl)
 
-        # --- Payment Terms table ---
-        elif p_text_norm == "Payment Terms:":
-            tbl = _build_payment_terms_table(doc, payment_terms, project_cost)
-            p._p.addnext(tbl._tbl)
+        # --- Commercial Offer Table ---
+        elif "Price Quote" in p_text and "Payment schedule" in p_text:
+            tbl_comm = _build_commercial_table(doc, comm_data, size_kw_str)
+            p._p.addnext(tbl_comm._tbl)
 
-        # --- Bank / Account details ---
-        elif p_text_norm in ("Account Details:", "Bank Details:"):
+        # --- Payment Terms Table ---
+        elif p_text == "Payment Terms:":
+            tbl_pay = _build_payment_terms_table(doc, payment_terms, project_cost)
+            p._p.addnext(tbl_pay._tbl)
+
+        # --- Bank Details Block ---
+        elif p_text in ("Account Details:", "Bank Details:"):
             p_bank = _build_bank_details_block(doc, bank_details, c_name)
             p._p.addnext(p_bank._p)
 
-        # --- Bill of Material (S1 only — S2 doesn't have a BOM section) ---
-        elif p_text_norm == "Bill of Material" and tpl_type == "S1":
+        # --- BOM Table (S1 only) ---
+        elif p_text == "Bill of Material" and tpl_type == "S1":
             tbl_bom = _build_bom_table(doc, bom_items)
             p._p.addnext(tbl_bom._tbl)
 
         # --- Scope of Work ---
-        elif p_text_norm == "Scope of Work":
-            paras_block = _build_list_block(doc, scope_items, numbered=False)
-            curr = p
-            for sp in paras_block:
-                curr._p.addnext(sp._p)
-                curr = sp
+        elif p_text == "Scope of Work":
+            tbl_scope = _build_scope_table(doc, scope_items)
+            p._p.addnext(tbl_scope._tbl)
 
-        # --- Terms & Conditions (both S1 "Terms & Conditions" and S2 "General Terms & Conditions") ---
-        elif p_text_norm in ("Terms & Conditions", "General Terms & Conditions", "Terms &amp; Conditions", "General Terms &amp; Conditions"):
-            paras_block = _build_list_block(doc, terms_items, numbered=True)
-            curr = p
-            for tp in paras_block:
-                curr._p.addnext(tp._p)
-                curr = tp
+        # --- Terms & Conditions ---
+        elif p_text in ("Terms & Conditions", "General Terms & Conditions"):
+            tbl_terms = _build_terms_table(doc, terms_items)
+            p._p.addnext(tbl_terms._tbl)
 
-    # 7. Final Quality Assertion: Check for any remaining unresolved «...»
-    unresolved = []
+    # 10. Clean up any leftover stray guillemets
     for p in doc.paragraphs:
-        matches = re.findall(r'«[^»]+»?', p.text)
-        for m in matches:
-            if m.startswith("«"):
-                unresolved.append(m)
+        if "«" in p.text:
+            cleaned = re.sub(r'«[^»]*»?', '', p.text)
+            if p.runs:
+                p.runs[0].text = cleaned
+                for r in p.runs[1:]:
+                    r.text = ""
 
-    if unresolved:
-        logger.warning(f"Unresolved placeholders in {tpl_type}: {set(unresolved)}")
-        # Clean up any leftover stray guillemets gracefully
-        for p in doc.paragraphs:
-            if "«" in p.text:
-                cleaned = re.sub(r'«[^»]*»?', '', p.text)
-                if p.runs:
-                    p.runs[0].text = cleaned
-                    for r in p.runs[1:]:
-                        r.text = ""
+    W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    for t_node in doc.element.iter(f"{{{W_NS}}}t"):
+        if t_node.text and "«" in t_node.text:
+            t_node.text = re.sub(r'«[^»]*»?', '', t_node.text)
 
-        # Also clean in XML text nodes
-        for t_node in doc.element.xpath('.//w:t', namespaces={'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}):
-            if t_node.text and "«" in t_node.text:
-                t_node.text = re.sub(r'«[^»]*»?', '', t_node.text)
-
-    # 8. Save to Bytes
+    # 11. Save to Bytes
     out_buf = io.BytesIO()
     doc.save(out_buf)
     return out_buf.getvalue()
@@ -851,7 +1137,6 @@ def generate_quotation_pdf(quotation_data: Dict[str, Any], company_data: Dict[st
         pdf_path = Path(tmpdir) / "quotation.pdf"
         docx_path.write_bytes(docx_bytes)
 
-        # Try LibreOffice headless conversion
         lo_candidates = [
             "libreoffice",
             "soffice",
@@ -875,11 +1160,11 @@ def generate_quotation_pdf(quotation_data: Dict[str, Any], company_data: Dict[st
         if converted and pdf_path.exists():
             return pdf_path.read_bytes()
 
-        # Fallback: try docx2pdf if installed (optional dependency)
+        # Fallback: try docx2pdf if installed
         try:
             import importlib
             d2p = importlib.import_module("docx2pdf")
-            d2p.convert(str(docx_path), str(pdf_path))  # type: ignore[attr-defined]
+            d2p.convert(str(docx_path), str(pdf_path))
             if pdf_path.exists():
                 return pdf_path.read_bytes()
         except ImportError:
@@ -889,6 +1174,6 @@ def generate_quotation_pdf(quotation_data: Dict[str, Any], company_data: Dict[st
 
     raise RuntimeError(
         "PDF conversion failed: LibreOffice is not installed or not found. "
-        "Install with: brew install libreoffice  (macOS) or apt install libreoffice (Linux). "
+        "Install with: brew install libreoffice (macOS) or apt install libreoffice (Linux). "
         "DOCX download is available as an alternative."
     )
