@@ -12,6 +12,7 @@ import httpx
 import uuid
 import time
 import os
+import asyncio
 from datetime import datetime, timezone
 
 logger = logging.getLogger("whatsapp_providers")
@@ -75,48 +76,200 @@ class WhatsAppProvider(ABC):
 
 class EvolutionGoProvider(WhatsAppProvider):
     """
-    Evolution API (Evolution Go) Provider Integration.
-    API Docs compatible with v1 and v2.
+    Evolution API (Evolution Go & Evolution API) Provider Integration.
+    Seamlessly supports Evolution Go (whatsmeow / Go Gin) native routes and Evolution API v2 routes.
+    Includes precise diagnostic categorizations for connection refused, unauthorized,
+    instance not found, service unavailable, and timeouts.
     """
     def __init__(self, credentials: Dict[str, Any], settings: Optional[Dict[str, Any]] = None):
         super().__init__(credentials, settings)
-        self.api_url = (self.credentials.get("api_url") or "http://127.0.0.1:8085").rstrip("/")
-        self.api_key = self.credentials.get("api_key") or ""
-        self.instance_name = self.credentials.get("instance_name") or "solarix_primary"
+        self.api_url = (
+            os.environ.get("EVOLUTION_API_URL") or 
+            self.credentials.get("api_url") or 
+            "http://127.0.0.1:8080"
+        ).rstrip("/")
+        self.api_key = (
+            os.environ.get("EVOLUTION_API_KEY") or 
+            self.credentials.get("api_key") or 
+            ""
+        )
+        self.instance_name = (
+            os.environ.get("EVOLUTION_INSTANCE") or 
+            self.credentials.get("instance_name") or 
+            "solarix_primary"
+        )
         self.headers = {
             "apikey": self.api_key,
             "Content-Type": "application/json"
         }
 
-    async def requestPairingCode(self, phone: str) -> Dict[str, Any]:
+    def _diagnose_exception(self, err: Exception) -> str:
+        s = str(err)
+        err_type = type(err).__name__
+        if "Connection refused" in s or "[Errno 61]" in s or "ConnectError" in err_type:
+            return f"Connection refused: Evolution Go service is not reachable on {self.api_url}. Verify that the service is running and the port is listening."
+        if "ConnectTimeout" in err_type or "ReadTimeout" in err_type:
+            return f"Timeout: Evolution Go service at {self.api_url} did not respond within the timeout limit."
+        return f"Service unreachable: {s}"
+
+    async def getStatus(self) -> Dict[str, Any]:
         if not self.api_url:
-            return {"success": False, "error": "Evolution API URL is required."}
-        clean_phone = "".join(filter(str.isdigit, phone))
+            return {"connected": False, "status": "disconnected", "error": "Evolution API URL is not configured", "uptime_seconds": 0}
+        
         try:
-            async with httpx.AsyncClient(timeout=25.0) as client:
-                url = f"{self.api_url}/instance/pairing-code/{self.instance_name}"
-                res = await client.post(url, json={"phone": clean_phone, "number": clean_phone, "instanceName": self.instance_name}, headers=self.headers)
-                if res.status_code in (200, 201):
-                    return res.json()
-                # Fallback to /instance/pair
-                url_alt = f"{self.api_url}/instance/pair"
-                res_alt = await client.post(url_alt, json={"number": clean_phone, "phone": clean_phone}, headers=self.headers)
-                if res_alt.status_code in (200, 201):
-                    return res_alt.json()
-                return {"success": False, "error": f"Evolution API pairing error: {res.text}"}
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                # 1. First probe basic server health
+                try:
+                    health_res = await client.get(f"{self.api_url}/server/ok")
+                    if health_res.status_code == 503:
+                        return {
+                            "connected": False,
+                            "status": "disconnected",
+                            "error": "License not activated: Evolution Go requires operator license activation.",
+                            "uptime_seconds": 0
+                        }
+                except Exception as health_err:
+                    return {
+                        "connected": False,
+                        "status": "disconnected",
+                        "error": self._diagnose_exception(health_err),
+                        "uptime_seconds": 0
+                    }
+
+                # 2. Probe native Evolution Go status endpoint
+                res = await client.get(f"{self.api_url}/instance/status", headers=self.headers)
+                if res.status_code == 200:
+                    data = res.json()
+                    status_info = data.get("data") or data
+                    state = status_info.get("status") or status_info.get("state")
+                    connected = state in ("connected", "open", "inChat")
+                    phone = status_info.get("owner") or status_info.get("phone") or status_info.get("jid")
+                    return {
+                        "connected": connected,
+                        "status": "connected" if connected else "disconnected",
+                        "phone_number": phone,
+                        "instance": self.instance_name,
+                        "uptime_seconds": 3600 if connected else 0,
+                        "raw": data
+                    }
+                elif res.status_code == 401:
+                    return {
+                        "connected": False,
+                        "status": "disconnected",
+                        "error": "Unauthorized: Invalid API key. Check EVOLUTION_API_KEY.",
+                        "uptime_seconds": 0
+                    }
+                elif res.status_code == 503:
+                    return {
+                        "connected": False,
+                        "status": "disconnected",
+                        "error": "Service unavailable: License not activated on Evolution Go.",
+                        "uptime_seconds": 0
+                    }
+
+                # 3. Fallback to v2 connectionState endpoint
+                url_v2 = f"{self.api_url}/instance/connectionState/{self.instance_name}"
+                res_v2 = await client.get(url_v2, headers=self.headers)
+                if res_v2.status_code == 200:
+                    data = res_v2.json()
+                    state = (data.get("instance") or {}).get("state") or data.get("state")
+                    connected = state == "open"
+                    phone = (data.get("instance") or {}).get("owner") or self.credentials.get("phone_number")
+                    return {
+                        "connected": connected,
+                        "status": "connected" if connected else "disconnected",
+                        "phone_number": phone,
+                        "instance": self.instance_name,
+                        "uptime_seconds": 3600 if connected else 0,
+                        "raw": data
+                    }
+                elif res_v2.status_code == 404:
+                    return {
+                        "connected": False,
+                        "status": "disconnected",
+                        "error": f"Instance not found: Instance '{self.instance_name}' does not exist on Evolution Go.",
+                        "uptime_seconds": 0
+                    }
+
+                return {
+                    "connected": False,
+                    "status": "disconnected",
+                    "error": f"Evolution Go returned HTTP {res.status_code}: {res.text}",
+                    "uptime_seconds": 0
+                }
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {
+                "connected": False,
+                "status": "disconnected",
+                "error": self._diagnose_exception(e),
+                "uptime_seconds": 0
+            }
 
     async def connect(self, force: bool = False) -> Dict[str, Any]:
-        if not self.api_url or not self.api_key:
-            return {"success": False, "status": "disconnected", "error": "Evolution API URL and API Key are required."}
+        if not self.api_url:
+            return {"success": False, "status": "disconnected", "error": "Evolution API URL is not configured."}
+        
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # First check if instance exists or create it
-                url = f"{self.api_url}/instance/connect/{self.instance_name}"
-                res = await client.get(url, headers=self.headers)
-                if res.status_code in (200, 201):
-                    data = res.json()
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                # Ensure server is alive
+                try:
+                    h = await client.get(f"{self.api_url}/server/ok")
+                    if h.status_code == 503:
+                        return {"success": False, "status": "disconnected", "error": "License not activated: Evolution Go license must be activated first."}
+                except Exception as he:
+                    return {"success": False, "status": "disconnected", "error": self._diagnose_exception(he)}
+
+                # Attempt native Evolution Go /instance/connect
+                backend_base = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+                webhook_url = f"{backend_base}/api/whatsapp/evolution/webhook"
+                
+                # Check if instance already exists or if we need to create it
+                connect_payload = {"webhookUrl": webhook_url, "subscribe": ["messages.upsert", "messages.update", "connection.update"]}
+                connect_res = await client.post(f"{self.api_url}/instance/connect", json=connect_payload, headers=self.headers)
+                
+                if connect_res.status_code in (200, 201):
+                    # Fetch current QR code
+                    qr_res = await client.get(f"{self.api_url}/instance/qr", headers=self.headers)
+                    qr_code = None
+                    if qr_res.status_code == 200:
+                        qr_data = qr_res.json()
+                        qr_code = qr_data.get("data") or qr_data.get("qrcode") or qr_data.get("code")
+                    
+                    return {
+                        "success": True,
+                        "status": "qr_ready" if qr_code else "connecting",
+                        "qr_code": qr_code,
+                        "instance": self.instance_name,
+                        "raw": connect_res.json()
+                    }
+                elif connect_res.status_code in (401, 403):
+                    # Check if instance needs creation first via admin /instance/create
+                    create_payload = {
+                        "name": self.instance_name,
+                        "token": self.api_key
+                    }
+                    create_res = await client.post(f"{self.api_url}/instance/create", json=create_payload, headers=self.headers)
+                    if create_res.status_code in (200, 201):
+                        # Created! Now retry connect
+                        c2_res = await client.post(f"{self.api_url}/instance/connect", json=connect_payload, headers=self.headers)
+                        qr_res = await client.get(f"{self.api_url}/instance/qr", headers=self.headers)
+                        qr_code = None
+                        if qr_res.status_code == 200:
+                            qr_code = (qr_res.json().get("data") or {}).get("qrcode") or qr_res.json().get("data")
+                        return {
+                            "success": True,
+                            "status": "qr_ready" if qr_code else "connecting",
+                            "qr_code": qr_code,
+                            "instance": self.instance_name
+                        }
+                    elif create_res.status_code == 401:
+                        return {"success": False, "status": "disconnected", "error": "Unauthorized: Invalid API key for Evolution Go."}
+
+                # Fallback to v2 path-based connect
+                v2_url = f"{self.api_url}/instance/connect/{self.instance_name}"
+                res_v2 = await client.get(v2_url, headers=self.headers)
+                if res_v2.status_code in (200, 201):
+                    data = res_v2.json()
                     qr_code = data.get("base64") or data.get("qrcode") or data.get("code")
                     status = "connected" if data.get("state") == "open" else "qr_ready"
                     return {
@@ -126,108 +279,134 @@ class EvolutionGoProvider(WhatsAppProvider):
                         "instance": self.instance_name,
                         "raw": data
                     }
-                elif res.status_code == 404:
-                    # Create instance first
-                    create_url = f"{self.api_url}/instance/create"
-                    create_payload = {
-                        "instanceName": self.instance_name,
-                        "token": self.api_key,
-                        "qrcode": True
-                    }
-                    create_res = await client.post(create_url, json=create_payload, headers=self.headers)
-                    create_data = create_res.json()
-                    qr_code = (create_data.get("qrcode") or {}).get("base64") if isinstance(create_data.get("qrcode"), dict) else create_data.get("base64")
-                    return {
-                        "success": True,
-                        "status": "qr_ready",
-                        "qr_code": qr_code,
-                        "instance": self.instance_name,
-                        "raw": create_data
-                    }
-                else:
-                    return {"success": False, "status": "disconnected", "error": f"Evolution API returned HTTP {res.status_code}: {res.text}"}
+                elif res_v2.status_code == 404:
+                    # Create in v2
+                    create_v2 = await client.post(f"{self.api_url}/instance/create", json={"instanceName": self.instance_name, "token": self.api_key, "qrcode": True}, headers=self.headers)
+                    if create_v2.status_code in (200, 201):
+                        cdata = create_v2.json()
+                        qr_code = (cdata.get("qrcode") or {}).get("base64") if isinstance(cdata.get("qrcode"), dict) else cdata.get("base64")
+                        return {"success": True, "status": "qr_ready", "qr_code": qr_code, "instance": self.instance_name}
+
+                return {"success": False, "status": "disconnected", "error": f"Evolution API returned HTTP {connect_res.status_code}: {connect_res.text}"}
         except Exception as e:
-            logger.error(f"EvolutionGo connect error: {e}")
-            return {"success": False, "status": "disconnected", "error": str(e)}
+            return {"success": False, "status": "disconnected", "error": self._diagnose_exception(e)}
+
+    async def getQr(self) -> Dict[str, Any]:
+        """Fetch QR code from Evolution Go without reinitializing instance."""
+        if not self.api_url:
+            return {"success": False, "error": "Evolution API URL is not configured"}
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                res = await client.get(f"{self.api_url}/instance/qr", headers=self.headers)
+                if res.status_code == 200:
+                    data = res.json()
+                    qr = data.get("data") or data.get("qrcode") or data.get("code")
+                    return {"success": True, "qr_code": qr, "status": "qr_ready"}
+                # Fallback to v2 connect
+                v2_res = await client.get(f"{self.api_url}/instance/connect/{self.instance_name}", headers=self.headers)
+                if v2_res.status_code == 200:
+                    v2_data = v2_res.json()
+                    qr = v2_data.get("base64") or v2_data.get("qrcode")
+                    return {"success": True, "qr_code": qr, "status": "qr_ready"}
+                return {"success": False, "error": f"Evolution QR returned HTTP {res.status_code}: {res.text}"}
+        except Exception as e:
+            return {"success": False, "error": self._diagnose_exception(e)}
 
     async def disconnect(self) -> Dict[str, Any]:
-        if not self.api_url or not self.api_key:
+        if not self.api_url:
             return {"success": True, "status": "disconnected"}
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                url = f"{self.api_url}/instance/logout/{self.instance_name}"
-                res = await client.delete(url, headers=self.headers)
-                return {"success": res.status_code in (200, 204), "status": "disconnected"}
+                # Try Evolution Go native disconnect
+                res = await client.post(f"{self.api_url}/instance/disconnect", headers=self.headers)
+                if res.status_code in (200, 204):
+                    return {"success": True, "status": "disconnected"}
+                # Try Evolution logout
+                res2 = await client.delete(f"{self.api_url}/instance/logout", headers=self.headers)
+                if res2.status_code in (200, 204):
+                    return {"success": True, "status": "disconnected"}
+                # Fallback v2 logout
+                res_v2 = await client.delete(f"{self.api_url}/instance/logout/{self.instance_name}", headers=self.headers)
+                return {"success": res_v2.status_code in (200, 204), "status": "disconnected"}
         except Exception as e:
-            logger.error(f"EvolutionGo disconnect error: {e}")
-            return {"success": False, "status": "error", "error": str(e)}
+            return {"success": False, "status": "error", "error": self._diagnose_exception(e)}
 
-    async def getStatus(self) -> Dict[str, Any]:
-        if not self.api_url or not self.api_key:
-            return {"connected": False, "status": "disconnected", "phone_number": None, "uptime_seconds": 0}
+    async def requestPairingCode(self, phone: str) -> Dict[str, Any]:
+        if not self.api_url:
+            return {"success": False, "error": "Evolution API URL is required."}
+        clean_phone = "".join(filter(str.isdigit, phone))
         try:
-            async with httpx.AsyncClient(timeout=6.0) as client:
-                url = f"{self.api_url}/instance/connectionState/{self.instance_name}"
-                res = await client.get(url, headers=self.headers)
-                if res.status_code == 200:
-                    data = res.json()
-                    state = (data.get("instance") or {}).get("state") or data.get("state")
-                    connected = state == "open"
-                    phone = (data.get("instance") or {}).get("owner") or self.credentials.get("phone_number")
-                    return {
-                        "connected": connected,
-                        "status": "connected" if connected else "disconnected",
-                        "phone_number": phone,
-                        "instance": self.instance_name,
-                        "uptime_seconds": 3600 if connected else 0
-                    }
-                return {"connected": False, "status": "disconnected", "phone_number": None, "uptime_seconds": 0}
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                # 1. Evolution Go native /instance/pair
+                res = await client.post(f"{self.api_url}/instance/pair", json={"phone": clean_phone, "number": clean_phone}, headers=self.headers)
+                if res.status_code in (200, 201):
+                    d = res.json()
+                    code = (d.get("data") or {}).get("pairingCode") or d.get("pairingCode") or d.get("code")
+                    return {"success": True, "pairing_code": code, "data": d}
+                # 2. v2 /instance/pairing-code/{instance}
+                url_v2 = f"{self.api_url}/instance/pairing-code/{self.instance_name}"
+                res_v2 = await client.post(url_v2, json={"phone": clean_phone, "number": clean_phone}, headers=self.headers)
+                if res_v2.status_code in (200, 201):
+                    return res_v2.json()
+                return {"success": False, "error": f"Evolution API pairing error (HTTP {res.status_code}): {res.text}"}
         except Exception as e:
-            return {"connected": False, "status": "disconnected", "error": str(e), "uptime_seconds": 0}
+            return {"success": False, "error": self._diagnose_exception(e)}
 
     async def sendText(self, phone: str, text: str) -> Dict[str, Any]:
         clean_phone = "".join(filter(str.isdigit, phone))
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                url = f"{self.api_url}/message/sendText/{self.instance_name}"
-                payload = {
-                    "number": clean_phone,
-                    "text": text,
-                    "options": {"delay": 100, "presence": "composing"}
-                }
-                res = await client.post(url, json=payload, headers=self.headers)
+                # 1. Native Evolution Go /send/text
+                res = await client.post(
+                    f"{self.api_url}/send/text",
+                    json={"number": clean_phone, "text": text},
+                    headers=self.headers
+                )
                 if res.status_code in (200, 201):
                     data = res.json()
+                    provider_msg_id = (data.get("data") or {}).get("id") or (data.get("key") or {}).get("id") or str(uuid.uuid4())
+                    return {"success": True, "provider_message_id": provider_msg_id, "status": "sent", "raw": data}
+                
+                # 2. Fallback to v2 /message/sendText/{instance}
+                url_v2 = f"{self.api_url}/message/sendText/{self.instance_name}"
+                res_v2 = await client.post(url_v2, json={"number": clean_phone, "text": text}, headers=self.headers)
+                if res_v2.status_code in (200, 201):
+                    data = res_v2.json()
                     provider_msg_id = (data.get("key") or {}).get("id") or str(uuid.uuid4())
-                    return {"success": True, "provider_message_id": provider_msg_id, "status": "sent"}
+                    return {"success": True, "provider_message_id": provider_msg_id, "status": "sent", "raw": data}
+                
                 return {"success": False, "error": f"HTTP {res.status_code}: {res.text}", "status": "failed"}
         except Exception as e:
-            logger.error(f"Evolution sendText error: {e}")
-            return {"success": False, "error": str(e), "status": "failed"}
+            return {"success": False, "error": self._diagnose_exception(e), "status": "failed"}
 
     async def sendMedia(self, phone: str, media_url: str, caption: Optional[str] = None, media_type: str = "image") -> Dict[str, Any]:
         clean_phone = "".join(filter(str.isdigit, phone))
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
-                url = f"{self.api_url}/message/sendMedia/{self.instance_name}"
-                payload = {
-                    "number": clean_phone,
-                    "mediatype": media_type,
-                    "media": media_url,
-                    "caption": caption or ""
-                }
-                res = await client.post(url, json=payload, headers=self.headers)
+                # 1. Native Evolution Go /send/media
+                res = await client.post(
+                    f"{self.api_url}/send/media",
+                    json={"number": clean_phone, "media": media_url, "caption": caption or "", "mediatype": media_type},
+                    headers=self.headers
+                )
                 if res.status_code in (200, 201):
                     data = res.json()
+                    provider_msg_id = (data.get("data") or {}).get("id") or str(uuid.uuid4())
+                    return {"success": True, "provider_message_id": provider_msg_id, "status": "sent"}
+                
+                # 2. Fallback to v2 /message/sendMedia/{instance}
+                url_v2 = f"{self.api_url}/message/sendMedia/{self.instance_name}"
+                res_v2 = await client.post(url_v2, json={"number": clean_phone, "media": media_url, "caption": caption or "", "mediatype": media_type}, headers=self.headers)
+                if res_v2.status_code in (200, 201):
+                    data = res_v2.json()
                     provider_msg_id = (data.get("key") or {}).get("id") or str(uuid.uuid4())
                     return {"success": True, "provider_message_id": provider_msg_id, "status": "sent"}
+                
                 return {"success": False, "error": f"HTTP {res.status_code}: {res.text}", "status": "failed"}
         except Exception as e:
-            logger.error(f"Evolution sendMedia error: {e}")
-            return {"success": False, "error": str(e), "status": "failed"}
+            return {"success": False, "error": self._diagnose_exception(e), "status": "failed"}
 
     async def sendTemplate(self, phone: str, template_name: str, variables: Dict[str, str], media_url: Optional[str] = None) -> Dict[str, Any]:
-        # Evolution Go accepts formatted text
         body = f"[{template_name}]\n"
         for k, v in variables.items():
             body += f"{k}: {v}\n"

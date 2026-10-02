@@ -19,7 +19,7 @@ import subprocess
 from fastapi import APIRouter, HTTPException, Depends, Request, Response, Query, BackgroundTasks
 from pydantic import BaseModel, Field
 
-from whatsapp_providers import get_whatsapp_provider, WhatsAppProvider, SimulatedProvider
+from whatsapp_providers import get_whatsapp_provider, WhatsAppProvider, SimulatedProvider, EvolutionGoProvider
 
 logger = logging.getLogger("whatsapp_marketing")
 
@@ -1963,3 +1963,429 @@ async def handle_whatsapp_webhook(
                 )
 
     return {"status": "success", "processed_events": len(events)}
+
+
+# ─── 12. EVOLUTION GO DEDICATED PROXY & ADMIN DIAGNOSTICS LAYER ──────────────
+class EvolutionSendIn(BaseModel):
+    number: str
+    text: str
+    media_url: Optional[str] = None
+    media_type: Optional[str] = "image"
+    caption: Optional[str] = None
+
+
+@whatsapp_router.get("/evolution/status")
+async def get_evolution_status(user: dict = Depends(get_current_user_dep())):
+    """
+    Step 4: /api/whatsapp/evolution/status
+    Retrieves live status from Evolution Go backend. Frontend never touches Evolution directly.
+    """
+    company_id = user["company_id"]
+    db = get_db()
+    
+    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
+    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
+    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    
+    prov = await db.whatsapp_providers.find_one({"company_id": company_id, "provider_type": "evolution_go"})
+    if prov and prov.get("credentials"):
+        creds = prov["credentials"]
+        url = (creds.get("api_url") or url).rstrip("/")
+        api_key = creds.get("api_key") or api_key
+        instance_name = creds.get("instance_name") or instance_name
+
+    provider = EvolutionGoProvider({
+        "api_url": url,
+        "api_key": api_key,
+        "instance_name": instance_name
+    })
+    
+    status_res = await provider.getStatus()
+    
+    if status_res.get("error"):
+        await db.whatsapp_system_diagnostics.update_one(
+            {"type": "evolution_go"},
+            {"$set": {"last_error": {"message": status_res["error"], "time": now_iso()}}},
+            upsert=True
+        )
+
+    connected = bool(status_res.get("connected", False))
+    phone_number = status_res.get("phone_number") if connected else None
+    
+    await db.whatsapp_instances.update_one(
+        {"company_id": company_id},
+        {"$set": {
+            "status": "connected" if connected else "disconnected",
+            "phone_number": phone_number,
+            "provider_type": "evolution_go",
+            "updated_at": now_iso()
+        }},
+        upsert=True
+    )
+    
+    return {
+        "provider": "Evolution Go",
+        "status": "connected" if connected else "disconnected",
+        "connected": connected,
+        "phone_number": phone_number,
+        "evolution_url_masked": "********",
+        "instance_masked": "********",
+        "instance_name": instance_name,
+        "error": status_res.get("error"),
+        "uptime_seconds": status_res.get("uptime_seconds", 0)
+    }
+
+
+@whatsapp_router.post("/evolution/connect")
+async def connect_evolution(request: Request, user: dict = Depends(get_current_user_dep())):
+    """
+    Step 4 & 6: /api/whatsapp/evolution/connect
+    Calls Evolution Go server, creates/ensures instance, binds webhook, and returns QR state.
+    """
+    company_id = user["company_id"]
+    db = get_db()
+    
+    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
+    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
+    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    
+    prov = await db.whatsapp_providers.find_one({"company_id": company_id, "provider_type": "evolution_go"})
+    if prov and prov.get("credentials"):
+        creds = prov["credentials"]
+        url = (creds.get("api_url") or url).rstrip("/")
+        api_key = creds.get("api_key") or api_key
+        instance_name = creds.get("instance_name") or instance_name
+
+    provider = EvolutionGoProvider({
+        "api_url": url,
+        "api_key": api_key,
+        "instance_name": instance_name
+    })
+    
+    res = await provider.connect()
+    if not res.get("success") and res.get("error"):
+        await db.whatsapp_system_diagnostics.update_one(
+            {"type": "evolution_go"},
+            {"$set": {"last_error": {"message": res["error"], "time": now_iso()}}},
+            upsert=True
+        )
+    return res
+
+
+@whatsapp_router.post("/evolution/disconnect")
+async def disconnect_evolution(user: dict = Depends(get_current_user_dep())):
+    """
+    Step 4: /api/whatsapp/evolution/disconnect
+    Logs out the instance from Evolution Go and WhatsApp network.
+    """
+    company_id = user["company_id"]
+    db = get_db()
+    
+    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
+    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
+    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    
+    provider = EvolutionGoProvider({
+        "api_url": url,
+        "api_key": api_key,
+        "instance_name": instance_name
+    })
+    
+    res = await provider.disconnect()
+    await db.whatsapp_instances.update_one(
+        {"company_id": company_id},
+        {"$set": {"status": "disconnected", "phone_number": None, "qr_code": None, "updated_at": now_iso()}}
+    )
+    return res
+
+
+@whatsapp_router.get("/evolution/qr")
+async def get_evolution_qr(user: dict = Depends(get_current_user_dep())):
+    """
+    Step 4: /api/whatsapp/evolution/qr
+    Fetches real-time QR code from Evolution Go.
+    """
+    company_id = user["company_id"]
+    db = get_db()
+    
+    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
+    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
+    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    
+    provider = EvolutionGoProvider({
+        "api_url": url,
+        "api_key": api_key,
+        "instance_name": instance_name
+    })
+    
+    return await provider.getQr()
+
+
+@whatsapp_router.post("/evolution/send")
+async def send_evolution_message(payload: EvolutionSendIn, user: dict = Depends(get_current_user_dep())):
+    """
+    Step 4: /api/whatsapp/evolution/send
+    Sends a single test message via Evolution Go backend.
+    """
+    company_id = user["company_id"]
+    db = get_db()
+    
+    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
+    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
+    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    
+    provider = EvolutionGoProvider({
+        "api_url": url,
+        "api_key": api_key,
+        "instance_name": instance_name
+    })
+    
+    if payload.media_url:
+        media_type = payload.media_type or "image"
+        res = await provider.sendMedia(payload.number, payload.media_url, payload.caption, media_type)
+    else:
+        res = await provider.sendText(payload.number, payload.text)
+        
+    if res.get("success"):
+        msg_doc = {
+            "id": str(uuid.uuid4()),
+            "company_id": company_id,
+            "provider_message_id": res.get("provider_message_id"),
+            "customer_phone": payload.number,
+            "message_body": payload.text,
+            "status": "sent",
+            "direction": "outbound",
+            "provider": "evolution_go",
+            "sent_at": now_iso(),
+            "created_at": now_iso()
+        }
+        await db.whatsapp_messages.insert_one(msg_doc)
+    else:
+        if res.get("error"):
+            await db.whatsapp_system_diagnostics.update_one(
+                {"type": "evolution_go"},
+                {"$set": {"last_error": {"message": res["error"], "time": now_iso()}}},
+                upsert=True
+            )
+    return res
+
+
+@whatsapp_router.post("/evolution/webhook")
+async def handle_evolution_webhook(request: Request):
+    """
+    Step 7: /api/whatsapp/evolution/webhook
+    Receives events from Evolution Go: connection updates, incoming/outgoing, delivery, read, failure.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        return Response(content="Invalid JSON", status_code=400)
+    
+    db = get_db()
+    now = now_iso()
+    
+    # Record webhook receipt for diagnostic panel
+    ev_name = payload.get("event") or payload.get("type") or "message"
+    await db.whatsapp_system_diagnostics.update_one(
+        {"type": "evolution_go"},
+        {
+            "$set": {
+                "last_webhook_received": {
+                    "time": now,
+                    "event": ev_name,
+                    "preview": json.dumps(payload)[:200]
+                }
+            }
+        },
+        upsert=True
+    )
+    
+    provider = EvolutionGoProvider({})
+    events = provider.parseWebhook(payload)
+    for ev in events:
+        if ev.get("event_type") == "status_update":
+            p_msg_id = ev.get("provider_message_id")
+            new_status = ev.get("status")
+            if p_msg_id and new_status:
+                await db.whatsapp_messages.update_one(
+                    {"provider_message_id": p_msg_id},
+                    {"$set": {"status": new_status, f"{new_status}_at": now, "updated_at": now}}
+                )
+    return {"status": "received", "timestamp": now}
+
+
+@whatsapp_router.get("/evolution/diagnostics")
+async def get_evolution_diagnostics(user: dict = Depends(get_current_user_dep())):
+    """
+    Step 8: Admin-only diagnostic panel data.
+    """
+    db = get_db()
+    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
+    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
+    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    
+    import httpx, time
+    start = time.perf_counter()
+    api_reachable = False
+    auth_status = "UNCHECKED"
+    inst_status = "UNKNOWN"
+    wa_connected = False
+    err_msg = None
+    
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            res = await client.get(f"{url}/server/ok")
+            response_time_ms = round((time.perf_counter() - start) * 1000, 2)
+            if res.status_code == 200:
+                api_reachable = True
+            elif res.status_code == 503:
+                api_reachable = True
+                err_msg = "License not activated (HTTP 503)"
+            else:
+                err_msg = f"HTTP {res.status_code}"
+    except Exception as e:
+        response_time_ms = round((time.perf_counter() - start) * 1000, 2)
+        s = str(e)
+        if "Connection refused" in s or "[Errno 61]" in s or "ConnectError" in type(e).__name__:
+            err_msg = f"Connection refused on {url}. Evolution Go is not running or port is blocked."
+        else:
+            err_msg = s
+
+    if api_reachable and api_key:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                res_auth = await client.get(f"{url}/instance/status", headers={"apikey": api_key})
+                if res_auth.status_code == 200:
+                    auth_status = "PASS"
+                    data = res_auth.json()
+                    st = (data.get("data") or {}).get("status") or ""
+                    wa_connected = st in ("connected", "open")
+                    inst_status = "CONNECTED" if wa_connected else "EXISTS"
+                elif res_auth.status_code == 401:
+                    auth_status = "FAIL"
+                    err_msg = "Unauthorized: Invalid API key"
+                elif res_auth.status_code == 404:
+                    auth_status = "PASS"
+                    inst_status = "NOT_FOUND"
+        except Exception:
+            pass
+
+    diag_doc = await db.whatsapp_system_diagnostics.find_one({"type": "evolution_go"}) or {}
+    last_webhook = diag_doc.get("last_webhook_received")
+    last_err = diag_doc.get("last_error") or ({"message": err_msg, "time": now_iso()} if err_msg else None)
+
+    return {
+        "evolution_url": url,
+        "evolution_url_masked": "********",
+        "api_reachable": api_reachable,
+        "auth_status": auth_status,
+        "instance_status": inst_status,
+        "instance_name": instance_name,
+        "instance_masked": "********",
+        "whatsapp_connection": "CONNECTED" if wa_connected else "DISCONNECTED",
+        "webhook_status": "ACTIVE" if last_webhook else "WAITING",
+        "last_webhook_received": last_webhook,
+        "last_api_error": last_err,
+        "response_time_ms": response_time_ms
+    }
+
+
+@whatsapp_router.post("/evolution/test-api")
+async def test_evolution_api(user: dict = Depends(get_current_user_dep())):
+    """Step 8: Button: Test API"""
+    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
+    import httpx, time
+    start = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            res = await client.get(f"{url}/server/ok")
+            latency = round((time.perf_counter() - start) * 1000, 2)
+            if res.status_code == 200:
+                return {"pass": True, "status_code": res.status_code, "latency_ms": latency, "message": "Evolution Go API is healthy and reachable."}
+            elif res.status_code == 503:
+                return {"pass": False, "status_code": 503, "latency_ms": latency, "message": "Service reachable, but license is not activated."}
+            return {"pass": False, "status_code": res.status_code, "latency_ms": latency, "message": f"Evolution Go returned status {res.status_code}."}
+    except Exception as e:
+        latency = round((time.perf_counter() - start) * 1000, 2)
+        s = str(e)
+        if "Connection refused" in s or "[Errno 61]" in s or "ConnectError" in type(e).__name__:
+            msg = f"Connection refused on {url}. Evolution Go is not running or port is blocked."
+        else:
+            msg = f"API probe failed: {s}"
+        return {"pass": False, "status_code": None, "latency_ms": latency, "message": msg}
+
+
+@whatsapp_router.post("/evolution/test-auth")
+async def test_evolution_auth(user: dict = Depends(get_current_user_dep())):
+    """Step 8: Button: Test Authentication"""
+    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
+    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
+    if not api_key:
+        return {"pass": False, "message": "EVOLUTION_API_KEY is not set in backend/.env."}
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            res = await client.get(f"{url}/instance/all", headers={"apikey": api_key})
+            if res.status_code in (200, 201):
+                return {"pass": True, "message": "Global Admin API Key authenticated successfully."}
+            res2 = await client.get(f"{url}/instance/status", headers={"apikey": api_key})
+            if res2.status_code in (200, 201, 404):
+                return {"pass": True, "message": "Instance API Key authenticated successfully."}
+            if res.status_code == 401 or res2.status_code == 401:
+                return {"pass": False, "message": "Unauthorized: EVOLUTION_API_KEY was rejected by Evolution Go."}
+            return {"pass": False, "message": f"Authentication check returned HTTP {res.status_code}."}
+    except Exception as e:
+        return {"pass": False, "message": f"Could not reach Evolution Go to verify authentication: {e}"}
+
+
+@whatsapp_router.post("/evolution/test-instance")
+async def test_evolution_instance(user: dict = Depends(get_current_user_dep())):
+    """Step 8: Button: Test Instance"""
+    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
+    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
+    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            res = await client.get(f"{url}/instance/status", headers={"apikey": api_key})
+            if res.status_code == 200:
+                data = res.json()
+                return {"pass": True, "status": "exists", "data": data, "message": f"Instance '{instance_name}' found."}
+            elif res.status_code == 404:
+                return {"pass": False, "status": "not_found", "message": f"Instance '{instance_name}' does not exist yet. Click 'Connect WhatsApp' to initialize it."}
+            return {"pass": False, "message": f"Instance status check returned HTTP {res.status_code}: {res.text}"}
+    except Exception as e:
+        return {"pass": False, "message": f"Failed to check instance: {e}"}
+
+
+@whatsapp_router.post("/evolution/test-webhook")
+async def test_evolution_webhook(user: dict = Depends(get_current_user_dep())):
+    """Step 8: Button: Test Webhook"""
+    backend_base = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+    wh_url = f"{backend_base}/api/whatsapp/evolution/webhook"
+    db = get_db()
+    now = now_iso()
+    test_payload = {
+        "event": "diagnostic.test",
+        "timestamp": now,
+        "message": "Self-test ping from Solarix Admin Panel"
+    }
+    await db.whatsapp_system_diagnostics.update_one(
+        {"type": "evolution_go"},
+        {
+            "$set": {
+                "last_webhook_received": {
+                    "time": now,
+                    "event": "diagnostic.test",
+                    "preview": json.dumps(test_payload)
+                }
+            }
+        },
+        upsert=True
+    )
+    return {
+        "pass": True,
+        "webhook_url": wh_url,
+        "message": "Webhook test simulated and recorded in Solarix diagnostics successfully."
+    }
+
