@@ -841,14 +841,13 @@ async def get_instance_status(user: dict = Depends(get_current_user_dep())):
     }
 
 @whatsapp_router.post("/instance/connect")
-async def connect_instance(request: Request = None, user: dict = Depends(get_current_user_dep())):
+async def connect_instance(request: Request, user: dict = Depends(get_current_user_dep())):
     force = False
-    if request:
-        try:
-            body = await request.json()
-            force = bool(body.get("force", False))
-        except Exception:
-            force = False
+    try:
+        body = await request.json()
+        force = bool(body.get("force", False))
+    except Exception:
+        force = False
 
     company_id = user["company_id"]
     db = get_db()
@@ -893,7 +892,7 @@ async def request_pairing_code(payload: PairingCodeIn, user: dict = Depends(get_
     return res
 
 @whatsapp_router.post("/instance/reconnect")
-async def reconnect_instance(request: Request = None, user: dict = Depends(get_current_user_dep())):
+async def reconnect_instance(request: Request, user: dict = Depends(get_current_user_dep())):
     return await connect_instance(request, user)
 
 @whatsapp_router.post("/instance/disconnect")
@@ -1229,7 +1228,7 @@ async def create_campaign(payload: CampaignCreateIn, user: dict = Depends(get_cu
         if c_doc:
             phone = c_doc.get("mobile") or c_doc.get("phone_number") or c_doc.get("phone") or ""
         if not phone:
-            clean_digits = "".join(filter(str.isdigit, str(cid)))
+            clean_digits = "".join(filter(str.isdigit, cid))
             if len(clean_digits) >= 10:
                 phone = clean_digits
 

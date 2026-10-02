@@ -29,7 +29,7 @@ class WhatsAppProvider(ABC):
         self.settings = settings or {}
 
     @abstractmethod
-    async def connect(self) -> Dict[str, Any]:
+    async def connect(self, force: bool = False) -> Dict[str, Any]:
         """Initiate connection or retrieve QR code to connect WhatsApp."""
         pass
 
@@ -107,7 +107,7 @@ class EvolutionGoProvider(WhatsAppProvider):
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    async def connect(self) -> Dict[str, Any]:
+    async def connect(self, force: bool = False) -> Dict[str, Any]:
         if not self.api_url or not self.api_key:
             return {"success": False, "status": "disconnected", "error": "Evolution API URL and API Key are required."}
         try:
@@ -303,7 +303,7 @@ class WhatsAppCloudApiProvider(WhatsAppProvider):
             "Content-Type": "application/json"
         }
 
-    async def connect(self) -> Dict[str, Any]:
+    async def connect(self, force: bool = False) -> Dict[str, Any]:
         if not self.phone_number_id or not self.access_token:
             return {"success": False, "status": "disconnected", "error": "WhatsApp Cloud API Phone Number ID and Access Token are required."}
         try:
@@ -455,7 +455,7 @@ class SimulatedProvider(WhatsAppProvider):
         "connected_at": now_iso()
     }
 
-    async def connect(self) -> Dict[str, Any]:
+    async def connect(self, force: bool = False) -> Dict[str, Any]:
         self._state["connected"] = True
         self._state["connected_at"] = now_iso()
         # High quality sample QR code data URI
