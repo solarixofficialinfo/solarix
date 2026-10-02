@@ -1,7 +1,8 @@
 /**
  * SOLARIX CRM — LIVE NATIVE WHATSAPP MULTI-DEVICE GATEWAY ENGINE
  * Powered by @whiskeysockets/baileys.
- * Generates REAL WhatsApp Multi-Device QR codes that scan directly in the official WhatsApp app.
+ * Generates REAL WhatsApp Multi-Device QR codes and 8-digit Pairing Codes
+ * that connect directly to the official WhatsApp mobile application.
  */
 const express = require('express');
 const cors = require('cors');
@@ -14,6 +15,7 @@ const {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  Browsers,
   delay
 } = require('@whiskeysockets/baileys');
 
@@ -49,7 +51,7 @@ function cleanPhoneNumber(raw) {
 
 async function forwardToSolarix(events) {
   try {
-    const res = await fetch(SOLRIX_WEBHOOK_URL, {
+    await fetch(SOLRIX_WEBHOOK_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ events }),
@@ -60,18 +62,23 @@ async function forwardToSolarix(events) {
 }
 
 async function initWhatsApp(forceNew = false) {
-  if (isInitializing && !forceNew) return;
+  if (isInitializing) return;
   isInitializing = true;
 
   try {
-    if (forceNew && sock) {
+    if (sock) {
       try {
-        await sock.logout();
+        sock.ev.removeAllListeners();
+        sock.end();
       } catch (e) {}
       sock = null;
+    }
+
+    if (forceNew) {
       currentQR = null;
       currentQRDataUrl = null;
       connectedPhone = null;
+      connectedName = null;
       connectionStatus = 'disconnected';
       if (fs.existsSync(AUTH_DIR)) {
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
@@ -86,9 +93,9 @@ async function initWhatsApp(forceNew = false) {
     sock = makeWASocket({
       version,
       auth: state,
-      logger: pino({ level: 'error' }),
-      printQRInTerminal: true,
-      browser: ['Solarix CRM', 'Chrome', '124.0.0.0'],
+      logger: pino({ level: 'silent' }),
+      printQRInTerminal: false,
+      browser: Browsers.macOS('Chrome'),
       syncFullHistory: false,
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
@@ -121,20 +128,19 @@ async function initWhatsApp(forceNew = false) {
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
         console.log(`[WhatsApp Engine] Connection closed. Reason: ${statusCode}, shouldReconnect: ${shouldReconnect}`);
 
-        currentQR = null;
-        currentQRDataUrl = null;
-
         if (statusCode === DisconnectReason.loggedOut) {
           connectionStatus = 'disconnected';
           connectedPhone = null;
           connectedName = null;
+          currentQR = null;
+          currentQRDataUrl = null;
           if (fs.existsSync(AUTH_DIR)) {
             fs.rmSync(AUTH_DIR, { recursive: true, force: true });
           }
         } else if (shouldReconnect) {
           connectionStatus = 'connecting';
           reconnectAttempts++;
-          setTimeout(() => initWhatsApp(false), Math.min(reconnectAttempts * 3000, 15000));
+          setTimeout(() => initWhatsApp(false), Math.min(reconnectAttempts * 2000, 10000));
         } else {
           connectionStatus = 'disconnected';
         }
@@ -200,7 +206,8 @@ async function initWhatsApp(forceNew = false) {
         events.push({
           event_type: 'status_update',
           provider_message_id: msgId,
-          status: mappedStatus
+          status: mappedStatus,
+          timestamp: new Date().toISOString()
         });
       }
       if (events.length > 0) {
@@ -246,24 +253,14 @@ app.post('/connect', async (req, res) => {
     });
   }
 
-  // If QR already generated within last 40 seconds, return it
-  if (currentQRDataUrl && connectionStatus === 'qr_ready') {
-    return res.json({
-      success: true,
-      status: 'qr_ready',
-      qr_code: currentQRDataUrl,
-      instance: 'solarix_primary'
-    });
-  }
+  const force = req.body && req.body.force === true;
+  initWhatsApp(force);
 
-  // Otherwise initiate or refresh session
-  initWhatsApp(false);
-
-  // Poll up to 12 seconds for the live QR to be emitted
+  // Poll up to 10 seconds for the live QR to be emitted
   let waited = 0;
-  while (waited < 12000 && !currentQRDataUrl && connectionStatus !== 'connected') {
-    await delay(500);
-    waited += 500;
+  while (waited < 10000 && !currentQRDataUrl && connectionStatus !== 'connected') {
+    await delay(300);
+    waited += 300;
   }
 
   return res.json({
@@ -275,11 +272,58 @@ app.post('/connect', async (req, res) => {
   });
 });
 
-// 3. Disconnect / Logout
+// 3. Request Official 8-Digit Pairing Code (Alternative to QR scan)
+app.post('/pairing-code', async (req, res) => {
+  const { phone } = req.body || {};
+  if (!phone) {
+    return res.status(400).json({ success: false, error: 'Phone number is required.' });
+  }
+
+  const cleanNum = phone.replace(/[^0-9]/g, '');
+  if (!cleanNum || cleanNum.length < 10) {
+    return res.status(400).json({ success: false, error: 'Invalid mobile number. Include country code without +, e.g. 919876543210' });
+  }
+
+  try {
+    if (connectionStatus === 'connected' && sock?.user) {
+      return res.json({
+        success: true,
+        status: 'connected',
+        phone_number: connectedPhone,
+        message: 'Already connected to WhatsApp.'
+      });
+    }
+
+    if (!sock || connectionStatus === 'disconnected') {
+      await initWhatsApp(true);
+      await delay(1500);
+    }
+
+    if (sock && !sock.authState.creds.registered) {
+      console.log(`[WhatsApp Engine] Generating pairing code for: ${cleanNum}`);
+      const code = await sock.requestPairingCode(cleanNum);
+      return res.json({
+        success: true,
+        pairing_code: code,
+        phone: cleanNum,
+        message: 'Pairing code generated successfully.'
+      });
+    } else {
+      return res.status(400).json({ success: false, error: 'Socket is already registered or in active state.' });
+    }
+  } catch (err) {
+    console.error('[WhatsApp Engine] Error requesting pairing code:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to request pairing code' });
+  }
+});
+
+// 4. Disconnect / Logout
 app.post('/disconnect', async (req, res) => {
   try {
     if (sock) {
       await sock.logout().catch(() => {});
+      sock.ev.removeAllListeners();
+      sock.end();
     }
   } catch (e) {}
 
@@ -292,12 +336,13 @@ app.post('/disconnect', async (req, res) => {
 
   if (fs.existsSync(AUTH_DIR)) {
     fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+    fs.mkdirSync(AUTH_DIR, { recursive: true });
   }
 
   res.json({ success: true, status: 'disconnected', message: 'WhatsApp instance disconnected.' });
 });
 
-// 4. Send Real Text Message
+// 5. Send Real Text Message
 app.post('/send-text', async (req, res) => {
   const { phone, text } = req.body;
   if (!sock || connectionStatus !== 'connected') {
@@ -325,7 +370,7 @@ app.post('/send-text', async (req, res) => {
   }
 });
 
-// 5. Send Real Media Message (URL or PDF)
+// 6. Send Real Media Message (URL or PDF)
 app.post('/send-media', async (req, res) => {
   const { phone, media_url, caption, media_type } = req.body;
   if (!sock || connectionStatus !== 'connected') {

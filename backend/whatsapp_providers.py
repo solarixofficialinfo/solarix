@@ -43,6 +43,10 @@ class WhatsAppProvider(ABC):
         """Check the connection health, uptime, and connected number."""
         pass
 
+    async def requestPairingCode(self, phone: str) -> Dict[str, Any]:
+        """Request 8-character pairing code for linking device via phone number."""
+        return {"success": False, "error": "Pairing code not supported by this provider"}
+
     @abstractmethod
     async def sendText(self, phone: str, text: str) -> Dict[str, Any]:
         """Send a standard text message to a recipient."""
@@ -553,6 +557,14 @@ class NativeBaileysProvider(WhatsAppProvider):
                 return {"connected": False, "status": "disconnected", "phone_number": None, "uptime_seconds": 0}
         except Exception:
             return {"connected": False, "status": "disconnected", "phone_number": None, "uptime_seconds": 0}
+
+    async def requestPairingCode(self, phone: str) -> Dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                res = await client.post(f"{self.engine_url}/pairing-code", json={"phone": phone})
+                return res.json() if res.status_code in (200, 400) else {"success": False, "error": res.text}
+        except Exception as e:
+            return {"success": False, "error": f"Gateway error: {e}"}
 
     async def sendText(self, phone: str, text: str) -> Dict[str, Any]:
         try:

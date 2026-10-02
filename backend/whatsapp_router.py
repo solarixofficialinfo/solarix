@@ -624,6 +624,9 @@ class SendTestMessageIn(BaseModel):
     media_type: Optional[str] = "none"
     sample_contact_id: Optional[str] = None
 
+class PairingCodeIn(BaseModel):
+    phone_number: str
+
 class TemplateIn(BaseModel):
     name: str
     category: str = "MARKETING"
@@ -810,6 +813,19 @@ async def connect_instance(user: dict = Depends(get_current_user_dep())):
         )
         if connected:
             await log_whatsapp_activity(company_id, "provider_connected", user=user, details={"provider": provider_type, "phone": phone_number})
+    return res
+
+@whatsapp_router.post("/instance/pairing-code")
+async def request_pairing_code(payload: PairingCodeIn, user: dict = Depends(get_current_user_dep())):
+    company_id = user["company_id"]
+    db = get_db()
+    ensure_whatsapp_engine_running()
+    prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
+    provider_type = prov.get("provider_type", "native") if prov else "native"
+    credentials = prov.get("credentials", {}) if prov else {}
+    provider = get_whatsapp_provider(provider_type, credentials)
+
+    res = await provider.requestPairingCode(payload.phone_number)
     return res
 
 @whatsapp_router.post("/instance/reconnect")
