@@ -235,6 +235,15 @@ export default function WhatsAppCampaigns() {
                       <Play className="w-3 h-3 mr-1" /> Resume
                     </Button>
                   )}
+                  {camp.status === "Failed" && (
+                    <Button
+                      size="sm"
+                      onClick={() => handleCampaignAction(camp.id, "start")}
+                      className="h-8 text-xs bg-amber-600 hover:bg-amber-700 text-white font-semibold"
+                    >
+                      <RefreshCw className="w-3 h-3 mr-1" /> Retry Campaign
+                    </Button>
+                  )}
                   {(camp.status === "Sending" || camp.status === "Scheduled") && (
                     <Button
                       size="sm"

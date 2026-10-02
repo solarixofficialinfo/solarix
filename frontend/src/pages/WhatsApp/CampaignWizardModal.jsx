@@ -70,12 +70,25 @@ export default function CampaignWizardModal({ open, onOpenChange, onSuccess }) {
   const [testMobile, setTestMobile] = useState("");
   const [sendingTest, setSendingTest] = useState(false);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectedPhone, setConnectedPhone] = useState("");
 
-  // Load audience & templates
+  const fetchConnectionStatus = async () => {
+    try {
+      const res = await api.get("/whatsapp/instance/status");
+      setIsConnected(Boolean(res.data?.connected));
+      setConnectedPhone(res.data?.phone_number || "");
+    } catch (e) {
+      console.error("Connection check failed", e);
+    }
+  };
+
+  // Load audience, templates & connection status
   useEffect(() => {
     if (open) {
       fetchAudience();
       fetchTemplates();
+      fetchConnectionStatus();
     }
   }, [open]);
 
@@ -214,6 +227,12 @@ export default function CampaignWizardModal({ open, onOpenChange, onSuccess }) {
     if (!messageText.trim()) {
       toast.error("Please enter a message body");
       setStep(3);
+      return;
+    }
+
+    if (status === "Sending" && !isConnected) {
+      toast.error("Cannot start campaign: WhatsApp is not connected. Please scan QR Code or link phone in the top banner first, or save as Draft.");
+      setConfirmModalOpen(false);
       return;
     }
 
@@ -681,16 +700,28 @@ export default function CampaignWizardModal({ open, onOpenChange, onSuccess }) {
             {/* STEP 4: PREVIEW & VERIFICATION */}
             {step === 4 && (
               <div className="space-y-5">
-                {/* Mandatory Disclaimer Box */}
-                <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-xl flex items-start gap-3 text-amber-900">
-                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                  <div className="text-xs space-y-1">
-                    <div className="font-bold text-amber-900">Mandatory Pre-Send Compliance Notice</div>
-                    <p className="text-amber-800 leading-relaxed">
-                      "Please verify your audience and message before sending. Sending unsolicited messages may result in WhatsApp restrictions or number throttling."
-                    </p>
+                {/* WhatsApp Connection State Banner */}
+                {!isConnected ? (
+                  <div className="p-4 bg-rose-50 border-2 border-rose-300 rounded-xl flex items-start gap-3 text-rose-900">
+                    <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="text-xs space-y-1">
+                      <div className="font-bold text-rose-900">WhatsApp Device Is Not Connected</div>
+                      <p className="text-rose-700 leading-relaxed">
+                        Your WhatsApp number is not linked yet. Messages cannot be dispatched until you link your WhatsApp account.
+                        Please use the <strong>"Connect / QR Code"</strong> or <strong>"Link Phone Code"</strong> in the top banner, or save this campaign as <strong>Draft</strong> for now.
+                      </p>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-xs text-emerald-900">
+                    <span className="flex items-center gap-2 font-bold">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" /> WhatsApp Connected & Ready to Broadcast
+                    </span>
+                    <span className="font-mono text-emerald-950 font-bold bg-emerald-100/60 px-2.5 py-1 rounded">
+                      {connectedPhone || "Connected"}
+                    </span>
+                  </div>
+                )}
 
                 {/* Campaign Summary Card */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -708,7 +739,9 @@ export default function CampaignWizardModal({ open, onOpenChange, onSuccess }) {
                   </div>
                   <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
                     <div className="text-[10px] uppercase font-bold text-slate-500">Sender Number</div>
-                    <div className="text-xs font-bold text-slate-900 mt-1">+91 98765 43210</div>
+                    <div className={`text-xs font-bold mt-1 truncate ${isConnected ? "text-emerald-700" : "text-amber-600"}`}>
+                      {connectedPhone || "Not Connected"}
+                    </div>
                   </div>
                 </div>
 
@@ -875,17 +908,26 @@ export default function CampaignWizardModal({ open, onOpenChange, onSuccess }) {
             <br /><br />
             Messages will be queued and sent via the rate-limited background worker. Are you sure you want to proceed?
           </DialogDescription>
+          {!isConnected && (
+            <div className="mt-3 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs text-left flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <span>
+                <strong>WhatsApp Disconnected:</strong> You must connect your WhatsApp device via QR code or Pairing Code before starting. You can save as <strong>Draft</strong> instead.
+              </span>
+            </div>
+          )}
+
           <div className="flex gap-2 justify-center mt-5">
             <Button variant="outline" size="sm" onClick={() => setConfirmModalOpen(false)}>
               Back to Review
             </Button>
             <Button
               size="sm"
-              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold disabled:opacity-50"
               onClick={() => handleFinalSubmit("Sending")}
-              disabled={submitting}
+              disabled={submitting || !isConnected}
             >
-              {submitting ? "Starting..." : "Yes, Start Campaign"}
+              {submitting ? "Starting..." : (!isConnected ? "Connect WhatsApp First" : "Yes, Start Campaign")}
             </Button>
           </div>
         </DialogContent>

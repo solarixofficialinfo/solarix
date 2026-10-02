@@ -445,7 +445,28 @@ async def whatsapp_queue_worker_loop():
 
                 else:
                     # Failed
-                    err_msg = res.get("error", "Unknown sending error")
+                    err_msg = str(res.get("error", "Unknown sending error"))
+                    is_disconn = any(kw in err_msg.lower() for kw in ("not connected", "connection refused", "link device first", "not reachable"))
+
+                    if is_disconn and camp_id:
+                        # Auto-pause campaign to prevent failing all messages due to temporary device disconnection
+                        await db.whatsapp_message_queue.update_one(
+                            {"id": queue_id},
+                            {"$set": {"status": "queued", "error_message": err_msg}}
+                        )
+                        await db.whatsapp_campaigns.update_one(
+                            {"id": camp_id},
+                            {"$set": {"status": "Paused", "pause_reason": err_msg, "updated_at": now_iso()}}
+                        )
+                        await log_whatsapp_activity(
+                            company_id=company_id,
+                            action="campaign_auto_paused",
+                            campaign_id=camp_id,
+                            details={"reason": err_msg}
+                        )
+                        await asyncio.sleep(5)
+                        break
+
                     retries = item.get("retry_count", 0) + 1
                     max_retries = item.get("max_retries", 3)
                     new_status = "queued" if retries < max_retries else "failed"
@@ -476,15 +497,19 @@ async def whatsapp_queue_worker_loop():
                     "status": {"$in": ["queued", "sending"]}
                 })
                 if pending_count == 0:
+                    sent = ac.get("sent_count", 0)
+                    failed = ac.get("failed_count", 0)
+                    final_status = "Completed" if sent > 0 else ("Failed" if failed > 0 else "Completed")
                     await db.whatsapp_campaigns.update_one(
                         {"id": cid},
-                        {"$set": {"status": "Completed", "updated_at": now_iso()}}
+                        {"$set": {"status": final_status, "completed_at": now_iso(), "updated_at": now_iso()}}
                     )
                     await log_whatsapp_activity(
                         company_id=ac["company_id"],
-                        action="campaign_completed",
+                        action="campaign_completed" if final_status == "Completed" else "campaign_failed",
                         campaign_id=cid,
-                        campaign_name=ac.get("name")
+                        campaign_name=ac.get("name"),
+                        details={"sent": sent, "failed": failed}
                     )
 
         except asyncio.CancelledError:
@@ -1185,8 +1210,21 @@ async def create_campaign(payload: CampaignCreateIn, user: dict = Depends(get_cu
     contacts_to_insert = []
     for cid in payload.contact_ids:
         # Lookup contact phone
-        c_doc = await db.clients.find_one({"id": cid}) or await db.leads.find_one({"id": cid}) or await db.whatsapp_contacts.find_one({"id": cid})
-        phone = (c_doc.get("mobile") if c_doc else "") or (c_doc.get("phone_number") if c_doc else "")
+        c_doc = (
+            await db.clients.find_one({"id": cid}) or
+            await db.clients.find_one({"_id": cid}) or
+            await db.leads.find_one({"id": cid}) or
+            await db.leads.find_one({"_id": cid}) or
+            await db.whatsapp_contacts.find_one({"id": cid})
+        )
+        phone = ""
+        if c_doc:
+            phone = c_doc.get("mobile") or c_doc.get("phone_number") or c_doc.get("phone") or ""
+        if not phone:
+            clean_digits = "".join(filter(str.isdigit, str(cid)))
+            if len(clean_digits) >= 10:
+                phone = clean_digits
+
         if phone:
             contacts_to_insert.append({
                 "id": str(uuid.uuid4()),
@@ -1231,8 +1269,42 @@ async def start_campaign(campaign_id: str, user: dict = Depends(get_current_user
     if not camp:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
-    # Queue and start sending
-    await _execute_campaign_sending(company_id, campaign_id)
+    ensure_whatsapp_engine_running()
+
+    prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
+    provider_type = prov.get("provider_type", "native") if prov else "native"
+    credentials = prov.get("credentials", {}) if prov else {}
+    settings = prov.get("settings", {}) if prov else {}
+    provider = get_whatsapp_provider(provider_type, credentials, settings)
+
+    live_status = await provider.getStatus()
+    if not live_status.get("connected"):
+        raise HTTPException(
+            status_code=400,
+            detail="WhatsApp device is not connected! Please scan the QR Code or link your phone using pairing code first."
+        )
+
+    # If it was failed, reset failed messages to queued for retry
+    if camp.get("status") == "Failed":
+        await db.whatsapp_message_queue.update_many(
+            {"campaign_id": campaign_id, "status": "failed"},
+            {"$set": {"status": "queued", "retry_count": 0, "error_message": None, "updated_at": now_iso()}}
+        )
+        await db.whatsapp_campaigns.update_one(
+            {"id": campaign_id},
+            {"$set": {"failed_count": 0, "status": "Sending", "updated_at": now_iso()}}
+        )
+    else:
+        # Check if already has queued messages, if not push them
+        existing_q = await db.whatsapp_message_queue.count_documents({"campaign_id": campaign_id})
+        if existing_q == 0:
+            await _execute_campaign_sending(company_id, campaign_id)
+        else:
+            await db.whatsapp_campaigns.update_one(
+                {"id": campaign_id},
+                {"$set": {"status": "Sending", "updated_at": now_iso()}}
+            )
+
     return {"success": True, "message": "Campaign started and queued successfully."}
 
 @whatsapp_router.post("/campaigns/{campaign_id}/pause")

@@ -1490,22 +1490,24 @@ class CollectionAdapter:
             documents = [{k: v for k, v in doc.items() if k != "rate"} for doc in documents]
         try:
             res = supabase.table(self._supabase_table_name).insert(documents, returning="minimal").execute()
+            await LocalFileCollection(self.table_name).insert_many(documents)
+            return InsertManyResult([doc.get("id") for doc in documents])
         except Exception as e:
             err_str = str(e)
+            if "PGRST205" in err_str or "Could not find the table" in err_str:
+                return await LocalFileCollection(self.table_name).insert_many(documents)
             if "PGRST204" in err_str or "Could not find the" in err_str:
                 docs_copy = [{k: v for k, v in doc.items() if k not in ["high_value_asset", "high_value_goods", "serial_number_required", "rate", "opening_stock"]} for doc in documents]
                 try:
                     res = supabase.table(self._supabase_table_name).insert(docs_copy, returning="minimal").execute()
-                except Exception as e2:
-                    if "42501" in str(e2) or "row-level security" in str(e2).lower() or "unauthorized" in str(e2).lower() or "401" in str(e2) or "PGRST204" in str(e2):
-                        return await LocalFileCollection(self.table_name).insert_many(documents)
-                    raise e2
+                    await LocalFileCollection(self.table_name).insert_many(documents)
+                    return InsertManyResult([doc.get("id") for doc in documents])
+                except Exception:
+                    return await LocalFileCollection(self.table_name).insert_many(documents)
             elif "42501" in err_str or "row-level security" in err_str.lower() or "unauthorized" in err_str.lower() or "401" in err_str:
                 return await LocalFileCollection(self.table_name).insert_many(documents)
             else:
-                raise e
-        await LocalFileCollection(self.table_name).insert_many(documents)
-        return InsertManyResult([doc.get("id") for doc in documents])
+                return await LocalFileCollection(self.table_name).insert_many(documents)
 
     async def update_one(self, filter, update, upsert=False):
         global _PRODUCTS_HAS_RATE
