@@ -156,7 +156,7 @@ export default function WhatsAppMarketingPublic() {
                 <span className="ml-2 font-mono text-[11px] text-slate-400">solarix.crm / whatsapp-marketing</span>
               </div>
               <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
-                Connected: +91 98765 43210 (Evolution Go)
+                Live WhatsApp Multi-Device Gateway
               </Badge>
             </div>
 

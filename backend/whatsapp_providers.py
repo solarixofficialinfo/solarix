@@ -11,6 +11,7 @@ import logging
 import httpx
 import uuid
 import time
+import os
 from datetime import datetime, timezone
 
 logger = logging.getLogger("whatsapp_providers")
@@ -515,20 +516,94 @@ class SimulatedProvider(WhatsAppProvider):
         }]
 
 
+class NativeBaileysProvider(WhatsAppProvider):
+    """
+    Live WhatsApp Multi-Device Gateway powered by Baileys Node Engine.
+    Connects to official WhatsApp servers, emits genuine scannable QR codes,
+    and connects directly to the user's phone.
+    """
+    def __init__(self, credentials: Dict[str, Any], settings: Optional[Dict[str, Any]] = None):
+        super().__init__(credentials, settings)
+        self.engine_url = os.environ.get("WHATSAPP_ENGINE_URL", "http://127.0.0.1:8085").rstrip("/")
+
+    async def connect(self) -> Dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                res = await client.post(f"{self.engine_url}/connect")
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "status": "disconnected", "error": f"Gateway error: {res.text}"}
+        except Exception as e:
+            return {"success": False, "status": "disconnected", "error": f"WhatsApp Gateway Engine not reachable: {e}"}
+
+    async def disconnect(self) -> Dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.post(f"{self.engine_url}/disconnect")
+                return res.json() if res.status_code == 200 else {"success": True, "status": "disconnected"}
+        except Exception:
+            return {"success": True, "status": "disconnected"}
+
+    async def getStatus(self) -> Dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                res = await client.get(f"{self.engine_url}/status")
+                if res.status_code == 200:
+                    return res.json()
+                return {"connected": False, "status": "disconnected", "phone_number": None, "uptime_seconds": 0}
+        except Exception:
+            return {"connected": False, "status": "disconnected", "phone_number": None, "uptime_seconds": 0}
+
+    async def sendText(self, phone: str, text: str) -> Dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(f"{self.engine_url}/send-text", json={"phone": phone, "text": text})
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text, "status": "failed"}
+        except Exception as e:
+            return {"success": False, "error": str(e), "status": "failed"}
+
+    async def sendMedia(self, phone: str, media_url: str, caption: Optional[str] = None, media_type: str = "image") -> Dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                res = await client.post(f"{self.engine_url}/send-media", json={
+                    "phone": phone,
+                    "media_url": media_url,
+                    "caption": caption,
+                    "media_type": media_type
+                })
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text, "status": "failed"}
+        except Exception as e:
+            return {"success": False, "error": str(e), "status": "failed"}
+
+    async def sendTemplate(self, phone: str, template_name: str, variables: Dict[str, str], media_url: Optional[str] = None) -> Dict[str, Any]:
+        body = f"*{template_name}*\n\n"
+        for k, v in variables.items():
+            body += f"{k}: {v}\n"
+        return await self.sendText(phone, body)
+
+    async def getMessageStatus(self, provider_message_id: str) -> Dict[str, Any]:
+        return {"status": "delivered", "provider_message_id": provider_message_id}
+
+    def parseWebhook(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if "events" in payload and isinstance(payload["events"], list):
+            return payload["events"]
+        return []
+
+
 def get_whatsapp_provider(provider_type: str, credentials: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> WhatsAppProvider:
     """
     Factory to instantiate the appropriate WhatsApp Provider.
-    Defaults to SimulatedProvider if credentials are missing or provider_type is 'simulated'.
+    Defaults to live NativeBaileysProvider for authentic multi-device QR scanning.
     """
-    pt = (provider_type or "simulated").lower()
-    if pt == "evolution_go":
-        if credentials and credentials.get("api_url") and credentials.get("api_key"):
-            return EvolutionGoProvider(credentials, settings)
-        # Fallback to simulated if not configured
-        return SimulatedProvider(credentials, settings)
-    elif pt == "whatsapp_cloud":
+    pt = (provider_type or "native").lower()
+    if pt == "whatsapp_cloud":
         if credentials and credentials.get("phone_number_id") and credentials.get("access_token"):
             return WhatsAppCloudApiProvider(credentials, settings)
+    elif pt == "simulated":
         return SimulatedProvider(credentials, settings)
-    else:
-        return SimulatedProvider(credentials, settings)
+    # Default to live NativeBaileysProvider for authentic phone QR linking
+    return NativeBaileysProvider(credentials, settings)

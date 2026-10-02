@@ -83,10 +83,12 @@ export default function WhatsAppDashboard() {
   };
 
   const connection = data?.connection || {
-    connected: true,
-    phone_number: "+91 98765 43210",
-    uptime_seconds: 172800,
+    connected: false,
+    phone_number: null,
+    uptime_seconds: 0,
     instance_name: "solarix_primary",
+    provider_type: "native",
+    engine: "Baileys Multi-Device",
   };
 
   const uptimeHours = Math.floor((connection.uptime_seconds || 0) / 3600);
@@ -150,27 +152,27 @@ export default function WhatsAppDashboard() {
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
               Connection Status
             </span>
-            <div className={`w-2.5 h-2.5 rounded-full ${connection.connected ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
+            <div className={`w-2.5 h-2.5 rounded-full ${connection.connected ? "bg-emerald-500 animate-pulse" : "bg-amber-500"}`} />
           </div>
 
           <div>
             <div className="text-base font-bold text-slate-900 flex items-center gap-1.5">
               <Smartphone className="w-4 h-4 text-emerald-600" />
-              {connection.phone_number || "Disconnected"}
+              {connection.connected && connection.phone_number ? connection.phone_number : "Disconnected"}
             </div>
             <div className="text-[11px] text-slate-500 mt-0.5">
               {connection.connected ? (
                 <>Instance: <span className="font-semibold text-slate-700">{connection.instance_name}</span> • Uptime: {uptimeDays}d {uptimeHours % 24}h</>
               ) : (
-                <span className="text-red-500 font-medium">Session inactive</span>
+                <span className="text-amber-600 font-medium">No WhatsApp device linked — click Reconnect / QR</span>
               )}
             </div>
           </div>
 
           <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
-            <span className="text-slate-500 font-medium">Provider: Evolution Go</span>
-            <Badge variant="outline" className="text-[10px] bg-slate-50">
-              {connection.connected ? "Healthy" : "Offline"}
+            <span className="text-slate-500 font-medium">{connection.engine || "WhatsApp Gateway"}</span>
+            <Badge variant="outline" className={`text-[10px] ${connection.connected ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-600"}`}>
+              {connection.connected ? "Live Connected" : "Not Linked"}
             </Badge>
           </div>
         </div>

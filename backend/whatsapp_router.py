@@ -13,6 +13,9 @@ import time
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Union
 
+from pathlib import Path
+import subprocess
+
 from fastapi import APIRouter, HTTPException, Depends, Request, Response, Query, BackgroundTasks
 from pydantic import BaseModel, Field
 
@@ -21,6 +24,26 @@ from whatsapp_providers import get_whatsapp_provider, WhatsAppProvider, Simulate
 logger = logging.getLogger("whatsapp_marketing")
 
 whatsapp_router = APIRouter(prefix="/api/whatsapp", tags=["whatsapp_marketing"])
+
+def ensure_whatsapp_engine_running():
+    try:
+        import httpx
+        with httpx.Client(timeout=1.0) as client:
+            r = client.get("http://127.0.0.1:8085/status")
+            if r.status_code == 200:
+                return True
+    except Exception:
+        pass
+    
+    engine_dir = Path(__file__).resolve().parent.parent / "whatsapp_engine"
+    if (engine_dir / "server.js").exists():
+        try:
+            logger.info("Spawning WhatsApp Baileys gateway background engine on port 8085...")
+            subprocess.Popen(["node", "server.js"], cwd=str(engine_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to auto-spawn whatsapp_engine: {e}")
+    return False
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -108,14 +131,11 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
         default_prov = {
             "id": str(uuid.uuid4()),
             "company_id": company_id,
-            "provider_type": "simulated",
-            "name": "Solarix High-Speed WhatsApp Engine",
+            "provider_type": "native",
+            "name": "Live WhatsApp Multi-Device Gateway",
             "is_active": True,
             "credentials": {
-                "api_url": "https://api.evolution.solarix.internal",
-                "api_key": "solarix_live_wa_key_secure",
-                "instance_name": "solarix_primary",
-                "phone_number": "+91 98765 43210"
+                "instance_name": "solarix_primary"
             },
             "settings": {
                 "rate_limit_per_min": 60,
@@ -126,6 +146,11 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
             "updated_at": now_iso()
         }
         await db.whatsapp_providers.insert_one(default_prov)
+    elif prov.get("provider_type") == "simulated":
+        await db.whatsapp_providers.update_one(
+            {"company_id": company_id},
+            {"$set": {"provider_type": "native", "name": "Live WhatsApp Multi-Device Gateway", "updated_at": now_iso()}}
+        )
 
     # 2. Instance
     inst = await db.whatsapp_instances.find_one({"company_id": company_id})
@@ -134,15 +159,27 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
             "id": str(uuid.uuid4()),
             "company_id": company_id,
             "instance_name": "solarix_primary",
-            "phone_number": "+91 98765 43210",
-            "status": "connected",
-            "uptime_seconds": 172800,
-            "last_connected_at": now_iso(),
-            "metadata": {"battery": 94, "platform": "Evolution Go v2.1"},
+            "phone_number": None,
+            "status": "disconnected",
+            "uptime_seconds": 0,
+            "last_connected_at": None,
+            "metadata": {"platform": "Baileys Multi-Device Native Engine v7.0"},
             "created_at": now_iso(),
             "updated_at": now_iso()
         }
         await db.whatsapp_instances.insert_one(default_inst)
+    elif inst.get("phone_number") == "+91 98765 43210":
+        # Reset previous fake dummy data so user can pair their actual device
+        await db.whatsapp_instances.update_one(
+            {"company_id": company_id},
+            {"$set": {
+                "phone_number": None,
+                "status": "disconnected",
+                "uptime_seconds": 0,
+                "qr_code": None,
+                "updated_at": now_iso()
+            }}
+        )
 
     # 3. Default high-converting Solar templates
     tmpl_count = await db.whatsapp_templates.count_documents({"company_id": company_id})
@@ -622,10 +659,16 @@ async def get_dashboard_stats(user: dict = Depends(get_current_user_dep())):
     db = get_db()
     await ensure_default_whatsapp_setup(company_id, user.get("company_name", "Solarix"))
 
-    # Active Provider and Instance
+    # Active Provider and Instance live status
     prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
     inst = await db.whatsapp_instances.find_one({"company_id": company_id})
-    connected = inst.get("status") == "connected" if inst else False
+    provider_type = prov.get("provider_type", "native") if prov else "native"
+    credentials = prov.get("credentials", {}) if prov else {}
+    provider = get_whatsapp_provider(provider_type, credentials)
+
+    live_status = await provider.getStatus()
+    connected = bool(live_status.get("connected", False))
+    phone_number = live_status.get("phone_number") if connected else None
 
     # Counters from campaigns & messages
     total_campaigns = await db.whatsapp_campaigns.count_documents({"company_id": company_id})
@@ -673,11 +716,12 @@ async def get_dashboard_stats(user: dict = Depends(get_current_user_dep())):
     return {
         "connection": {
             "connected": connected,
-            "status": inst.get("status", "disconnected") if inst else "disconnected",
-            "phone_number": inst.get("phone_number") if inst else "+91 98765 43210",
-            "uptime_seconds": inst.get("uptime_seconds", 172800) if inst else 0,
-            "provider_type": prov.get("provider_type", "simulated") if prov else "simulated",
-            "instance_name": inst.get("instance_name", "solarix_primary") if inst else "solarix_primary"
+            "status": live_status.get("status", "disconnected"),
+            "phone_number": phone_number,
+            "uptime_seconds": live_status.get("uptime_seconds", 0) if connected else 0,
+            "provider_type": provider_type,
+            "instance_name": inst.get("instance_name", "solarix_primary") if inst else "solarix_primary",
+            "engine": live_status.get("engine", "Baileys Multi-Device Native Engine v7.0")
         },
         "stats": {
             "total_campaigns": total_campaigns,
@@ -700,48 +744,72 @@ async def get_dashboard_stats(user: dict = Depends(get_current_user_dep())):
 async def get_instance_status(user: dict = Depends(get_current_user_dep())):
     company_id = user["company_id"]
     db = get_db()
+    ensure_whatsapp_engine_running()
     prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
     inst = await db.whatsapp_instances.find_one({"company_id": company_id})
 
-    provider_type = prov.get("provider_type", "simulated") if prov else "simulated"
+    provider_type = prov.get("provider_type", "native") if prov else "native"
     credentials = prov.get("credentials", {}) if prov else {}
     provider = get_whatsapp_provider(provider_type, credentials)
 
     live_status = await provider.getStatus()
+    connected = bool(live_status.get("connected", False))
+    phone_number = live_status.get("phone_number") if connected else None
+
+    # Sync with DB instance document
+    if inst:
+        new_status = live_status.get("status", "disconnected")
+        if inst.get("status") != new_status or inst.get("phone_number") != phone_number:
+            await db.whatsapp_instances.update_one(
+                {"company_id": company_id},
+                {"$set": {
+                    "status": new_status,
+                    "phone_number": phone_number,
+                    "uptime_seconds": live_status.get("uptime_seconds", 0) if connected else 0,
+                    "updated_at": now_iso()
+                }}
+            )
+
     return {
-        "status": live_status.get("status", "connected"),
-        "connected": live_status.get("connected", True),
-        "phone_number": live_status.get("phone_number") or (inst.get("phone_number") if inst else "+91 98765 43210"),
+        "status": live_status.get("status", "disconnected"),
+        "connected": connected,
+        "phone_number": phone_number,
         "instance_name": inst.get("instance_name", "solarix_primary") if inst else "solarix_primary",
-        "uptime_seconds": live_status.get("uptime_seconds", 172800),
-        "provider_type": provider_type
+        "uptime_seconds": live_status.get("uptime_seconds", 0) if connected else 0,
+        "qr_code": live_status.get("qr_code"),
+        "provider_type": provider_type,
+        "engine": live_status.get("engine", "Baileys Multi-Device Native Engine v7.0")
     }
 
 @whatsapp_router.post("/instance/connect")
 async def connect_instance(user: dict = Depends(get_current_user_dep())):
     company_id = user["company_id"]
     db = get_db()
+    ensure_whatsapp_engine_running()
     prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
-    provider_type = prov.get("provider_type", "simulated") if prov else "simulated"
+    provider_type = prov.get("provider_type", "native") if prov else "native"
     credentials = prov.get("credentials", {}) if prov else {}
     provider = get_whatsapp_provider(provider_type, credentials)
 
     res = await provider.connect()
     if res.get("success"):
+        connected = bool(res.get("status") == "connected")
+        phone_number = res.get("phone_number") if connected else None
         await db.whatsapp_instances.update_one(
             {"company_id": company_id},
             {
                 "$set": {
-                    "status": res.get("status", "connected"),
-                    "phone_number": res.get("phone_number") or "+91 98765 43210",
+                    "status": res.get("status", "qr_ready"),
+                    "phone_number": phone_number,
                     "qr_code": res.get("qr_code"),
-                    "last_connected_at": now_iso(),
+                    "last_connected_at": now_iso() if connected else None,
                     "updated_at": now_iso()
                 }
             },
             upsert=True
         )
-        await log_whatsapp_activity(company_id, "provider_connected", user=user, details={"provider": provider_type})
+        if connected:
+            await log_whatsapp_activity(company_id, "provider_connected", user=user, details={"provider": provider_type, "phone": phone_number})
     return res
 
 @whatsapp_router.post("/instance/reconnect")
@@ -753,14 +821,14 @@ async def disconnect_instance(user: dict = Depends(get_current_user_dep())):
     company_id = user["company_id"]
     db = get_db()
     prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
-    provider_type = prov.get("provider_type", "simulated") if prov else "simulated"
+    provider_type = prov.get("provider_type", "native") if prov else "native"
     credentials = prov.get("credentials", {}) if prov else {}
     provider = get_whatsapp_provider(provider_type, credentials)
 
     res = await provider.disconnect()
     await db.whatsapp_instances.update_one(
         {"company_id": company_id},
-        {"$set": {"status": "disconnected", "qr_code": None, "updated_at": now_iso()}}
+        {"$set": {"status": "disconnected", "phone_number": None, "uptime_seconds": 0, "qr_code": None, "updated_at": now_iso()}}
     )
     await log_whatsapp_activity(company_id, "provider_disconnected", user=user)
     return res
@@ -783,13 +851,16 @@ async def get_provider_settings(user: dict = Depends(get_current_user_dep())):
     webhook_host = os.environ.get("BACKEND_URL") or "https://solarix.onrender.com"
     webhook_url = f"{webhook_host.rstrip('/')}/api/whatsapp/webhook/{prov.get('provider_type', 'evolution_go')}"
 
+    inst = await db.whatsapp_instances.find_one({"company_id": company_id})
+    inst_phone = inst.get("phone_number") if inst else None
+
     return {
-        "provider_type": prov.get("provider_type", "simulated"),
-        "name": prov.get("name", "Solarix Provider"),
+        "provider_type": prov.get("provider_type", "native"),
+        "name": prov.get("name", "Live WhatsApp Multi-Device Gateway"),
         "api_url": creds.get("api_url", ""),
         "api_key_masked": masked_key,
         "instance_name": creds.get("instance_name", "solarix_primary"),
-        "phone_number": creds.get("phone_number", "+91 98765 43210"),
+        "phone_number": creds.get("phone_number") or inst_phone or "",
         "phone_number_id": creds.get("phone_number_id", ""),
         "access_token_masked": masked_token,
         "waba_id": creds.get("waba_id", ""),

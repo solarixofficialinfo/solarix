@@ -36,8 +36,10 @@ export default function WhatsAppLayout({ children }) {
       setLoadingStatus(true);
       const res = await api.get("/whatsapp/instance/status");
       setStatusData(res.data);
+      return res.data;
     } catch (e) {
       console.error("Failed to load WhatsApp status", e);
+      return null;
     } finally {
       setLoadingStatus(false);
     }
@@ -45,25 +47,42 @@ export default function WhatsAppLayout({ children }) {
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 15000);
+    // Fast polling (2s) while QR modal is open to instantly detect phone scan
+    const intervalTime = qrModalOpen ? 2000 : 12000;
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.get("/whatsapp/instance/status");
+        if (res.data) {
+          setStatusData(res.data);
+          if (qrModalOpen && (res.data.connected || res.data.status === "connected")) {
+            setQrModalOpen(false);
+            toast.success(`WhatsApp Linked Successfully! Connected to ${res.data.phone_number || "Device"}`);
+          }
+        }
+      } catch (e) {}
+    }, intervalTime);
     return () => clearInterval(interval);
-  }, []);
+  }, [qrModalOpen]);
 
   const handleConnect = async () => {
     try {
       setConnecting(true);
       const res = await api.post("/whatsapp/instance/connect");
-      if (res.data && res.data.qr_code) {
+      if (res.data?.status === "connected" && res.data?.phone_number) {
+        setStatusData(res.data);
+        setQrModalOpen(false);
+        toast.success(`WhatsApp is already connected to ${res.data.phone_number}!`);
+      } else if (res.data && res.data.qr_code) {
         setStatusData((prev) => ({
           ...prev,
+          ...res.data,
           qr_code: res.data.qr_code,
-          status: res.data.status || "qr_ready",
+          status: "qr_ready",
         }));
         setQrModalOpen(true);
-        toast.info("Scan the QR code in WhatsApp > Linked Devices to connect.");
+        toast.info("Point WhatsApp > Linked Devices at the QR code to pair your phone.");
       } else {
-        toast.success("WhatsApp is successfully connected!");
-        fetchStatus();
+        await fetchStatus();
       }
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to initiate WhatsApp connection");
@@ -100,7 +119,7 @@ export default function WhatsAppLayout({ children }) {
                   WhatsApp Marketing
                 </h1>
                 <Badge variant="outline" className="bg-emerald-500/20 text-emerald-300 border-emerald-400/30 text-[11px] font-medium">
-                  Solarix CRM Engine
+                  {statusData?.engine || "Multi-Device Gateway"}
                 </Badge>
               </div>
               <p className="text-xs text-slate-300 mt-0.5">
@@ -115,9 +134,9 @@ export default function WhatsAppLayout({ children }) {
               <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
               <span className="font-medium">
                 {isConnected ? (
-                  <>Connected: <span className="text-white font-semibold">{statusData?.phone_number || "+91 98765 43210"}</span></>
+                  <>Connected: <span className="text-white font-semibold">{statusData?.phone_number || "Device Linked"}</span></>
                 ) : (
-                  <span className="text-amber-300">Disconnected</span>
+                  <span className="text-amber-300 font-semibold">Disconnected</span>
                 )}
               </span>
             </div>
@@ -184,29 +203,43 @@ export default function WhatsAppLayout({ children }) {
               <QrCode className="w-5 h-5 text-emerald-600" /> Connect Solarix WhatsApp
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500">
-              Open WhatsApp on your phone → Settings / Menu → Linked Devices → Link a Device, then point your phone camera at this screen.
+              Scan this QR code using the WhatsApp app on your smartphone to connect your official business number.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="my-5 flex flex-col items-center justify-center">
-            <div className="p-4 bg-white border border-slate-200 rounded-2xl shadow-inner inline-block">
+          <div className="my-4 flex flex-col items-center justify-center">
+            <div className="p-3 bg-white border-2 border-slate-200/90 rounded-2xl shadow-md inline-block relative">
               {statusData?.qr_code ? (
                 statusData.qr_code.startsWith("data:") ? (
-                  <img src={statusData.qr_code} alt="WhatsApp QR Code" className="w-48 h-48 object-contain" />
+                  <img src={statusData.qr_code} alt="Official WhatsApp Multi-Device QR" className="w-52 h-52 object-contain rounded-lg" />
                 ) : (
-                  <img src={`data:image/png;base64,${statusData.qr_code}`} alt="WhatsApp QR Code" className="w-48 h-48 object-contain" />
+                  <img src={`data:image/png;base64,${statusData.qr_code}`} alt="Official WhatsApp Multi-Device QR" className="w-52 h-52 object-contain rounded-lg" />
                 )
               ) : (
-                <div className="w-48 h-48 flex flex-col items-center justify-center bg-slate-50 text-slate-400 text-xs">
-                  <RefreshCw className="w-6 h-6 animate-spin text-emerald-600 mb-2" />
-                  Generating fresh session...
+                <div className="w-52 h-52 flex flex-col items-center justify-center bg-slate-50 text-slate-500 text-xs gap-2 rounded-lg">
+                  <RefreshCw className="w-7 h-7 animate-spin text-emerald-600" />
+                  <span className="font-semibold text-slate-700">Connecting to WhatsApp...</span>
+                  <span className="text-[11px] text-slate-400">Fetching live multi-device pairing key</span>
                 </div>
               )}
             </div>
 
-            <div className="mt-4 flex items-center gap-2 text-xs text-slate-600 font-medium bg-slate-50 px-3 py-1.5 rounded-full border border-slate-200">
-              <Smartphone className="w-3.5 h-3.5 text-blue-600" />
-              Instance: <span className="font-semibold text-slate-900">{statusData?.instance_name || "solarix_primary"}</span>
+            {/* Instruction Steps */}
+            <div className="mt-4 w-full text-left bg-slate-50 p-3 rounded-xl border border-slate-200/80 space-y-1.5 text-xs text-slate-700">
+              <div className="font-bold text-slate-900 flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-emerald-700">
+                <Smartphone className="w-3.5 h-3.5" /> How to scan with phone:
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-600 leading-relaxed">
+                <li>Open <strong className="text-slate-900">WhatsApp</strong> on your mobile phone</li>
+                <li>Tap <strong className="text-slate-900">Settings</strong> (iOS) or <strong className="text-slate-900">3 Dots Menu</strong> (Android)</li>
+                <li>Select <strong className="text-slate-900">Linked Devices</strong> → <strong className="text-slate-900">Link a Device</strong></li>
+                <li>Point your camera at this QR code.</li>
+              </ol>
+            </div>
+
+            <div className="mt-3 flex items-center gap-2 text-[11px] text-emerald-700 font-medium bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200 animate-pulse">
+              <RefreshCw className="w-3 h-3 animate-spin" />
+              Listening for phone link... Auto-connects on scan
             </div>
           </div>
 

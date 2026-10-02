@@ -26,12 +26,12 @@ export default function WhatsAppSettings() {
   const [copied, setCopied] = useState(false);
 
   // Settings State
-  const [providerType, setProviderType] = useState("evolution_go");
-  const [name, setName] = useState("Solarix WhatsApp Provider");
-  const [apiUrl, setApiUrl] = useState("https://api.evolution.solarix.internal");
+  const [providerType, setProviderType] = useState("native");
+  const [name, setName] = useState("Live WhatsApp Multi-Device Gateway");
+  const [apiUrl, setApiUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [instanceName, setInstanceName] = useState("solarix_primary");
-  const [phoneNumber, setPhoneNumber] = useState("+91 98765 43210");
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [wabaId, setWabaId] = useState("");
@@ -45,12 +45,12 @@ export default function WhatsAppSettings() {
       setLoading(true);
       const res = await api.get("/whatsapp/providers/settings");
       const d = res.data;
-      setProviderType(d.provider_type || "evolution_go");
-      setName(d.name || "Solarix WhatsApp Provider");
+      setProviderType(d.provider_type || "native");
+      setName(d.name || "Live WhatsApp Multi-Device Gateway");
       setApiUrl(d.api_url || "");
       setApiKey(d.api_key_masked || "");
       setInstanceName(d.instance_name || "solarix_primary");
-      setPhoneNumber(d.phone_number || "+91 98765 43210");
+      setPhoneNumber(d.phone_number || "");
       setPhoneNumberId(d.phone_number_id || "");
       setAccessToken(d.access_token_masked || "");
       setWabaId(d.waba_id || "");
@@ -125,10 +125,10 @@ export default function WhatsAppSettings() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[
             {
-              id: "evolution_go",
-              title: "Evolution Go",
-              badge: "Recommended",
-              desc: "Open-source high-throughput API with automatic QR linking, group management & full media.",
+              id: "native",
+              title: "WhatsApp Multi-Device Gateway",
+              badge: "Official Linked Device",
+              desc: "Direct WhatsApp Multi-Device connection with live QR code pairing via WhatsApp > Linked Devices.",
             },
             {
               id: "whatsapp_cloud",
@@ -137,10 +137,10 @@ export default function WhatsAppSettings() {
               desc: "Official Meta WhatsApp Business Graph API for enterprise accounts with approved templates.",
             },
             {
-              id: "simulated",
-              title: "Simulation Provider",
-              badge: "Sandbox",
-              desc: "Built-in interactive emulator for testing delivery funnels & training team without a live SIM.",
+              id: "evolution_go",
+              title: "Evolution Go",
+              badge: "External Gateway",
+              desc: "External Evolution API instance with remote webhook dispatch.",
             },
           ].map((p) => {
             const active = providerType === p.id;
@@ -168,6 +168,41 @@ export default function WhatsAppSettings() {
         </div>
       </div>
 
+      {/* Native Multi-Device Gateway Config */}
+      {providerType === "native" && (
+        <div className="p-6 bg-white border border-slate-200 rounded-2xl shadow-xs space-y-4">
+          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+            <Smartphone className="w-4 h-4 text-emerald-600" />
+            <h3 className="text-sm font-bold text-slate-900">Live WhatsApp Multi-Device Settings</h3>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">Instance Identifier</label>
+              <Input
+                placeholder="solarix_primary"
+                value={instanceName}
+                onChange={(e) => setInstanceName(e.target.value)}
+                className="text-xs h-9"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">Connected Phone Number</label>
+              <Input
+                readOnly
+                placeholder="Not connected — Click Connect / QR in top banner"
+                value={phoneNumber || ""}
+                className="text-xs h-9 bg-slate-50 text-slate-700"
+              />
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            Powered by Baileys Multi-Device Engine. Connects directly to web.whatsapp.com with multi-device encryption.
+          </p>
+        </div>
+      )}
+
       {/* Evolution Go Specific Config */}
       {providerType === "evolution_go" && (
         <div className="p-6 bg-white border border-slate-200 rounded-2xl shadow-xs space-y-4">
@@ -180,7 +215,7 @@ export default function WhatsAppSettings() {
             <div>
               <label className="text-xs font-semibold text-slate-700 block mb-1">Evolution API URL *</label>
               <Input
-                placeholder="https://api.evolution.solarix.internal"
+                placeholder="https://api.evolution.example.com"
                 value={apiUrl}
                 onChange={(e) => setApiUrl(e.target.value)}
                 className="text-xs h-9"
@@ -211,7 +246,7 @@ export default function WhatsAppSettings() {
             <div>
               <label className="text-xs font-semibold text-slate-700 block mb-1">Connected WhatsApp Number</label>
               <Input
-                placeholder="+91 98765 43210"
+                placeholder="+91..."
                 value={phoneNumber}
                 onChange={(e) => setPhoneNumber(e.target.value)}
                 className="text-xs h-9"
