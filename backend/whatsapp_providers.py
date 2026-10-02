@@ -359,7 +359,7 @@ class WhatsAppCloudApiProvider(WhatsAppProvider):
     async def sendTemplate(self, phone: str, template_name: str, variables: Dict[str, str], media_url: Optional[str] = None) -> Dict[str, Any]:
         clean_phone = "".join(filter(str.isdigit, phone))
         try:
-            parameters = [{"type": "text", "text": str(v)} for v in variables.values()]
+            parameters = [{"type": "text", "text": v} for v in variables.values()]
             payload = {
                 "messaging_product": "whatsapp",
                 "to": clean_phone,

@@ -83,7 +83,7 @@ def replace_crm_variables(template_text: str, customer_data: Dict[str, Any], com
         "{{city}}": str(city),
         "{{solar_capacity}}": f"{cap} kW" if not str(cap).endswith("kW") else str(cap),
         "{{installation_date}}": str(inst_date),
-        "{{company_name}}": str(company_name),
+        "{{company_name}}": company_name,
     }
     for var_key, var_val in replacements.items():
         text = text.replace(var_key, var_val)
@@ -373,7 +373,7 @@ async def whatsapp_queue_worker_loop():
                     res = {"success": False, "error": str(e), "status": "failed"}
 
                 if res.get("success"):
-                    provider_msg_id = res.get("provider_message_id") or str(uuid.uuid4())
+                    provider_msg_id: str = str(res.get("provider_message_id") or uuid.uuid4())
                     sent_time = now_iso()
 
                     # Update queue item
@@ -839,12 +839,13 @@ async def disconnect_instance(user: dict = Depends(get_current_user_dep())):
 async def get_provider_settings(user: dict = Depends(get_current_user_dep())):
     company_id = user["company_id"]
     db = get_db()
-    prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
-    if not prov:
+    prov_doc = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
+    if not prov_doc:
         await ensure_default_whatsapp_setup(company_id)
-        prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
+        prov_doc = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
+    prov: Dict[str, Any] = prov_doc if isinstance(prov_doc, dict) else {}
 
-    creds = prov.get("credentials", {})
+    creds: Dict[str, Any] = prov.get("credentials") if isinstance(prov.get("credentials"), dict) else {}
     masked_key = (creds.get("api_key")[:4] + "••••••••" + creds.get("api_key")[-3:]) if creds.get("api_key") else ""
     masked_token = (creds.get("access_token")[:4] + "••••••••" + creds.get("access_token")[-3:]) if creds.get("access_token") else ""
 
@@ -1690,10 +1691,11 @@ async def handle_whatsapp_webhook(
                 # Find matching company / client
                 clean_p = "".join(filter(str.isdigit, phone))[-10:]
                 matched_client = await db.clients.find_one({"mobile": {"$regex": clean_p}})
-                company_id = matched_client.get("company_id") if matched_client else None
-                if not company_id:
+                raw_company_id = matched_client.get("company_id") if matched_client else None
+                if not raw_company_id:
                     comp = await db.companies.find_one()
-                    company_id = comp.get("id") if comp else "default"
+                    raw_company_id = comp.get("id") if comp else "default"
+                company_id: str = str(raw_company_id or "default")
 
                 # Update or create conversation
                 conv = await db.whatsapp_conversations.find_one({"phone_number": phone, "company_id": company_id})
