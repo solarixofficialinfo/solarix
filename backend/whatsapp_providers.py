@@ -552,12 +552,12 @@ class NativeBaileysProvider(WhatsAppProvider):
         self.api_key = self.credentials.get("api_key") or ""
         self.headers = {"apikey": self.api_key, "Content-Type": "application/json"}
 
-    async def connect(self) -> Dict[str, Any]:
+    async def connect(self, force: bool = False) -> Dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=25.0) as client:
                 res = await client.post(
                     f"{self.engine_url}/instance/connect/{self.instance_name}",
-                    json={"instanceName": self.instance_name, "token": self.api_key},
+                    json={"instanceName": self.instance_name, "token": self.api_key, "force": force},
                     headers=self.headers
                 )
                 if res.status_code == 200:

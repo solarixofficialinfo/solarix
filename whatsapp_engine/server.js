@@ -93,7 +93,13 @@ class WhatsAppInstance {
 
   hasStoredCredentials() {
     const credsPath = path.join(this.authDir, 'creds.json');
-    return fs.existsSync(credsPath);
+    if (!fs.existsSync(credsPath)) return false;
+    try {
+      const data = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+      return !!(data && data.registered === true && data.me?.id);
+    } catch (e) {
+      return false;
+    }
   }
 
   async init(forceNew = false) {
@@ -107,9 +113,12 @@ class WhatsAppInstance {
           this.sock.end();
         } catch (e) {}
         this.sock = null;
+        await delay(500);
       }
 
-      if (forceNew) {
+      // If forceNew requested OR existing session is unverified / incomplete, purge clean
+      const hasValidSession = this.hasStoredCredentials();
+      if (forceNew || !hasValidSession) {
         this.currentQR = null;
         this.currentQRDataUrl = null;
         this.connectedPhone = null;
@@ -123,19 +132,21 @@ class WhatsAppInstance {
 
       this.connectionStatus = 'connecting';
       const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
-      const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1015901307] }));
+      const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1043857760] }));
 
       this.sock = makeWASocket({
         version,
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
-        browser: Browsers.macOS('Chrome'),
+        browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false,
+        markOnlineOnConnect: true,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 25000,
         generateHighQualityLinkPreview: true,
+        getMessage: async (key) => ({ conversation: '' }),
       });
 
       this.sock.ev.on('creds.update', saveCreds);
@@ -173,7 +184,7 @@ class WhatsAppInstance {
               fs.rmSync(this.authDir, { recursive: true, force: true });
               fs.mkdirSync(this.authDir, { recursive: true });
             }
-          } else if (shouldReconnect) {
+          } else if (shouldReconnect && this.hasStoredCredentials()) {
             this.connectionStatus = 'connecting';
             this.reconnectAttempts++;
             setTimeout(() => this.init(false), Math.min(this.reconnectAttempts * 2000, 10000));
@@ -432,7 +443,10 @@ const handleConnect = async (req, res) => {
     });
   }
 
-  inst.init(force);
+  // If forced, or if socket is not running, or if we have no QR, initialize
+  if (force || !inst.sock || !inst.currentQRDataUrl || inst.connectionStatus === 'disconnected') {
+    inst.init(force);
+  }
 
   // Poll up to 10s for the live QR
   let waited = 0;
@@ -474,7 +488,7 @@ app.get('/instance/qr/:instance', handleQR);
 // 6. Request 8-Digit Pairing Code (Phone-based linking)
 const handlePair = async (req, res) => {
   const inst = resolveInstance(req);
-  const rawPhone = req.body?.phone || req.body?.number || req.body?.phoneNumber;
+  const rawPhone = req.body?.phone || req.body?.number || req.body?.phoneNumber || req.body?.phone_number;
 
   if (!rawPhone) {
     return res.status(400).json({ success: false, error: 'Phone number is required.' });
@@ -482,7 +496,7 @@ const handlePair = async (req, res) => {
 
   const cleanNum = rawPhone.replace(/[^0-9]/g, '');
   if (!cleanNum || cleanNum.length < 10) {
-    return res.status(400).json({ success: false, error: 'Invalid phone number format.' });
+    return res.status(400).json({ success: false, error: 'Invalid phone number format. Must include country code without +.' });
   }
 
   try {
@@ -495,25 +509,36 @@ const handlePair = async (req, res) => {
       });
     }
 
-    if (!inst.sock || inst.connectionStatus === 'disconnected') {
-      await inst.init(true);
-      await delay(1500);
+    // Always reset socket to pure state to avoid QR collision during pairing code handshake
+    await inst.init(true);
+
+    // Wait until socket is ready to receive requests
+    let waited = 0;
+    while (waited < 15000 && (!inst.sock || inst.connectionStatus === 'disconnected')) {
+      await delay(250);
+      waited += 250;
     }
 
-    if (inst.sock && !inst.sock.authState.creds.registered) {
-      console.log(`[WhatsApp Engine][${inst.name}] Generating pairing code for: ${cleanNum}`);
-      const code = await inst.sock.requestPairingCode(cleanNum);
-      return res.json({
-        success: true,
-        pairing_code: code,
-        code: code,
-        phone: cleanNum,
-        instance: inst.name,
-        message: 'Pairing code generated successfully.'
-      });
-    } else {
-      return res.status(400).json({ success: false, error: 'Socket is already registered or active.' });
+    if (!inst.sock) {
+      return res.status(500).json({ success: false, error: 'WhatsApp gateway socket not ready. Please try again.' });
     }
+
+    // Give 1 second for initial handshake
+    await delay(1000);
+
+    console.log(`[WhatsApp Engine][${inst.name}] Generating official pairing code for phone: ${cleanNum}`);
+    const code = await inst.sock.requestPairingCode(cleanNum);
+    const formattedCode = code && code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
+
+    return res.json({
+      success: true,
+      pairing_code: code,
+      formatted_code: formattedCode,
+      code: code,
+      phone: cleanNum,
+      instance: inst.name,
+      message: 'Pairing code generated successfully. Enter this code in WhatsApp > Linked Devices > Link with phone number.'
+    });
   } catch (err) {
     console.error(`[WhatsApp Engine][${inst.name}] Pairing code error:`, err);
     return res.status(500).json({ success: false, error: err.message || 'Failed to request pairing code' });

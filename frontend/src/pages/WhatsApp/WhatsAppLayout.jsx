@@ -104,10 +104,11 @@ export default function WhatsAppLayout({ children }) {
     return () => clearInterval(interval);
   }, [qrModalOpen]);
 
-  const handleConnect = async () => {
+  const handleConnect = async (force = false) => {
     try {
       setConnecting(true);
-      const res = await api.post("/whatsapp/instance/connect");
+      const isForced = force === true;
+      const res = await api.post("/whatsapp/instance/connect", { force: isForced });
       if (res.data?.status === "connected" && res.data?.phone_number) {
         setStatusData(res.data);
         setQrModalOpen(false);
@@ -123,6 +124,7 @@ export default function WhatsAppLayout({ children }) {
         toast.info("Point WhatsApp > Linked Devices at the QR code to pair your phone.");
       } else {
         await fetchStatus();
+        setQrModalOpen(true);
       }
     } catch (err) {
       toast.error(err.response?.data?.detail || "Failed to initiate WhatsApp connection");
@@ -385,7 +387,7 @@ export default function WhatsAppLayout({ children }) {
               Close
             </Button>
             {connectTab === "qr" && (
-              <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={handleConnect}>
+              <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => handleConnect(true)}>
                 Refresh QR
               </Button>
             )}

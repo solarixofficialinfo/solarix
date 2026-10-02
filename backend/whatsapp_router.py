@@ -841,7 +841,15 @@ async def get_instance_status(user: dict = Depends(get_current_user_dep())):
     }
 
 @whatsapp_router.post("/instance/connect")
-async def connect_instance(user: dict = Depends(get_current_user_dep())):
+async def connect_instance(request: Request = None, user: dict = Depends(get_current_user_dep())):
+    force = False
+    if request:
+        try:
+            body = await request.json()
+            force = bool(body.get("force", False))
+        except Exception:
+            force = False
+
     company_id = user["company_id"]
     db = get_db()
     ensure_whatsapp_engine_running()
@@ -850,7 +858,7 @@ async def connect_instance(user: dict = Depends(get_current_user_dep())):
     credentials = prov.get("credentials", {}) if prov else {}
     provider = get_whatsapp_provider(provider_type, credentials)
 
-    res = await provider.connect()
+    res = await provider.connect(force=force)
     if res.get("success"):
         connected = bool(res.get("status") == "connected")
         phone_number = res.get("phone_number") if connected else None
@@ -885,8 +893,8 @@ async def request_pairing_code(payload: PairingCodeIn, user: dict = Depends(get_
     return res
 
 @whatsapp_router.post("/instance/reconnect")
-async def reconnect_instance(user: dict = Depends(get_current_user_dep())):
-    return await connect_instance(user)
+async def reconnect_instance(request: Request = None, user: dict = Depends(get_current_user_dep())):
+    return await connect_instance(request, user)
 
 @whatsapp_router.post("/instance/disconnect")
 async def disconnect_instance(user: dict = Depends(get_current_user_dep())):
@@ -1835,7 +1843,22 @@ async def handle_whatsapp_webhook(
         ev_type = ev.get("event_type")
         if ev_type == "status_update":
             p_msg_id = ev.get("provider_message_id")
-            new_status = ev.get("status")  # sent, delivered, read, failed
+            new_status = ev.get("status")  # sent, delivered, read, failed, connected
+            phone_num = ev.get("phone_number")
+            inst_name = ev.get("instance_name") or payload.get("instance_name") or payload.get("instance")
+
+            if p_msg_id == "connection_open" or new_status == "connected":
+                query = {"instance_name": inst_name} if inst_name else {}
+                await db.whatsapp_instances.update_many(
+                    query,
+                    {"$set": {
+                        "status": "connected",
+                        "phone_number": phone_num,
+                        "last_connected_at": now_iso(),
+                        "updated_at": now_iso()
+                    }}
+                )
+
             if p_msg_id and new_status:
                 patch = {"status": new_status, "updated_at": now_iso()}
                 if new_status == "delivered":
