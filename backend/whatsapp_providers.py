@@ -552,56 +552,96 @@ class NativeBaileysProvider(WhatsAppProvider):
         self.api_key = self.credentials.get("api_key") or ""
         self.headers = {"apikey": self.api_key, "Content-Type": "application/json"}
 
+    def _get_target_urls(self) -> List[str]:
+        urls = [self.engine_url]
+        if "127.0.0.1" in self.engine_url:
+            urls.append(self.engine_url.replace("127.0.0.1", "localhost"))
+        elif "localhost" in self.engine_url:
+            urls.append(self.engine_url.replace("localhost", "127.0.0.1"))
+        return urls
+
     async def connect(self, force: bool = False) -> Dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(timeout=25.0) as client:
-                res = await client.post(
-                    f"{self.engine_url}/instance/connect/{self.instance_name}",
-                    json={"instanceName": self.instance_name, "token": self.api_key, "force": force},
-                    headers=self.headers
-                )
-                if res.status_code == 200:
-                    return res.json()
-                return {"success": False, "status": "disconnected", "error": f"Gateway error: {res.text}"}
-        except Exception as e:
-            return {"success": False, "status": "disconnected", "error": f"WhatsApp Gateway Engine not reachable: {e}"}
+        targets = self._get_target_urls()
+        last_error = ""
+
+        for base_url in targets:
+            for attempt in range(2):
+                try:
+                    async with httpx.AsyncClient(timeout=25.0) as client:
+                        res = await client.post(
+                            f"{base_url}/instance/connect/{self.instance_name}",
+                            json={"instanceName": self.instance_name, "token": self.api_key, "force": force},
+                            headers=self.headers
+                        )
+                        if res.status_code == 200:
+                            return res.json()
+                        last_error = res.text
+                except (httpx.ConnectError, httpx.TimeoutException) as e:
+                    last_error = str(e)
+                    await asyncio.sleep(0.5)
+
+        return {
+            "success": False,
+            "status": "disconnected",
+            "error": f"WhatsApp Gateway Engine offline at {self.engine_url}. ({last_error})"
+        }
 
     async def disconnect(self) -> Dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.post(
-                    f"{self.engine_url}/instance/disconnect/{self.instance_name}",
-                    json={"instanceName": self.instance_name},
-                    headers=self.headers
-                )
-                return res.json() if res.status_code == 200 else {"success": True, "status": "disconnected"}
-        except Exception:
-            return {"success": True, "status": "disconnected"}
+        targets = self._get_target_urls()
+        for base_url in targets:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    res = await client.post(
+                        f"{base_url}/instance/disconnect/{self.instance_name}",
+                        json={"instanceName": self.instance_name},
+                        headers=self.headers
+                    )
+                    if res.status_code == 200:
+                        return res.json()
+            except Exception:
+                pass
+        return {"success": True, "status": "disconnected"}
 
     async def getStatus(self) -> Dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(timeout=6.0) as client:
-                res = await client.get(
-                    f"{self.engine_url}/instance/connectionState/{self.instance_name}",
-                    headers=self.headers
-                )
-                if res.status_code == 200:
-                    return res.json()
-                return {"connected": False, "status": "disconnected", "phone_number": None, "uptime_seconds": 0}
-        except Exception:
-            return {"connected": False, "status": "disconnected", "phone_number": None, "uptime_seconds": 0}
+        targets = self._get_target_urls()
+        for base_url in targets:
+            try:
+                async with httpx.AsyncClient(timeout=6.0) as client:
+                    res = await client.get(
+                        f"{base_url}/instance/connectionState/{self.instance_name}",
+                        headers=self.headers
+                    )
+                    if res.status_code == 200:
+                        return res.json()
+            except Exception:
+                pass
+        return {"connected": False, "status": "disconnected", "phone_number": None, "uptime_seconds": 0}
 
     async def requestPairingCode(self, phone: str) -> Dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(timeout=25.0) as client:
-                res = await client.post(
-                    f"{self.engine_url}/instance/pairing-code/{self.instance_name}",
-                    json={"phone": phone, "number": phone, "instanceName": self.instance_name},
-                    headers=self.headers
-                )
-                return res.json() if res.status_code in (200, 400) else {"success": False, "error": res.text}
-        except Exception as e:
-            return {"success": False, "error": f"Gateway error: {e}"}
+        clean_phone = "".join(filter(str.isdigit, phone))
+        targets = self._get_target_urls()
+        last_error = ""
+
+        for base_url in targets:
+            for attempt in range(2):
+                try:
+                    async with httpx.AsyncClient(timeout=25.0) as client:
+                        res = await client.post(
+                            f"{base_url}/instance/pairing-code/{self.instance_name}",
+                            json={"phone": clean_phone, "number": clean_phone, "instanceName": self.instance_name},
+                            headers=self.headers
+                        )
+                        if res.status_code in (200, 400):
+                            return res.json()
+                        last_error = res.text
+                except (httpx.ConnectError, httpx.TimeoutException) as e:
+                    last_error = str(e)
+                    await asyncio.sleep(0.5)
+
+        return {
+            "success": False,
+            "error": f"WhatsApp Gateway Engine offline at {self.engine_url}. Please ensure node server.js is running."
+        }
 
     async def sendText(self, phone: str, text: str) -> Dict[str, Any]:
         try:

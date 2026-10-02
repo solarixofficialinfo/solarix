@@ -25,13 +25,16 @@ logger = logging.getLogger("whatsapp_marketing")
 
 whatsapp_router = APIRouter(prefix="/api/whatsapp", tags=["whatsapp_marketing"])
 
-def ensure_whatsapp_engine_running():
+def ensure_whatsapp_engine_running() -> bool:
     try:
         import httpx
-        with httpx.Client(timeout=1.0) as client:
-            r = client.get("http://127.0.0.1:8085/status")
-            if r.status_code == 200:
-                return True
+        for target in ("http://127.0.0.1:8085", "http://localhost:8085"):
+            try:
+                with httpx.Client(timeout=1.0) as client:
+                    if client.get(f"{target}/server/ok").status_code == 200:
+                        return True
+            except Exception:
+                pass
     except Exception:
         pass
     
@@ -40,6 +43,16 @@ def ensure_whatsapp_engine_running():
         try:
             logger.info("Spawning WhatsApp Baileys gateway background engine on port 8085...")
             subprocess.Popen(["node", "server.js"], cwd=str(engine_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            import httpx, time
+            for _ in range(15):
+                time.sleep(0.2)
+                try:
+                    with httpx.Client(timeout=0.5) as client:
+                        if client.get("http://127.0.0.1:8085/server/ok").status_code == 200:
+                            logger.info("WhatsApp Baileys gateway online and ready on port 8085.")
+                            return True
+                except Exception:
+                    pass
             return True
         except Exception as e:
             logger.error(f"Failed to auto-spawn whatsapp_engine: {e}")
