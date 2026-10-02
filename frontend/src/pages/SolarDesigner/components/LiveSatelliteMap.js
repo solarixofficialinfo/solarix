@@ -134,6 +134,10 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     onAddPanel,
     selectedPanelId = null,
     setSelectedPanelId,
+    selectedPanelIds = [],
+    setSelectedPanelIds,
+    selectedGroupId = null,
+    setSelectedGroupId,
     selectionMode = "panel",
     setSelectionMode,
     selectedRowIndex = null,
@@ -880,6 +884,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       azimuthDegrees: targetAzimuth,
       nearX: x,
       nearY: y,
+      isManual: true,
     });
 
     if (!check.canFit || !check.newPanel) {
@@ -893,6 +898,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       sectionId: targetSec ? targetSec.id : undefined,
       azimuth: targetAzimuth,
       pitch: Number(targetSec?.pitch ?? 0),
+      isManual: true,
     };
 
     setPanels?.((prev) => [...prev, panelWithSection]);
@@ -2018,12 +2024,14 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         const pRow = p.row !== undefined && p.row !== null ? p.row : 0;
         const rowPanels = rowPanelsMap.get(pRow) || [p];
 
-        const isPanelSelected = activeSelectionMode === "panel" && p.id === activeSelectedPanelId;
+        const isPanelSelected = (activeSelectionMode === "panel" || activeSelectionMode === "custom") &&
+          (p.id === activeSelectedPanelId || (Array.isArray(selectedPanelIds) && selectedPanelIds.includes(p.id)));
         const isRowSelected = activeSelectionMode === "row" && activeSelectedRowIndex != null && pRow === activeSelectedRowIndex;
+        const isGroupSelected = activeSelectionMode === "group" && selectedGroupId != null && (p.groupId === selectedGroupId || p.tableId === selectedGroupId || pRow === selectedGroupId);
         const isRowHovered = activeSelectionMode === "row" && hoveredRowIndex != null && pRow === hoveredRowIndex && !isRowSelected;
         const isArraySelected = activeSelectionMode === "array";
 
-        const isSelected = isPanelSelected || isRowSelected || isArraySelected;
+        const isSelected = isPanelSelected || isRowSelected || isGroupSelected || isArraySelected;
         const isOutOfBounds = roofPolygon && roofPolygon.length >= 3 && !isPointInPolygon(p.x, p.y, roofPolygon);
 
         const corners = getRotatedRectCorners(p.x, p.y, p.width || 1.134, p.height || 2.278, p.rotation || 0);
@@ -2056,15 +2064,37 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
         panelPoly.on("click", (e) => {
           L.DomEvent.stopPropagation(e);
-          if (activeSelectionMode === "panel") {
-            changeSelectedPanelId(p.id);
+          if (activeSelectionMode === "panel" || activeSelectionMode === "custom") {
+            const isShift = Boolean(e.originalEvent?.shiftKey);
+            if (setSelectedPanelIds) {
+              if (isShift) {
+                setSelectedPanelIds((prev = []) => {
+                  const exists = prev.includes(p.id);
+                  const next = exists ? prev.filter((id) => id !== p.id) : [...prev, p.id];
+                  changeSelectedPanelId(next[next.length - 1] || null);
+                  return next;
+                });
+              } else {
+                setSelectedPanelIds([p.id]);
+                changeSelectedPanelId(p.id);
+              }
+            } else {
+              changeSelectedPanelId(p.id);
+            }
             changeSelectedRowIndex(null);
           } else if (activeSelectionMode === "row") {
             changeSelectedRowIndex(pRow);
             changeSelectedPanelId(null);
+            setSelectedPanelIds?.([]);
+          } else if (activeSelectionMode === "group") {
+            const gId = p.groupId ?? p.tableId ?? pRow;
+            setSelectedGroupId?.(gId);
+            changeSelectedPanelId(null);
+            setSelectedPanelIds?.([]);
           } else if (activeSelectionMode === "array") {
             changeSelectedPanelId(null);
             changeSelectedRowIndex(null);
+            setSelectedPanelIds?.([]);
           }
         });
 
@@ -2136,7 +2166,7 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     }
   }, [
     roofPolygon, roofSections, selectedSectionId, onSelectSection, onMergeSections, onUpdateSectionPolygon, panels, obstacles, walkways, setbackMeters,
-    activeDrawPoints, layers, activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode, hoveredRowIndex, editingRoof, editingSection, activeTool,
+    activeDrawPoints, layers, activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode, selectedPanelIds, selectedGroupId, hoveredRowIndex, editingRoof, editingSection, activeTool,
     cartesianToLatLng, latLngToCartesian, handleVertexDrag, handleDeleteVertex,
     handleInsertVertexOnEdge, pushVertexHistory, changeSelectedPanelId, changeSelectedRowIndex, setPanels, setHasManualAdjustments,
     setActiveTool, handleFinishDrawingRoof, syncMagnifierTiles, updateMagnifierTransform

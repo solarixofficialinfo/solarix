@@ -37,6 +37,11 @@ const Roof2DCanvas = forwardRef(function Roof2DCanvas(
     onPanelSelect,
     selectedPanelId = null,
     setSelectedPanelId,
+    selectedPanelIds = [],
+    setSelectedPanelIds,
+    selectedGroupId = null,
+    setSelectedGroupId,
+    selectionMode = "row",
     onCalibrationComplete,
     orientation = "portrait",
     panelSpecs = {},
@@ -352,7 +357,9 @@ const Roof2DCanvas = forwardRef(function Roof2DCanvas(
       panels.forEach((p, idx) => {
         if (p.hidden) return;
 
-        const isSelected = p.id === selectedPanelId;
+        const isSelected = p.id === selectedPanelId ||
+          (Array.isArray(selectedPanelIds) && selectedPanelIds.includes(p.id)) ||
+          (selectionMode === "group" && selectedGroupId != null && (p.groupId === selectedGroupId || p.row === selectedGroupId));
         const corners = getRotatedRectCorners(p.x, p.y, p.width, p.height, p.rotation || 0);
 
         ctx.beginPath();
@@ -556,7 +563,22 @@ const Roof2DCanvas = forwardRef(function Roof2DCanvas(
         const hw = p.width / 2;
         const hh = p.height / 2;
         if (world.x >= p.x - hw && world.x <= p.x + hw && world.y >= p.y - hh && world.y <= p.y + hh) {
-          setSelectedPanelId(p.id);
+          const isShift = Boolean(e.shiftKey);
+          if (setSelectedPanelIds) {
+            if (isShift) {
+              setSelectedPanelIds((prev = []) => {
+                const exists = prev.includes(p.id);
+                const next = exists ? prev.filter((id) => id !== p.id) : [...prev, p.id];
+                setSelectedPanelId(next[next.length - 1] || null);
+                return next;
+              });
+            } else {
+              setSelectedPanelIds([p.id]);
+              setSelectedPanelId(p.id);
+            }
+          } else {
+            setSelectedPanelId(p.id);
+          }
           if (onPanelSelect) onPanelSelect(p);
           if (!p.locked) {
             setDragState({ type: "panel", id: p.id, startX: world.x - p.x, startY: world.y - p.y });
@@ -605,13 +627,29 @@ const Roof2DCanvas = forwardRef(function Roof2DCanvas(
         updated[dragState.index] = { x: world.x, y: world.y };
         setRoofPolygon(updated);
       } else if (dragState.type === "panel") {
-        setPanels((prev) =>
-          prev.map((p) =>
-            p.id === dragState.id
-              ? { ...p, x: Math.round((world.x - dragState.startX) * 100) / 100, y: Math.round((world.y - dragState.startY) * 100) / 100 }
-              : p
-          )
-        );
+        const newX = Math.round((world.x - dragState.startX) * 100) / 100;
+        const newY = Math.round((world.y - dragState.startY) * 100) / 100;
+        const currP = panels.find((item) => item.id === dragState.id);
+        const dx = currP ? newX - currP.x : 0;
+        const dy = currP ? newY - currP.y : 0;
+
+        if (Array.isArray(selectedPanelIds) && selectedPanelIds.includes(dragState.id) && selectedPanelIds.length > 1) {
+          setPanels((prev) =>
+            prev.map((p) =>
+              selectedPanelIds.includes(p.id)
+                ? { ...p, x: Math.round((p.x + dx) * 100) / 100, y: Math.round((p.y + dy) * 100) / 100, isManual: true }
+                : p
+            )
+          );
+        } else {
+          setPanels((prev) =>
+            prev.map((p) =>
+              p.id === dragState.id
+                ? { ...p, x: newX, y: newY, isManual: true }
+                : p
+            )
+          );
+        }
       } else if (dragState.type === "obstacle") {
         setObstacles((prev) =>
           prev.map((obs) =>

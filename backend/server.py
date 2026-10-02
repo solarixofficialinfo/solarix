@@ -2249,6 +2249,11 @@ async def auto_migrate_product_variants():
 async def lifespan(app: FastAPI):
     deferred_task = asyncio.create_task(_deferred_startup_tasks())
     try:
+        from whatsapp_router import start_whatsapp_background_workers
+        start_whatsapp_background_workers()
+    except Exception as e:
+        logger.warning(f"Could not start whatsapp workers: {e}")
+    try:
         logger.info("Solarix backend started")
         yield
     finally:
@@ -2417,9 +2422,10 @@ logger = logging.getLogger(__name__)
 @app.middleware("http")
 async def supabase_client_middleware(request: Request, call_next):
     path = request.url.path
-    is_public_route = any(path.endswith(p) for p in [
+    is_public_route = any(path.endswith(p) or p in path for p in [
         "/auth/login", "/auth/register", "/auth/forgot-password",
-        "/auth/verify-otp", "/auth/reset-password", "/auth/refresh", "/auth/google", "/auth/request-access"
+        "/auth/verify-otp", "/auth/reset-password", "/auth/refresh", "/auth/google", "/auth/request-access",
+        "/whatsapp/webhook"
     ])
     
     token = None
@@ -20465,7 +20471,9 @@ async def export_solar_design_docx_endpoint(
 
 
 from billing_router import billing_router
+from whatsapp_router import whatsapp_router
 app.include_router(billing_router)
+app.include_router(whatsapp_router)
 app.include_router(api_router)
 
 DEFAULT_CORS_ORIGINS = [

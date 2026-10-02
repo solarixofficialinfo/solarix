@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
-import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, FileCheck, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp, ShieldAlert, Sparkles, PackageSearch, UserPlus, Layers } from "lucide-react";
+import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, FileCheck, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp, ShieldAlert, Sparkles, PackageSearch, UserPlus, Layers, MessageSquare, Send, Users, Inbox as InboxIcon, Zap, Settings as SettingsIcon } from "lucide-react";
 import NotificationBell from "@/components/NotificationBell";
 import ProfileMenu from "@/components/ProfileMenu";
 import TrialBanner from "@/components/TrialBanner";
@@ -172,7 +172,7 @@ export default function Layout({ children }) {
   const isSuperOrAdmin = !isExternalUser && (isSuperAdmin || user?.role === "Admin" || user?.role === "Owner" || user?.user_type === "owner" || user?.is_owner);
   const isAdmin = isSuperOrAdmin;
   const allowed = (page) => !isExternalUser && (isSuperOrAdmin || (user?.permissions?.[page]?.view === true));
-  const ALWAYS_VISIBLE = new Set(["complaints"]);
+  const ALWAYS_VISIBLE = new Set(["complaints", "whatsapp"]);
 
   const navSections = [
     {
@@ -184,6 +184,18 @@ export default function Layout({ children }) {
         { to: "/clients", label: "Clients", icon: Users2, key: "clients" },
         { to: "/projects", label: "Project Execution", icon: Briefcase, key: "project_execution" },
         { to: "/tasks", label: "Task Portal", icon: ClipboardList, key: "task_portal" },
+      ],
+    },
+    {
+      title: "WHATSAPP",
+      items: [
+        { to: "/whatsapp/dashboard", label: "Dashboard", icon: LayoutDashboard, key: "whatsapp" },
+        { to: "/whatsapp/campaigns", label: "Campaigns", icon: Send, key: "whatsapp" },
+        { to: "/whatsapp/contacts", label: "Contacts", icon: Users, key: "whatsapp" },
+        { to: "/whatsapp/templates", label: "Templates", icon: FileText, key: "whatsapp" },
+        { to: "/whatsapp/inbox", label: "Inbox", icon: MessageSquare, key: "whatsapp" },
+        { to: "/whatsapp/automation", label: "Automation", icon: Zap, key: "whatsapp" },
+        { to: "/whatsapp/settings", label: "Settings", icon: SettingsIcon, key: "whatsapp" },
       ],
     },
     {

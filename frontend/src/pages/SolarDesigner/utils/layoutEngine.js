@@ -371,19 +371,24 @@ export function validatePanelPlacement({
   obstacles = [],
   walkways = [],
   excludePanelId = null,
+  isManual = false,
 }) {
   if (!roofPolygon || roofPolygon.length < 3) {
     return { valid: false, reason: "No roof boundary defined." };
   }
 
-  const usablePolygon = computeSetbackPolygon(roofPolygon, setbackMeters);
+  // In manual mode, validate against the true physical roof boundary with a minimal 0.02m edge buffer
+  // This ensures auto-generation setbacks never falsely block valid manual placements inside the roof.
+  const effectiveSetback = isManual ? Math.min(Number(setbackMeters || 0.5), 0.02) : Number(setbackMeters || 0.5);
+  const usablePolygon = computeSetbackPolygon(roofPolygon, effectiveSetback);
   const pWidth = Number(candidate.width || 1.134);
   const pLength = Number(candidate.height || 2.278);
   const pRot = Number(candidate.rotation || 0);
 
-  // 1. Inside usable polygon
-  if (!isRectInsidePolygon(candidate.x, candidate.y, pWidth, pLength, pRot, usablePolygon)) {
-    return { valid: false, reason: "Panel extends beyond the valid roof setback boundary." };
+  // 1. Inside usable polygon (or roof boundary if setback is relaxed)
+  const boundaryPoly = (usablePolygon && usablePolygon.length >= 3) ? usablePolygon : roofPolygon;
+  if (!isRectInsidePolygon(candidate.x, candidate.y, pWidth, pLength, pRot, boundaryPoly)) {
+    return { valid: false, reason: isManual ? "Panel is outside the roof perimeter boundary." : "Panel extends beyond the valid roof setback boundary." };
   }
 
   // 2. Overlap with existing panels
@@ -448,18 +453,19 @@ export function canFitAdditionalPanel({
   azimuthDegrees = 180,
   nearX = null,
   nearY = null,
+  isManual = true,
 }) {
   if (!roofPolygon || roofPolygon.length < 3) {
     return { canFit: false, newPanel: null, reason: "No roof boundary defined." };
   }
 
-  const usablePolygon = computeSetbackPolygon(roofPolygon, setbackMeters);
-  if (!usablePolygon || usablePolygon.length < 3) {
-    return { canFit: false, newPanel: null, reason: "No usable roof area inside setbacks." };
-  }
+  // In manual mode, validate against actual roof boundary with minimal 0.02m buffer
+  // This removes the false 'no space' restriction from auto-layout setbacks.
+  const effectiveSetback = isManual ? Math.min(Number(setbackMeters || 0.5), 0.02) : Number(setbackMeters || 0.5);
+  const usablePolygon = computeSetbackPolygon(roofPolygon, effectiveSetback);
+  const boundaryPoly = (usablePolygon && usablePolygon.length >= 3) ? usablePolygon : roofPolygon;
 
   // 1. Determine Panel Dimensions, Orientation, and Azimuth
-  // Preserve configuration from existing panels if present
   let pWidth, pLength, pRotation, pAzimuth;
   if (panels.length > 0) {
     const refPanel = panels[0];
@@ -475,13 +481,37 @@ export function canFitAdditionalPanel({
     pAzimuth = Number(azimuthDegrees || 180);
   }
 
-  // 2. Determine Spacing / Grid Step (using unified panelGap)
+  // 2. Determine Spacing / Grid Step
   const panelGap = Math.max(0.01, Number(panelSpacingMeters ?? rowSpacingMeters ?? 0.03));
   const stepX = pWidth + panelGap;
   const stepY = pLength + panelGap;
 
-  const bounds = getPolygonBounds(usablePolygon);
+  const bounds = getPolygonBounds(boundaryPoly);
   const candidates = [];
+
+  // TIER 0: Direct manual target location (highest priority)
+  if (nearX != null && nearY != null) {
+    const nX = Number(nearX);
+    const nY = Number(nearY);
+    candidates.push({ x: nX, y: nY, row: 0, col: 0, priority: -10 });
+    // Local cluster offsets around user target
+    [
+      { dx: stepX, dy: 0 },
+      { dx: -stepX, dy: 0 },
+      { dx: 0, dy: stepY },
+      { dx: 0, dy: -stepY },
+      { dx: stepX, dy: stepY },
+      { dx: -stepX, dy: stepY },
+      { dx: stepX, dy: -stepY },
+      { dx: -stepX, dy: -stepY },
+      { dx: stepX * 0.5, dy: 0 },
+      { dx: -stepX * 0.5, dy: 0 },
+      { dx: 0, dy: stepY * 0.5 },
+      { dx: 0, dy: -stepY * 0.5 },
+    ].forEach((off) => {
+      candidates.push({ x: nX + off.dx, y: nY + off.dy, row: 0, col: 0, priority: -5 });
+    });
+  }
 
   // 3. Candidate Generation
   if (panels.length > 0) {
@@ -581,7 +611,7 @@ export function canFitAdditionalPanel({
       });
     }
 
-    // TIER 3: Canonical Grid Expansion across entire usablePolygon
+    // TIER 3: Canonical Grid Expansion across entire usable boundary
     const anchorX = panels[0].x;
     const anchorY = panels[0].y;
     const minK = Math.floor((bounds.minX + pWidth / 2 - anchorX) / stepX) - 1;
@@ -609,15 +639,29 @@ export function canFitAdditionalPanel({
       }
     }
 
+    // TIER 4: Comprehensive Fine-Grained Search for any unblocked spot on roof
+    const fineStepX = Math.max(0.2, pWidth * 0.25);
+    const fineStepY = Math.max(0.2, pLength * 0.25);
+    for (let fy = bounds.maxY - pLength / 2; fy >= bounds.minY + pLength / 2; fy -= fineStepY) {
+      for (let fx = bounds.minX + pWidth / 2; fx <= bounds.maxX - pWidth / 2; fx += fineStepX) {
+        const occupied = panels.some(
+          (p) => Math.abs(p.x - fx) < pWidth * 0.85 && Math.abs(p.y - fy) < pLength * 0.85
+        );
+        if (!occupied) {
+          gridCandidates.push({
+            x: fx,
+            y: fy,
+            row: 0,
+            col: 0,
+            priority: 8,
+          });
+        }
+      }
+    }
+
     // Sort grid candidates by proximity to existing panels (or nearX, nearY)
     const centroidX = nearX != null ? Number(nearX) : panels.reduce((s, p) => s + p.x, 0) / panels.length;
     const centroidY = nearY != null ? Number(nearY) : panels.reduce((s, p) => s + p.y, 0) / panels.length;
-
-    gridCandidates.sort((a, b) => {
-      const distA = Math.hypot(a.x - centroidX, a.y - centroidY);
-      const distB = Math.hypot(b.x - centroidX, b.y - centroidY);
-      return distA - distB;
-    });
 
     candidates.sort((a, b) => {
       if (a.priority !== b.priority) return a.priority - b.priority;
@@ -626,16 +670,22 @@ export function canFitAdditionalPanel({
       return distA - distB;
     });
 
+    gridCandidates.sort((a, b) => {
+      const distA = Math.hypot(a.x - centroidX, a.y - centroidY);
+      const distB = Math.hypot(b.x - centroidX, b.y - centroidY);
+      return distA - distB;
+    });
+
     candidates.push(...gridCandidates);
   } else {
-    // EMPTY ROOF: place the first panel near the clicked location if provided, else on canonical grid
+    // EMPTY ROOF: place the first panel near clicked location or canonical grid
     if (nearX != null && nearY != null) {
       candidates.push({
         x: Number(nearX),
         y: Number(nearY),
         row: 0,
         col: 0,
-        priority: -1, // Highest priority: exactly where the user clicked
+        priority: -1,
       });
     }
 
@@ -673,8 +723,8 @@ export function canFitAdditionalPanel({
       rotation: pRotation,
     };
 
-    // A. Must be completely inside the usable setback polygon (works for arbitrary polygons!)
-    if (!isRectInsidePolygon(candidateObj.x, candidateObj.y, pWidth, pLength, pRotation, usablePolygon)) {
+    // A. Must be completely inside the usable boundary polygon
+    if (!isRectInsidePolygon(candidateObj.x, candidateObj.y, pWidth, pLength, pRotation, boundaryPoly)) {
       continue;
     }
 

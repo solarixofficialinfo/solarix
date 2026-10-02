@@ -56,6 +56,7 @@ export const isPublicRoute = (pathname = "") =>
   pathname === "/login" ||
   pathname === "/register" ||
   pathname === "/forgot-password" ||
+  pathname === "/whatsapp-marketing" ||
   pathname.startsWith("/s/") ||
   pathname.startsWith("/sales/");
 

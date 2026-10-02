@@ -236,11 +236,15 @@ export default function SolarStudio() {
 
   const [activeTool, setActiveTool] = useState("select"); // 'select' | 'draw_roof' | 'edit_roof' | 'add_panel' | 'calibrate'
   const [selectedPanelId, setSelectedPanelId] = useState(null);
+  const [selectedPanelIds, setSelectedPanelIds] = useState([]);
   const [selectedSectionId, setSelectedSectionId] = useState(null);
   const [isSectionSettingsOpen, setIsSectionSettingsOpen] = useState(false);
   const [showMicroAdjust, setShowMicroAdjust] = useState(false);
-  const [selectionMode, setSelectionMode] = useState("panel"); // 'panel' | 'row' | 'array'
+  const [selectionMode, setSelectionMode] = useState("row"); // 'row' | 'group' | 'custom' | 'structure'
   const [selectedRowIndex, setSelectedRowIndex] = useState(null);
+  const [selectedGroupId, setSelectedGroupId] = useState(null);
+  const [selectedMemberId, setSelectedMemberId] = useState(null);
+  const [snapEnabled, setSnapEnabled] = useState(true);
   const [autoLayoutBaselinePanels, setAutoLayoutBaselinePanels] = useState(null);
   const [hasManualAdjustments, setHasManualAdjustments] = useState(false);
   const [isCalibrated, setIsCalibrated] = useState(false);
@@ -1789,6 +1793,7 @@ export default function SolarStudio() {
       rowSpacingMeters: targetRowGap,
       panelSpacingMeters: targetPanelGap,
       azimuthDegrees: targetAzimuth,
+      isManual: true,
     });
 
     if (!check.canFit || !check.newPanel) {
@@ -1802,6 +1807,7 @@ export default function SolarStudio() {
       sectionId: targetSection ? targetSection.id : undefined,
       azimuth: targetAzimuth,
       pitch: Number(targetSection?.pitch ?? 0),
+      isManual: true,
     };
 
     const updatedPanels = [...designData.panels, taggedPanel];
@@ -1828,7 +1834,11 @@ export default function SolarStudio() {
     if (!designData.panels || designData.panels.length === 0) return;
 
     let updatedPanels;
-    if (selectedPanelId) {
+    if (selectedPanelIds && selectedPanelIds.length > 0) {
+      updatedPanels = designData.panels.filter((p) => !selectedPanelIds.includes(p.id));
+      setSelectedPanelIds([]);
+      setSelectedPanelId(null);
+    } else if (selectedPanelId) {
       updatedPanels = designData.panels.filter((p) => p.id !== selectedPanelId);
       setSelectedPanelId(null);
     } else {
@@ -2511,11 +2521,23 @@ export default function SolarStudio() {
           setSelectionMode={setSelectionMode}
           selectedPanelId={selectedPanelId}
           setSelectedPanelId={setSelectedPanelId}
+          selectedPanelIds={selectedPanelIds}
+          setSelectedPanelIds={setSelectedPanelIds}
           selectedRowIndex={selectedRowIndex}
           setSelectedRowIndex={setSelectedRowIndex}
+          selectedGroupId={selectedGroupId}
+          setSelectedGroupId={setSelectedGroupId}
+          structureMembers={designData.structure_members || []}
+          setStructureMembers={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
+          structureNodes={designData.structure_nodes || []}
+          setStructureNodes={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
+          selectedMemberId={selectedMemberId}
+          setSelectedMemberId={setSelectedMemberId}
           autoLayoutBaselinePanels={autoLayoutBaselinePanels}
           hasManualAdjustments={hasManualAdjustments}
           setHasManualAdjustments={setHasManualAdjustments}
+          snapEnabled={snapEnabled}
+          setSnapEnabled={setSnapEnabled}
         />
       )}
 
@@ -2529,28 +2551,32 @@ export default function SolarStudio() {
             {/* FIXED SECTION CONTROL DRAWER (Left fixed side panel) */}
             {openSection && (
               <div
-                className="w-80 shrink-0 border-r border-slate-800 bg-slate-900/98 flex flex-col h-full overflow-y-auto z-20 shadow-2xl p-3.5 text-white space-y-3 animate-in fade-in slide-in-from-left-2 duration-150"
+                className="w-88 sm:w-[360px] shrink-0 border-r border-slate-800 bg-slate-900/98 flex flex-col h-full z-20 shadow-2xl text-white animate-in fade-in slide-in-from-left-2 duration-150 overflow-hidden"
                 style={{ pointerEvents: "auto" }}
               >
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <div className="flex items-center gap-2">
-                  {openSection === "location" && <MapPin className="w-4 h-4 text-blue-400" />}
-                  {openSection === "roof" && <PenTool className="w-4 h-4 text-emerald-400" />}
-                  {openSection === "obstacles" && <Box className="w-4 h-4 text-red-400" />}
-                  {openSection === "pv_module" && <Grid className="w-4 h-4 text-amber-400" />}
-                  {openSection === "structure" && <Layers2 className="w-4 h-4 text-blue-400" />}
-                  {openSection === "layout" && <Sparkles className="w-4 h-4 text-blue-400" />}
-                  <span className="text-xs font-bold uppercase tracking-wider text-slate-200">
-                    {DESIGN_STAGES.find((s) => s.key === openSection)?.label}
-                  </span>
+                {/* Fixed Header */}
+                <div className="p-3.5 pb-2.5 shrink-0 border-b border-slate-800 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    {openSection === "location" && <MapPin className="w-4 h-4 text-blue-400" />}
+                    {openSection === "roof" && <PenTool className="w-4 h-4 text-emerald-400" />}
+                    {openSection === "obstacles" && <Box className="w-4 h-4 text-red-400" />}
+                    {openSection === "pv_module" && <Grid className="w-4 h-4 text-amber-400" />}
+                    {openSection === "structure" && <Layers2 className="w-4 h-4 text-blue-400" />}
+                    {openSection === "layout" && <Sparkles className="w-4 h-4 text-blue-400" />}
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-200">
+                      {DESIGN_STAGES.find((s) => s.key === openSection)?.label}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setOpenSection(null)}
+                    className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 </div>
-                <button
-                  onClick={() => setOpenSection(null)}
-                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
+
+                {/* Scrollable Content Body */}
+                <div className="flex-1 overflow-y-auto p-3.5 space-y-3.5 scrollbar-thin">
 
               {/* SECTION 1: LOCATION CONTROLS */}
               {openSection === "location" && (
@@ -3267,13 +3293,14 @@ export default function SolarStudio() {
                   </div>
                 </div>
               )}
+                </div>
             </div>
           )}
 
           {/* PERSISTENT CANONICAL SECTION INSPECTOR (Active across 2D, 3D, and Split) */}
           {!openSection && isSectionSettingsOpen && activeSection && (
             <div
-              className="w-84 shrink-0 border-r border-slate-800 bg-slate-900/98 flex flex-col h-full overflow-hidden z-20 shadow-2xl animate-in fade-in slide-in-from-left-2 duration-150"
+              className="w-88 sm:w-[360px] shrink-0 border-r border-slate-800 bg-slate-900/98 flex flex-col h-full overflow-hidden z-20 shadow-2xl animate-in fade-in slide-in-from-left-2 duration-150"
               style={{ pointerEvents: "auto" }}
             >
               {/* Header */}
@@ -3832,6 +3859,10 @@ export default function SolarStudio() {
               setActiveTool={setActiveTool}
               selectedPanelId={selectedPanelId}
               setSelectedPanelId={setSelectedPanelId}
+              selectedPanelIds={selectedPanelIds}
+              setSelectedPanelIds={setSelectedPanelIds}
+              selectedGroupId={selectedGroupId}
+              setSelectedGroupId={setSelectedGroupId}
               selectionMode={selectionMode}
               setSelectionMode={setSelectionMode}
               selectedRowIndex={selectedRowIndex}
@@ -3946,6 +3977,10 @@ export default function SolarStudio() {
                     setPanels={handleSetPanels}
                     selectedPanelId={selectedPanelId}
                     setSelectedPanelId={setSelectedPanelId}
+                    selectedPanelIds={selectedPanelIds}
+                    setSelectedPanelIds={setSelectedPanelIds}
+                    selectedGroupId={selectedGroupId}
+                    setSelectedGroupId={setSelectedGroupId}
                     selectionMode={selectionMode}
                     setSelectionMode={setSelectionMode}
                     selectedRowIndex={selectedRowIndex}
@@ -4014,6 +4049,10 @@ export default function SolarStudio() {
                 setActiveTool={setActiveTool}
                 selectedPanelId={selectedPanelId}
                 setSelectedPanelId={setSelectedPanelId}
+                selectedPanelIds={selectedPanelIds}
+                setSelectedPanelIds={setSelectedPanelIds}
+                selectedGroupId={selectedGroupId}
+                setSelectedGroupId={setSelectedGroupId}
                 selectionMode={selectionMode}
                 setSelectionMode={setSelectionMode}
                 selectedRowIndex={selectedRowIndex}
@@ -4063,6 +4102,10 @@ export default function SolarStudio() {
                       setPanels={handleSetPanels}
                       selectedPanelId={selectedPanelId}
                       setSelectedPanelId={setSelectedPanelId}
+                      selectedPanelIds={selectedPanelIds}
+                      setSelectedPanelIds={setSelectedPanelIds}
+                      selectedGroupId={selectedGroupId}
+                      setSelectedGroupId={setSelectedGroupId}
                       selectionMode={selectionMode}
                       setSelectionMode={setSelectionMode}
                       selectedRowIndex={selectedRowIndex}
@@ -4096,25 +4139,27 @@ export default function SolarStudio() {
         </div>
 
         {/* RIGHT COLUMN: COMPACT DESIGN INFORMATION & GALLERY (3 cols on xl = 25%, 4 cols on lg = 33%) */}
-        <div className="xl:col-span-3 lg:col-span-4 overflow-y-auto space-y-2.5">
-          <DesignSummaryPanel
-            designData={designData}
-            savedViews={savedViews}
-            onSelectView={(view) => {
-              setActiveGalleryView(view);
-              setShowGalleryModal(true);
-            }}
-            onOpenGallery={() => setShowGalleryModal(true)}
-            onGenerateViews={handleGenerateViews}
-            onSave={() => handleSaveDesign(false)}
-            onSaveNewVersion={() => handleSaveDesign(true)}
-            onExportPdf={handleExportPdf}
-            onExportDocx={handleExportDocx}
-            onTransferToQuotation={handleTransferToQuotation}
-            onTransferToProposal={handleTransferToProposal}
-            saving={saving}
-            exporting={exporting}
-          />
+        <div className="xl:col-span-3 lg:col-span-4 flex flex-col min-h-0 h-full overflow-hidden">
+          <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 scrollbar-thin">
+            <DesignSummaryPanel
+              designData={designData}
+              savedViews={savedViews}
+              onSelectView={(view) => {
+                setActiveGalleryView(view);
+                setShowGalleryModal(true);
+              }}
+              onOpenGallery={() => setShowGalleryModal(true)}
+              onGenerateViews={handleGenerateViews}
+              onSave={() => handleSaveDesign(false)}
+              onSaveNewVersion={() => handleSaveDesign(true)}
+              onExportPdf={handleExportPdf}
+              onExportDocx={handleExportDocx}
+              onTransferToQuotation={handleTransferToQuotation}
+              onTransferToProposal={handleTransferToProposal}
+              saving={saving}
+              exporting={exporting}
+            />
+          </div>
         </div>
       </div>
 

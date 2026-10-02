@@ -47,6 +47,18 @@ const SolarDesigner = lazy(() => import("@/pages/SolarDesigner"));
 const SolarStudio = lazy(() => import("@/pages/SolarDesigner/SolarStudio"));
 const PublicSalesPortal = lazy(() => import("@/pages/PublicSalesPortal"));
 
+// WhatsApp Marketing Module Pages
+const WhatsAppLayout = lazy(() => import("@/pages/WhatsApp/WhatsAppLayout"));
+const WhatsAppDashboard = lazy(() => import("@/pages/WhatsApp/WhatsAppDashboard"));
+const WhatsAppCampaigns = lazy(() => import("@/pages/WhatsApp/WhatsAppCampaigns"));
+const WhatsAppContacts = lazy(() => import("@/pages/WhatsApp/WhatsAppContacts"));
+const WhatsAppTemplates = lazy(() => import("@/pages/WhatsApp/WhatsAppTemplates"));
+const WhatsAppInbox = lazy(() => import("@/pages/WhatsApp/WhatsAppInbox"));
+const WhatsAppAutomation = lazy(() => import("@/pages/WhatsApp/WhatsAppAutomation"));
+const WhatsAppActivityLog = lazy(() => import("@/pages/WhatsApp/WhatsAppActivityLog"));
+const WhatsAppSettings = lazy(() => import("@/pages/WhatsApp/WhatsAppSettings"));
+const WhatsAppMarketingPublic = lazy(() => import("@/pages/WhatsAppMarketingPublic"));
+
 const ControlCenterLayout = lazy(() => import("@/pages/ControlCenter/ControlCenterLayout"));
 const ControlCenterDashboard = lazy(() => import("@/pages/ControlCenter/ControlCenterDashboard"));
 const CustomerList = lazy(() => import("@/pages/ControlCenter/CustomerList"));
@@ -141,7 +153,7 @@ function PermissionRoute({ page, children }) {
   }
 
   // 2. Check Role / User Permissions
-  const hasPerm = isSuperOrAdmin || page === "complaints" || (user?.permissions?.[page]?.view === true);
+  const hasPerm = isSuperOrAdmin || page === "complaints" || page === "whatsapp" || (user?.permissions?.[page]?.view === true);
 
   if (!hasPerm) {
     const pages = [
@@ -151,6 +163,7 @@ function PermissionRoute({ page, children }) {
       { key: "clients", path: "/clients" },
       { key: "project_execution", path: "/projects" },
       { key: "task_portal", path: "/tasks" },
+      { key: "whatsapp", path: "/whatsapp" },
       { key: "receivables", path: "/receivables" },
       { key: "data_management", path: "/inventory" },
       { key: "material_requests", path: "/material" },
@@ -168,7 +181,7 @@ function PermissionRoute({ page, children }) {
     const allowed = pages.find(
       (p) =>
         (isSuperAdmin || isPageAllowed(p.key)) &&
-        (p.key === "complaints" || isSuperOrAdmin || user?.permissions?.[p.key]?.view === true)
+        (p.key === "complaints" || p.key === "whatsapp" || isSuperOrAdmin || user?.permissions?.[p.key]?.view === true)
     );
     return <Navigate to={allowed ? allowed.path : "/login"} replace />;
   }
@@ -282,6 +295,21 @@ function App() {
             {/* Public Company-Branded Sales / Lead Capture Portal */}
             <Route path="/s/:token" element={<PublicSalesPortal />} />
             <Route path="/sales/:token" element={<PublicSalesPortal />} />
+
+            {/* Public WhatsApp Marketing Landing Page */}
+            <Route path="/whatsapp-marketing" element={<WhatsAppMarketingPublic />} />
+
+            {/* WhatsApp Marketing Module Routes */}
+            <Route path="/whatsapp" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppDashboard /></WhatsAppLayout></PermissionRoute></Protected>} />
+            <Route path="/whatsapp/dashboard" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppDashboard /></WhatsAppLayout></PermissionRoute></Protected>} />
+            <Route path="/whatsapp/campaigns" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppCampaigns /></WhatsAppLayout></PermissionRoute></Protected>} />
+            <Route path="/whatsapp/contacts" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppContacts /></WhatsAppLayout></PermissionRoute></Protected>} />
+            <Route path="/whatsapp/templates" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppTemplates /></WhatsAppLayout></PermissionRoute></Protected>} />
+            <Route path="/whatsapp/inbox" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppInbox /></WhatsAppLayout></PermissionRoute></Protected>} />
+            <Route path="/whatsapp/automation" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppAutomation /></WhatsAppLayout></PermissionRoute></Protected>} />
+            <Route path="/whatsapp/activity" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppActivityLog /></WhatsAppLayout></PermissionRoute></Protected>} />
+            <Route path="/whatsapp/settings" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppSettings /></WhatsAppLayout></PermissionRoute></Protected>} />
+
             <Route path="/dashboard" element={<Protected><PermissionRoute page="dashboard"><MainTabShell activeTab="dashboard" /></PermissionRoute></Protected>} />
             <Route path="/solar-designer" element={<Protected><PermissionRoute page="solar_designer"><SolarDesigner /></PermissionRoute></Protected>} />
             <Route path="/solar-designer/new" element={<Protected><PermissionRoute page="solar_designer"><SolarStudio /></PermissionRoute></Protected>} />

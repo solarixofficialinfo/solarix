@@ -270,7 +270,11 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     setPanels = null,
     selectedPanelId = null,
     setSelectedPanelId = null,
-    selectionMode = "panel", // 'panel' | 'row' | 'array'
+    selectedPanelIds = [],
+    setSelectedPanelIds = null,
+    selectedGroupId: propSelectedGroupId = undefined,
+    setSelectedGroupId: propSetSelectedGroupId = null,
+    selectionMode = "row", // 'row' | 'group' | 'custom' | 'structure'
     setSelectionMode = null,
     selectedRowIndex = null,
     setSelectedRowIndex = null,
@@ -1084,10 +1088,28 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             const hit = pIntersects[0].object;
             const pId = hit.userData?.panelId;
             if (pId) {
-              changeSelectedPanelId(pId);
+              const isShift = Boolean(e.shiftKey);
+              if (setSelectedPanelIds) {
+                if (isShift) {
+                  setSelectedPanelIds((prev = []) => {
+                    const exists = prev.includes(pId);
+                    const next = exists ? prev.filter((id) => id !== pId) : [...prev, pId];
+                    changeSelectedPanelId(next[next.length - 1] || null);
+                    return next;
+                  });
+                } else {
+                  setSelectedPanelIds([pId]);
+                  changeSelectedPanelId(pId);
+                }
+              } else {
+                changeSelectedPanelId(pId);
+              }
               const clickedP = panels.find((item) => item.id === pId);
               if (clickedP && clickedP.row != null) {
                 changeSelectedRowIndex(clickedP.row);
+              }
+              if (clickedP && (clickedP.groupId != null || clickedP.tableId != null)) {
+                setSelectedGroupId?.(clickedP.groupId ?? clickedP.tableId ?? clickedP.row);
               }
             }
           } else {
@@ -1098,13 +1120,15 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
               const secId = hit.userData?.sectionId;
               changeSelectedPanelId(null);
               changeSelectedRowIndex(null);
+              setSelectedPanelIds?.([]);
               if (secId && onSelectSection) {
                 onSelectSection(secId);
               }
             } else {
               setSelectedNodeId(null);
               setSelectedMemberId(null);
-              setSelectedGroupId(null);
+              if (setSelectedGroupId) setSelectedGroupId(null);
+              setSelectedPanelIds?.([]);
               changeSelectedPanelId(null);
               changeSelectedRowIndex(null);
             }
@@ -1798,15 +1822,16 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           }
 
           // 3D Panel Selection Outline Highlight
-          const isSingleSel = activeSelectedPanelId === p.id;
+          const isSingleSel = activeSelectedPanelId === p.id || (Array.isArray(selectedPanelIds) && selectedPanelIds.includes(p.id));
           const isRowSel = activeSelectionMode === "row" && activeSelectedRowIndex != null && p.row === activeSelectedRowIndex;
+          const isGroupSel = (activeSelectionMode === "group" || selectionMode === "group") && selectedGroupId != null && (p.groupId === selectedGroupId || p.tableId === selectedGroupId || p.row === selectedGroupId);
           const isArraySel = activeSelectionMode === "array" && (activeSelectedPanelId != null || activeSelectedRowIndex != null);
-          const isPanelHighlighted = isSingleSel || isRowSel || isArraySel;
+          const isPanelHighlighted = isSingleSel || isRowSel || isGroupSel || isArraySel;
 
           if (isPanelHighlighted) {
             const selGeom = new THREE.EdgesGeometry(new THREE.BoxGeometry(pw + 0.03, 0.055, pl + 0.03));
             const selMat = new THREE.LineBasicMaterial({
-              color: isSingleSel ? 0x06b6d4 : 0xf59e0b,
+              color: isSingleSel ? 0x06b6d4 : (isGroupSel ? 0x10b981 : 0xf59e0b),
               linewidth: 3,
             });
             const selOutline = new THREE.LineSegments(selGeom, selMat);
