@@ -13,7 +13,10 @@ import {
   Save,
   Server,
   AlertTriangle,
-  ExternalLink
+  ExternalLink,
+  Code2,
+  Terminal,
+  Zap
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,13 +26,17 @@ import { toast } from "sonner";
 export default function WhatsAppSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [copiedCurl, setCopiedCurl] = useState(false);
+  const [regeneratingKey, setRegeneratingKey] = useState(false);
 
   // Settings State
   const [providerType, setProviderType] = useState("native");
   const [name, setName] = useState("Live WhatsApp Multi-Device Gateway");
-  const [apiUrl, setApiUrl] = useState("");
+  const [apiUrl, setApiUrl] = useState("http://127.0.0.1:8085");
   const [apiKey, setApiKey] = useState("");
+  const [clientApiKey, setClientApiKey] = useState("");
   const [instanceName, setInstanceName] = useState("solarix_primary");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [phoneNumberId, setPhoneNumberId] = useState("");
@@ -47,8 +54,9 @@ export default function WhatsAppSettings() {
       const d = res.data;
       setProviderType(d.provider_type || "native");
       setName(d.name || "Live WhatsApp Multi-Device Gateway");
-      setApiUrl(d.api_url || "");
-      setApiKey(d.api_key_masked || "");
+      setApiUrl(d.api_url || "http://127.0.0.1:8085");
+      setApiKey(d.api_key || d.api_key_masked || "");
+      setClientApiKey(d.api_key || d.api_key_masked || "");
       setInstanceName(d.instance_name || "solarix_primary");
       setPhoneNumber(d.phone_number || "");
       setPhoneNumberId(d.phone_number_id || "");
@@ -97,11 +105,50 @@ export default function WhatsAppSettings() {
     }
   };
 
+  const handleRegenerateKey = async () => {
+    if (!window.confirm("Are you sure you want to regenerate your client WhatsApp API key? Any external integration using your old key will need to be updated.")) {
+      return;
+    }
+    try {
+      setRegeneratingKey(true);
+      const res = await api.post("/whatsapp/providers/regenerate-api-key");
+      if (res.data?.success) {
+        setClientApiKey(res.data.api_key);
+        setApiKey(res.data.api_key);
+        toast.success("New secure client API Key generated successfully!");
+      }
+    } catch (e) {
+      toast.error("Failed to regenerate API key");
+    } finally {
+      setRegeneratingKey(false);
+    }
+  };
+
+  const copyApiKey = () => {
+    if (!clientApiKey) return;
+    navigator.clipboard.writeText(clientApiKey);
+    setCopiedKey(true);
+    toast.success("Client API Key copied to clipboard");
+    setTimeout(() => setCopiedKey(false), 2000);
+  };
+
   const copyWebhook = () => {
     navigator.clipboard.writeText(webhookUrl);
-    setCopied(true);
+    setCopiedWebhook(true);
     toast.success("Webhook URL copied to clipboard");
-    setTimeout(() => setCopied(false), 2000);
+    setTimeout(() => setCopiedWebhook(false), 2000);
+  };
+
+  const curlSnippet = `curl -X POST "${apiUrl || "http://127.0.0.1:8085"}/send/text" \\
+  -H "apikey: ${clientApiKey || "YOUR_API_KEY"}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"number": "919876543210", "text": "Hello from Solarix CRM!"}'`;
+
+  const copyCurl = () => {
+    navigator.clipboard.writeText(curlSnippet);
+    setCopiedCurl(true);
+    toast.success("cURL example copied to clipboard");
+    setTimeout(() => setCopiedCurl(false), 2000);
   };
 
   return (
@@ -112,14 +159,114 @@ export default function WhatsAppSettings() {
           WhatsApp Gateway & Provider Settings
         </h2>
         <p className="text-xs text-slate-500">
-          Configure server-side credentials for Evolution Go, Meta WhatsApp Cloud API, and webhook security.
+          Configure multi-tenant Evolution engine credentials, client API keys, and automated webhook routing.
         </p>
+      </div>
+
+      {/* ─── DEDICATED CLIENT INSTANCE & DYNAMIC API KEY CARD ─── */}
+      <div className="p-6 bg-gradient-to-br from-slate-900 to-slate-950 text-white rounded-2xl shadow-md border border-slate-800 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400">
+              <Key className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-white tracking-wide">Client Instance & Dynamic API Key</h3>
+                <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 text-[10px] font-mono">
+                  State-Wise Isolated
+                </Badge>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Every client in Solarix gets an isolated WhatsApp instance and auto-generated secret API key.
+              </p>
+            </div>
+          </div>
+
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleRegenerateKey}
+            disabled={regeneratingKey}
+            className="text-xs h-8 bg-slate-800/80 border-slate-700 text-slate-200 hover:bg-slate-700 hover:text-white gap-1.5"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${regeneratingKey ? "animate-spin" : ""}`} />
+            {regeneratingKey ? "Regenerating..." : "Regenerate API Key"}
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+          <div>
+            <label className="text-[11px] font-semibold text-slate-300 block mb-1.5">
+              Client Instance Identifier
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                readOnly
+                value={instanceName}
+                className="bg-slate-800/70 border-slate-700 text-slate-200 font-mono text-xs h-9"
+              />
+              <Badge variant="outline" className="border-slate-700 text-slate-400 text-[10px] px-2 py-1 shrink-0">
+                Tenant ID
+              </Badge>
+            </div>
+            <p className="text-[10px] text-slate-500 mt-1">
+              Deterministic per-company instance mapping.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-[11px] font-semibold text-slate-300 block mb-1.5">
+              Dynamic Client Secret API Key
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                readOnly
+                value={clientApiKey || "Generating..."}
+                type="text"
+                className="bg-slate-800/70 border-slate-700 text-emerald-400 font-mono text-xs h-9 tracking-wider"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={copyApiKey}
+                className="text-xs h-9 bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 gap-1.5 shrink-0"
+              >
+                {copiedKey ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedKey ? "Copied" : "Copy"}
+              </Button>
+            </div>
+            <p className="text-[10px] text-slate-500 mt-1">
+              Pass as <code className="text-slate-400">apikey</code> header for client-level authentication.
+            </p>
+          </div>
+        </div>
+
+        {/* cURL Usage Box */}
+        <div className="pt-2">
+          <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1.5">
+            <span className="flex items-center gap-1.5">
+              <Terminal className="w-3.5 h-3.5 text-blue-400" />
+              Developer API Quick Dispatch Snippet (Evolution Compatible)
+            </span>
+            <button
+              onClick={copyCurl}
+              className="text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-1"
+            >
+              {copiedCurl ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+              {copiedCurl ? "Copied Snippet" : "Copy cURL"}
+            </button>
+          </div>
+          <pre className="p-3 bg-slate-950/80 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-300 overflow-x-auto leading-relaxed">
+            {curlSnippet}
+          </pre>
+        </div>
       </div>
 
       {/* Provider Selector Cards */}
       <div className="p-6 bg-white border border-slate-200 rounded-2xl shadow-xs space-y-4">
         <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-          Select Active WhatsApp Provider
+          Select Active WhatsApp Gateway Engine
         </label>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -127,20 +274,20 @@ export default function WhatsAppSettings() {
             {
               id: "native",
               title: "WhatsApp Multi-Device Gateway",
-              badge: "Official Linked Device",
-              desc: "Direct WhatsApp Multi-Device connection with live QR code pairing via WhatsApp > Linked Devices.",
+              badge: "Evolution Compatible",
+              desc: "Direct multi-device gateway running on port 8085 with live QR & phone pairing code support.",
+            },
+            {
+              id: "evolution_go",
+              title: "Evolution Go / Evolution API",
+              badge: "v1 / v2 Engine",
+              desc: "External or remote Evolution Go instance with multi-tenant token authorization.",
             },
             {
               id: "whatsapp_cloud",
               title: "WhatsApp Cloud API",
               badge: "Official Meta",
               desc: "Official Meta WhatsApp Business Graph API for enterprise accounts with approved templates.",
-            },
-            {
-              id: "evolution_go",
-              title: "Evolution Go",
-              badge: "External Gateway",
-              desc: "External Evolution API instance with remote webhook dispatch.",
             },
           ].map((p) => {
             const active = providerType === p.id;
@@ -173,33 +320,32 @@ export default function WhatsAppSettings() {
         <div className="p-6 bg-white border border-slate-200 rounded-2xl shadow-xs space-y-4">
           <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
             <Smartphone className="w-4 h-4 text-emerald-600" />
-            <h3 className="text-sm font-bold text-slate-900">Live WhatsApp Multi-Device Settings</h3>
+            <h3 className="text-sm font-bold text-slate-900">Live WhatsApp Multi-Device Gateway Configuration</h3>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">Instance Identifier</label>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">Gateway Base URL</label>
               <Input
-                placeholder="solarix_primary"
-                value={instanceName}
-                onChange={(e) => setInstanceName(e.target.value)}
-                className="text-xs h-9"
+                placeholder="http://127.0.0.1:8085"
+                value={apiUrl}
+                onChange={(e) => setApiUrl(e.target.value)}
+                className="text-xs h-9 font-mono"
               />
+              <p className="text-[10px] text-slate-400 mt-1">Default local gateway port is 8085.</p>
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">Connected Phone Number</label>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">Connected WhatsApp Number</label>
               <Input
                 readOnly
                 placeholder="Not connected — Click Connect / QR in top banner"
                 value={phoneNumber || ""}
                 className="text-xs h-9 bg-slate-50 text-slate-700"
               />
+              <p className="text-[10px] text-slate-400 mt-1">Status updates automatically when device is linked.</p>
             </div>
           </div>
-          <p className="text-[11px] text-slate-500">
-            Powered by Baileys Multi-Device Engine. Connects directly to web.whatsapp.com with multi-device encryption.
-          </p>
         </div>
       )}
 
@@ -208,28 +354,27 @@ export default function WhatsAppSettings() {
         <div className="p-6 bg-white border border-slate-200 rounded-2xl shadow-xs space-y-4">
           <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
             <Server className="w-4 h-4 text-emerald-600" />
-            <h3 className="text-sm font-bold text-slate-900">Evolution Go Connection Settings</h3>
+            <h3 className="text-sm font-bold text-slate-900">Evolution Go Server Connection Settings</h3>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-xs font-semibold text-slate-700 block mb-1">Evolution API URL *</label>
               <Input
-                placeholder="https://api.evolution.example.com"
+                placeholder="http://127.0.0.1:8085 or https://evolution.example.com"
                 value={apiUrl}
                 onChange={(e) => setApiUrl(e.target.value)}
-                className="text-xs h-9"
+                className="text-xs h-9 font-mono"
               />
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-slate-700 block mb-1">API Key (Server-side Encrypted) *</label>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">Evolution API Key *</label>
               <Input
-                type="password"
                 placeholder="Enter Evolution API token"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                className="text-xs h-9"
+                className="text-xs h-9 font-mono"
               />
             </div>
 
@@ -239,7 +384,7 @@ export default function WhatsAppSettings() {
                 placeholder="solarix_primary"
                 value={instanceName}
                 onChange={(e) => setInstanceName(e.target.value)}
-                className="text-xs h-9"
+                className="text-xs h-9 font-mono"
               />
             </div>
 
@@ -322,7 +467,7 @@ export default function WhatsAppSettings() {
         </div>
 
         <p className="text-xs text-slate-500 leading-relaxed">
-          Configure this URL in your Evolution API instance or Meta App Webhook dashboard to receive delivery reports, read receipts, and inbound customer replies.
+          Configure this URL in your Evolution API instance or Meta App Webhook dashboard to receive delivery reports, read receipts, and inbound customer replies with client instance metadata.
         </p>
 
         <div className="flex items-center gap-2">
@@ -332,8 +477,8 @@ export default function WhatsAppSettings() {
             className="text-xs font-mono bg-slate-50 border-slate-200 text-slate-700 flex-1"
           />
           <Button size="sm" variant="outline" onClick={copyWebhook} className="text-xs h-9 gap-1.5 shrink-0">
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-            {copied ? "Copied" : "Copy URL"}
+            {copiedWebhook ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+            {copiedWebhook ? "Copied" : "Copy URL"}
           </Button>
         </div>
       </div>

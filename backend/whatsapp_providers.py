@@ -80,13 +80,32 @@ class EvolutionGoProvider(WhatsAppProvider):
     """
     def __init__(self, credentials: Dict[str, Any], settings: Optional[Dict[str, Any]] = None):
         super().__init__(credentials, settings)
-        self.api_url = (self.credentials.get("api_url") or "").rstrip("/")
+        self.api_url = (self.credentials.get("api_url") or "http://127.0.0.1:8085").rstrip("/")
         self.api_key = self.credentials.get("api_key") or ""
-        self.instance_name = self.credentials.get("instance_name") or "solarix_crm"
+        self.instance_name = self.credentials.get("instance_name") or "solarix_primary"
         self.headers = {
             "apikey": self.api_key,
             "Content-Type": "application/json"
         }
+
+    async def requestPairingCode(self, phone: str) -> Dict[str, Any]:
+        if not self.api_url:
+            return {"success": False, "error": "Evolution API URL is required."}
+        clean_phone = "".join(filter(str.isdigit, phone))
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                url = f"{self.api_url}/instance/pairing-code/{self.instance_name}"
+                res = await client.post(url, json={"phone": clean_phone, "number": clean_phone, "instanceName": self.instance_name}, headers=self.headers)
+                if res.status_code in (200, 201):
+                    return res.json()
+                # Fallback to /instance/pair
+                url_alt = f"{self.api_url}/instance/pair"
+                res_alt = await client.post(url_alt, json={"number": clean_phone, "phone": clean_phone}, headers=self.headers)
+                if res_alt.status_code in (200, 201):
+                    return res_alt.json()
+                return {"success": False, "error": f"Evolution API pairing error: {res.text}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     async def connect(self) -> Dict[str, Any]:
         if not self.api_url or not self.api_key:
@@ -522,18 +541,25 @@ class SimulatedProvider(WhatsAppProvider):
 
 class NativeBaileysProvider(WhatsAppProvider):
     """
-    Live WhatsApp Multi-Device Gateway powered by Baileys Node Engine.
+    Live WhatsApp Multi-Device Gateway powered by Baileys Multi-Tenant Node Engine.
     Connects to official WhatsApp servers, emits genuine scannable QR codes,
-    and connects directly to the user's phone.
+    and supports multi-tenant isolation per client instance.
     """
     def __init__(self, credentials: Dict[str, Any], settings: Optional[Dict[str, Any]] = None):
         super().__init__(credentials, settings)
-        self.engine_url = os.environ.get("WHATSAPP_ENGINE_URL", "http://127.0.0.1:8085").rstrip("/")
+        self.engine_url = (self.credentials.get("api_url") or os.environ.get("WHATSAPP_ENGINE_URL", "http://127.0.0.1:8085")).rstrip("/")
+        self.instance_name = self.credentials.get("instance_name") or "solarix_primary"
+        self.api_key = self.credentials.get("api_key") or ""
+        self.headers = {"apikey": self.api_key, "Content-Type": "application/json"}
 
     async def connect(self) -> Dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=25.0) as client:
-                res = await client.post(f"{self.engine_url}/connect")
+                res = await client.post(
+                    f"{self.engine_url}/instance/connect/{self.instance_name}",
+                    json={"instanceName": self.instance_name, "token": self.api_key},
+                    headers=self.headers
+                )
                 if res.status_code == 200:
                     return res.json()
                 return {"success": False, "status": "disconnected", "error": f"Gateway error: {res.text}"}
@@ -543,7 +569,11 @@ class NativeBaileysProvider(WhatsAppProvider):
     async def disconnect(self) -> Dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.post(f"{self.engine_url}/disconnect")
+                res = await client.post(
+                    f"{self.engine_url}/instance/disconnect/{self.instance_name}",
+                    json={"instanceName": self.instance_name},
+                    headers=self.headers
+                )
                 return res.json() if res.status_code == 200 else {"success": True, "status": "disconnected"}
         except Exception:
             return {"success": True, "status": "disconnected"}
@@ -551,7 +581,10 @@ class NativeBaileysProvider(WhatsAppProvider):
     async def getStatus(self) -> Dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=6.0) as client:
-                res = await client.get(f"{self.engine_url}/status")
+                res = await client.get(
+                    f"{self.engine_url}/instance/connectionState/{self.instance_name}",
+                    headers=self.headers
+                )
                 if res.status_code == 200:
                     return res.json()
                 return {"connected": False, "status": "disconnected", "phone_number": None, "uptime_seconds": 0}
@@ -561,7 +594,11 @@ class NativeBaileysProvider(WhatsAppProvider):
     async def requestPairingCode(self, phone: str) -> Dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=25.0) as client:
-                res = await client.post(f"{self.engine_url}/pairing-code", json={"phone": phone})
+                res = await client.post(
+                    f"{self.engine_url}/instance/pairing-code/{self.instance_name}",
+                    json={"phone": phone, "number": phone, "instanceName": self.instance_name},
+                    headers=self.headers
+                )
                 return res.json() if res.status_code in (200, 400) else {"success": False, "error": res.text}
         except Exception as e:
             return {"success": False, "error": f"Gateway error: {e}"}
@@ -569,7 +606,11 @@ class NativeBaileysProvider(WhatsAppProvider):
     async def sendText(self, phone: str, text: str) -> Dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.post(f"{self.engine_url}/send-text", json={"phone": phone, "text": text})
+                res = await client.post(
+                    f"{self.engine_url}/message/sendText/{self.instance_name}",
+                    json={"phone": phone, "number": phone, "text": text},
+                    headers=self.headers
+                )
                 if res.status_code == 200:
                     return res.json()
                 return {"success": False, "error": res.text, "status": "failed"}
@@ -579,12 +620,18 @@ class NativeBaileysProvider(WhatsAppProvider):
     async def sendMedia(self, phone: str, media_url: str, caption: Optional[str] = None, media_type: str = "image") -> Dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=25.0) as client:
-                res = await client.post(f"{self.engine_url}/send-media", json={
-                    "phone": phone,
-                    "media_url": media_url,
-                    "caption": caption,
-                    "media_type": media_type
-                })
+                res = await client.post(
+                    f"{self.engine_url}/message/sendMedia/{self.instance_name}",
+                    json={
+                        "phone": phone,
+                        "number": phone,
+                        "media_url": media_url,
+                        "media": media_url,
+                        "caption": caption,
+                        "media_type": media_type
+                    },
+                    headers=self.headers
+                )
                 if res.status_code == 200:
                     return res.json()
                 return {"success": False, "error": res.text, "status": "failed"}
@@ -609,12 +656,18 @@ class NativeBaileysProvider(WhatsAppProvider):
 def get_whatsapp_provider(provider_type: str, credentials: Dict[str, Any], settings: Optional[Dict[str, Any]] = None) -> WhatsAppProvider:
     """
     Factory to instantiate the appropriate WhatsApp Provider.
-    Defaults to live NativeBaileysProvider for authentic multi-device QR scanning.
+    Supports:
+    - "native": Built-in Multi-Tenant Baileys Gateway (Evolution-compatible)
+    - "evolution_go": Evolution API Gateway (Local or Remote)
+    - "whatsapp_cloud": Official Meta Cloud API
+    - "simulated": Offline Testing Simulation
     """
     pt = (provider_type or "native").lower()
     if pt == "whatsapp_cloud":
         if credentials and credentials.get("phone_number_id") and credentials.get("access_token"):
             return WhatsAppCloudApiProvider(credentials, settings)
+    elif pt in ("evolution_go", "evolution"):
+        return EvolutionGoProvider(credentials, settings)
     elif pt == "simulated":
         return SimulatedProvider(credentials, settings)
     # Default to live NativeBaileysProvider for authentic phone QR linking

@@ -122,9 +122,13 @@ async def log_whatsapp_activity(
 # ─── DEFAULT SEEDING HELPER ──────────────────────────────────────────────────
 async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GVP Solar Energy"):
     """
-    Ensure default active provider, initial templates, and sample automations exist for company.
+    Ensure default active provider, client instance, initial templates, and sample automations exist for company.
+    Guarantees every client has their own isolated instance name and dedicated API key.
     """
     db = get_db()
+    client_instance_name = f"solarix_{company_id[:8]}"
+    client_api_key = f"sol_evo_{company_id[:8]}_{uuid.uuid4().hex[:12]}"
+
     # 1. Provider
     prov = await db.whatsapp_providers.find_one({"company_id": company_id})
     if not prov:
@@ -135,7 +139,9 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
             "name": "Live WhatsApp Multi-Device Gateway",
             "is_active": True,
             "credentials": {
-                "instance_name": "solarix_primary"
+                "instance_name": client_instance_name,
+                "api_key": client_api_key,
+                "api_url": "http://127.0.0.1:8085"
             },
             "settings": {
                 "rate_limit_per_min": 60,
@@ -146,11 +152,21 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
             "updated_at": now_iso()
         }
         await db.whatsapp_providers.insert_one(default_prov)
-    elif prov.get("provider_type") == "simulated":
-        await db.whatsapp_providers.update_one(
-            {"company_id": company_id},
-            {"$set": {"provider_type": "native", "name": "Live WhatsApp Multi-Device Gateway", "updated_at": now_iso()}}
-        )
+    else:
+        creds = prov.get("credentials") or {}
+        updates = {}
+        if not creds.get("instance_name") or creds.get("instance_name") == "solarix_primary":
+            updates["credentials.instance_name"] = client_instance_name
+        if not creds.get("api_key"):
+            updates["credentials.api_key"] = client_api_key
+        if not creds.get("api_url"):
+            updates["credentials.api_url"] = "http://127.0.0.1:8085"
+        if prov.get("provider_type") == "simulated":
+            updates["provider_type"] = "native"
+            updates["name"] = "Live WhatsApp Multi-Device Gateway"
+        if updates:
+            updates["updated_at"] = now_iso()
+            await db.whatsapp_providers.update_one({"company_id": company_id}, {"$set": updates})
 
     # 2. Instance
     inst = await db.whatsapp_instances.find_one({"company_id": company_id})
@@ -158,28 +174,43 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
         default_inst = {
             "id": str(uuid.uuid4()),
             "company_id": company_id,
-            "instance_name": "solarix_primary",
+            "instance_name": client_instance_name,
             "phone_number": None,
             "status": "disconnected",
             "uptime_seconds": 0,
             "last_connected_at": None,
-            "metadata": {"platform": "Baileys Multi-Device Native Engine v7.0"},
+            "metadata": {"platform": "Solarix Multi-Tenant Evolution Gateway v7.0"},
             "created_at": now_iso(),
             "updated_at": now_iso()
         }
         await db.whatsapp_instances.insert_one(default_inst)
-    elif inst.get("phone_number") == "+91 98765 43210":
-        # Reset previous fake dummy data so user can pair their actual device
-        await db.whatsapp_instances.update_one(
-            {"company_id": company_id},
-            {"$set": {
-                "phone_number": None,
-                "status": "disconnected",
-                "uptime_seconds": 0,
-                "qr_code": None,
-                "updated_at": now_iso()
-            }}
-        )
+    else:
+        inst_updates = {}
+        if not inst.get("instance_name") or inst.get("instance_name") == "solarix_primary":
+            inst_updates["instance_name"] = client_instance_name
+        if inst.get("phone_number") == "+91 98765 43210":
+            inst_updates["phone_number"] = None
+            inst_updates["status"] = "disconnected"
+            inst_updates["uptime_seconds"] = 0
+            inst_updates["qr_code"] = None
+        if inst_updates:
+            inst_updates["updated_at"] = now_iso()
+            await db.whatsapp_instances.update_one({"company_id": company_id}, {"$set": inst_updates})
+
+    # Auto-provision on local engine
+    try:
+        import httpx
+        final_prov = await db.whatsapp_providers.find_one({"company_id": company_id})
+        f_creds = (final_prov or {}).get("credentials") or {}
+        f_name = f_creds.get("instance_name") or client_instance_name
+        f_key = f_creds.get("api_key") or client_api_key
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            await client.post(
+                "http://127.0.0.1:8085/instance/create",
+                json={"instanceName": f_name, "token": f_key, "qrcode": False}
+            )
+    except Exception:
+        pass
 
     # 3. Default high-converting Solar templates
     tmpl_count = await db.whatsapp_templates.count_documents({"company_id": company_id})
@@ -874,9 +905,11 @@ async def get_provider_settings(user: dict = Depends(get_current_user_dep())):
     return {
         "provider_type": prov.get("provider_type", "native"),
         "name": prov.get("name", "Live WhatsApp Multi-Device Gateway"),
-        "api_url": creds.get("api_url", ""),
+        "api_url": creds.get("api_url") or "http://127.0.0.1:8085",
+        "client_gateway_url": creds.get("api_url") or "http://127.0.0.1:8085",
+        "api_key": creds.get("api_key", ""),
         "api_key_masked": masked_key,
-        "instance_name": creds.get("instance_name", "solarix_primary"),
+        "instance_name": creds.get("instance_name") or f"solarix_{company_id[:8]}",
         "phone_number": creds.get("phone_number") or inst_phone or "",
         "phone_number_id": creds.get("phone_number_id", ""),
         "access_token_masked": masked_token,
@@ -902,9 +935,9 @@ async def save_provider_settings(payload: ProviderSettingsIn, user: dict = Depen
     token_val = payload.access_token if payload.access_token and not "••••" in payload.access_token else existing_creds.get("access_token", "")
 
     creds = {
-        "api_url": payload.api_url,
+        "api_url": payload.api_url or "http://127.0.0.1:8085",
         "api_key": api_key_val,
-        "instance_name": payload.instance_name,
+        "instance_name": payload.instance_name or f"solarix_{company_id[:8]}",
         "phone_number": payload.phone_number,
         "phone_number_id": payload.phone_number_id,
         "access_token": token_val,
@@ -933,8 +966,53 @@ async def save_provider_settings(payload: ProviderSettingsIn, user: dict = Depen
         {"$set": doc},
         upsert=True
     )
-    await log_whatsapp_activity(company_id, "provider_settings_updated", user=user, details={"provider_type": payload.provider_type})
+    # Sync instance document
+    await db.whatsapp_instances.update_one(
+        {"company_id": company_id},
+        {"$set": {"instance_name": creds["instance_name"], "updated_at": now_iso()}},
+        upsert=True
+    )
+    await log_whatsapp_activity(company_id, "provider_settings_updated", user=user, details={"provider_type": payload.provider_type, "instance_name": creds["instance_name"]})
     return {"success": True, "message": "WhatsApp Provider settings saved successfully."}
+
+@whatsapp_router.post("/providers/regenerate-api-key")
+async def regenerate_api_key(user: dict = Depends(get_current_user_dep())):
+    company_id = user["company_id"]
+    db = get_db()
+    prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
+    if not prov:
+        await ensure_default_whatsapp_setup(company_id)
+        prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
+
+    creds = (prov or {}).get("credentials") or {}
+    inst_name = creds.get("instance_name") or f"solarix_{company_id[:8]}"
+    new_api_key = f"sol_evo_{company_id[:8]}_{uuid.uuid4().hex[:12]}"
+
+    await db.whatsapp_providers.update_one(
+        {"company_id": company_id, "is_active": True},
+        {"$set": {
+            "credentials.api_key": new_api_key,
+            "credentials.instance_name": inst_name,
+            "updated_at": now_iso()
+        }}
+    )
+
+    # Sync instance creation with gateway
+    try:
+        import httpx
+        gateway_url = (creds.get("api_url") or "http://127.0.0.1:8085").rstrip("/")
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(f"{gateway_url}/instance/create", json={"instanceName": inst_name, "token": new_api_key})
+    except Exception:
+        pass
+
+    await log_whatsapp_activity(company_id, "api_key_regenerated", user=user, details={"instance_name": inst_name})
+    return {
+        "success": True,
+        "instance_name": inst_name,
+        "api_key": new_api_key,
+        "message": "New client API key generated successfully."
+    }
 
 
 # ─── 4. AUDIENCE SELECTION (CRM CLIENTS & LEADS) ─────────────────────────────
@@ -1703,15 +1781,23 @@ async def handle_whatsapp_webhook(
             phone = ev.get("phone_number")
             text = ev.get("text")
             sender = ev.get("sender_name")
+            inst_name = ev.get("instance_name") or payload.get("instance_name") or payload.get("instance")
             if phone and text:
-                # Find matching company / client
-                clean_p = "".join(filter(str.isdigit, phone))[-10:]
-                matched_client = await db.clients.find_one({"mobile": {"$regex": clean_p}})
-                raw_company_id = matched_client.get("company_id") if matched_client else None
-                if not raw_company_id:
-                    comp = await db.companies.find_one()
-                    raw_company_id = comp.get("id") if comp else "default"
-                company_id: str = str(raw_company_id or "default")
+                company_id = None
+                if inst_name:
+                    matching_prov = await db.whatsapp_providers.find_one({"credentials.instance_name": inst_name})
+                    if matching_prov:
+                        company_id = matching_prov.get("company_id")
+                if not company_id:
+                    # Find matching company / client
+                    clean_p = "".join(filter(str.isdigit, phone))[-10:]
+                    matched_client = await db.clients.find_one({"mobile": {"$regex": clean_p}})
+                    raw_company_id = matched_client.get("company_id") if matched_client else None
+                    if not raw_company_id:
+                        comp = await db.companies.find_one()
+                        raw_company_id = comp.get("id") if comp else "default"
+                    company_id = raw_company_id
+                company_id = str(company_id or "default")
 
                 # Update or create conversation
                 conv = await db.whatsapp_conversations.find_one({"phone_number": phone, "company_id": company_id})

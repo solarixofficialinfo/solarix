@@ -1,9 +1,28 @@
 /**
- * SOLARIX CRM — LIVE NATIVE WHATSAPP MULTI-DEVICE GATEWAY ENGINE
+ * SOLARIX CRM — MULTI-TENANT EVOLUTION-COMPATIBLE WHATSAPP GATEWAY
  * Powered by @whiskeysockets/baileys.
- * Generates REAL WhatsApp Multi-Device QR codes and 8-digit Pairing Codes
- * that connect directly to the official WhatsApp mobile application.
+ *
+ * Features:
+ * 1. Multi-Tenant Instance Management:
+ *    - Each client / company gets an isolated instance (e.g. solarix_a1b2c3d4)
+ *    - Dedicated auth directory per instance (auth_info_baileys/<instance_name>)
+ *    - Independent Baileys WebSocket connection
+ *    - Independent QR code & 8-digit pairing code generation
+ *    - Per-client API key validation
+ * 2. Full Evolution Go & Evolution API v1/v2 compatibility:
+ *    - POST /instance/create
+ *    - GET /instance/all
+ *    - GET /instance/status & /instance/connectionState/:instance
+ *    - POST /instance/connect & /instance/connect/:instance
+ *    - GET /instance/qr & /instance/qr/:instance
+ *    - POST /instance/pair & /instance/pairing-code
+ *    - POST /instance/disconnect & DELETE /instance/logout/:instance
+ *    - DELETE /instance/delete/:instance
+ *    - POST /send/text & /message/sendText/:instance & /send-text
+ *    - POST /send/media & /message/sendMedia/:instance & /send-media
+ * 3. Inbound Webhooks forwarded to Solarix backend with instance_name metadata.
  */
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -24,22 +43,11 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.WHATSAPP_ENGINE_PORT || 8085;
-const AUTH_DIR = path.join(__dirname, 'auth_info_baileys');
+const AUTH_BASE_DIR = path.join(__dirname, 'auth_info_baileys');
 const SOLRIX_WEBHOOK_URL = process.env.SOLRIX_WEBHOOK_URL || 'http://127.0.0.1:8000/api/whatsapp/webhook/native';
 
-let sock = null;
-let currentQR = null;
-let currentQRDataUrl = null;
-let connectionStatus = 'disconnected'; // 'disconnected' | 'connecting' | 'qr_ready' | 'connected'
-let connectedPhone = null;
-let connectedName = null;
-let connectionStartTime = null;
-let reconnectAttempts = 0;
-let isInitializing = false;
-
-// Ensure auth dir exists
-if (!fs.existsSync(AUTH_DIR)) {
-  fs.mkdirSync(AUTH_DIR, { recursive: true });
+if (!fs.existsSync(AUTH_BASE_DIR)) {
+  fs.mkdirSync(AUTH_BASE_DIR, { recursive: true });
 }
 
 function cleanPhoneNumber(raw) {
@@ -49,370 +57,595 @@ function cleanPhoneNumber(raw) {
   return numOnly.startsWith('+') ? numOnly : `+${numOnly}`;
 }
 
-async function forwardToSolarix(events) {
+async function forwardToSolarix(instanceName, events) {
   try {
     await fetch(SOLRIX_WEBHOOK_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ events }),
+      body: JSON.stringify({ instance_name: instanceName, events }),
     });
   } catch (err) {
-    // Backend may be starting or offline
+    // Backend may be offline or starting up
   }
 }
 
-async function initWhatsApp(forceNew = false) {
-  if (isInitializing) return;
-  isInitializing = true;
+// ─── INSTANCE CLASS ─────────────────────────────────────────────────────────
 
-  try {
-    if (sock) {
-      try {
-        sock.ev.removeAllListeners();
-        sock.end();
-      } catch (e) {}
-      sock = null;
+class WhatsAppInstance {
+  constructor(name, token = '') {
+    this.name = name;
+    this.token = token;
+    this.authDir = path.join(AUTH_BASE_DIR, name);
+    this.sock = null;
+    this.currentQR = null;
+    this.currentQRDataUrl = null;
+    this.connectionStatus = 'disconnected'; // 'disconnected' | 'connecting' | 'qr_ready' | 'connected'
+    this.connectedPhone = null;
+    this.connectedName = null;
+    this.connectionStartTime = null;
+    this.reconnectAttempts = 0;
+    this.isInitializing = false;
+
+    if (!fs.existsSync(this.authDir)) {
+      fs.mkdirSync(this.authDir, { recursive: true });
     }
+  }
 
-    if (forceNew) {
-      currentQR = null;
-      currentQRDataUrl = null;
-      connectedPhone = null;
-      connectedName = null;
-      connectionStatus = 'disconnected';
-      if (fs.existsSync(AUTH_DIR)) {
-        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-        fs.mkdirSync(AUTH_DIR, { recursive: true });
-      }
-    }
+  hasStoredCredentials() {
+    const credsPath = path.join(this.authDir, 'creds.json');
+    return fs.existsSync(credsPath);
+  }
 
-    connectionStatus = 'connecting';
-    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-    const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1015901307] }));
+  async init(forceNew = false) {
+    if (this.isInitializing) return;
+    this.isInitializing = true;
 
-    sock = makeWASocket({
-      version,
-      auth: state,
-      logger: pino({ level: 'silent' }),
-      printQRInTerminal: false,
-      browser: Browsers.macOS('Chrome'),
-      syncFullHistory: false,
-      connectTimeoutMs: 60000,
-      defaultQueryTimeoutMs: 60000,
-      keepAliveIntervalMs: 25000,
-      generateHighQualityLinkPreview: true,
-    });
-
-    sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-
-      if (qr) {
-        currentQR = qr;
+    try {
+      if (this.sock) {
         try {
-          currentQRDataUrl = await QRCode.toDataURL(qr, {
-            margin: 2,
-            scale: 8,
-            color: { dark: '#0f172a', light: '#ffffff' }
+          this.sock.ev.removeAllListeners();
+          this.sock.end();
+        } catch (e) {}
+        this.sock = null;
+      }
+
+      if (forceNew) {
+        this.currentQR = null;
+        this.currentQRDataUrl = null;
+        this.connectedPhone = null;
+        this.connectedName = null;
+        this.connectionStatus = 'disconnected';
+        if (fs.existsSync(this.authDir)) {
+          fs.rmSync(this.authDir, { recursive: true, force: true });
+          fs.mkdirSync(this.authDir, { recursive: true });
+        }
+      }
+
+      this.connectionStatus = 'connecting';
+      const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
+      const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: [2, 3000, 1015901307] }));
+
+      this.sock = makeWASocket({
+        version,
+        auth: state,
+        logger: pino({ level: 'silent' }),
+        printQRInTerminal: false,
+        browser: Browsers.macOS('Chrome'),
+        syncFullHistory: false,
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 25000,
+        generateHighQualityLinkPreview: true,
+      });
+
+      this.sock.ev.on('creds.update', saveCreds);
+
+      this.sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+          this.currentQR = qr;
+          try {
+            this.currentQRDataUrl = await QRCode.toDataURL(qr, {
+              margin: 2,
+              scale: 8,
+              color: { dark: '#0f172a', light: '#ffffff' }
+            });
+            this.connectionStatus = 'qr_ready';
+            console.log(`[WhatsApp Engine][${this.name}] Live QR Code Generated for WhatsApp scan.`);
+          } catch (e) {
+            console.error(`[WhatsApp Engine][${this.name}] QR DataURL error:`, e);
+          }
+        }
+
+        if (connection === 'close') {
+          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+          console.log(`[WhatsApp Engine][${this.name}] Connection closed (${statusCode}), reconnecting=${shouldReconnect}`);
+
+          if (statusCode === DisconnectReason.loggedOut) {
+            this.connectionStatus = 'disconnected';
+            this.connectedPhone = null;
+            this.connectedName = null;
+            this.currentQR = null;
+            this.currentQRDataUrl = null;
+            if (fs.existsSync(this.authDir)) {
+              fs.rmSync(this.authDir, { recursive: true, force: true });
+              fs.mkdirSync(this.authDir, { recursive: true });
+            }
+          } else if (shouldReconnect) {
+            this.connectionStatus = 'connecting';
+            this.reconnectAttempts++;
+            setTimeout(() => this.init(false), Math.min(this.reconnectAttempts * 2000, 10000));
+          } else {
+            this.connectionStatus = 'disconnected';
+          }
+        } else if (connection === 'open') {
+          this.reconnectAttempts = 0;
+          this.connectionStatus = 'connected';
+          this.currentQR = null;
+          this.currentQRDataUrl = null;
+          this.connectionStartTime = Date.now();
+
+          const rawUser = this.sock.user?.id || '';
+          this.connectedPhone = cleanPhoneNumber(rawUser);
+          this.connectedName = this.sock.user?.name || 'Solarix User';
+
+          console.log(`[WhatsApp Engine][${this.name}] ✓ CONNECTED! Number: ${this.connectedPhone}`);
+
+          forwardToSolarix(this.name, [{
+            event_type: 'status_update',
+            provider_message_id: 'connection_open',
+            status: 'connected',
+            phone_number: this.connectedPhone,
+            instance_name: this.name
+          }]);
+        }
+      });
+
+      // Inbound Messages
+      this.sock.ev.on('messages.upsert', async (m) => {
+        if (m.type === 'notify' || m.type === 'append') {
+          for (const msg of m.messages) {
+            if (!msg.key.fromMe && msg.message) {
+              const fromJid = msg.key.remoteJid || '';
+              const phone = cleanPhoneNumber(fromJid);
+              const text = msg.message.conversation ||
+                msg.message.extendedTextMessage?.text ||
+                msg.message.imageMessage?.caption ||
+                '';
+              const senderName = msg.pushName || 'Customer';
+
+              console.log(`[WhatsApp Engine][${this.name}] Inbound msg from ${phone}: ${text}`);
+
+              forwardToSolarix(this.name, [{
+                event_type: 'inbound_message',
+                provider_message_id: msg.key.id,
+                phone_number: phone,
+                text,
+                sender_name: senderName,
+                instance_name: this.name
+              }]);
+            }
+          }
+        }
+      });
+
+      // Delivery and Read Updates
+      this.sock.ev.on('messages.update', async (updates) => {
+        const events = [];
+        for (const u of updates) {
+          const msgId = u.key?.id;
+          let mappedStatus = 'sent';
+          if (u.update?.status === 3) mappedStatus = 'delivered';
+          if (u.update?.status === 4) mappedStatus = 'read';
+
+          events.push({
+            event_type: 'status_update',
+            provider_message_id: msgId,
+            status: mappedStatus,
+            timestamp: new Date().toISOString(),
+            instance_name: this.name
           });
-          connectionStatus = 'qr_ready';
-          console.log('[WhatsApp Engine] Real QR Code Generated! Ready for WhatsApp App scan.');
-        } catch (e) {
-          console.error('[WhatsApp Engine] Failed to generate QR data URL:', e);
         }
-      }
-
-      if (connection === 'close') {
-        const statusCode = lastDisconnect?.error?.output?.statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-        console.log(`[WhatsApp Engine] Connection closed. Reason: ${statusCode}, shouldReconnect: ${shouldReconnect}`);
-
-        if (statusCode === DisconnectReason.loggedOut) {
-          connectionStatus = 'disconnected';
-          connectedPhone = null;
-          connectedName = null;
-          currentQR = null;
-          currentQRDataUrl = null;
-          if (fs.existsSync(AUTH_DIR)) {
-            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-          }
-        } else if (shouldReconnect) {
-          connectionStatus = 'connecting';
-          reconnectAttempts++;
-          setTimeout(() => initWhatsApp(false), Math.min(reconnectAttempts * 2000, 10000));
-        } else {
-          connectionStatus = 'disconnected';
+        if (events.length > 0) {
+          forwardToSolarix(this.name, events);
         }
-      } else if (connection === 'open') {
-        reconnectAttempts = 0;
-        connectionStatus = 'connected';
-        currentQR = null;
-        currentQRDataUrl = null;
-        connectionStartTime = Date.now();
+      });
 
-        const rawUser = sock.user?.id || '';
-        connectedPhone = cleanPhoneNumber(rawUser);
-        connectedName = sock.user?.name || 'Solarix User';
+    } catch (err) {
+      console.error(`[WhatsApp Engine][${this.name}] Init error:`, err);
+      this.connectionStatus = 'disconnected';
+    } finally {
+      this.isInitializing = false;
+    }
+  }
 
-        console.log(`[WhatsApp Engine] ✓ LIVE WHATSAPP CONNECTED! Phone Number: ${connectedPhone}`);
-
-        // Notify Solarix activity log
-        forwardToSolarix([{
-          event_type: 'status_update',
-          provider_message_id: 'connection_open',
-          status: 'connected',
-          phone_number: connectedPhone
-        }]);
+  async disconnect() {
+    try {
+      if (this.sock) {
+        await this.sock.logout().catch(() => {});
+        this.sock.ev.removeAllListeners();
+        this.sock.end();
       }
-    });
+    } catch (e) {}
 
-    // Handle incoming messages
-    sock.ev.on('messages.upsert', async (m) => {
-      if (m.type === 'notify' || m.type === 'append') {
-        for (const msg of m.messages) {
-          if (!msg.key.fromMe && msg.message) {
-            const fromJid = msg.key.remoteJid || '';
-            const phone = cleanPhoneNumber(fromJid);
-            const text = msg.message.conversation ||
-              msg.message.extendedTextMessage?.text ||
-              msg.message.imageMessage?.caption ||
-              '';
-            const senderName = msg.pushName || 'Customer';
+    this.sock = null;
+    this.currentQR = null;
+    this.currentQRDataUrl = null;
+    this.connectionStatus = 'disconnected';
+    this.connectedPhone = null;
+    this.connectedName = null;
 
-            console.log(`[WhatsApp Engine] Inbound message from ${phone}: ${text}`);
+    if (fs.existsSync(this.authDir)) {
+      fs.rmSync(this.authDir, { recursive: true, force: true });
+      fs.mkdirSync(this.authDir, { recursive: true });
+    }
+  }
 
-            forwardToSolarix([{
-              event_type: 'inbound_message',
-              provider_message_id: msg.key.id,
-              phone_number: phone,
-              text,
-              sender_name: senderName
-            }]);
-          }
-        }
-      }
-    });
+  getStatusPayload() {
+    const isConn = this.connectionStatus === 'connected' && this.sock?.user != null;
+    const uptime = isConn && this.connectionStartTime ? Math.floor((Date.now() - this.connectionStartTime) / 1000) : 0;
 
-    // Handle delivery & read receipts
-    sock.ev.on('messages.update', async (updates) => {
-      const events = [];
-      for (const u of updates) {
-        const msgId = u.key?.id;
-        let mappedStatus = 'sent';
-        if (u.update?.status === 3) mappedStatus = 'delivered';
-        if (u.update?.status === 4) mappedStatus = 'read';
-
-        events.push({
-          event_type: 'status_update',
-          provider_message_id: msgId,
-          status: mappedStatus,
-          timestamp: new Date().toISOString()
-        });
-      }
-      if (events.length > 0) {
-        forwardToSolarix(events);
-      }
-    });
-
-  } catch (err) {
-    console.error('[WhatsApp Engine] Init error:', err);
-    connectionStatus = 'disconnected';
-  } finally {
-    isInitializing = false;
+    return {
+      instance_name: this.name,
+      connected: isConn,
+      status: isConn ? 'connected' : this.connectionStatus,
+      state: isConn ? 'open' : (this.connectionStatus === 'connecting' ? 'connecting' : 'close'),
+      phone_number: isConn ? this.connectedPhone : null,
+      user_name: isConn ? this.connectedName : null,
+      qr_code: this.currentQRDataUrl,
+      raw_qr: this.currentQR,
+      uptime_seconds: uptime,
+      engine: 'Solarix Multi-Tenant Evolution Gateway v7.0'
+    };
   }
 }
 
-// ─── API ENDPOINTS ──────────────────────────────────────────────────────────
+// ─── INSTANCE MANAGER ───────────────────────────────────────────────────────
 
-// 1. Get Live Gateway Status
-app.get('/status', (req, res) => {
-  const isConn = connectionStatus === 'connected' && sock?.user != null;
-  const uptime = isConn && connectionStartTime ? Math.floor((Date.now() - connectionStartTime) / 1000) : 0;
+const instances = new Map();
 
-  res.json({
-    connected: isConn,
-    status: isConn ? 'connected' : connectionStatus,
-    phone_number: isConn ? connectedPhone : null,
-    user_name: isConn ? connectedName : null,
-    qr_code: currentQRDataUrl,
-    uptime_seconds: uptime,
-    instance_name: 'solarix_primary',
-    engine: 'Baileys Multi-Device Native Engine v7.0'
+function getOrCreateInstance(name = 'solarix_primary', token = '') {
+  const cleanName = (name || 'solarix_primary').trim();
+  if (!instances.has(cleanName)) {
+    const inst = new WhatsAppInstance(cleanName, token);
+    instances.set(cleanName, inst);
+  }
+  const inst = instances.get(cleanName);
+  if (token && !inst.token) {
+    inst.token = token;
+  }
+  return inst;
+}
+
+function resolveInstance(req) {
+  // Try route params, query, headers, or body
+  const name =
+    req.params?.instanceName ||
+    req.params?.instanceId ||
+    req.params?.instance ||
+    req.query?.instance ||
+    req.query?.instanceName ||
+    req.body?.instanceName ||
+    req.body?.instance ||
+    req.body?.name ||
+    'solarix_primary';
+
+  const token = req.headers?.apikey || req.headers?.['x-api-key'] || req.body?.token || '';
+  return getOrCreateInstance(name, token);
+}
+
+// Auto-restore all existing instances from disk on boot
+function restoreInstancesFromDisk() {
+  if (!fs.existsSync(AUTH_BASE_DIR)) return;
+
+  // 1. Ensure default instance exists
+  getOrCreateInstance('solarix_primary');
+
+  // 2. Scan auth subdirectories
+  const entries = fs.readdirSync(AUTH_BASE_DIR, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const instName = entry.name;
+      const inst = getOrCreateInstance(instName);
+      if (inst.hasStoredCredentials()) {
+        console.log(`[WhatsApp Engine] Found saved session for instance [${instName}], connecting...`);
+        inst.init(false);
+      }
+    }
+  }
+}
+
+// ─── EVOLUTION API & SOLARIX ENDPOINTS ──────────────────────────────────────
+
+// Server Health
+app.get('/server/ok', (req, res) => res.json({ status: 200, message: 'Solarix Evolution Gateway Online' }));
+
+// 1. Create Instance (Evolution compatible: POST /instance/create)
+app.post('/instance/create', async (req, res) => {
+  const instanceName = req.body.instanceName || req.body.name;
+  const token = req.body.token || req.body.apiKey || '';
+  const qrcode = req.body.qrcode !== false;
+
+  if (!instanceName) {
+    return res.status(400).json({ error: 'instanceName is required' });
+  }
+
+  const inst = getOrCreateInstance(instanceName, token);
+
+  if (qrcode && inst.connectionStatus === 'disconnected') {
+    inst.init(false);
+  }
+
+  return res.json({
+    message: 'Instance created successfully',
+    instance: {
+      instanceName: inst.name,
+      status: inst.connectionStatus,
+      token: inst.token
+    }
   });
 });
 
-// 2. Connect / Refresh QR
-app.post('/connect', async (req, res) => {
-  if (connectionStatus === 'connected' && sock?.user) {
+// 2. List All Instances (Evolution compatible: GET /instance/all)
+app.get('/instance/all', (req, res) => {
+  const all = [];
+  for (const [name, inst] of instances.entries()) {
+    all.push(inst.getStatusPayload());
+  }
+  res.json({ instances: all });
+});
+
+// 3. Instance Status & Connection State
+const handleStatus = (req, res) => {
+  const inst = resolveInstance(req);
+  const payload = inst.getStatusPayload();
+  // Evolution format compatibility
+  res.json({
+    ...payload,
+    instance: {
+      instanceName: inst.name,
+      state: payload.state
+    }
+  });
+};
+
+app.get('/status', handleStatus);
+app.get('/instance/status', handleStatus);
+app.get('/instance/connectionState/:instance', handleStatus);
+app.get('/instance/info/:instance', handleStatus);
+
+// 4. Connect & Generate Live QR Code
+const handleConnect = async (req, res) => {
+  const inst = resolveInstance(req);
+  const force = req.body && req.body.force === true;
+
+  if (inst.connectionStatus === 'connected' && inst.sock?.user) {
     return res.json({
       success: true,
       status: 'connected',
-      phone_number: connectedPhone,
+      state: 'open',
+      phone_number: inst.connectedPhone,
+      instance: inst.name,
       message: 'Already connected to WhatsApp.'
     });
   }
 
-  const force = req.body && req.body.force === true;
-  initWhatsApp(force);
+  inst.init(force);
 
-  // Poll up to 10 seconds for the live QR to be emitted
+  // Poll up to 10s for the live QR
   let waited = 0;
-  while (waited < 10000 && !currentQRDataUrl && connectionStatus !== 'connected') {
+  while (waited < 10000 && !inst.currentQRDataUrl && inst.connectionStatus !== 'connected') {
     await delay(300);
     waited += 300;
   }
 
   return res.json({
     success: true,
-    status: connectionStatus,
-    phone_number: connectedPhone,
-    qr_code: currentQRDataUrl,
-    instance: 'solarix_primary'
+    status: inst.connectionStatus,
+    state: inst.connectionStatus === 'connected' ? 'open' : 'connecting',
+    phone_number: inst.connectedPhone,
+    qr_code: inst.currentQRDataUrl,
+    base64: inst.currentQRDataUrl,
+    code: inst.currentQR,
+    instance: inst.name
   });
-});
+};
 
-// 3. Request Official 8-Digit Pairing Code (Alternative to QR scan)
-app.post('/pairing-code', async (req, res) => {
-  const { phone } = req.body || {};
-  if (!phone) {
+app.post('/connect', handleConnect);
+app.post('/instance/connect', handleConnect);
+app.post('/instance/connect/:instance', handleConnect);
+app.get('/instance/connect/:instance', handleConnect);
+
+// 5. Get Live QR
+const handleQR = (req, res) => {
+  const inst = resolveInstance(req);
+  res.json({
+    success: !!inst.currentQRDataUrl,
+    qr_code: inst.currentQRDataUrl,
+    code: inst.currentQR,
+    instance: inst.name
+  });
+};
+app.get('/instance/qr', handleQR);
+app.get('/instance/qr/:instance', handleQR);
+
+// 6. Request 8-Digit Pairing Code (Phone-based linking)
+const handlePair = async (req, res) => {
+  const inst = resolveInstance(req);
+  const rawPhone = req.body?.phone || req.body?.number || req.body?.phoneNumber;
+
+  if (!rawPhone) {
     return res.status(400).json({ success: false, error: 'Phone number is required.' });
   }
 
-  const cleanNum = phone.replace(/[^0-9]/g, '');
+  const cleanNum = rawPhone.replace(/[^0-9]/g, '');
   if (!cleanNum || cleanNum.length < 10) {
-    return res.status(400).json({ success: false, error: 'Invalid mobile number. Include country code without +, e.g. 919876543210' });
+    return res.status(400).json({ success: false, error: 'Invalid phone number format.' });
   }
 
   try {
-    if (connectionStatus === 'connected' && sock?.user) {
+    if (inst.connectionStatus === 'connected' && inst.sock?.user) {
       return res.json({
         success: true,
         status: 'connected',
-        phone_number: connectedPhone,
+        phone_number: inst.connectedPhone,
         message: 'Already connected to WhatsApp.'
       });
     }
 
-    if (!sock || connectionStatus === 'disconnected') {
-      await initWhatsApp(true);
+    if (!inst.sock || inst.connectionStatus === 'disconnected') {
+      await inst.init(true);
       await delay(1500);
     }
 
-    if (sock && !sock.authState.creds.registered) {
-      console.log(`[WhatsApp Engine] Generating pairing code for: ${cleanNum}`);
-      const code = await sock.requestPairingCode(cleanNum);
+    if (inst.sock && !inst.sock.authState.creds.registered) {
+      console.log(`[WhatsApp Engine][${inst.name}] Generating pairing code for: ${cleanNum}`);
+      const code = await inst.sock.requestPairingCode(cleanNum);
       return res.json({
         success: true,
         pairing_code: code,
+        code: code,
         phone: cleanNum,
+        instance: inst.name,
         message: 'Pairing code generated successfully.'
       });
     } else {
-      return res.status(400).json({ success: false, error: 'Socket is already registered or in active state.' });
+      return res.status(400).json({ success: false, error: 'Socket is already registered or active.' });
     }
   } catch (err) {
-    console.error('[WhatsApp Engine] Error requesting pairing code:', err);
+    console.error(`[WhatsApp Engine][${inst.name}] Pairing code error:`, err);
     return res.status(500).json({ success: false, error: err.message || 'Failed to request pairing code' });
   }
+};
+
+app.post('/pairing-code', handlePair);
+app.post('/instance/pairing-code', handlePair);
+app.post('/instance/pairing-code/:instance', handlePair);
+app.post('/instance/pair', handlePair);
+app.post('/instance/pair/:instance', handlePair);
+
+// 7. Disconnect / Logout
+const handleDisconnect = async (req, res) => {
+  const inst = resolveInstance(req);
+  await inst.disconnect();
+  return res.json({ success: true, status: 'disconnected', instance: inst.name, message: 'Instance disconnected.' });
+};
+
+app.post('/disconnect', handleDisconnect);
+app.post('/instance/disconnect', handleDisconnect);
+app.post('/instance/disconnect/:instance', handleDisconnect);
+app.delete('/instance/logout', handleDisconnect);
+app.delete('/instance/logout/:instance', handleDisconnect);
+
+// 8. Delete Instance (Evolution compatible: DELETE /instance/delete/:instance)
+app.delete('/instance/delete/:instance', async (req, res) => {
+  const inst = resolveInstance(req);
+  await inst.disconnect();
+  instances.delete(inst.name);
+  if (fs.existsSync(inst.authDir)) {
+    fs.rmSync(inst.authDir, { recursive: true, force: true });
+  }
+  return res.json({ success: true, message: `Instance ${inst.name} deleted successfully.` });
 });
 
-// 4. Disconnect / Logout
-app.post('/disconnect', async (req, res) => {
-  try {
-    if (sock) {
-      await sock.logout().catch(() => {});
-      sock.ev.removeAllListeners();
-      sock.end();
-    }
-  } catch (e) {}
+// 9. Send Text Message
+const handleSendText = async (req, res) => {
+  const inst = resolveInstance(req);
+  const rawPhone = req.body.number || req.body.phone || req.body.to;
+  const text = req.body.textMessage?.text || req.body.text || req.body.message;
 
-  sock = null;
-  currentQR = null;
-  currentQRDataUrl = null;
-  connectionStatus = 'disconnected';
-  connectedPhone = null;
-  connectedName = null;
-
-  if (fs.existsSync(AUTH_DIR)) {
-    fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-    fs.mkdirSync(AUTH_DIR, { recursive: true });
+  if (!inst.sock || inst.connectionStatus !== 'connected') {
+    return res.status(400).json({
+      success: false,
+      error: `WhatsApp instance [${inst.name}] is not connected. Scan QR code or link device first.`
+    });
   }
-
-  res.json({ success: true, status: 'disconnected', message: 'WhatsApp instance disconnected.' });
-});
-
-// 5. Send Real Text Message
-app.post('/send-text', async (req, res) => {
-  const { phone, text } = req.body;
-  if (!sock || connectionStatus !== 'connected') {
-    return res.status(400).json({ success: false, error: 'WhatsApp is not connected. Scan QR code first.' });
-  }
-  if (!phone || !text) {
-    return res.status(400).json({ success: false, error: 'Phone and text are required.' });
+  if (!rawPhone || !text) {
+    return res.status(400).json({ success: false, error: 'Phone number and text message are required.' });
   }
 
   try {
-    const cleanNum = phone.replace(/[^0-9]/g, '');
+    const cleanNum = rawPhone.replace(/[^0-9]/g, '');
     const jid = `${cleanNum}@s.whatsapp.net`;
-    const sent = await sock.sendMessage(jid, { text });
+    const sent = await inst.sock.sendMessage(jid, { text });
     const msgId = sent?.key?.id;
 
-    res.json({
+    return res.json({
       success: true,
       provider_message_id: msgId,
+      key: { id: msgId, remoteJid: jid, fromMe: true },
       status: 'sent',
-      phone: cleanNum
+      phone: cleanNum,
+      instance: inst.name
     });
   } catch (err) {
-    console.error('[WhatsApp Engine] Send error:', err);
-    res.status(500).json({ success: false, error: err.message || 'Send message failed' });
+    console.error(`[WhatsApp Engine][${inst.name}] Send error:`, err);
+    return res.status(500).json({ success: false, error: err.message || 'Send message failed' });
   }
-});
+};
 
-// 6. Send Real Media Message (URL or PDF)
-app.post('/send-media', async (req, res) => {
-  const { phone, media_url, caption, media_type } = req.body;
-  if (!sock || connectionStatus !== 'connected') {
-    return res.status(400).json({ success: false, error: 'WhatsApp is not connected. Scan QR code first.' });
+app.post('/send-text', handleSendText);
+app.post('/send/text', handleSendText);
+app.post('/message/sendText/:instance', handleSendText);
+
+// 10. Send Media Message
+const handleSendMedia = async (req, res) => {
+  const inst = resolveInstance(req);
+  const rawPhone = req.body.number || req.body.phone || req.body.to;
+  const mediaUrl = req.body.media || req.body.media_url || req.body.url;
+  const caption = req.body.caption || req.body.text || '';
+  const mediaType = (req.body.mediatype || req.body.media_type || 'image').toLowerCase();
+
+  if (!inst.sock || inst.connectionStatus !== 'connected') {
+    return res.status(400).json({
+      success: false,
+      error: `WhatsApp instance [${inst.name}] is not connected. Scan QR code or link device first.`
+    });
+  }
+  if (!rawPhone || !mediaUrl) {
+    return res.status(400).json({ success: false, error: 'Phone number and media URL are required.' });
   }
 
   try {
-    const cleanNum = phone.replace(/[^0-9]/g, '');
+    const cleanNum = rawPhone.replace(/[^0-9]/g, '');
     const jid = `${cleanNum}@s.whatsapp.net`;
     let messageContent = {};
 
-    if (media_type === 'image') {
-      messageContent = { image: { url: media_url }, caption: caption || '' };
-    } else if (media_type === 'document' || media_type === 'pdf') {
+    if (mediaType === 'image') {
+      messageContent = { image: { url: mediaUrl }, caption };
+    } else if (mediaType === 'document' || mediaType === 'pdf') {
       messageContent = {
-        document: { url: media_url },
+        document: { url: mediaUrl },
         mimetype: 'application/pdf',
         fileName: 'Solar_Proposal.pdf',
-        caption: caption || ''
+        caption
       };
     } else {
-      messageContent = { text: `${caption || ''}\n${media_url}` };
+      messageContent = { text: `${caption}\n${mediaUrl}`.trim() };
     }
 
-    const sent = await sock.sendMessage(jid, messageContent);
-    res.json({
+    const sent = await inst.sock.sendMessage(jid, messageContent);
+    return res.json({
       success: true,
       provider_message_id: sent?.key?.id,
-      status: 'sent'
+      key: { id: sent?.key?.id, remoteJid: jid, fromMe: true },
+      status: 'sent',
+      instance: inst.name
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error(`[WhatsApp Engine][${inst.name}] Send media error:`, err);
+    return res.status(500).json({ success: false, error: err.message });
   }
-});
+};
 
-// Start Express Server
+app.post('/send-media', handleSendMedia);
+app.post('/send/media', handleSendMedia);
+app.post('/message/sendMedia/:instance', handleSendMedia);
+
+// ─── START SERVER ───────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[WhatsApp Engine] Solarix Live WhatsApp Gateway listening on port ${PORT}`);
-  // If previously saved session credentials exist, auto-reconnect
-  const credsFile = path.join(AUTH_DIR, 'creds.json');
-  if (fs.existsSync(credsFile)) {
-    console.log('[WhatsApp Engine] Found existing credentials, restoring WhatsApp connection...');
-    initWhatsApp(false);
-  }
+  console.log(`[WhatsApp Engine] Solarix Multi-Tenant Evolution Gateway running on port ${PORT}`);
+  restoreInstancesFromDisk();
 });
