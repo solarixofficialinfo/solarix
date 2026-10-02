@@ -1784,14 +1784,17 @@ async def handle_whatsapp_webhook(
             inst_name = ev.get("instance_name") or payload.get("instance_name") or payload.get("instance")
             if phone and text:
                 company_id = None
+                matched_client = None
+                clean_p = "".join(filter(str.isdigit, phone))[-10:]
+                if clean_p:
+                    matched_client = await db.clients.find_one({"mobile": {"$regex": clean_p}})
+
                 if inst_name:
                     matching_prov = await db.whatsapp_providers.find_one({"credentials.instance_name": inst_name})
                     if matching_prov:
                         company_id = matching_prov.get("company_id")
+
                 if not company_id:
-                    # Find matching company / client
-                    clean_p = "".join(filter(str.isdigit, phone))[-10:]
-                    matched_client = await db.clients.find_one({"mobile": {"$regex": clean_p}})
                     raw_company_id = matched_client.get("company_id") if matched_client else None
                     if not raw_company_id:
                         comp = await db.companies.find_one()
