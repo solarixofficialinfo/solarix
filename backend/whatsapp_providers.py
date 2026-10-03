@@ -83,19 +83,20 @@ class EvolutionGoProvider(WhatsAppProvider):
     """
     def __init__(self, credentials: Dict[str, Any], settings: Optional[Dict[str, Any]] = None):
         super().__init__(credentials, settings)
+        # Prioritize explicit credentials (from DB / Form) with fallback to server environment variables
         self.api_url = (
-            os.environ.get("EVOLUTION_API_URL") or 
             self.credentials.get("api_url") or 
-            "http://127.0.0.1:8080"
+            os.environ.get("EVOLUTION_API_URL") or 
+            "http://127.0.0.1:8085"
         ).rstrip("/")
         self.api_key = (
-            os.environ.get("EVOLUTION_API_KEY") or 
             self.credentials.get("api_key") or 
+            os.environ.get("EVOLUTION_API_KEY") or 
             ""
         )
         self.instance_name = (
-            os.environ.get("EVOLUTION_INSTANCE") or 
             self.credentials.get("instance_name") or 
+            os.environ.get("EVOLUTION_INSTANCE") or 
             "solarix_primary"
         )
         self.headers = {

@@ -148,13 +148,13 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
         default_prov = {
             "id": str(uuid.uuid4()),
             "company_id": company_id,
-            "provider_type": "native",
-            "name": "Live WhatsApp Multi-Device Gateway",
+            "provider_type": "evolution_go",
+            "name": "Evolution Go WhatsApp Gateway",
             "is_active": True,
             "credentials": {
-                "instance_name": client_instance_name,
-                "api_key": client_api_key,
-                "api_url": "http://127.0.0.1:8085"
+                "instance_name": os.environ.get("EVOLUTION_INSTANCE") or client_instance_name,
+                "api_key": os.environ.get("EVOLUTION_API_KEY") or client_api_key,
+                "api_url": os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085"
             },
             "settings": {
                 "rate_limit_per_min": 60,
@@ -169,14 +169,14 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
         creds = prov.get("credentials") or {}
         updates = {}
         if not creds.get("instance_name") or creds.get("instance_name") == "solarix_primary":
-            updates["credentials.instance_name"] = client_instance_name
+            updates["credentials.instance_name"] = os.environ.get("EVOLUTION_INSTANCE") or client_instance_name
         if not creds.get("api_key"):
-            updates["credentials.api_key"] = client_api_key
+            updates["credentials.api_key"] = os.environ.get("EVOLUTION_API_KEY") or client_api_key
         if not creds.get("api_url"):
-            updates["credentials.api_url"] = "http://127.0.0.1:8085"
+            updates["credentials.api_url"] = os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085"
         if prov.get("provider_type") == "simulated":
-            updates["provider_type"] = "native"
-            updates["name"] = "Live WhatsApp Multi-Device Gateway"
+            updates["provider_type"] = "evolution_go"
+            updates["name"] = "Evolution Go WhatsApp Gateway"
         if updates:
             updates["updated_at"] = now_iso()
             await db.whatsapp_providers.update_one({"company_id": company_id}, {"$set": updates})
@@ -948,13 +948,13 @@ async def get_provider_settings(user: dict = Depends(get_current_user_dep())):
     inst_phone = inst.get("phone_number") if inst else None
 
     return {
-        "provider_type": prov.get("provider_type", "native"),
-        "name": prov.get("name", "Live WhatsApp Multi-Device Gateway"),
-        "api_url": creds.get("api_url") or "http://127.0.0.1:8085",
-        "client_gateway_url": creds.get("api_url") or "http://127.0.0.1:8085",
+        "provider_type": prov.get("provider_type", "evolution_go"),
+        "name": prov.get("name", "Evolution Go WhatsApp Gateway"),
+        "api_url": creds.get("api_url") or os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085",
+        "client_gateway_url": creds.get("api_url") or os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085",
         "api_key": creds.get("api_key", ""),
         "api_key_masked": masked_key,
-        "instance_name": creds.get("instance_name") or f"solarix_{company_id[:8]}",
+        "instance_name": creds.get("instance_name") or os.environ.get("EVOLUTION_INSTANCE") or f"solarix_{company_id[:8]}",
         "phone_number": creds.get("phone_number") or inst_phone or "",
         "phone_number_id": creds.get("phone_number_id", ""),
         "access_token_masked": masked_token,
@@ -980,9 +980,9 @@ async def save_provider_settings(payload: ProviderSettingsIn, user: dict = Depen
     token_val = payload.access_token if payload.access_token and not "••••" in payload.access_token else existing_creds.get("access_token", "")
 
     creds = {
-        "api_url": payload.api_url or "http://127.0.0.1:8085",
+        "api_url": payload.api_url or os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085",
         "api_key": api_key_val,
-        "instance_name": payload.instance_name or f"solarix_{company_id[:8]}",
+        "instance_name": payload.instance_name or os.environ.get("EVOLUTION_INSTANCE") or f"solarix_{company_id[:8]}",
         "phone_number": payload.phone_number,
         "phone_number_id": payload.phone_number_id,
         "access_token": token_val,
@@ -1974,6 +1974,28 @@ class EvolutionSendIn(BaseModel):
     caption: Optional[str] = None
 
 
+async def get_evolution_credentials(company_id: str) -> tuple:
+    db = get_db()
+    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085").rstrip("/")
+    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
+    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    
+    prov = await db.whatsapp_providers.find_one({"company_id": company_id, "provider_type": "evolution_go"})
+    if not prov:
+        prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
+        
+    if prov and prov.get("credentials"):
+        creds = prov["credentials"]
+        if creds.get("api_url"):
+            url = creds["api_url"].rstrip("/")
+        if creds.get("api_key"):
+            api_key = creds["api_key"]
+        if creds.get("instance_name"):
+            instance_name = creds["instance_name"]
+            
+    return url, api_key, instance_name
+
+
 @whatsapp_router.get("/evolution/status")
 async def get_evolution_status(user: dict = Depends(get_current_user_dep())):
     """
@@ -1983,16 +2005,7 @@ async def get_evolution_status(user: dict = Depends(get_current_user_dep())):
     company_id = user["company_id"]
     db = get_db()
     
-    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
-    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
-    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
-    
-    prov = await db.whatsapp_providers.find_one({"company_id": company_id, "provider_type": "evolution_go"})
-    if prov and prov.get("credentials"):
-        creds = prov["credentials"]
-        url = (creds.get("api_url") or url).rstrip("/")
-        api_key = creds.get("api_key") or api_key
-        instance_name = creds.get("instance_name") or instance_name
+    url, api_key, instance_name = await get_evolution_credentials(company_id)
 
     provider = EvolutionGoProvider({
         "api_url": url,
@@ -2045,16 +2058,7 @@ async def connect_evolution(request: Request, user: dict = Depends(get_current_u
     company_id = user["company_id"]
     db = get_db()
     
-    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
-    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
-    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
-    
-    prov = await db.whatsapp_providers.find_one({"company_id": company_id, "provider_type": "evolution_go"})
-    if prov and prov.get("credentials"):
-        creds = prov["credentials"]
-        url = (creds.get("api_url") or url).rstrip("/")
-        api_key = creds.get("api_key") or api_key
-        instance_name = creds.get("instance_name") or instance_name
+    url, api_key, instance_name = await get_evolution_credentials(company_id)
 
     provider = EvolutionGoProvider({
         "api_url": url,
@@ -2081,9 +2085,7 @@ async def disconnect_evolution(user: dict = Depends(get_current_user_dep())):
     company_id = user["company_id"]
     db = get_db()
     
-    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
-    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
-    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    url, api_key, instance_name = await get_evolution_credentials(company_id)
     
     provider = EvolutionGoProvider({
         "api_url": url,
@@ -2106,11 +2108,8 @@ async def get_evolution_qr(user: dict = Depends(get_current_user_dep())):
     Fetches real-time QR code from Evolution Go.
     """
     company_id = user["company_id"]
-    db = get_db()
     
-    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
-    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
-    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    url, api_key, instance_name = await get_evolution_credentials(company_id)
     
     provider = EvolutionGoProvider({
         "api_url": url,
@@ -2130,9 +2129,7 @@ async def send_evolution_message(payload: EvolutionSendIn, user: dict = Depends(
     company_id = user["company_id"]
     db = get_db()
     
-    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
-    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
-    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    url, api_key, instance_name = await get_evolution_credentials(company_id)
     
     provider = EvolutionGoProvider({
         "api_url": url,
@@ -2219,10 +2216,9 @@ async def get_evolution_diagnostics(user: dict = Depends(get_current_user_dep())
     """
     Step 8: Admin-only diagnostic panel data.
     """
+    company_id = user["company_id"]
     db = get_db()
-    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
-    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
-    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    url, api_key, instance_name = await get_evolution_credentials(company_id)
     
     import httpx, time
     start = time.perf_counter()
@@ -2293,7 +2289,8 @@ async def get_evolution_diagnostics(user: dict = Depends(get_current_user_dep())
 @whatsapp_router.post("/evolution/test-api")
 async def test_evolution_api(user: dict = Depends(get_current_user_dep())):
     """Step 8: Button: Test API"""
-    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
+    company_id = user["company_id"]
+    url, api_key, instance_name = await get_evolution_credentials(company_id)
     import httpx, time
     start = time.perf_counter()
     try:
@@ -2318,10 +2315,10 @@ async def test_evolution_api(user: dict = Depends(get_current_user_dep())):
 @whatsapp_router.post("/evolution/test-auth")
 async def test_evolution_auth(user: dict = Depends(get_current_user_dep())):
     """Step 8: Button: Test Authentication"""
-    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
-    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
+    company_id = user["company_id"]
+    url, api_key, instance_name = await get_evolution_credentials(company_id)
     if not api_key:
-        return {"pass": False, "message": "EVOLUTION_API_KEY is not set in backend/.env."}
+        return {"pass": False, "message": "Evolution API Key is not set."}
     import httpx
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
@@ -2332,7 +2329,7 @@ async def test_evolution_auth(user: dict = Depends(get_current_user_dep())):
             if res2.status_code in (200, 201, 404):
                 return {"pass": True, "message": "Instance API Key authenticated successfully."}
             if res.status_code == 401 or res2.status_code == 401:
-                return {"pass": False, "message": "Unauthorized: EVOLUTION_API_KEY was rejected by Evolution Go."}
+                return {"pass": False, "message": "Unauthorized: API Key was rejected by Evolution Go."}
             return {"pass": False, "message": f"Authentication check returned HTTP {res.status_code}."}
     except Exception as e:
         return {"pass": False, "message": f"Could not reach Evolution Go to verify authentication: {e}"}
@@ -2341,9 +2338,8 @@ async def test_evolution_auth(user: dict = Depends(get_current_user_dep())):
 @whatsapp_router.post("/evolution/test-instance")
 async def test_evolution_instance(user: dict = Depends(get_current_user_dep())):
     """Step 8: Button: Test Instance"""
-    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8080").rstrip("/")
-    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
-    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
+    company_id = user["company_id"]
+    url, api_key, instance_name = await get_evolution_credentials(company_id)
     import httpx
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
