@@ -506,12 +506,18 @@ class CursorAdapter:
                 builder = builder.range(skip, 1000000)
 
         try:
+            if self.collection.table_name in _known_missing_supabase_tables:
+                # Already confirmed missing — go straight to local files silently
+                return await LocalFileCollection(self.collection.table_name).find(self.filter, self.projection).sort(self.sort_fields).to_list(length)
             res = await asyncio.to_thread(builder.execute)
             data = res.data or []
         except Exception as e:
             err_str = str(e).lower()
             if "42501" in err_str or "row-level security" in err_str or "unauthorized" in err_str or "timeout" in err_str or "timed out" in err_str or "connection" in err_str or "400" in err_str or "bad request" in err_str or "pgrst" in err_str or "does not exist" in err_str or "schema cache" in err_str:
-                logger.warning(f"Supabase query failed ({e}), falling back to local files for {self.collection.table_name}")
+                if self.collection.table_name not in _known_missing_supabase_tables:
+                    logger.warning(f"Supabase query failed ({e}), falling back to local files for {self.collection.table_name}")
+                    if "pgrst205" in err_str or "schema cache" in err_str or "could not find the table" in err_str:
+                        _known_missing_supabase_tables.add(self.collection.table_name)
                 return await LocalFileCollection(self.collection.table_name).find(self.filter, self.projection).sort(self.sort_fields).to_list(length)
             else:
                 raise e
@@ -1070,9 +1076,14 @@ async def recover_and_sync_financial_data():
     except Exception as e:
         logger.warning(f"[FINANCIAL RECOVERY] Error in recover_and_sync_financial_data: {e}")
 
+# Tables confirmed absent from Supabase — skip Supabase entirely after first PGRST205
+# This prevents log spam from background workers polling non-existent tables every 2s
+_known_missing_supabase_tables: set = set()
+
 class CollectionAdapter:
     def __init__(self, table_name: str):
         self.table_name = table_name
+
 
     @property
     def _supabase_table_name(self) -> str:
@@ -1293,6 +1304,13 @@ class CollectionAdapter:
                         return doc
                 return None
 
+        # Skip Supabase entirely for tables already confirmed missing (PGRST205)
+        if self.table_name in _known_missing_supabase_tables:
+            local_doc = await LocalFileCollection(self.table_name).find_one(filter, projection)
+            if local_doc and self.table_name == "companies":
+                return _enrich_company_doc(local_doc)
+            return local_doc
+
         # Always select * from Supabase so missing columns in custom projection dictionaries never cause 400 Bad Request
         builder = supabase.table(self._supabase_table_name).select("*")
         builder = self._apply_filters(builder, filter)
@@ -1329,6 +1347,8 @@ class CollectionAdapter:
         except Exception as e:
             err_str = str(e).lower()
             if "42501" in err_str or "row-level security" in err_str or "unauthorized" in err_str or "pgrst205" in err_str or "schema cache" in err_str or "could not find the table" in err_str or "42703" in err_str or "does not exist" in err_str or "400" in err_str or "bad request" in err_str:
+                if "pgrst205" in err_str or "schema cache" in err_str or "could not find the table" in err_str:
+                    _known_missing_supabase_tables.add(self.table_name)
                 local_doc = await LocalFileCollection(self.table_name).find_one(filter, projection)
                 if local_doc and self.table_name == "companies":
                     return _enrich_company_doc(local_doc)
@@ -1831,6 +1851,8 @@ class CollectionAdapter:
         return DeleteResult(1)
 
     async def count_documents(self, filter=None):
+        if self.table_name in _known_missing_supabase_tables:
+            return await LocalFileCollection(self.table_name).count_documents(filter)
         builder = supabase.table(self._supabase_table_name).select("id", count="exact")
         builder = self._apply_filters(builder, filter)
         try:
@@ -1839,6 +1861,7 @@ class CollectionAdapter:
         except Exception as e:
             err_str = str(e).lower()
             if "pgrst205" in err_str or "does not exist" in err_str or "schema cache" in err_str or "could not find the table" in err_str:
+                _known_missing_supabase_tables.add(self.table_name)
                 return await LocalFileCollection(self.table_name).count_documents(filter)
             raise e
 
@@ -2251,7 +2274,8 @@ async def auto_migrate_product_variants():
 async def lifespan(app: FastAPI):
     deferred_task = asyncio.create_task(_deferred_startup_tasks())
     try:
-        from whatsapp_router import start_whatsapp_background_workers
+        from whatsapp_router import start_whatsapp_background_workers, ensure_whatsapp_engine_running
+        ensure_whatsapp_engine_running()
         start_whatsapp_background_workers()
     except Exception as e:
         logger.warning(f"Could not start whatsapp workers: {e}")
