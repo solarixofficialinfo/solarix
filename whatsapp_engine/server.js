@@ -175,6 +175,7 @@ class WhatsAppInstance {
           console.log(`[WhatsApp Engine][${this.name}] Connection closed (${statusCode}), reconnecting=${shouldReconnect}`);
 
           if (statusCode === DisconnectReason.loggedOut) {
+            // Explicit logout — clear everything and stop
             this.connectionStatus = 'disconnected';
             this.connectedPhone = null;
             this.connectedName = null;
@@ -184,12 +185,13 @@ class WhatsAppInstance {
               fs.rmSync(this.authDir, { recursive: true, force: true });
               fs.mkdirSync(this.authDir, { recursive: true });
             }
-          } else if (shouldReconnect && this.hasStoredCredentials()) {
-            this.connectionStatus = 'connecting';
+          } else if (shouldReconnect) {
+            // QR expired (408), connection error, or reconnect needed — always retry
+            // so a fresh QR is generated even before a phone has been linked
+            this.connectionStatus = 'qr_ready';
             this.reconnectAttempts++;
-            setTimeout(() => this.init(false), Math.min(this.reconnectAttempts * 2000, 10000));
-          } else {
-            this.connectionStatus = 'disconnected';
+            const delay = Math.min(this.reconnectAttempts * 1500, 8000);
+            setTimeout(() => this.init(false), delay);
           }
         } else if (connection === 'open') {
           this.reconnectAttempts = 0;
@@ -670,7 +672,21 @@ app.post('/send/media', handleSendMedia);
 app.post('/message/sendMedia/:instance', handleSendMedia);
 
 // ─── START SERVER ───────────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
+const primaryServer = app.listen(PORT, '0.0.0.0', () => {
   console.log(`[WhatsApp Engine] Solarix Multi-Tenant Evolution Gateway running on port ${PORT}`);
   restoreInstancesFromDisk();
 });
+
+// Dual-port listening: also bind 8080/8085 so callers to Evolution Go (8080) and Baileys (8085) are both serviced seamlessly
+const ALT_PORT = Number(PORT) === 8080 ? 8085 : 8080;
+try {
+  const altServer = app.listen(ALT_PORT, '0.0.0.0', () => {
+    console.log(`[WhatsApp Engine] Also listening on port ${ALT_PORT} for Evolution Go compatibility`);
+  });
+  altServer.on('error', (err) => {
+    console.log(`[WhatsApp Engine] Note: secondary port ${ALT_PORT} not bound: ${err.message}`);
+  });
+} catch (e) {
+  console.log(`[WhatsApp Engine] Could not bind secondary port: ${e.message}`);
+}
+
