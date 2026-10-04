@@ -1,9 +1,7 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   MousePointer,
   Move,
-  Scissors,
-  Copy,
   Trash2,
   RotateCcw,
   RotateCw,
@@ -13,18 +11,16 @@ import {
   ArrowLeft,
   ArrowRight,
   Layers,
-  Maximize2,
-  ChevronDown,
-  Sparkles,
-  Info,
-  Check,
   Magnet,
   Grid,
   Box,
   Sliders,
+  Crosshair,
+  Rotate3d,
 } from "lucide-react";
 import { toast } from "sonner";
 import { validatePanelPlacement, canFitAdditionalPanel } from "../utils/layoutEngine";
+import { isPointInPolygon } from "../utils/geoCalculations";
 
 /**
  * Helper to cluster and sort panels into rows
@@ -81,22 +77,28 @@ export function getPanelsByRow(panels = []) {
 
 /**
  * 4-Mode Controlled Micro Adjuster for Solar Designer:
- * MODE 1: ROW ADJUST
- * MODE 2: GROUP / STRUCTURE ADJUST
- * MODE 3: CUSTOM PANEL ADJUST (with Shift+Click multi-select and Snap ON/OFF)
- * MODE 4: STRUCTURE / MEMBER ADJUST
+ * Flow:
+ * 1. CLICK MICRO ADJUST -> SHOW MODE SELECTION [ ROW ] [ GROUP ] [ PANEL ] [ STRUCTURE ]
+ * 2. USER SELECTS ONE MODE -> ONLY THEN SHOW CONTROLS FOR THAT MODE
+ * 3. Specialized controls per mode:
+ *    - ROW: Three-state shift (LEFT / CENTER / RIGHT), fine shift, tilt, row select
+ *    - GROUP: Group shift, rotate, elevation
+ *    - PANEL: Add panel (manual override), multi-panel shift, rotate, delete, snap
+ *    - STRUCTURE: Member fine adjustment
  */
 export default function LayoutMicroAdjuster({
   variant = "fixed-bar",
   panels = [],
   setPanels,
   roofPolygon,
+  activeSection = null,
+  roofSections = [],
   setbackMeters = 0.5,
   obstacles = [],
   walkways = [],
   panelSpecs = {},
   orientation = "portrait",
-  selectionMode = "row", // 'row' | 'group' | 'custom' | 'structure'
+  selectionMode = null, // null | 'row' | 'group' | 'panel' | 'structure'
   setSelectionMode,
   selectedPanelId = null,
   setSelectedPanelId,
@@ -117,15 +119,38 @@ export default function LayoutMicroAdjuster({
   setHasManualAdjustments,
   snapEnabled = true,
   setSnapEnabled,
+  setActiveTool,
+  onClose,
+  recommendedCapacity = null,
+  onAddManualPanel,
 }) {
   const [stepIncrement, setStepIncrement] = useState(0.05); // 0.02, 0.05, 0.10, 0.20
-  const [activeRowTab, setActiveRowTab] = useState("move"); // 'move' | 'gap' | 'split'
-  const [splitPanelIndex, setSplitPanelIndex] = useState(1);
-  const [splitGap, setSplitGap] = useState(0.5);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const rowBaselinesRef = useRef(new Map());
+
+  // Section Isolation: Filter panels for this section if activeSection is given
+  const effectivePanels = useMemo(() => {
+    if (!activeSection) return panels;
+    return panels.filter(
+      (p) =>
+        p.sectionId === activeSection.id ||
+        (!p.sectionId && activeSection.polygon && isPointInPolygon(p.x, p.y, activeSection.polygon))
+    );
+  }, [panels, activeSection]);
+
+  const targetBoundaryPolygon = activeSection?.polygon || roofPolygon;
 
   // Grouped rows
-  const rows = useMemo(() => getPanelsByRow(panels), [panels]);
+  const rows = useMemo(() => getPanelsByRow(effectivePanels), [effectivePanels]);
+
+  // Record initial row average X on first observation for Center/Reset
+  useEffect(() => {
+    rows.forEach((r) => {
+      if (!rowBaselinesRef.current.has(r.rowIndex) && r.panels.length > 0) {
+        const avgX = r.panels.reduce((sum, p) => sum + p.x, 0) / r.panels.length;
+        rowBaselinesRef.current.set(r.rowIndex, avgX);
+      }
+    });
+  }, [rows]);
 
   // Selected row data
   const currentSelectedRow = useMemo(() => {
@@ -136,10 +161,13 @@ export default function LayoutMicroAdjuster({
   }, [rows, selectedRowIndex]);
 
   // Selected group data
-  const currentGroupId = selectedGroupId != null ? selectedGroupId : (currentSelectedRow ? currentSelectedRow.rowIndex : 0);
+  const currentGroupId =
+    selectedGroupId != null ? selectedGroupId : currentSelectedRow ? currentSelectedRow.rowIndex : 0;
   const currentGroupPanels = useMemo(() => {
-    return panels.filter((p) => (p.groupId != null ? p.groupId === currentGroupId : p.row === currentGroupId));
-  }, [panels, currentGroupId]);
+    return effectivePanels.filter((p) =>
+      p.groupId != null ? p.groupId === currentGroupId : p.row === currentGroupId
+    );
+  }, [effectivePanels, currentGroupId]);
 
   // Multi-selected panels list
   const activeSelectedIds = useMemo(() => {
@@ -169,12 +197,12 @@ export default function LayoutMicroAdjuster({
     (dx, dy, multiplier = 1) => {
       const finalDx = Math.round(dx * multiplier * 1000) / 1000;
       const finalDy = Math.round(dy * multiplier * 1000) / 1000;
-      if (!roofPolygon || roofPolygon.length < 3) {
+      if (!targetBoundaryPolygon || targetBoundaryPolygon.length < 3) {
         toast.warning("Roof boundary required for micro-adjustments.");
         return;
       }
 
-      // MODE 1: ROW MOVE
+      // MODE 1: ROW MOVE (Entire selected row moves as ONE logical group)
       if (selectionMode === "row") {
         if (!currentSelectedRow || currentSelectedRow.panels.length === 0) {
           toast.info("Please select a row to move.");
@@ -194,7 +222,7 @@ export default function LayoutMicroAdjuster({
         for (const cand of candidatePanels) {
           const validation = validatePanelPlacement({
             candidate: cand,
-            roofPolygon,
+            roofPolygon: targetBoundaryPolygon,
             setbackMeters,
             panels: otherPanels,
             obstacles,
@@ -223,7 +251,7 @@ export default function LayoutMicroAdjuster({
         return;
       }
 
-      // MODE 2: GROUP / COMPLETE STRUCTURE MOVE
+      // MODE 2: GROUP MOVE
       if (selectionMode === "group") {
         if (currentGroupPanels.length === 0) {
           toast.info("Please select a structure group to move.");
@@ -243,7 +271,7 @@ export default function LayoutMicroAdjuster({
         for (const cand of candidatePanels) {
           const validation = validatePanelPlacement({
             candidate: cand,
-            roofPolygon,
+            roofPolygon: targetBoundaryPolygon,
             setbackMeters,
             panels: otherPanels,
             obstacles,
@@ -269,12 +297,15 @@ export default function LayoutMicroAdjuster({
           })
         );
 
-        // Also shift any custom structure members associated with this group
         if (structureMembers && structureMembers.length > 0 && setStructureMembers) {
           setStructureMembers((prev) =>
             prev.map((m) =>
               m.groupId === currentGroupId || m.row === currentGroupId
-                ? { ...m, x: Math.round(((m.x || 0) + finalDx) * 1000) / 1000, y: Math.round(((m.y || 0) + finalDy) * 1000) / 1000 }
+                ? {
+                    ...m,
+                    x: Math.round(((m.x || 0) + finalDx) * 1000) / 1000,
+                    y: Math.round(((m.y || 0) + finalDy) * 1000) / 1000,
+                  }
                 : m
             )
           );
@@ -304,9 +335,9 @@ export default function LayoutMicroAdjuster({
         for (const cand of candidatePanels) {
           const validation = validatePanelPlacement({
             candidate: cand,
-            roofPolygon,
+            roofPolygon: targetBoundaryPolygon,
             setbackMeters,
-            panels: staticPanels, // Do not collide with other moving panels
+            panels: staticPanels,
             obstacles,
             walkways,
             excludePanelId: cand.id,
@@ -321,19 +352,25 @@ export default function LayoutMicroAdjuster({
 
         const candMap = new Map(candidatePanels.map((p) => [p.id, p]));
         setPanels((prev) =>
-          prev.map((p) => (candMap.has(p.id) ? { ...p, x: candMap.get(p.id).x, y: candMap.get(p.id).y, isManual: true } : p))
+          prev.map((p) =>
+            candMap.has(p.id) ? { ...p, x: candMap.get(p.id).x, y: candMap.get(p.id).y, isManual: true } : p
+          )
         );
         setHasManualAdjustments?.(true);
         return;
       }
 
-      // MODE 4: STRUCTURE / MEMBER ADJUST
+      // MODE 4: STRUCTURE ADJUST
       if (selectionMode === "structure") {
         if (selectedMemberId && structureMembers.length > 0 && setStructureMembers) {
           setStructureMembers((prev) =>
             prev.map((m) =>
               m.id === selectedMemberId
-                ? { ...m, x: Math.round(((m.x || 0) + finalDx) * 1000) / 1000, y: Math.round(((m.y || 0) + finalDy) * 1000) / 1000 }
+                ? {
+                    ...m,
+                    x: Math.round(((m.x || 0) + finalDx) * 1000) / 1000,
+                    y: Math.round(((m.y || 0) + finalDy) * 1000) / 1000,
+                  }
                 : m
             )
           );
@@ -351,7 +388,7 @@ export default function LayoutMicroAdjuster({
       currentGroupId,
       activeSelectedIds,
       panels,
-      roofPolygon,
+      targetBoundaryPolygon,
       setbackMeters,
       obstacles,
       walkways,
@@ -362,6 +399,40 @@ export default function LayoutMicroAdjuster({
       selectedMemberId,
     ]
   );
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // THREE-STATE ROW SHIFT: LEFT, CENTER / RESET, RIGHT
+  // ─────────────────────────────────────────────────────────────────────────────
+  const handleShiftRowLeft = () => {
+    const shiftAmt = Math.max(0.1, stepIncrement * 2);
+    handleMicroMove(-shiftAmt, 0);
+  };
+
+  const handleShiftRowRight = () => {
+    const shiftAmt = Math.max(0.1, stepIncrement * 2);
+    handleMicroMove(shiftAmt, 0);
+  };
+
+  const handleResetRowCenter = () => {
+    if (!currentSelectedRow || currentSelectedRow.panels.length === 0) {
+      toast.info("Please select a row first.");
+      return;
+    }
+    const baselineAvgX = rowBaselinesRef.current.get(currentSelectedRow.rowIndex);
+    const currentAvgX =
+      currentSelectedRow.panels.reduce((sum, p) => sum + p.x, 0) / currentSelectedRow.panels.length;
+    if (baselineAvgX == null) {
+      toast.info("Row is already at baseline center.");
+      return;
+    }
+    const deltaX = Math.round((baselineAvgX - currentAvgX) * 1000) / 1000;
+    if (Math.abs(deltaX) < 0.005) {
+      toast.info("Row is already centered.");
+      return;
+    }
+    handleMicroMove(deltaX, 0);
+    toast.success(`Row ${currentSelectedRow.visualIndex} reset to center`);
+  };
 
   // ─────────────────────────────────────────────────────────────────────────────
   // ROW TILT ADJUSTMENT
@@ -387,10 +458,15 @@ export default function LayoutMicroAdjuster({
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // CUSTOM PANEL ADD (Section & roof aware with isManual: true)
+  // CUSTOM PANEL ADD (MANUAL OVERRIDE: Capacity recommendation is never a hard block)
   // ─────────────────────────────────────────────────────────────────────────────
   const handleAddSinglePanelNear = () => {
-    if (!roofPolygon || roofPolygon.length < 3) {
+    if (onAddManualPanel) {
+      onAddManualPanel();
+      return;
+    }
+
+    if (!targetBoundaryPolygon || targetBoundaryPolygon.length < 3) {
       toast.warning("Please define a roof boundary first.");
       return;
     }
@@ -400,7 +476,7 @@ export default function LayoutMicroAdjuster({
 
     const check = canFitAdditionalPanel({
       panels,
-      roofPolygon,
+      roofPolygon: targetBoundaryPolygon,
       setbackMeters,
       obstacles,
       walkways,
@@ -416,22 +492,26 @@ export default function LayoutMicroAdjuster({
     });
 
     if (!check.canFit || !check.newPanel) {
-      toast.warning(check.reason || "No valid spot available near the selected area.");
+      toast.warning(check.reason || "Unable to place panel.");
       return;
     }
 
-    const added = { ...check.newPanel, isManual: true };
+    const added = {
+      ...check.newPanel,
+      sectionId: activeSection ? activeSection.id : undefined,
+      isManual: true,
+    };
     setPanels((prev) => [...prev, added]);
     setSelectedPanelId?.(added.id);
     setSelectedPanelIds?.([added.id]);
     setHasManualAdjustments?.(true);
-    toast.success("Added 1 panel in nearest valid roof position");
+    toast.success(`Manually added Panel #${panels.length + 1} (Override: ON)`);
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
   // DELETE SELECTED PANELS
   // ─────────────────────────────────────────────────────────────────────────────
-  const handleDeleteSelected = () => {
+  const handleDeleteSelected = useCallback(() => {
     if (activeSelectedIds.length === 0) {
       toast.warning("Please select panel(s) first.");
       return;
@@ -442,7 +522,7 @@ export default function LayoutMicroAdjuster({
     setSelectedPanelIds?.([]);
     setHasManualAdjustments?.(true);
     toast.success(`Removed ${activeSelectedIds.length} panel${activeSelectedIds.length === 1 ? "" : "s"}`);
-  };
+  }, [activeSelectedIds, setPanels, setSelectedPanelId, setSelectedPanelIds, setHasManualAdjustments]);
 
   // ─────────────────────────────────────────────────────────────────────────────
   // ROTATE SELECTION
@@ -470,24 +550,7 @@ export default function LayoutMicroAdjuster({
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // RESET LOCAL CHANGES
-  // ─────────────────────────────────────────────────────────────────────────────
-  const handleResetToAutoLayout = () => {
-    if (!autoLayoutBaselinePanels || autoLayoutBaselinePanels.length === 0) {
-      toast.info("No baseline auto-layout snapshot to restore.");
-      return;
-    }
-    setPanels(autoLayoutBaselinePanels);
-    setSelectedPanelId?.(null);
-    setSelectedPanelIds?.([]);
-    setSelectedRowIndex?.(null);
-    setSelectedGroupId?.(null);
-    setHasManualAdjustments?.(false);
-    toast.success(`Restored auto-layout baseline (${autoLayoutBaselinePanels.length} panels)`);
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // KEYBOARD ARROW CONTROLS
+  // KEYBOARD ARROW SHORTCUTS
   // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -500,7 +563,7 @@ export default function LayoutMicroAdjuster({
         ((selectionMode === "custom" || selectionMode === "panel") && activeSelectedIds.length > 0);
 
       if (!hasSelection) return;
-      const multiplier = e.shiftKey ? 5 : 1;
+      const multiplier = e.shiftKey ? 4 : 1;
 
       switch (e.key) {
         case "ArrowUp":
@@ -533,36 +596,132 @@ export default function LayoutMicroAdjuster({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectionMode, currentSelectedRow, currentGroupPanels, activeSelectedIds, stepIncrement, handleMicroMove]);
+  }, [selectionMode, currentSelectedRow, currentGroupPanels, activeSelectedIds, stepIncrement, handleMicroMove, handleDeleteSelected]);
 
   const currentTilt = currentSelectedRow?.panels[0]?.tilt ?? 15;
+  const isPanelMode = selectionMode === "custom" || selectionMode === "panel";
 
+  // Comparison metrics for manual override
+  const baselineCount = recommendedCapacity != null ? recommendedCapacity : autoLayoutBaselinePanels?.length || panels.length;
+  const isOverridden = panels.length > baselineCount;
+
+  // ═════════════════════════════════════════════════════════════════════════════
+  // VIEW 1: MODE SELECTION SCREEN (Shown when user opens Micro Adjust)
+  // ═════════════════════════════════════════════════════════════════════════════
+  if (!selectionMode) {
+    return (
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900/98 border border-amber-500/40 px-4 py-2.5 rounded-2xl shadow-2xl text-xs text-white shrink-0 select-none animate-in fade-in zoom-in-95 duration-150">
+        <div className="flex items-center gap-2.5">
+          <span className="p-1.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-400">
+            <Sliders className="w-4 h-4" />
+          </span>
+          <div>
+            <div className="text-xs font-bold text-white tracking-wide uppercase flex items-center gap-2">
+              <span>Micro Adjust</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950 border border-amber-700/60 text-amber-300 font-mono">
+                Select Mode
+              </span>
+              {activeSection && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-800 text-cyan-300 font-mono">
+                  {activeSection.name || "Section"}
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-400">Choose an adjustment tool to show specialized controls:</p>
+          </div>
+        </div>
+
+        {/* 4 Clear Mode Buttons */}
+        <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+          <button
+            type="button"
+            onClick={() => {
+              setSelectionMode?.("row");
+              if (rows.length > 0) setSelectedRowIndex?.(rows[0].rowIndex);
+            }}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 bg-slate-800/90 hover:bg-amber-500 hover:text-slate-950 text-slate-200 border border-slate-700 hover:border-amber-400 shadow-sm"
+          >
+            <Layers className="w-3.5 h-3.5 text-amber-400" />
+            <span>1. ROW</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setSelectionMode?.("group");
+              setSelectedGroupId?.(currentSelectedRow ? currentSelectedRow.rowIndex : 0);
+            }}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 bg-slate-800/90 hover:bg-amber-500 hover:text-slate-950 text-slate-200 border border-slate-700 hover:border-amber-400 shadow-sm"
+          >
+            <Grid className="w-3.5 h-3.5 text-amber-400" />
+            <span>2. GROUP</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSelectionMode?.("panel")}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 bg-slate-800/90 hover:bg-amber-500 hover:text-slate-950 text-slate-200 border border-slate-700 hover:border-amber-400 shadow-sm"
+          >
+            <MousePointer className="w-3.5 h-3.5 text-amber-400" />
+            <span>3. PANEL</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSelectionMode?.("structure")}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 bg-slate-800/90 hover:bg-amber-500 hover:text-slate-950 text-slate-200 border border-slate-700 hover:border-amber-400 shadow-sm"
+          >
+            <Box className="w-3.5 h-3.5 text-amber-400" />
+            <span>4. STRUCTURE</span>
+          </button>
+        </div>
+
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-7 h-7 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-white flex items-center justify-center font-bold text-xs cursor-pointer"
+            title="Close Micro Adjust"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════════
+  // VIEW 2: MODE-SPECIFIC CONTROLS (Only visible after mode selection)
+  // ═════════════════════════════════════════════════════════════════════════════
   return (
     <div className="flex flex-col gap-2 bg-slate-900/98 border border-slate-800 px-3.5 py-2 rounded-2xl shadow-xl text-xs text-white shrink-0 select-none animate-in fade-in duration-150">
-      {/* ── ROW 1: 4-MODE SELECTOR & CONTEXTUAL STATUS ────────────────────────── */}
+      {/* ── ROW 1: ACTIVE MODE HEADER & QUICK SWITCHER ───────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-2.5 pb-1 border-b border-slate-800/80">
         <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase font-bold text-amber-400 tracking-wider flex items-center gap-1">
-            <Sliders className="w-3.5 h-3.5 text-amber-400" />
-            <span>Micro Adjust:</span>
-          </span>
+          {/* Back / Change Mode Button */}
+          <button
+            type="button"
+            onClick={() => setSelectionMode?.(null)}
+            className="h-6 px-2 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10.5px] font-bold flex items-center gap-1 cursor-pointer transition"
+            title="Return to Mode Selection"
+          >
+            <span>← Mode Select</span>
+          </button>
 
-          {/* 4 Clear Modes */}
-          <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded-xl border border-slate-800">
+          {/* Direct Mode Tabs */}
+          <div className="flex items-center gap-0.5 bg-slate-950 p-0.5 rounded-xl border border-slate-800">
             <button
               type="button"
               onClick={() => {
                 setSelectionMode?.("row");
-                if (rows.length > 0 && selectedRowIndex == null) {
-                  setSelectedRowIndex?.(rows[0].rowIndex);
-                }
+                if (rows.length > 0 && selectedRowIndex == null) setSelectedRowIndex?.(rows[0].rowIndex);
               }}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+              className={`px-2 py-0.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 ${
                 selectionMode === "row" ? "bg-amber-500 text-slate-950 shadow-sm" : "text-slate-400 hover:text-white"
               }`}
             >
               <Layers className="w-3 h-3" />
-              <span>1. Row Adjust</span>
+              <span>Row</span>
             </button>
 
             <button
@@ -571,34 +730,34 @@ export default function LayoutMicroAdjuster({
                 setSelectionMode?.("group");
                 setSelectedGroupId?.(currentSelectedRow ? currentSelectedRow.rowIndex : 0);
               }}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+              className={`px-2 py-0.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 ${
                 selectionMode === "group" ? "bg-amber-500 text-slate-950 shadow-sm" : "text-slate-400 hover:text-white"
               }`}
             >
               <Grid className="w-3 h-3" />
-              <span>2. Group Adjust</span>
+              <span>Group</span>
             </button>
 
             <button
               type="button"
-              onClick={() => setSelectionMode?.("custom")}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
-                selectionMode === "custom" || selectionMode === "panel" ? "bg-amber-500 text-slate-950 shadow-sm" : "text-slate-400 hover:text-white"
+              onClick={() => setSelectionMode?.("panel")}
+              className={`px-2 py-0.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 ${
+                isPanelMode ? "bg-amber-500 text-slate-950 shadow-sm" : "text-slate-400 hover:text-white"
               }`}
             >
               <MousePointer className="w-3 h-3" />
-              <span>3. Custom Panel</span>
+              <span>Panel</span>
             </button>
 
             <button
               type="button"
               onClick={() => setSelectionMode?.("structure")}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+              className={`px-2 py-0.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 ${
                 selectionMode === "structure" ? "bg-amber-500 text-slate-950 shadow-sm" : "text-slate-400 hover:text-white"
               }`}
             >
               <Box className="w-3 h-3" />
-              <span>4. Structure Adjust</span>
+              <span>Structure</span>
             </button>
           </div>
         </div>
@@ -610,12 +769,12 @@ export default function LayoutMicroAdjuster({
             {selectionMode === "row" && (
               currentSelectedRow
                 ? `Selected: Row ${currentSelectedRow.visualIndex} (${currentSelectedRow.panels.length} Panels)`
-                : "Click or select a row"
+                : "Select a row to adjust"
             )}
             {selectionMode === "group" && (
               `Selected: Structure Group ${currentGroupId + 1} (${currentGroupPanels.length} Panels + Rails)`
             )}
-            {(selectionMode === "custom" || selectionMode === "panel") && (
+            {isPanelMode && (
               activeSelectedIds.length > 0
                 ? `Selected: ${activeSelectedIds.length} Panel${activeSelectedIds.length === 1 ? "" : "s"} (Shift+Click multi-select)`
                 : "Click panel to select (Shift+Click to multi-select)"
@@ -625,15 +784,37 @@ export default function LayoutMicroAdjuster({
             )}
           </span>
 
-          {hasManualAdjustments && (
+          {/* Manual Override Status Badge */}
+          {isOverridden && (
+            <span className="text-emerald-400 font-mono text-[10.5px] font-bold px-2 py-0.5 bg-emerald-950/60 border border-emerald-700/60 rounded-lg">
+              Override: ON (+{panels.length - baselineCount})
+            </span>
+          )}
+
+          {hasManualAdjustments && autoLayoutBaselinePanels && autoLayoutBaselinePanels.length > 0 && (
             <button
               type="button"
-              onClick={handleResetToAutoLayout}
-              className="h-7 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1 text-[10.5px] font-semibold transition cursor-pointer"
-              title="Restore auto-generation layout"
+              onClick={() => {
+                setPanels(autoLayoutBaselinePanels);
+                setHasManualAdjustments?.(false);
+                toast.success(`Restored auto-layout baseline (${autoLayoutBaselinePanels.length} panels)`);
+              }}
+              className="h-6 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1 text-[10px] font-semibold transition cursor-pointer"
+              title="Restore initial auto-generation baseline"
             >
               <RotateCcw className="w-3 h-3 text-amber-400" />
-              <span>Reset</span>
+              <span>Restore Baseline</span>
+            </button>
+          )}
+
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-6 h-6 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-white flex items-center justify-center font-bold text-xs cursor-pointer ml-1"
+              title="Close Micro Adjust"
+            >
+              ✕
             </button>
           )}
         </div>
@@ -641,9 +822,9 @@ export default function LayoutMicroAdjuster({
 
       {/* ── ROW 2: ACTIVE MODE DEDICATED CONTROLS ────────────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-        {/* Left: Direction D-Pad & Step Selector */}
-        <div className="flex items-center gap-2">
-          {/* Step Size Selector */}
+        {/* Left: Step Size Selector */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-slate-400 font-semibold">Step:</span>
           <div className="flex items-center gap-0.5 bg-slate-950 border border-slate-800 rounded-lg p-0.5">
             {[0.02, 0.05, 0.1, 0.2].map((inc) => (
               <button
@@ -658,192 +839,339 @@ export default function LayoutMicroAdjuster({
               </button>
             ))}
           </div>
-
-          {/* Directional Navigation Buttons: -X, +X, -Y, +Y */}
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => handleMicroMove(-stepIncrement, 0)}
-              className="h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-700 flex items-center gap-1 text-slate-200 hover:text-amber-300 font-mono font-bold text-xs transition shadow-sm cursor-pointer"
-              title="Shift West / Left (-X)"
-            >
-              <ArrowLeft className="w-3 h-3" />
-              <span>← -X</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleMicroMove(stepIncrement, 0)}
-              className="h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-700 flex items-center gap-1 text-slate-200 hover:text-amber-300 font-mono font-bold text-xs transition shadow-sm cursor-pointer"
-              title="Shift East / Right (+X)"
-            >
-              <span>+X →</span>
-              <ArrowRight className="w-3 h-3" />
-            </button>
-            <button
-              type="button"
-              onClick={() => handleMicroMove(0, -stepIncrement)}
-              className="h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-700 flex items-center gap-1 text-slate-200 hover:text-amber-300 font-mono font-bold text-xs transition shadow-sm cursor-pointer"
-              title="Shift South / Down (-Y)"
-            >
-              <ArrowDown className="w-3 h-3" />
-              <span>↓ -Y</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleMicroMove(0, stepIncrement)}
-              className="h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:scale-95 border border-slate-700 flex items-center gap-1 text-slate-200 hover:text-amber-300 font-mono font-bold text-xs transition shadow-sm cursor-pointer"
-              title="Shift North / Up (+Y)"
-            >
-              <ArrowUp className="w-3 h-3" />
-              <span>↑ +Y</span>
-            </button>
-          </div>
         </div>
 
-        {/* Right: Mode Specific Tools */}
-        <div className="flex items-center gap-2">
-          {/* ── MODE 1: ROW ADJUST TOOLS ──────────────────────── */}
-          {selectionMode === "row" && (
-            <div className="flex items-center gap-2">
-              {/* Row Tilt Control */}
-              <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-xl">
-                <span className="text-[10px] text-slate-400 font-semibold">Row Tilt:</span>
-                <button
-                  type="button"
-                  onClick={() => handleAdjustRowTilt(-1)}
-                  className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-bold text-xs text-slate-300 hover:text-white"
-                >
-                  -
-                </button>
-                <span className="font-mono text-cyan-400 font-bold text-xs px-1">{currentTilt}°</span>
-                <button
-                  type="button"
-                  onClick={() => handleAdjustRowTilt(1)}
-                  className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-bold text-xs text-slate-300 hover:text-white"
-                >
-                  +
-                </button>
-              </div>
-
-              {/* Row Switcher (Prev / Next Row) */}
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (rows.length === 0) return;
-                    const cIdx = rows.findIndex((r) => r.rowIndex === selectedRowIndex);
-                    const prevIdx = cIdx > 0 ? cIdx - 1 : rows.length - 1;
-                    setSelectedRowIndex?.(rows[prevIdx].rowIndex);
-                  }}
-                  className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold"
-                >
-                  Prev Row
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (rows.length === 0) return;
-                    const cIdx = rows.findIndex((r) => r.rowIndex === selectedRowIndex);
-                    const nextIdx = cIdx < rows.length - 1 ? cIdx + 1 : 0;
-                    setSelectedRowIndex?.(rows[nextIdx].rowIndex);
-                  }}
-                  className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold"
-                >
-                  Next Row
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ── MODE 2: GROUP ADJUST TOOLS ────────────────────── */}
-          {selectionMode === "group" && (
-            <div className="flex items-center gap-2">
+        {/* ── MODE 1: ROW ADJUST SPECIALIZED CONTROLS ───────────────────────── */}
+        {selectionMode === "row" && (
+          <div className="flex flex-wrap items-center gap-3">
+            {/* THREE-STATE SHIFT CONTROLS: LEFT / CENTER / RIGHT */}
+            <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 p-1 rounded-xl">
               <button
                 type="button"
-                onClick={() => handleRotateSelection(15)}
-                className="h-7 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1 font-semibold text-xs"
+                onClick={handleShiftRowLeft}
+                className="h-7 px-3 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 active:scale-95 text-slate-200 font-bold text-xs transition border border-slate-700 flex items-center gap-1.5 cursor-pointer shadow-sm"
+                title="Shift complete row to the left"
               >
-                <RotateCw className="w-3 h-3 text-cyan-400" />
-                <span>Rotate Group 15°</span>
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>SHIFT LEFT</span>
               </button>
 
+              <button
+                type="button"
+                onClick={handleResetRowCenter}
+                className="h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:scale-95 text-cyan-300 font-bold text-xs transition border border-slate-700 flex items-center gap-1 cursor-pointer shadow-sm"
+                title="Reset row alignment back to center baseline"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>CENTER / RESET</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleShiftRowRight}
+                className="h-7 px-3 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 active:scale-95 text-slate-200 font-bold text-xs transition border border-slate-700 flex items-center gap-1.5 cursor-pointer shadow-sm"
+                title="Shift complete row to the right"
+              >
+                <span>SHIFT RIGHT</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Fine Nudge Controls (-X, +X, -Y, +Y) */}
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => handleMicroMove(-stepIncrement, 0)}
+                className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs border border-slate-700"
+                title="Fine shift left (-X)"
+              >
+                ← -X
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMicroMove(stepIncrement, 0)}
+                className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs border border-slate-700"
+                title="Fine shift right (+X)"
+              >
+                +X →
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMicroMove(0, -stepIncrement)}
+                className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs border border-slate-700"
+                title="Fine shift down / South (-Y)"
+              >
+                ↓ -Y
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMicroMove(0, stepIncrement)}
+                className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs border border-slate-700"
+                title="Fine shift up / North (+Y)"
+              >
+                ↑ +Y
+              </button>
+            </div>
+
+            {/* Row Tilt Control */}
+            <div className="flex items-center gap-1 bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-xl">
+              <span className="text-[10px] text-slate-400 font-semibold">Tilt:</span>
+              <button
+                type="button"
+                onClick={() => handleAdjustRowTilt(-1)}
+                className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-bold text-xs text-slate-300"
+              >
+                -
+              </button>
+              <span className="font-mono text-cyan-400 font-bold text-xs px-1">{currentTilt}°</span>
+              <button
+                type="button"
+                onClick={() => handleAdjustRowTilt(1)}
+                className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-bold text-xs text-slate-300"
+              >
+                +
+              </button>
+            </div>
+
+            {/* Row Switcher */}
+            <div className="flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => {
-                  const nextGroupId = (currentGroupId + 1) % Math.max(1, rows.length);
-                  setSelectedGroupId?.(nextGroupId);
+                  if (rows.length === 0) return;
+                  const cIdx = rows.findIndex((r) => r.rowIndex === selectedRowIndex);
+                  const prevIdx = cIdx > 0 ? cIdx - 1 : rows.length - 1;
+                  setSelectedRowIndex?.(rows[prevIdx].rowIndex);
                 }}
-                className="h-7 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1 font-semibold text-xs"
+                className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
               >
-                <span>Next Table Group →</span>
+                Prev Row
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (rows.length === 0) return;
+                  const cIdx = rows.findIndex((r) => r.rowIndex === selectedRowIndex);
+                  const nextIdx = cIdx < rows.length - 1 ? cIdx + 1 : 0;
+                  setSelectedRowIndex?.(rows[nextIdx].rowIndex);
+                }}
+                className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+              >
+                Next Row
               </button>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* ── MODE 3: CUSTOM PANEL ADJUST TOOLS ─────────────── */}
-          {(selectionMode === "custom" || selectionMode === "panel") && (
-            <div className="flex items-center gap-2">
-              {/* SNAP TOGGLE */}
+        {/* ── MODE 2: GROUP ADJUST SPECIALIZED CONTROLS ─────────────────────── */}
+        {selectionMode === "group" && (
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1">
               <button
                 type="button"
-                onClick={() => setSnapEnabled?.(!snapEnabled)}
-                className={`h-7 px-2.5 rounded-xl border flex items-center gap-1 font-bold text-xs transition cursor-pointer ${
-                  snapEnabled
-                    ? "bg-emerald-950/60 border-emerald-600/70 text-emerald-300"
-                    : "bg-slate-800 border-slate-700 text-slate-400 hover:text-white"
-                }`}
-                title={snapEnabled ? "Snapping enabled to grid & panel gaps" : "Snapping disabled: free micro-positioning"}
+                onClick={() => handleMicroMove(-stepIncrement, 0)}
+                className="h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs border border-slate-700"
               >
-                <Magnet className="w-3.5 h-3.5" />
-                <span>Snap {snapEnabled ? "ON" : "OFF"}</span>
+                ← -X
               </button>
-
-              {/* Add Single Panel Button */}
               <button
                 type="button"
-                onClick={handleAddSinglePanelNear}
-                className="h-7 px-2.5 rounded-xl bg-amber-950/60 hover:bg-amber-900 border border-amber-700/60 text-amber-300 hover:text-white flex items-center gap-1 font-bold text-xs shadow-sm cursor-pointer"
-                title="Add panel in nearest valid space"
+                onClick={() => handleMicroMove(stepIncrement, 0)}
+                className="h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs border border-slate-700"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>+ Panel</span>
+                +X →
               </button>
-
-              {/* Rotate Selection */}
               <button
                 type="button"
-                onClick={() => handleRotateSelection(15)}
+                onClick={() => handleMicroMove(0, -stepIncrement)}
+                className="h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs border border-slate-700"
+              >
+                ↓ -Y
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMicroMove(0, stepIncrement)}
+                className="h-7 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono font-bold text-xs border border-slate-700"
+              >
+                ↑ +Y
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => handleRotateSelection(15)}
+              className="h-7 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1 font-semibold text-xs cursor-pointer"
+            >
+              <RotateCw className="w-3 h-3 text-cyan-400" />
+              <span>Rotate Group 15°</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                const nextGroupId = (currentGroupId + 1) % Math.max(1, rows.length);
+                setSelectedGroupId?.(nextGroupId);
+              }}
+              className="h-7 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1 font-semibold text-xs cursor-pointer"
+            >
+              <span>Next Group →</span>
+            </button>
+          </div>
+        )}
+
+        {/* ── MODE 3: CUSTOM PANEL ADJUST SPECIALIZED CONTROLS ───────────────── */}
+        {isPanelMode && (
+          <div className="flex flex-wrap items-center gap-2">
+            {/* SNAP TOGGLE */}
+            <button
+              type="button"
+              onClick={() => setSnapEnabled?.(!snapEnabled)}
+              className={`h-7 px-2.5 rounded-xl border flex items-center gap-1 font-bold text-xs transition cursor-pointer ${
+                snapEnabled
+                  ? "bg-emerald-950/60 border-emerald-600/70 text-emerald-300"
+                  : "bg-slate-800 border-slate-700 text-slate-400 hover:text-white"
+              }`}
+              title={snapEnabled ? "Snapping enabled to grid & panel gaps" : "Snapping disabled: free micro-positioning"}
+            >
+              <Magnet className="w-3.5 h-3.5" />
+              <span>Snap {snapEnabled ? "ON" : "OFF"}</span>
+            </button>
+
+            {/* ADD PANEL (MANUAL OVERRIDE) */}
+            <button
+              type="button"
+              onClick={handleAddSinglePanelNear}
+              className="h-7 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center gap-1.5 font-bold text-xs shadow-md transition cursor-pointer"
+              title="Add panel (manual override: not blocked by automatic capacity)"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Add Panel</span>
+            </button>
+
+            {/* CLICK ON ROOF TO PLACE */}
+            {setActiveTool && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTool("add_panel");
+                  toast.info("Click anywhere on the roof to place panel.");
+                }}
+                className="h-7 px-2.5 rounded-xl bg-amber-950/70 hover:bg-amber-900 border border-amber-700/60 text-amber-300 hover:text-white flex items-center gap-1 font-semibold text-xs cursor-pointer"
+                title="Click anywhere on the roof boundary to place a panel directly"
+              >
+                <Crosshair className="w-3 h-3 text-amber-400" />
+                <span>Click to Place</span>
+              </button>
+            )}
+
+            {/* MULTI-PANEL DIRECTIONAL MOVE */}
+            <div className="flex items-center gap-0.5 bg-slate-950 border border-slate-800 rounded-lg p-0.5">
+              <button
+                type="button"
+                onClick={() => handleMicroMove(-stepIncrement, 0)}
                 disabled={activeSelectedIds.length === 0}
-                className="h-7 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1 font-semibold text-xs"
-                title="Rotate selected panel(s) 15°"
+                className="h-6 px-1.5 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 font-mono font-bold text-xs"
+                title="Move selection West (-X)"
               >
-                <RotateCw className="w-3 h-3 text-blue-400" />
-                <span>Rotate</span>
+                ←
               </button>
-
-              {/* Delete Selection */}
               <button
                 type="button"
-                onClick={handleDeleteSelected}
+                onClick={() => handleMicroMove(stepIncrement, 0)}
                 disabled={activeSelectedIds.length === 0}
-                className="h-7 px-2.5 rounded-xl bg-red-950/60 hover:bg-red-900 disabled:opacity-40 text-red-300 hover:text-white border border-red-800/60 flex items-center gap-1 font-semibold text-xs"
-                title="Delete selected panel(s)"
+                className="h-6 px-1.5 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 font-mono font-bold text-xs"
+                title="Move selection East (+X)"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete ({activeSelectedIds.length})</span>
+                →
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMicroMove(0, -stepIncrement)}
+                disabled={activeSelectedIds.length === 0}
+                className="h-6 px-1.5 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 font-mono font-bold text-xs"
+                title="Move selection South (-Y)"
+              >
+                ↓
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMicroMove(0, stepIncrement)}
+                disabled={activeSelectedIds.length === 0}
+                className="h-6 px-1.5 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 font-mono font-bold text-xs"
+                title="Move selection North (+Y)"
+              >
+                ↑
               </button>
             </div>
-          )}
 
-          {/* ── MODE 4: STRUCTURE ADJUST TOOLS ────────────────── */}
-          {selectionMode === "structure" && (
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-slate-400 italic">
-                Click support legs or rails in 3D to fine-tune placement & elevation.
-              </span>
+            {/* Rotate Selection */}
+            <button
+              type="button"
+              onClick={() => handleRotateSelection(15)}
+              disabled={activeSelectedIds.length === 0}
+              className="h-7 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 hover:text-white border border-slate-700 flex items-center gap-1 font-semibold text-xs cursor-pointer"
+              title="Rotate selected panel(s) 15°"
+            >
+              <RotateCw className="w-3 h-3 text-blue-400" />
+              <span>Rotate</span>
+            </button>
+
+            {/* Delete Selection */}
+            <button
+              type="button"
+              onClick={handleDeleteSelected}
+              disabled={activeSelectedIds.length === 0}
+              className="h-7 px-2.5 rounded-xl bg-red-950/60 hover:bg-red-900 disabled:opacity-40 text-red-300 hover:text-white border border-red-800/60 flex items-center gap-1 font-semibold text-xs cursor-pointer"
+              title="Delete selected panel(s)"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete ({activeSelectedIds.length})</span>
+            </button>
+          </div>
+        )}
+
+        {/* ── MODE 4: STRUCTURE ADJUST SPECIALIZED CONTROLS ─────────────────── */}
+        {selectionMode === "structure" && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-slate-300 italic">
+              Click support post or rail in 3D to fine-adjust position:
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => handleMicroMove(-stepIncrement, 0)}
+                disabled={!selectedMemberId}
+                className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 font-mono font-bold text-xs border border-slate-700"
+              >
+                ← -X
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMicroMove(stepIncrement, 0)}
+                disabled={!selectedMemberId}
+                className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 font-mono font-bold text-xs border border-slate-700"
+              >
+                +X →
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMicroMove(0, -stepIncrement)}
+                disabled={!selectedMemberId}
+                className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 font-mono font-bold text-xs border border-slate-700"
+              >
+                ↓ -Y
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMicroMove(0, stepIncrement)}
+                disabled={!selectedMemberId}
+                className="h-7 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 font-mono font-bold text-xs border border-slate-700"
+              >
+                ↑ +Y
+              </button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

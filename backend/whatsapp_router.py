@@ -20,36 +20,46 @@ from fastapi import APIRouter, HTTPException, Depends, Request, Response, Query,
 from pydantic import BaseModel, Field
 
 from whatsapp_providers import get_whatsapp_provider, WhatsAppProvider, SimulatedProvider, EvolutionGoProvider
+from evolution_config import (
+    get_evolution_api_url,
+    get_evolution_api_key,
+    get_evolution_instance,
+    validate_evolution_config,
+    is_production,
+    log_evolution_config,
+)
 
 logger = logging.getLogger("whatsapp_marketing")
 
 whatsapp_router = APIRouter(prefix="/api/whatsapp", tags=["whatsapp_marketing"])
 
 def ensure_whatsapp_engine_running() -> bool:
+    """Ensures local gateway engine runs during local development only."""
+    if is_production():
+        # In production on Render/Cloud, Evolution API is external or configured via EVOLUTION_API_URL
+        return True
+
+    dev_url = get_evolution_api_url()
     try:
         import httpx
-        for target in ("http://127.0.0.1:8085", "http://localhost:8085"):
-            try:
-                with httpx.Client(timeout=1.0) as client:
-                    if client.get(f"{target}/server/ok").status_code == 200:
-                        return True
-            except Exception:
-                pass
+        with httpx.Client(timeout=1.0) as client:
+            if dev_url and client.get(f"{dev_url}/server/ok").status_code == 200:
+                return True
     except Exception:
         pass
     
     engine_dir = Path(__file__).resolve().parent.parent / "whatsapp_engine"
     if (engine_dir / "server.js").exists():
         try:
-            logger.info("Spawning WhatsApp Baileys gateway background engine on port 8085...")
+            logger.info("Spawning WhatsApp Evolution Gateway background engine for development...")
             subprocess.Popen(["node", "server.js"], cwd=str(engine_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             import httpx, time
             for _ in range(15):
-                time.sleep(0.2)
+                time.sleep(0.3)
                 try:
                     with httpx.Client(timeout=0.5) as client:
-                        if client.get("http://127.0.0.1:8085/server/ok").status_code == 200:
-                            logger.info("WhatsApp Baileys gateway online and ready on port 8085.")
+                        if dev_url and client.get(f"{dev_url}/server/ok").status_code == 200:
+                            logger.info("WhatsApp Evolution Gateway online and ready for development.")
                             return True
                 except Exception:
                     pass
@@ -144,6 +154,7 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
 
     # 1. Provider
     prov = await db.whatsapp_providers.find_one({"company_id": company_id})
+    central_url = get_evolution_api_url()
     if not prov:
         default_prov = {
             "id": str(uuid.uuid4()),
@@ -152,9 +163,9 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
             "name": "Evolution Go WhatsApp Gateway",
             "is_active": True,
             "credentials": {
-                "instance_name": os.environ.get("EVOLUTION_INSTANCE") or client_instance_name,
-                "api_key": os.environ.get("EVOLUTION_API_KEY") or client_api_key,
-                "api_url": os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085"
+                "instance_name": get_evolution_instance() or client_instance_name,
+                "api_key": get_evolution_api_key() or client_api_key,
+                "api_url": central_url
             },
             "settings": {
                 "rate_limit_per_min": 60,
@@ -169,11 +180,11 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
         creds = prov.get("credentials") or {}
         updates = {}
         if not creds.get("instance_name") or creds.get("instance_name") == "solarix_primary":
-            updates["credentials.instance_name"] = os.environ.get("EVOLUTION_INSTANCE") or client_instance_name
+            updates["credentials.instance_name"] = get_evolution_instance() or client_instance_name
         if not creds.get("api_key"):
-            updates["credentials.api_key"] = os.environ.get("EVOLUTION_API_KEY") or client_api_key
-        if not creds.get("api_url"):
-            updates["credentials.api_url"] = os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085"
+            updates["credentials.api_key"] = get_evolution_api_key() or client_api_key
+        if not creds.get("api_url") and central_url:
+            updates["credentials.api_url"] = central_url
         if prov.get("provider_type") == "simulated":
             updates["provider_type"] = "evolution_go"
             updates["name"] = "Evolution Go WhatsApp Gateway"
@@ -210,18 +221,21 @@ async def ensure_default_whatsapp_setup(company_id: str, company_name: str = "GV
             inst_updates["updated_at"] = now_iso()
             await db.whatsapp_instances.update_one({"company_id": company_id}, {"$set": inst_updates})
 
-    # Auto-provision on local engine
+    # Auto-provision on Evolution engine if URL is configured
     try:
-        import httpx
         final_prov = await db.whatsapp_providers.find_one({"company_id": company_id})
         f_creds = (final_prov or {}).get("credentials") or {}
-        f_name = f_creds.get("instance_name") or client_instance_name
-        f_key = f_creds.get("api_key") or client_api_key
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            await client.post(
-                "http://127.0.0.1:8085/instance/create",
-                json={"instanceName": f_name, "token": f_key, "qrcode": False}
-            )
+        provision_url = get_evolution_api_url(f_creds.get("api_url"))
+        if provision_url:
+            import httpx
+            f_name = f_creds.get("instance_name") or client_instance_name
+            f_key = f_creds.get("api_key") or client_api_key
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                await client.post(
+                    f"{provision_url}/instance/create",
+                    json={"instanceName": f_name, "token": f_key, "qrcode": False},
+                    headers={"apikey": f_key}
+                )
     except Exception:
         pass
 
@@ -937,9 +951,12 @@ async def get_provider_settings(user: dict = Depends(get_current_user_dep())):
         prov_doc = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
     prov: Dict[str, Any] = prov_doc if isinstance(prov_doc, dict) else {}
 
-    creds: Dict[str, Any] = prov.get("credentials") if isinstance(prov.get("credentials"), dict) else {}
-    masked_key = (creds.get("api_key")[:4] + "••••••••" + creds.get("api_key")[-3:]) if creds.get("api_key") else ""
-    masked_token = (creds.get("access_token")[:4] + "••••••••" + creds.get("access_token")[-3:]) if creds.get("access_token") else ""
+    creds_raw = prov.get("credentials")
+    creds: Dict[str, Any] = creds_raw if isinstance(creds_raw, dict) else {}
+    api_key_str = str(creds.get("api_key") or "")
+    access_token_str = str(creds.get("access_token") or "")
+    masked_key = (api_key_str[:4] + "••••••••" + api_key_str[-3:]) if len(api_key_str) >= 7 else ("••••••••" if api_key_str else "")
+    masked_token = (access_token_str[:4] + "••••••••" + access_token_str[-3:]) if len(access_token_str) >= 7 else ("••••••••" if access_token_str else "")
 
     webhook_host = os.environ.get("BACKEND_URL") or "https://solarix.onrender.com"
     webhook_url = f"{webhook_host.rstrip('/')}/api/whatsapp/webhook/{prov.get('provider_type', 'evolution_go')}"
@@ -950,11 +967,11 @@ async def get_provider_settings(user: dict = Depends(get_current_user_dep())):
     return {
         "provider_type": prov.get("provider_type", "evolution_go"),
         "name": prov.get("name", "Evolution Go WhatsApp Gateway"),
-        "api_url": creds.get("api_url") or os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085",
-        "client_gateway_url": creds.get("api_url") or os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085",
+        "api_url": get_evolution_api_url(creds.get("api_url")),
+        "client_gateway_url": get_evolution_api_url(creds.get("api_url")),
         "api_key": creds.get("api_key", ""),
         "api_key_masked": masked_key,
-        "instance_name": creds.get("instance_name") or os.environ.get("EVOLUTION_INSTANCE") or f"solarix_{company_id[:8]}",
+        "instance_name": creds.get("instance_name") or get_evolution_instance() or f"solarix_{company_id[:8]}",
         "phone_number": creds.get("phone_number") or inst_phone or "",
         "phone_number_id": creds.get("phone_number_id", ""),
         "access_token_masked": masked_token,
@@ -980,9 +997,9 @@ async def save_provider_settings(payload: ProviderSettingsIn, user: dict = Depen
     token_val = payload.access_token if payload.access_token and not "••••" in payload.access_token else existing_creds.get("access_token", "")
 
     creds = {
-        "api_url": payload.api_url or os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085",
+        "api_url": get_evolution_api_url(payload.api_url),
         "api_key": api_key_val,
-        "instance_name": payload.instance_name or os.environ.get("EVOLUTION_INSTANCE") or f"solarix_{company_id[:8]}",
+        "instance_name": payload.instance_name or get_evolution_instance() or f"solarix_{company_id[:8]}",
         "phone_number": payload.phone_number,
         "phone_number_id": payload.phone_number_id,
         "access_token": token_val,
@@ -1045,9 +1062,10 @@ async def regenerate_api_key(user: dict = Depends(get_current_user_dep())):
     # Sync instance creation with gateway
     try:
         import httpx
-        gateway_url = (creds.get("api_url") or "http://127.0.0.1:8085").rstrip("/")
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(f"{gateway_url}/instance/create", json={"instanceName": inst_name, "token": new_api_key})
+        gateway_url = get_evolution_api_url(creds.get("api_url"))
+        if gateway_url:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                await client.post(f"{gateway_url}/instance/create", json={"instanceName": inst_name, "token": new_api_key})
     except Exception:
         pass
 
@@ -1976,22 +1994,14 @@ class EvolutionSendIn(BaseModel):
 
 async def get_evolution_credentials(company_id: str) -> tuple:
     db = get_db()
-    url = (os.environ.get("EVOLUTION_API_URL") or "http://127.0.0.1:8085").rstrip("/")
-    api_key = os.environ.get("EVOLUTION_API_KEY") or ""
-    instance_name = os.environ.get("EVOLUTION_INSTANCE") or "solarix_primary"
-    
     prov = await db.whatsapp_providers.find_one({"company_id": company_id, "provider_type": "evolution_go"})
     if not prov:
         prov = await db.whatsapp_providers.find_one({"company_id": company_id, "is_active": True})
         
-    if prov and prov.get("credentials"):
-        creds = prov["credentials"]
-        if creds.get("api_url"):
-            url = creds["api_url"].rstrip("/")
-        if creds.get("api_key"):
-            api_key = creds["api_key"]
-        if creds.get("instance_name"):
-            instance_name = creds["instance_name"]
+    creds = (prov.get("credentials") if prov else None) or {}
+    url = get_evolution_api_url(creds.get("api_url"))
+    api_key = creds.get("api_key") or get_evolution_api_key()
+    instance_name = creds.get("instance_name") or get_evolution_instance()
             
     return url, api_key, instance_name
 
@@ -2220,6 +2230,25 @@ async def get_evolution_diagnostics(user: dict = Depends(get_current_user_dep())
     db = get_db()
     url, api_key, instance_name = await get_evolution_credentials(company_id)
     
+    valid, config_err = validate_evolution_config(url)
+    if not valid:
+        diag_doc = await db.whatsapp_system_diagnostics.find_one({"type": "evolution_go"}) or {}
+        return {
+            "evolution_url": "",
+            "evolution_url_masked": "NOT CONFIGURED",
+            "api_reachable": False,
+            "auth_status": "NOT CONFIGURED",
+            "instance_status": "NOT CONFIGURED",
+            "instance_name": instance_name,
+            "instance_masked": "********",
+            "whatsapp_connection": "DISCONNECTED",
+            "webhook_status": "WAITING",
+            "last_webhook_received": diag_doc.get("last_webhook_received"),
+            "last_api_error": {"message": config_err, "time": now_iso()},
+            "response_time_ms": 0,
+            "config_error": config_err
+        }
+
     import httpx, time
     start = time.perf_counter()
     api_reachable = False
@@ -2291,6 +2320,10 @@ async def test_evolution_api(user: dict = Depends(get_current_user_dep())):
     """Step 8: Button: Test API"""
     company_id = user["company_id"]
     url, api_key, instance_name = await get_evolution_credentials(company_id)
+    valid, config_err = validate_evolution_config(url)
+    if not valid:
+        return {"pass": False, "status_code": None, "latency_ms": 0, "message": config_err}
+
     import httpx, time
     start = time.perf_counter()
     try:
@@ -2317,6 +2350,9 @@ async def test_evolution_auth(user: dict = Depends(get_current_user_dep())):
     """Step 8: Button: Test Authentication"""
     company_id = user["company_id"]
     url, api_key, instance_name = await get_evolution_credentials(company_id)
+    valid, config_err = validate_evolution_config(url)
+    if not valid:
+        return {"pass": False, "message": config_err}
     if not api_key:
         return {"pass": False, "message": "Evolution API Key is not set."}
     import httpx
@@ -2340,6 +2376,9 @@ async def test_evolution_instance(user: dict = Depends(get_current_user_dep())):
     """Step 8: Button: Test Instance"""
     company_id = user["company_id"]
     url, api_key, instance_name = await get_evolution_credentials(company_id)
+    valid, config_err = validate_evolution_config(url)
+    if not valid:
+        return {"pass": False, "message": config_err}
     import httpx
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:

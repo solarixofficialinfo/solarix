@@ -541,12 +541,14 @@ export default function SolarStudio() {
     return effectiveSections.find((s) => s.id === selectedSectionId) || effectiveSections[0];
   }, [effectiveSections, selectedSectionId]);
 
-  // Explicit Section Selector: activates section and opens its inspector settings
-  const handleSelectSection = useCallback((secId) => {
+  // Explicit Section Selector: activates section and optionally opens its inspector settings
+  const handleSelectSection = useCallback((secId, openSettings = false) => {
     if (secId) {
       setSelectedSectionId(secId);
-      setIsSectionSettingsOpen(true);
-      setOpenSection(null);
+      if (openSettings) {
+        setIsSectionSettingsOpen(true);
+        setOpenSection(null);
+      }
     } else {
       setSelectedSectionId(null);
       setIsSectionSettingsOpen(false);
@@ -2465,7 +2467,15 @@ export default function SolarStudio() {
             {designData.panels && designData.panels.length > 0 && (
               <button
                 type="button"
-                onClick={() => setShowMicroAdjust((prev) => !prev)}
+                onClick={() => {
+                  setShowMicroAdjust((prev) => {
+                    const next = !prev;
+                    if (next) {
+                      setSelectionMode(null); // Show mode selection first
+                    }
+                    return next;
+                  });
+                }}
                 className={`h-7 px-3 text-xs rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
                   showMicroAdjust
                     ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300 border-amber-400"
@@ -2482,7 +2492,7 @@ export default function SolarStudio() {
             {activeTool !== "select" && (
               <div className="flex items-center gap-2">
                 <span className="text-xs text-amber-300 font-semibold animate-pulse">
-                  Active: {activeTool === "draw_section" ? "Drawing Section" : activeTool === "add_section_line" ? "Splitting Section" : activeTool}
+                  Active: {activeTool === "draw_section" ? "Drawing Section" : activeTool === "add_section_line" ? "Splitting Section" : activeTool === "add_panel" ? "Click Roof to Place Panel" : activeTool}
                 </span>
                 <button
                   onClick={() => {
@@ -2508,6 +2518,8 @@ export default function SolarStudio() {
           panels={designData.panels}
           setPanels={handleSetPanels}
           roofPolygon={designData.roof_polygon}
+          activeSection={activeSection}
+          roofSections={effectiveSections}
           setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
           obstacles={designData.obstacles}
           walkways={designData.walkways}
@@ -2538,6 +2550,10 @@ export default function SolarStudio() {
           setHasManualAdjustments={setHasManualAdjustments}
           snapEnabled={snapEnabled}
           setSnapEnabled={setSnapEnabled}
+          setActiveTool={setActiveTool}
+          onClose={() => setShowMicroAdjust(false)}
+          recommendedCapacity={autoLayoutBaselinePanels?.length || designData.panel_count || 0}
+          onAddManualPanel={handleIncreasePanelCount}
         />
       )}
 
@@ -4143,6 +4159,7 @@ export default function SolarStudio() {
           <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 scrollbar-thin">
             <DesignSummaryPanel
               designData={designData}
+              autoLayoutBaselinePanels={autoLayoutBaselinePanels}
               savedViews={savedViews}
               onSelectView={(view) => {
                 setActiveGalleryView(view);

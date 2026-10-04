@@ -44,6 +44,15 @@ export function useInvalidateInventory() {
     queryClient.invalidateQueries({ queryKey: queryKeys.inventory.all() });
     queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
     queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
+    queryClient.invalidateQueries({ queryKey: ["ledger"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory-b2b-client-history"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory-supply-summary"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory-supplier-history"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory-repair-summary"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory", "history"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory", "inward"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory", "outward"] });
   };
 }
 

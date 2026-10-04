@@ -6,7 +6,7 @@ import { queryKeys } from "@/lib/queryKeys";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Boxes, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, ClipboardList, Layers, Search, Activity, History, Hash, TrendingUp } from "lucide-react";
+import { Boxes, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, ClipboardList, Layers, Search, Activity, History, Hash, TrendingUp, Building2, Truck, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import InwardTab from "@/components/Inventory/InwardTab";
 import OutwardTab from "@/components/Inventory/OutwardTab";
@@ -14,6 +14,9 @@ import ProductMasterTab from "@/components/Inventory/ProductMasterTab";
 import BalanceTab from "@/components/Inventory/BalanceTab";
 import HistoryTab from "@/components/Inventory/HistoryTab";
 import SerialTrackingTab from "@/components/Inventory/SerialTrackingTab";
+import B2BSalesView from "@/components/Inventory/B2BSalesView";
+import SupplyView from "@/components/Inventory/SupplyView";
+import RepairView from "@/components/Inventory/RepairView";
 import PageHeader from "@/components/PageHeader";
 import useEntitlements from "@/hooks/useEntitlements";
 import LockedFeatureCard from "@/components/LockedFeatureCard";
@@ -122,6 +125,10 @@ export default function Inventory() {
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
         <div className="sticky top-2 z-10 w-full overflow-x-auto scrollbar-none touch-pan-x bg-slate-100/95 backdrop-blur rounded-lg p-1 shadow-sm border border-slate-200/60">
           <TabsList className="bg-transparent p-0 h-auto w-max min-w-full flex items-center justify-start flex-nowrap gap-1">
+            <TabsTrigger value="b2b-sales" data-testid="tab-b2b-sales" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Building2 className="w-3.5 h-3.5 mr-1.5" /> B2B Sales</TabsTrigger>
+            <TabsTrigger value="supply" data-testid="tab-supply" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Truck className="w-3.5 h-3.5 mr-1.5" /> Supply</TabsTrigger>
+            <TabsTrigger value="repair" data-testid="tab-repair" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Wrench className="w-3.5 h-3.5 mr-1.5" /> Repair</TabsTrigger>
+            <div className="h-4 w-px bg-slate-300 mx-1 shrink-0" />
             <TabsTrigger value="inward" data-testid="tab-inward" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><ArrowDownToLine className="w-3.5 h-3.5 mr-1.5" /> Inward</TabsTrigger>
             <TabsTrigger value="outward" data-testid="tab-outward" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><ArrowUpFromLine className="w-3.5 h-3.5 mr-1.5" /> Outward</TabsTrigger>
             <TabsTrigger value="products" data-testid="tab-products" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Boxes className="w-3.5 h-3.5 mr-1.5" /> Product Master</TabsTrigger>
@@ -131,6 +138,22 @@ export default function Inventory() {
             <TabsTrigger value="serial-tracking" data-testid="tab-serial-tracking" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Hash className="w-3.5 h-3.5 mr-1.5" /> Serial No. Tracking</TabsTrigger>
             <TabsTrigger value="intelligence" data-testid="tab-intelligence" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><TrendingUp className="w-3.5 h-3.5 mr-1.5 text-blue-600" /> Inventory Intelligence</TabsTrigger>
           </TabsList>
+        </div>
+
+        <div style={{ display: tab === "b2b-sales" ? "block" : "none" }}>
+          {visitedTabs.has("b2b-sales") && (
+            <B2BSalesView globalSearch={search} onChanged={bump} />
+          )}
+        </div>
+        <div style={{ display: tab === "supply" ? "block" : "none" }}>
+          {visitedTabs.has("supply") && (
+            <SupplyView globalSearch={search} onChanged={bump} />
+          )}
+        </div>
+        <div style={{ display: tab === "repair" ? "block" : "none" }}>
+          {visitedTabs.has("repair") && (
+            <RepairView globalSearch={search} onChanged={bump} />
+          )}
         </div>
 
         <div style={{ display: tab === "inward" ? "block" : "none" }}>

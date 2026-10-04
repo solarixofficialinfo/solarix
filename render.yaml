@@ -2,8 +2,8 @@ services:
   - type: web
     name: solrix-api
     runtime: python
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: PYTHONPATH=backend uvicorn server:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r backend/requirements.txt && (which node >/dev/null 2>&1 && which npm >/dev/null 2>&1 && (cd whatsapp_engine && npm install) || true)
+    startCommand: bash scripts/start-production.sh
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"

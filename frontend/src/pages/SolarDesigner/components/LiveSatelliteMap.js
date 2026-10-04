@@ -903,8 +903,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
     setPanels?.((prev) => [...prev, panelWithSection]);
     setSelectedPanelId?.(panelWithSection.id);
+    setSelectedPanelIds?.([panelWithSection.id]);
     toast.success(`Placed Panel #${panels.length + 1}${targetSec ? ` in ${targetSec.name}` : ""}`);
-  }, [latLngToCartesian, orientation, panelSpecs, setbackMeters, rowSpacingMeters, panelSpacingMeters, panels, obstacles, walkways, azimuthDegrees, setPanels, setSelectedPanelId, roofSections, selectedSectionId]);
+  }, [latLngToCartesian, orientation, panelSpecs, setbackMeters, rowSpacingMeters, panelSpacingMeters, panels, obstacles, walkways, azimuthDegrees, setPanels, setSelectedPanelId, setSelectedPanelIds, roofSections, selectedSectionId]);
 
   useEffect(() => {
     handleMapClickForAddPanelRef.current = handleMapClickForAddPanel;
@@ -924,14 +925,14 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
       const map = L.map(mapContainerRef.current, {
         center: [initialLat, initialLng],
-        zoom: Math.min(zoom || 19, 20),
-        maxZoom: 20,
+        zoom: Math.min(zoom || 19, 21),
+        maxZoom: 21,
         minZoom: 4,
-        zoomSnap: 0.25,
-        zoomDelta: 0.5,
-        wheelPxPerZoomLevel: 90,
+        zoomSnap: 0.5,
+        zoomDelta: 1,
+        wheelPxPerZoomLevel: 60,
         wheelDebounceTime: 40,
-        scrollWheelZoom: false, // Explicitly false so custom cursor-centered zoom handles wheel
+        scrollWheelZoom: true, // Native cursor-centered smooth wheel zoom coordinated with Leaflet Draggable
         zoomControl: false,
         attributionControl: false,
         preferCanvas: false,
@@ -1091,69 +1092,10 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         }
       };
 
-      // TRUE Cursor-Centered Zoom Handler
-      const handleMapWheel = (e) => {
-        // Prevent default window scrolling when scrolling inside map
-        e.preventDefault();
-        e.stopPropagation();
-
-        const map = mapInstanceRef.current;
-        const container = mapContainerRef.current;
-        if (!map || !container) return;
-
-        const rect = container.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-
-        if (mouseX < 0 || mouseX > rect.width || mouseY < 0 || mouseY > rect.height) {
-          return;
-        }
-
-        const containerPoint = L.point(mouseX, mouseY);
-        const currentZoom = map.getZoom();
-
-        // Small incremental zoom steps for smooth, controlled zooming
-        let zoomDelta = 0.5;
-        if (Math.abs(e.deltaY) < 40) {
-          // Trackpad pinch or fine wheel
-          zoomDelta = Math.max(0.1, Math.min(0.25, Math.abs(e.deltaY) * 0.015));
-        } else {
-          // Standard mouse wheel
-          zoomDelta = 0.5;
-        }
-
-        const direction = e.deltaY > 0 ? -1 : 1;
-        const targetZoom = Math.max(4, Math.min(20, Math.round((currentZoom + direction * zoomDelta) * 20) / 20));
-
-        if (targetZoom === currentZoom) return;
-
-        // TRUE Cursor-Centered Zoom Mathematics:
-        // 1. Capture exact geographic coordinate currently under mouse cursor
-        const targetLatLng = map.containerPointToLatLng(containerPoint);
-
-        // 2. Project targetLatLng to absolute world pixels at the NEW zoom
-        const targetWorldPoint = map.project(targetLatLng, targetZoom);
-
-        // 3. Container half-size
-        const size = map.getSize();
-        const halfSize = size.divideBy(2);
-
-        // 4. Recalculate new map center in world pixels so targetWorldPoint remains at containerPoint
-        const newCenterWorldPoint = targetWorldPoint.subtract(containerPoint).add(halfSize);
-
-        // 5. Convert world center back to LatLng
-        const newCenter = map.unproject(newCenterWorldPoint, targetZoom);
-
-        // 6. Apply new center and zoom immediately without animation drift
-        map.setView(newCenter, targetZoom, { animate: false });
-        onZoomChange?.(targetZoom);
-      };
-
       const domElem = mapContainerRef.current;
       domElem.addEventListener("touchstart", handleTouchStart, { passive: true });
       domElem.addEventListener("touchmove", handleTouchMove, { passive: true });
       domElem.addEventListener("touchend", handleTouchEnd, { passive: true });
-      domElem.addEventListener("wheel", handleMapWheel, { passive: false });
 
       // Map Click Handler based on active tool
       map.on("click", (e) => {
@@ -1218,7 +1160,6 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         domElem.removeEventListener("touchstart", handleTouchStart);
         domElem.removeEventListener("touchmove", handleTouchMove);
         domElem.removeEventListener("touchend", handleTouchEnd);
-        domElem.removeEventListener("wheel", handleMapWheel);
         resizeObserver.disconnect();
         if (mapInstanceRef.current) {
           mapInstanceRef.current.remove();
@@ -1237,11 +1178,12 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     if (!tileGroup) return;
     tileGroup.clearLayers();
 
-    if (mapType === "satellite") {
+    if (mapType === "satellite" || mapType === "hybrid") {
+      // Live Google Hybrid Satellite (high-res satellite imagery + live roads, street names, locality labels)
       const satLayer = L.tileLayer(
-        "https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        "https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
         {
-          maxZoom: 20,
+          maxZoom: 21,
           maxNativeZoom: 20,
           subdomains: ["0", "1", "2", "3"],
           keepBuffer: 6,
@@ -1251,42 +1193,29 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
       
       let fallbackAdded = false;
       satLayer.on("tileerror", (e) => {
-        console.error(`[Tile Error - Google] URL: ${e.tile?.src}, Zoom: ${mapInstanceRef.current?.getZoom()}, Center: ${JSON.stringify(mapInstanceRef.current?.getCenter())}`);
-        
         // Fallback to ArcGIS if Google tiles ever encounter rate limits
         if (!fallbackAdded && tileGroup && mapInstanceRef.current) {
           fallbackAdded = true;
-          console.warn("[Tile Fallback] Adding ArcGIS fallback layer due to Google tile failure.");
           const arcGisLayer = L.tileLayer(
             "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
             { maxZoom: 20, maxNativeZoom: 18, keepBuffer: 6, errorTileUrl: "" }
           );
-          arcGisLayer.on("tileerror", (e2) => {
-            console.error(`[Tile Error - ArcGIS] URL: ${e2.tile?.src}, Zoom: ${mapInstanceRef.current?.getZoom()}`);
-          });
           arcGisLayer.addTo(tileGroup);
         }
       });
       satLayer.addTo(tileGroup);
-    } else if (mapType === "hybrid") {
+    } else {
+      // Live Google Roadmap (detailed roads, current road names, place labels, locality context)
       L.tileLayer(
-        "https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+        "https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
         {
-          maxZoom: 20,
+          maxZoom: 21,
           maxNativeZoom: 20,
           subdomains: ["0", "1", "2", "3"],
           keepBuffer: 6,
           errorTileUrl: "",
         }
       ).addTo(tileGroup);
-    } else {
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 20,
-        maxNativeZoom: 19,
-        subdomains: ["a", "b", "c"],
-        keepBuffer: 6,
-        errorTileUrl: "",
-      }).addTo(tileGroup);
     }
 
     tileGroup.eachLayer((layer) => {
@@ -1298,7 +1227,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     });
   }, [mapType, syncMagnifierTiles]);
 
-  // Pan map when canonical location prop changes without resetting zoom
+  const prevPropLocationRef = useRef({ lat: Number(latitude) || 19.076, lng: Number(longitude) || 72.8777 });
+
+  // Pan map when canonical location prop explicitly changes without resetting user's manual pan
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -1306,11 +1237,11 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
     const lng = Number(longitude);
     if (!isValidLatLng(lat, lng)) return;
 
-    const currentCenter = map.getCenter();
-    const dist = Math.abs(currentCenter.lat - lat) + Math.abs(currentCenter.lng - lng);
-    if (dist > 0.00002) {
-      // Large moves should not use slow Leaflet pan animations to ensure instant tile fetch
-      map.setView([lat, lng], map.getZoom(), { animate: dist < 0.01 });
+    const prev = prevPropLocationRef.current;
+    const propMoved = Math.abs(prev.lat - lat) > 0.00001 || Math.abs(prev.lng - lng) > 0.00001;
+    if (propMoved) {
+      prevPropLocationRef.current = { lat, lng };
+      map.setView([lat, lng], map.getZoom(), { animate: true });
       tileLayerGroupRef.current?.eachLayer((layer) => layer.redraw?.());
     }
     if (markerRef.current && !pendingMarkerLocation) {

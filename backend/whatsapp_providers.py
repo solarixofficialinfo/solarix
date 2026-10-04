@@ -14,6 +14,13 @@ import time
 import os
 import asyncio
 from datetime import datetime, timezone
+from evolution_config import (
+    get_evolution_api_url,
+    get_evolution_api_key,
+    get_evolution_instance,
+    validate_evolution_config,
+    is_production,
+)
 
 logger = logging.getLogger("whatsapp_providers")
 
@@ -83,21 +90,15 @@ class EvolutionGoProvider(WhatsAppProvider):
     """
     def __init__(self, credentials: Dict[str, Any], settings: Optional[Dict[str, Any]] = None):
         super().__init__(credentials, settings)
-        # Prioritize explicit credentials (from DB / Form) with fallback to server environment variables
-        self.api_url = (
-            self.credentials.get("api_url") or 
-            os.environ.get("EVOLUTION_API_URL") or 
-            "http://127.0.0.1:8085"
-        ).rstrip("/")
+        # Use centralized Evolution API configuration (DB/Form credentials > EVOLUTION_API_URL > Dev-only fallback)
+        self.api_url = get_evolution_api_url(self.credentials.get("api_url"))
         self.api_key = (
             self.credentials.get("api_key") or 
-            os.environ.get("EVOLUTION_API_KEY") or 
-            ""
+            get_evolution_api_key()
         )
         self.instance_name = (
             self.credentials.get("instance_name") or 
-            os.environ.get("EVOLUTION_INSTANCE") or 
-            "solarix_primary"
+            get_evolution_instance()
         )
         self.headers = {
             "apikey": self.api_key,
@@ -115,7 +116,8 @@ class EvolutionGoProvider(WhatsAppProvider):
 
     async def getStatus(self) -> Dict[str, Any]:
         if not self.api_url:
-            return {"connected": False, "status": "disconnected", "error": "Evolution API URL is not configured", "uptime_seconds": 0}
+            _, err_msg = validate_evolution_config(self.api_url)
+            return {"connected": False, "status": "disconnected", "error": err_msg, "uptime_seconds": 0}
         
         try:
             async with httpx.AsyncClient(timeout=4.0) as client:
@@ -208,7 +210,8 @@ class EvolutionGoProvider(WhatsAppProvider):
 
     async def connect(self, force: bool = False) -> Dict[str, Any]:
         if not self.api_url:
-            return {"success": False, "status": "disconnected", "error": "Evolution API URL is not configured."}
+            _, err_msg = validate_evolution_config(self.api_url)
+            return {"success": False, "status": "disconnected", "error": err_msg}
         
         try:
             async with httpx.AsyncClient(timeout=12.0) as client:
@@ -295,7 +298,8 @@ class EvolutionGoProvider(WhatsAppProvider):
     async def getQr(self) -> Dict[str, Any]:
         """Fetch QR code from Evolution Go without reinitializing instance."""
         if not self.api_url:
-            return {"success": False, "error": "Evolution API URL is not configured"}
+            _, err_msg = validate_evolution_config(self.api_url)
+            return {"success": False, "error": err_msg}
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 res = await client.get(f"{self.api_url}/instance/qr", headers=self.headers)
@@ -334,7 +338,8 @@ class EvolutionGoProvider(WhatsAppProvider):
 
     async def requestPairingCode(self, phone: str) -> Dict[str, Any]:
         if not self.api_url:
-            return {"success": False, "error": "Evolution API URL is required."}
+            _, err_msg = validate_evolution_config(self.api_url)
+            return {"success": False, "error": err_msg}
         clean_phone = "".join(filter(str.isdigit, phone))
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
@@ -354,6 +359,9 @@ class EvolutionGoProvider(WhatsAppProvider):
             return {"success": False, "error": self._diagnose_exception(e)}
 
     async def sendText(self, phone: str, text: str) -> Dict[str, Any]:
+        if not self.api_url:
+            _, err_msg = validate_evolution_config(self.api_url)
+            return {"success": False, "error": err_msg, "status": "failed"}
         clean_phone = "".join(filter(str.isdigit, phone))
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -381,6 +389,9 @@ class EvolutionGoProvider(WhatsAppProvider):
             return {"success": False, "error": self._diagnose_exception(e), "status": "failed"}
 
     async def sendMedia(self, phone: str, media_url: str, caption: Optional[str] = None, media_type: str = "image") -> Dict[str, Any]:
+        if not self.api_url:
+            _, err_msg = validate_evolution_config(self.api_url)
+            return {"success": False, "error": err_msg, "status": "failed"}
         clean_phone = "".join(filter(str.isdigit, phone))
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
@@ -727,17 +738,20 @@ class NativeBaileysProvider(WhatsAppProvider):
     """
     def __init__(self, credentials: Dict[str, Any], settings: Optional[Dict[str, Any]] = None):
         super().__init__(credentials, settings)
-        self.engine_url = (self.credentials.get("api_url") or os.environ.get("WHATSAPP_ENGINE_URL", "http://127.0.0.1:8085")).rstrip("/")
-        self.instance_name = self.credentials.get("instance_name") or "solarix_primary"
-        self.api_key = self.credentials.get("api_key") or ""
+        self.engine_url = get_evolution_api_url(self.credentials.get("api_url") or os.environ.get("WHATSAPP_ENGINE_URL"))
+        self.instance_name = self.credentials.get("instance_name") or get_evolution_instance()
+        self.api_key = self.credentials.get("api_key") or get_evolution_api_key()
         self.headers = {"apikey": self.api_key, "Content-Type": "application/json"}
 
     def _get_target_urls(self) -> List[str]:
+        if not self.engine_url:
+            return []
         urls = [self.engine_url]
-        if "127.0.0.1" in self.engine_url:
-            urls.append(self.engine_url.replace("127.0.0.1", "localhost"))
-        elif "localhost" in self.engine_url:
-            urls.append(self.engine_url.replace("localhost", "127.0.0.1"))
+        if not is_production():
+            if "127.0.0.1" in self.engine_url:
+                urls.append(self.engine_url.replace("127.0.0.1", "localhost"))
+            elif "localhost" in self.engine_url:
+                urls.append(self.engine_url.replace("localhost", "127.0.0.1"))
         return urls
 
     async def connect(self, force: bool = False) -> Dict[str, Any]:

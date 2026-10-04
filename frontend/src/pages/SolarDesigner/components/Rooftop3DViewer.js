@@ -346,7 +346,10 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const nodeMeshMapRef = useRef({}); // nodeId → THREE.Mesh
   const memberMeshMapRef = useRef({}); // memberId → THREE.Mesh (+ line)
   const sectionMeshMapRef = useRef({}); // sectionId → THREE.Mesh
+  const roofMeshListRef = useRef([]); // All roof slabs, gables, walls for authoritative 1-click raycasting
   const panelMeshMapRef = useRef({}); // panelId → THREE.Mesh
+  const handleCanvasClickRef = useRef(null);
+  const lastClickTimeRef = useRef(0);
 
   // Visibility toggles
   const [renderNonce, setRenderNonce] = useState(0);
@@ -904,14 +907,19 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     interactiveGroupRef.current = iGroup;
     scene.add(iGroup);
 
-    // Mouse Event Handlers
+    // Mouse & Touch Event Handlers
     const dom = renderer.domElement;
     const onMouseDown = (e) => {
-      e.preventDefault();
+      // Only prevent default on middle/right click to avoid suppressing DOM click dispatch on left-click
+      if (e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey)) {
+        e.preventDefault();
+      }
       controlsRef.current.isDragging = e.button === 0 && structureToolRef.current === "none";
       controlsRef.current.isPanning = e.button === 2 || (e.button === 0 && e.shiftKey);
       controlsRef.current.prevX = e.clientX;
       controlsRef.current.prevY = e.clientY;
+      controlsRef.current.startX = e.clientX;
+      controlsRef.current.startY = e.clientY;
     };
     const onMouseMove = (e) => {
       const ctr = controlsRef.current;
@@ -934,7 +942,37 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       }
       updateCameraPosition();
     };
-    const onMouseUp = () => { controlsRef.current.isDragging = false; controlsRef.current.isPanning = false; };
+    const onMouseUp = (e) => {
+      controlsRef.current.isDragging = false;
+      controlsRef.current.isPanning = false;
+      if (e && e.button === 0) {
+        const dx = e.clientX - (controlsRef.current.startX ?? e.clientX);
+        const dy = e.clientY - (controlsRef.current.startY ?? e.clientY);
+        if (Math.hypot(dx, dy) < 6) {
+          // Authoritative single click on 3D canvas
+          handleCanvasClickRef.current?.(e);
+        }
+      }
+    };
+
+    let touchStartX = 0;
+    let touchStartY = 0;
+    const onTouchStart = (e) => {
+      if (e.touches && e.touches.length === 1) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+      }
+    };
+    const onTouchEnd = (e) => {
+      if (e.changedTouches && e.changedTouches.length === 1) {
+        const touch = e.changedTouches[0];
+        const dx = touch.clientX - touchStartX;
+        const dy = touch.clientY - touchStartY;
+        if (Math.hypot(dx, dy) < 10) {
+          handleCanvasClickRef.current?.(touch);
+        }
+      }
+    };
     const onWheel = (e) => {
       e.preventDefault();
       const ctr = controlsRef.current;
@@ -1012,6 +1050,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     dom.addEventListener("mousedown", onMouseDown);
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
+    dom.addEventListener("touchstart", onTouchStart, { passive: true });
+    dom.addEventListener("touchend", onTouchEnd, { passive: true });
     dom.addEventListener("wheel", onWheel, { passive: false });
     dom.addEventListener("contextmenu", onContextMenu);
 
@@ -1042,6 +1082,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       dom.removeEventListener("mousedown", onMouseDown);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      dom.removeEventListener("touchstart", onTouchStart);
+      dom.removeEventListener("touchend", onTouchEnd);
       dom.removeEventListener("wheel", onWheel);
       dom.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("resize", handleResize);
@@ -1051,6 +1093,11 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
   // ─── 3D Click Handler for Structure Tools ────────────────────────────────────
   const handleCanvasClick = useCallback((e) => {
+    if (!e) return;
+    const now = Date.now();
+    if (now - lastClickTimeRef.current < 120) return;
+    lastClickTimeRef.current = now;
+
     const tool = structureToolRef.current;
     if (tool === "none") {
       // Check if clicking an existing interactive node/member for selection
@@ -1089,40 +1136,75 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             const pId = hit.userData?.panelId;
             if (pId) {
               const isShift = Boolean(e.shiftKey);
-              if (setSelectedPanelIds) {
-                if (isShift) {
-                  setSelectedPanelIds((prev = []) => {
-                    const exists = prev.includes(pId);
-                    const next = exists ? prev.filter((id) => id !== pId) : [...prev, pId];
-                    changeSelectedPanelId(next[next.length - 1] || null);
-                    return next;
-                  });
+              const clickedP = panels.find((item) => item.id === pId);
+
+              if (activeSelectionMode === "panel" || activeSelectionMode === "custom") {
+                if (setSelectedPanelIds) {
+                  if (isShift) {
+                    setSelectedPanelIds((prev = []) => {
+                      const exists = prev.includes(pId);
+                      const next = exists ? prev.filter((id) => id !== pId) : [...prev, pId];
+                      changeSelectedPanelId(next[next.length - 1] || null);
+                      return next;
+                    });
+                  } else {
+                    setSelectedPanelIds([pId]);
+                    changeSelectedPanelId(pId);
+                  }
                 } else {
-                  setSelectedPanelIds([pId]);
                   changeSelectedPanelId(pId);
                 }
+              } else if (activeSelectionMode === "row") {
+                if (clickedP && clickedP.row != null) {
+                  changeSelectedRowIndex(clickedP.row);
+                }
+              } else if (activeSelectionMode === "group") {
+                if (clickedP && (clickedP.groupId != null || clickedP.tableId != null || clickedP.row != null)) {
+                  setSelectedGroupId?.(clickedP.groupId ?? clickedP.tableId ?? clickedP.row);
+                }
               } else {
-                changeSelectedPanelId(pId);
-              }
-              const clickedP = panels.find((item) => item.id === pId);
-              if (clickedP && clickedP.row != null) {
-                changeSelectedRowIndex(clickedP.row);
-              }
-              if (clickedP && (clickedP.groupId != null || clickedP.tableId != null)) {
-                setSelectedGroupId?.(clickedP.groupId ?? clickedP.tableId ?? clickedP.row);
+                // Neutral mode: select panel and register row without opening drawers
+                if (setSelectedPanelIds) {
+                  if (isShift) {
+                    setSelectedPanelIds((prev = []) => {
+                      const exists = prev.includes(pId);
+                      const next = exists ? prev.filter((id) => id !== pId) : [...prev, pId];
+                      changeSelectedPanelId(next[next.length - 1] || null);
+                      return next;
+                    });
+                  } else {
+                    setSelectedPanelIds([pId]);
+                    changeSelectedPanelId(pId);
+                  }
+                } else {
+                  changeSelectedPanelId(pId);
+                }
+                if (clickedP && clickedP.row != null) {
+                  changeSelectedRowIndex(clickedP.row);
+                }
               }
             }
           } else {
+            // Check if roof or section was clicked (Authoritative 1-Click Roof Selection)
             const sectionObjects = Object.values(sectionMeshMapRef.current || {});
-            const secIntersects = raycasterRef.current.intersectObjects(sectionObjects, false);
+            const allRoofObjects = [
+              ...sectionObjects,
+              ...(roofMeshListRef.current || []),
+            ];
+            const secIntersects = raycasterRef.current.intersectObjects(allRoofObjects, false);
             if (secIntersects.length > 0) {
               const hit = secIntersects[0].object;
-              const secId = hit.userData?.sectionId;
+              const secId = hit.userData?.sectionId || roofSections?.[0]?.id || "section-1";
               changeSelectedPanelId(null);
               changeSelectedRowIndex(null);
               setSelectedPanelIds?.([]);
-              if (secId && onSelectSection) {
-                onSelectSection(secId);
+              setSelectedNodeId(null);
+              setSelectedMemberId(null);
+              if (setSelectedGroupId) setSelectedGroupId(null);
+              if (onSelectSection) {
+                // Authoritative Single Click: Select roof and activate Section context
+                // openSettings = false ensures Section Settings drawer NEVER auto-opens!
+                onSelectSection(secId, false);
               }
             } else {
               setSelectedNodeId(null);
@@ -1214,7 +1296,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       }
       return;
     }
-  }, [roof, structure, snapToNearest, onStructureNodesChange, onStructureMembersChange, onSelectSection, panels, changeSelectedPanelId, changeSelectedRowIndex]);
+  }, [roof, structure, snapToNearest, onStructureNodesChange, onStructureMembersChange, onSelectSection, panels, changeSelectedPanelId, changeSelectedRowIndex, roofSections, activeSelectionMode, setSelectedPanelIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  handleCanvasClickRef.current = handleCanvasClick;
 
   // ─── Build / Update Main 3D Scene ─────────────────────────────────────────────
   useEffect(() => {
@@ -1225,6 +1308,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     memberMeshMapRef.current = {};
     sectionMeshMapRef.current = {};
     panelMeshMapRef.current = {};
+    roofMeshListRef.current = [];
 
     const rootGroup = new THREE.Group();
     rootGroup.name = "dynamic_rooftop_group";
@@ -1315,7 +1399,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
               const wallMesh = new THREE.Mesh(wallGeom, wallMat);
               wallMesh.castShadow = true;
               wallMesh.receiveShadow = true;
+              wallMesh.userData = {
+                isRoofSection: true,
+                isRoof: true,
+                sectionId: sec.id,
+                sectionName: sec.name,
+              };
               rootGroup.add(wallMesh);
+              roofMeshListRef.current.push(wallMesh);
             }
           });
         }
@@ -1403,6 +1494,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             };
             rootGroup.add(secMesh);
             sectionMeshMapRef.current[sec.id] = secMesh;
+            roofMeshListRef.current.push(secMesh);
 
             // 3D Slab Edge Lines: Highlighted cyan on selection, slate edge outline when unselected
             const secEdgeGeom = new THREE.EdgesGeometry(secGeom);
@@ -1432,7 +1524,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           wallGeom.rotateX(Math.PI / 2);
           const wallMesh = new THREE.Mesh(wallGeom, wallMat);
           wallMesh.castShadow = true; wallMesh.receiveShadow = true;
+          wallMesh.userData = { isRoof: true, sectionId: roofSections?.[0]?.id || "section-1" };
           rootGroup.add(wallMesh);
+          roofMeshListRef.current.push(wallMesh);
         }
 
         if (showRoof) {
@@ -1481,7 +1575,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           gableGeom.computeVertexNormals();
           const gableMesh = new THREE.Mesh(gableGeom, roofMat);
           gableMesh.castShadow = true; gableMesh.receiveShadow = true;
+          gableMesh.userData = { isRoof: true, sectionId: roofSections?.[0]?.id || "section-1" };
           rootGroup.add(gableMesh);
+          roofMeshListRef.current.push(gableMesh);
 
           const wireframe = new THREE.LineSegments(new THREE.EdgesGeometry(gableGeom), edgeMat);
           gableMesh.add(wireframe);
@@ -1505,7 +1601,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           wallGeom.rotateX(Math.PI / 2);
           const wallMesh = new THREE.Mesh(wallGeom, wallMat);
           wallMesh.castShadow = true; wallMesh.receiveShadow = true;
+          wallMesh.userData = { isRoof: true, sectionId: roofSections?.[0]?.id || "section-1" };
           rootGroup.add(wallMesh);
+          roofMeshListRef.current.push(wallMesh);
         }
 
         if (showRoof) {
@@ -1558,7 +1656,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           hipGeom.computeVertexNormals();
           const hipMesh = new THREE.Mesh(hipGeom, roofMat);
           hipMesh.castShadow = true; hipMesh.receiveShadow = true;
+          hipMesh.userData = { isRoof: true, sectionId: roofSections?.[0]?.id || "section-1" };
           rootGroup.add(hipMesh);
+          roofMeshListRef.current.push(hipMesh);
 
           const wireframe = new THREE.LineSegments(new THREE.EdgesGeometry(hipGeom), edgeMat);
           hipMesh.add(wireframe);
@@ -1585,7 +1685,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           wallGeom.computeVertexNormals();
           const wallMesh = new THREE.Mesh(wallGeom, wallMat);
           wallMesh.castShadow = true; wallMesh.receiveShadow = true;
+          wallMesh.userData = { isRoof: true, sectionId: roofSections?.[0]?.id || "section-1" };
           rootGroup.add(wallMesh);
+          roofMeshListRef.current.push(wallMesh);
         }
 
         if (showRoof) {
@@ -1608,7 +1710,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
           const pitchedMesh = new THREE.Mesh(flatGeom, roofMat);
           pitchedMesh.castShadow = true; pitchedMesh.receiveShadow = true;
+          pitchedMesh.userData = { isRoof: true, sectionId: roofSections?.[0]?.id || "section-1" };
           rootGroup.add(pitchedMesh);
+          roofMeshListRef.current.push(pitchedMesh);
 
           const wireframe = new THREE.LineSegments(new THREE.EdgesGeometry(flatGeom), edgeMat);
           pitchedMesh.add(wireframe);
@@ -1628,19 +1732,27 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const wallMesh = new THREE.Mesh(wallGeom, wallMat);
           wallMesh.position.y = 0;
           wallMesh.castShadow = true; wallMesh.receiveShadow = true;
+          wallMesh.userData = { isRoof: true, sectionId: roofSections?.[0]?.id || "section-1" };
           rootGroup.add(wallMesh);
+          roofMeshListRef.current.push(wallMesh);
         }
 
         if (showRoof) {
+          const isSelectedRoof = Boolean(selectedSectionId);
           const roofExtrudeSettings = { steps: 1, depth: 0.35, bevelEnabled: true, bevelThickness: 0.06, bevelSize: 0.06, bevelSegments: 2 };
           const roofGeom = new THREE.ExtrudeGeometry(shape, roofExtrudeSettings);
           roofGeom.rotateX(Math.PI / 2);
           const roofMesh = new THREE.Mesh(roofGeom, roofMat);
           roofMesh.position.y = buildingElevationM;
           roofMesh.receiveShadow = true; roofMesh.castShadow = true;
+          roofMesh.userData = { isRoof: true, sectionId: roofSections?.[0]?.id || "section-1" };
           rootGroup.add(roofMesh);
+          roofMeshListRef.current.push(roofMesh);
           const edgeGeom = new THREE.EdgesGeometry(roofGeom);
-          const edgeMatSegments = new THREE.LineBasicMaterial({ color: 0x64748b, linewidth: 1.5 });
+          const edgeMatSegments = new THREE.LineBasicMaterial({
+            color: isSelectedRoof ? 0x06b6d4 : 0x64748b,
+            linewidth: isSelectedRoof ? 2.5 : 1.5,
+          });
           roofMesh.add(new THREE.LineSegments(edgeGeom, edgeMatSegments));
         }
       }

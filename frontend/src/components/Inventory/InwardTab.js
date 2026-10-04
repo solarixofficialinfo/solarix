@@ -24,7 +24,7 @@ import { usePermission } from "@/lib/permissions";
 import { useAuth } from "@/context/AuthContext";
 import { useEntitlements } from "@/hooks/useEntitlements";
 
-const SOURCE_TYPE_OPTIONS = ["Supplier", "Vendor / Supplier", "Client / Customer", "Return From Client", "Other"];
+const SOURCE_TYPE_OPTIONS = ["Supplier", "B2B Return", "Repair Return", "Other"];
 
 const INWARD_CARRY_OPTIONS = [
   { key: "date", label: "Date" },
@@ -32,7 +32,7 @@ const INWARD_CARRY_OPTIONS = [
   { key: "reference_number", label: "Challan No." },
   { key: "bill_number", label: "Bill No." },
   { key: "source_type", label: "Source Type" },
-  { key: "source_name", label: "Vendor / Supplier" },
+  { key: "source_name", label: "Party / Source Name" },
   { key: "unit", label: "Unit" },
   { key: "remarks", label: "Remarks" },
 ];
@@ -47,6 +47,9 @@ const EMPTY_FORM = () => ({
   source_type: "Supplier",
   source_name: "",
   source_id: "",
+  client_id: "",
+  client_name: "",
+  vendor_id: "",
   product: "",
   product_id: "",
   size: "",
@@ -224,8 +227,14 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
     submittingRef.current = true;
     setBusy(true);
     try {
-      const matchedVendor = vendors.find((v) => v.name === form.source_name);
-      const vendorId = matchedVendor?.id || form.source_id || "";
+      const isClient = form.source_type === "B2B Return" || form.source_type === "Return From Client" || form.source_type === "Client / Customer";
+      const isVendor = form.source_type === "Supplier" || form.source_type === "Vendor / Supplier" || form.source_type === "Supply";
+      
+      const matchedClient = isClient ? clients.find((c) => (c.full_name || "").trim().toLowerCase() === (form.source_name || "").trim().toLowerCase()) : null;
+      const matchedVendor = isVendor ? vendors.find((v) => (v.name || "").trim().toLowerCase() === (form.source_name || "").trim().toLowerCase()) : null;
+      
+      const vendorId = matchedVendor?.id || form.vendor_id || (!isClient ? form.source_id : "") || "";
+      const clientId = matchedClient?.id || form.client_id || (isClient ? form.source_id : "") || "";
 
       const sns = form.serial_number_required
         ? (form.serial_text || "").split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
@@ -239,8 +248,10 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
         bill_number: form.bill_number,
         source_type: form.source_type,
         source_name: form.source_name,
-        source_id: vendorId,
+        source_id: isClient ? clientId : vendorId,
         vendor_id: vendorId,
+        client_id: clientId,
+        client_name: isClient ? (matchedClient?.full_name || form.client_name || form.source_name) : "",
         product: form.product.trim(),
         product_id: form.product_id || "",
         size: (form.size || "").trim(),
@@ -374,8 +385,9 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
     );
   }, [entries, globalSearch]);
 
-  const isVendorSource = form.source_type === "Supplier" || form.source_type === "Vendor / Supplier";
-  const isClientSource = form.source_type === "Client / Customer" || form.source_type === "Return From Client";
+  const isVendorSource = form.source_type === "Supplier" || form.source_type === "Vendor / Supplier" || form.source_type === "Supply";
+  const isClientSource = form.source_type === "B2B Return" || form.source_type === "Return From Client" || form.source_type === "Client / Customer";
+  const isRepairSource = form.source_type === "Repair Return";
 
   return (
     <div className="space-y-4">
@@ -532,7 +544,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                 </div>
                 <div className="md:col-span-2">
                   <Label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
-                    {isVendorSource ? "Vendor / Source Name *" : isClientSource ? "Client / Source Name *" : "Source Name *"}
+                    {isVendorSource ? "Supplier *" : isClientSource ? "B2B Client *" : isRepairSource ? "Repair Party *" : "Source Name *"}
                   </Label>
                   {isVendorSource ? (
                     <VendorAutocompleteInput
@@ -541,11 +553,12 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                         setForm((prev) => ({
                           ...prev,
                           source_name: val,
-                          source_id: matchedVendor?.id || ""
+                          source_id: matchedVendor?.id || "",
+                          vendor_id: matchedVendor?.id || ""
                         }));
                       }}
                       vendors={vendors}
-                      placeholder="Supplier company name"
+                      placeholder="Select existing supplier..."
                       className="h-10 text-xs bg-white mt-1 rounded-xl"
                       testid="inw-vendor-input"
                     />
@@ -556,19 +569,36 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                         setForm((prev) => ({
                           ...prev,
                           source_name: val,
-                          source_id: matchedClient?.id || ""
+                          source_id: matchedClient?.id || "",
+                          client_id: matchedClient?.id || "",
+                          client_name: matchedClient?.full_name || val
                         }));
                       }}
                       clients={clients}
-                      placeholder="Search client name..."
+                      placeholder="Select existing B2B client..."
                       className="h-10 text-xs bg-white mt-1 rounded-xl"
                       testid="inw-client-input"
+                    />
+                  ) : isRepairSource ? (
+                    <VendorAutocompleteInput
+                      value={form.source_name}
+                      onChange={(val, matchedVendor) => {
+                        setForm((prev) => ({
+                          ...prev,
+                          source_name: val,
+                          source_id: matchedVendor?.id || ""
+                        }));
+                      }}
+                      vendors={vendors}
+                      placeholder="Select repair party / service center..."
+                      className="h-10 text-xs bg-white mt-1 rounded-xl"
+                      testid="inw-repair-input"
                     />
                   ) : (
                     <Input
                       value={form.source_name}
                       onChange={(e) => setForm({ ...form, source_name: e.target.value })}
-                      placeholder="Supplier company name"
+                      placeholder="Source name"
                       className="h-10 text-xs bg-white mt-1 rounded-xl"
                       data-testid="inw-source-input"
                     />

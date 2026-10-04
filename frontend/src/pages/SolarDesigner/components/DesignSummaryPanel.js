@@ -30,6 +30,8 @@ export default function DesignSummaryPanel({
   onTransferToProposal,
   saving = false,
   exporting = false,
+  autoLayoutBaselinePanels = null,
+  recommendedPanels = null,
 }) {
   const [showBomModal, setShowBomModal] = useState(false);
   const [showTechSpecs, setShowTechSpecs] = useState(false);
@@ -37,6 +39,9 @@ export default function DesignSummaryPanel({
   const panelCount = Number(
     designData.panel_count ?? (designData.panels || []).filter((p) => !p.hidden).length ?? 0
   );
+  const baselineRecommended = recommendedPanels != null ? recommendedPanels : autoLayoutBaselinePanels?.length || null;
+  const hasManualOverride = baselineRecommended != null && panelCount > baselineRecommended;
+
   const panelWattage = Number(designData.panel_wattage || 550);
   const systemKw = Number(
     designData.system_kw ?? ((panelCount * panelWattage) / 1000.0).toFixed(2)
@@ -169,7 +174,14 @@ export default function DesignSummaryPanel({
         <div className="space-y-0.5 text-xs divide-y divide-slate-800/60">
           <div className="flex items-center justify-between py-1.5">
             <span className="text-slate-300 font-medium text-[12px]">Total Panels</span>
-            <span className="font-bold text-white font-mono text-[12.5px]">{panelCount}</span>
+            <div className="flex items-center gap-2">
+              {hasManualOverride && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/80 border border-amber-600/50 text-amber-300 font-mono font-bold" title={`Recommended by auto-generator: ${baselineRecommended}`}>
+                  Rec: {baselineRecommended} (+{panelCount - baselineRecommended})
+                </span>
+              )}
+              <span className="font-bold text-white font-mono text-[12.5px]">{panelCount}</span>
+            </div>
           </div>
           <div className="flex items-center justify-between py-1.5">
             <span className="text-slate-300 font-medium text-[12px]">System Capacity</span>

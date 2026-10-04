@@ -2274,6 +2274,8 @@ async def auto_migrate_product_variants():
 async def lifespan(app: FastAPI):
     deferred_task = asyncio.create_task(_deferred_startup_tasks())
     try:
+        from evolution_config import log_evolution_config
+        log_evolution_config()
         from whatsapp_router import start_whatsapp_background_workers, ensure_whatsapp_engine_running
         ensure_whatsapp_engine_running()
         start_whatsapp_background_workers()
@@ -8982,16 +8984,16 @@ async def _compute_inventory_balances(cid: str):
         pk = _resolve_product(ie)
         in_map[pk] = in_map.get(pk, 0.0) + qty
 
-        # Check for client return
+        # Check for client return (excluding repair returns)
         src_t = str(ie.get("source_type") or "").lower()
         src = str(ie.get("source") or "").lower()
-        if "return" in src_t or "client-return" in src:
+        if ("return" in src_t or "client-return" in src) and not ("repair" in src_t or "repair" in src):
             ret_map[pk] = ret_map.get(pk, 0.0) + qty
 
     # Process Outward Entries
     for oe in outward_entries:
         st = str(oe.get("status") or "").strip().lower()
-        if st in ["cancelled", "draft_cancelled"]:
+        if st in ["cancelled", "draft_cancelled", "pending"]:
             continue
             
         qty = float(oe.get("quantity") or 0.0)
@@ -9494,15 +9496,15 @@ def parse_inward_client_info(entry):
     if not entry:
         return entry
     r = entry.get("remarks") or ""
-    cid = ""
-    if "[client_id:" in r:
+    cid = entry.get("client_id") or ""
+    if not cid and "[client_id:" in r:
         import re
         m = re.search(r"\[client_id:([^\]]+)\]", r)
         if m:
             cid = m.group(1)
             entry["remarks"] = re.sub(r"\s*\[client_id:[^\]]+\]", "", r).strip()
     entry["client_id"] = cid
-    entry["client_name"] = entry.get("source_name") if entry.get("source_type") == "Return From Client" else ""
+    entry["client_name"] = entry.get("client_name") or (entry.get("source_name") if (entry.get("source_type") in ("Return From Client", "B2B Return", "Client / Customer", "Client Return") or cid) else "")
     entry["challan_number"] = entry.get("reference_number") or ""
     entry["challan_no"] = entry.get("reference_number") or ""
     return entry
@@ -9613,7 +9615,7 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
 
         # Vendor Purchase Bill Flow: Save/upsert purchase bill in db.purchase_bills if Vendor/Supplier is specified
         vendor_id_val = data.vendor_id or data.source_id or ""
-        if not vendor_id_val and source_name_val and source_type_val in ("Vendor / Supplier", "Supplier", "Vendor"):
+        if not vendor_id_val and source_name_val and source_type_val in ("Vendor / Supplier", "Supplier", "Vendor", "Supply"):
             v_doc = await db.vendors.find_one({"company_id": company_id, "name": {"$regex": f"^{re.escape(source_name_val.strip())}$", "$options": "i"}})
             if v_doc:
                 vendor_id_val = v_doc["id"]
@@ -9621,7 +9623,7 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
         challan_val = (data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None) or "").strip()
         raw_bill_num = (data.bill_number or "").strip()
 
-        if source_type_val in ("Vendor / Supplier", "Supplier", "Vendor") and (vendor_id_val or source_name_val):
+        if source_type_val in ("Vendor / Supplier", "Supplier", "Vendor", "Supply") and (vendor_id_val or source_name_val):
             existing_pbill = None
             if raw_bill_num:
                 existing_pbill = await db.purchase_bills.find_one({
@@ -9683,10 +9685,11 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
         # Material Stock Inward Entry
         pn = data.product.strip().upper()
         is_hv = data.high_value_asset or data.high_value_goods or _load_local_high_value_products().get(pn, False) or any(kw in pn for kw in ["SOLAR PANEL", "PANEL", "INVERTER", "ACDB", "DCDB", "METER", "BATTERY"])
-        await ensure_product(company_id, pn, size=data.size or "", unit=data.unit or "Nos", brand=data.source_name or "", high_value_goods=is_hv)
+        prod_doc = await ensure_product(company_id, pn, size=data.size or "", unit=data.unit or "Nos", brand=data.source_name or "", high_value_goods=is_hv)
+        resolved_pid = data.product_id or (prod_doc["id"] if prod_doc else "")
         
         # Client ID resolution from name case-insensitively
-        if source_type_val == "Return From Client":
+        if source_type_val in ("Return From Client", "B2B Return", "Client / Customer", "Client Return"):
             if client_name_val and not client_id_val:
                 client = await db.clients.find_one({
                     "company_id": company_id,
@@ -9705,8 +9708,9 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
                 source_name_val = client_name_val
 
         remarks_val = data.remarks or ""
-        if source_type_val == "Return From Client" and client_id_val:
-            remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
+        if (source_type_val in ("Return From Client", "B2B Return", "Client / Customer", "Client Return") or client_id_val) and client_id_val:
+            if f"[client_id:{client_id_val}]" not in remarks_val:
+                remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
             
         sns = [sn.strip() for sn in (data.serial_numbers or []) if sn and sn.strip()]
 
@@ -9780,6 +9784,8 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
             "total_amount": data.total_amount or 0.0,
             "payment_status": data.payment_status or "Unpaid",
             "vendor_id": vendor_id_val,
+            "client_id": client_id_val,
+            "client_name": client_name_val,
             "bill_type": data.bill_type or "Product Bill",
             "serial_numbers": sns,
             "serial_number_required": data.serial_number_required or len(sns) > 0,
@@ -9788,7 +9794,7 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
             "created_by": user_id,
             "created_by_name": user_name,
             "created_at": now_iso(),
-            "product_id": data.product_id or "",
+            "product_id": resolved_pid,
         }
         if import_batch:
             doc["import_batch"] = import_batch
@@ -9871,7 +9877,8 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
                 return dict(prev_doc)
 
         pn = pn_raw
-        await ensure_product(company_id, pn, size=data.size or "", unit=data.unit or "Nos")
+        prod_doc = await ensure_product(company_id, pn, size=data.size or "", unit=data.unit or "Nos")
+        resolved_pid = data.product_id or (prod_doc["id"] if prod_doc else "")
         
         client_id_val = data.client_id or ""
         client_name_val = data.client_name or ""
@@ -9965,7 +9972,7 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
             "created_by": user_id,
             "created_by_name": user_name,
             "created_at": now_iso(),
-            "product_id": data.product_id or "",
+            "product_id": resolved_pid,
         }
         if import_batch:
             doc["import_batch"] = import_batch
@@ -10184,9 +10191,10 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
     
     remarks_val = data.remarks or ""
     source_type_val = data.source_type or existing.get("source_type") or "Supplier"
-    client_id_val = data.client_id or ""
-    if source_type_val == "Return From Client" and client_id_val:
-        remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
+    client_id_val = data.client_id or existing.get("client_id") or ""
+    if (source_type_val in ("Return From Client", "B2B Return", "Client / Customer", "Client Return") or client_id_val) and client_id_val:
+        if f"[client_id:{client_id_val}]" not in remarks_val:
+            remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
         
     raw_ch = (data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None) or "").strip()
     ref_num = raw_ch or numeric_only(data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None))
@@ -10200,6 +10208,8 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
         "reference_type": data.reference_type or "Challan Number",
         "bill_number": (data.bill_number or "").strip() or numeric_only(data.bill_number),
         "source_type": source_type_val, "source_name": data.source_name or existing.get("source_name") or "",
+        "client_id": client_id_val,
+        "client_name": data.client_name or existing.get("client_name") or "",
         "date": data.date or existing.get("date") or now_iso(), "remarks": remarks_val,
         "attachment_file_id": data.attachment_file_id if data.attachment_file_id is not None else existing.get("attachment_file_id", ""),
         "attachment_filename": data.attachment_filename if data.attachment_filename is not None else existing.get("attachment_filename", ""),
@@ -10602,6 +10612,223 @@ async def delete_outward(entry_id: str, user=Depends(get_current_user)):
     invalidate_products_cache(cid)
     return {"ok": True}
 
+# ---------- Unified B2B Sales, Supply, and Repair Views ----------
+@api_router.get("/inventory/b2b-summary")
+async def get_b2b_summary(user=Depends(require_active_subscription())):
+    cid = user["company_id"]
+    clients = await db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "full_name": 1, "mobile": 1, "city": 1, "address": 1, "sol_id": 1}).sort("full_name", 1).to_list(5000)
+    outwards = await db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1}).to_list(50000)
+    inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "source_name": 1, "source_type": 1, "remarks": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1}).to_list(50000)
+
+    # Pre-index outwards and inwards by client_id and lower-cased name
+    out_by_client: Dict[str, List[dict]] = {}
+    out_by_name: Dict[str, List[dict]] = {}
+    for o in outwards:
+        cid_o = str(o.get("client_id") or "").strip()
+        cname_o = str(o.get("client_name") or "").strip().lower()
+        if cid_o:
+            out_by_client.setdefault(cid_o, []).append(o)
+        if cname_o:
+            out_by_name.setdefault(cname_o, []).append(o)
+
+    in_by_client: Dict[str, List[dict]] = {}
+    in_by_name: Dict[str, List[dict]] = {}
+    for i in inwards:
+        parsed = parse_inward_client_info(i)
+        cid_i = str(parsed.get("client_id") or "").strip()
+        cname_i = str(parsed.get("client_name") or parsed.get("source_name") or "").strip().lower()
+        is_return = parsed.get("source_type") in ("Return From Client", "B2B Return", "Client / Customer", "Client Return") or "return" in str(parsed.get("source_type") or "").lower() or bool(cid_i)
+        if is_return:
+            if cid_i:
+                in_by_client.setdefault(cid_i, []).append(parsed)
+            if cname_i:
+                in_by_name.setdefault(cname_i, []).append(parsed)
+
+    clients_data = []
+    for c in clients:
+        c_id = str(c.get("id") or "").strip()
+        c_name = str(c.get("full_name") or "").strip()
+        c_name_lower = c_name.lower()
+
+        c_outs = out_by_client.get(c_id) or out_by_name.get(c_name_lower) or []
+        c_ins = in_by_client.get(c_id) or in_by_name.get(c_name_lower) or []
+
+        tot_out = sum(float(o.get("quantity") or 0.0) for o in c_outs)
+        tot_ret = sum(float(i.get("quantity") or 0.0) for i in c_ins)
+        net_qty = round(tot_out - tot_ret, 2)
+
+        dates = [(o.get("date") or o.get("created_at") or "")[:10] for o in c_outs] + [(i.get("date") or i.get("created_at") or "")[:10] for i in c_ins]
+        last_date = max(dates) if dates else "—"
+
+        clients_data.append({
+            "id": c_id,
+            "sol_id": c.get("sol_id") or "",
+            "full_name": c_name,
+            "mobile": c.get("mobile") or "—",
+            "city": c.get("city") or "—",
+            "total_outward": round(tot_out, 2),
+            "total_return": round(tot_ret, 2),
+            "net_quantity": net_qty,
+            "transaction_count": len(c_outs) + len(c_ins),
+            "last_transaction": last_date
+        })
+
+    return {"clients": clients_data}
+
+@api_router.get("/inventory/b2b-client-history/{client_id}")
+async def get_b2b_client_history(client_id: str, user=Depends(require_active_subscription())):
+    cid = user["company_id"]
+    client = await db.clients.find_one({"company_id": cid, "id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    c_name = client.get("full_name") or ""
+    
+    outwards = await db.outward_entries.find({"company_id": cid, "$or": [{"client_id": client_id}, {"client_name": c_name}]}, {"_id": 0}).to_list(5000)
+    inwards_raw = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+    inwards = []
+    for inv in inwards_raw:
+        parsed = parse_inward_client_info(inv)
+        if parsed.get("client_id") == client_id or (parsed.get("source_type") in ("Return From Client", "B2B Return", "Client / Customer", "Client Return") and (parsed.get("source_name") or "").strip().lower() == c_name.strip().lower()):
+            inwards.append(parsed)
+            
+    txs = []
+    for o in outwards:
+        txs.append({
+            "id": o.get("id"),
+            "type": "OUTWARD",
+            "label": "Dispatch (Sale)",
+            "date": (o.get("date") or o.get("created_at") or "")[:10],
+            "product": o.get("product") or "",
+            "size": o.get("size") or "",
+            "quantity": float(o.get("quantity") or 0.0),
+            "unit": o.get("unit") or "Nos",
+            "reference_number": o.get("outward_challan_no") or o.get("reference_number") or "",
+            "status": o.get("status") or "Dispatched",
+            "remarks": o.get("remarks") or ""
+        })
+    for i in inwards:
+        txs.append({
+            "id": i.get("id"),
+            "type": "INWARD_RETURN",
+            "label": "Client Return",
+            "date": (i.get("date") or i.get("created_at") or "")[:10],
+            "product": i.get("product") or "",
+            "size": i.get("size") or "",
+            "quantity": float(i.get("quantity") or 0.0),
+            "unit": i.get("unit") or "Nos",
+            "reference_number": i.get("reference_number") or i.get("challan_no") or i.get("bill_number") or "",
+            "status": "Received",
+            "remarks": i.get("remarks") or ""
+        })
+    txs.sort(key=lambda x: x["date"], reverse=True)
+    return {"client": client, "transactions": txs}
+
+@api_router.get("/inventory/supply-summary")
+async def get_supply_summary(user=Depends(require_active_subscription())):
+    cid = user["company_id"]
+    vendors = await db.vendors.find({"company_id": cid}, {"_id": 0}).sort("name", 1).to_list(1000)
+    inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(50000)
+    
+    suppliers_data = []
+    for v in vendors:
+        v_id = v["id"]
+        v_name = (v.get("name") or "").strip().lower()
+        v_inwards = [
+            i for i in inwards 
+            if (i.get("vendor_id") == v_id or (i.get("source_name") or "").strip().lower() == v_name)
+            and (i.get("source_type") in ("Supplier", "Vendor / Supplier", "Vendor", "Supply") or not i.get("source_type"))
+        ]
+        
+        products = sorted(list({i.get("product") for i in v_inwards if i.get("product")}))
+        dates = [(i.get("date") or i.get("created_at") or "")[:10] for i in v_inwards if (i.get("date") or i.get("created_at"))]
+        last_date = max(dates) if dates else "—"
+        
+        suppliers_data.append({
+            "id": v_id,
+            "name": v.get("name") or "",
+            "contact_person": v.get("contact_person") or "",
+            "phone": v.get("phone") or "",
+            "email": v.get("email") or "",
+            "category": v.get("category") or "Supplier",
+            "inward_count": len(v_inwards),
+            "last_supply": last_date,
+            "products_supplied": products,
+            "products_count": len(products)
+        })
+    return {"suppliers": suppliers_data}
+
+@api_router.get("/inventory/supplier-history/{vendor_id}")
+async def get_supplier_history(vendor_id: str, user=Depends(require_active_subscription())):
+    cid = user["company_id"]
+    vendor = await db.vendors.find_one({"company_id": cid, "id": vendor_id}, {"_id": 0})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    v_name = (vendor.get("name") or "").strip().lower()
+    inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(50000)
+    v_inwards = [
+        i for i in inwards 
+        if (i.get("vendor_id") == vendor_id or (i.get("source_name") or "").strip().lower() == v_name)
+        and (i.get("source_type") in ("Supplier", "Vendor / Supplier", "Vendor", "Supply") or not i.get("source_type"))
+    ]
+    v_inwards.sort(key=lambda x: (x.get("date") or x.get("created_at") or "")[:10], reverse=True)
+    return {"vendor": vendor, "supplies": v_inwards}
+
+@api_router.get("/inventory/repair-summary")
+async def get_repair_summary(user=Depends(require_active_subscription())):
+    cid = user["company_id"]
+    vendors = await db.vendors.find({"company_id": cid}, {"_id": 0}).to_list(1000)
+    repair_vendors = [v for v in vendors if "repair" in (v.get("category") or "").lower() or "repair" in (v.get("name") or "").lower()]
+    
+    inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(50000)
+    outwards = await db.outward_entries.find({"company_id": cid}, {"_id": 0}).to_list(50000)
+    
+    repair_inwards = [
+        i for i in inwards 
+        if i.get("source_type") == "Repair Return" or "repair" in str(i.get("source_type") or "").lower() or "repair" in str(i.get("remarks") or "").lower()
+    ]
+    repair_outwards = [
+        o for o in outwards
+        if "repair" in str(o.get("remarks") or "").lower() or "repair" in str(o.get("reference_type") or "").lower()
+    ]
+    
+    records = []
+    for i in repair_inwards:
+        records.append({
+            "id": i.get("id"),
+            "movement": "INWARD",
+            "type": "Repair Return",
+            "date": (i.get("date") or i.get("created_at") or "")[:10],
+            "party_name": i.get("source_name") or "Repair Party",
+            "product": i.get("product") or "",
+            "size": i.get("size") or "",
+            "quantity": float(i.get("quantity") or 0.0),
+            "unit": i.get("unit") or "Nos",
+            "reference_number": i.get("reference_number") or i.get("challan_no") or "",
+            "remarks": i.get("remarks") or ""
+        })
+    for o in repair_outwards:
+        records.append({
+            "id": o.get("id"),
+            "movement": "OUTWARD",
+            "type": "Sent for Repair",
+            "date": (o.get("date") or o.get("created_at") or "")[:10],
+            "party_name": o.get("client_name") or "Repair Party",
+            "product": o.get("product") or "",
+            "size": o.get("size") or "",
+            "quantity": float(o.get("quantity") or 0.0),
+            "unit": o.get("unit") or "Nos",
+            "reference_number": o.get("outward_challan_no") or o.get("reference_number") or "",
+            "remarks": o.get("remarks") or ""
+        })
+        
+    records.sort(key=lambda x: x["date"], reverse=True)
+    return {
+        "repair_parties": repair_vendors if repair_vendors else vendors,
+        "repair_records": records,
+        "repair_parties_count": len(repair_vendors),
+        "repair_records_count": len(records)
+    }
+
 # ---------- High Value Assets ----------
 class AssetInstallIn(BaseModel):
     asset_ids: List[str]
@@ -10838,7 +11065,7 @@ async def get_asset_timeline(asset_id: str, user=Depends(get_current_user)):
             matches = True
 
         if matches:
-            is_return = ie.get("source_type") == "Return From Client" or "return" in (ie.get("entry_type") or "").lower()
+            is_return = ie.get("source_type") in ("Return From Client", "B2B Return", "Client / Customer", "Client Return") or "return" in str(ie.get("source_type") or "").lower() or "return" in (ie.get("entry_type") or "").lower()
             date_str = (ie.get("date") or ie.get("created_at") or "")[:10]
             if is_return:
                 events.append({
@@ -11082,7 +11309,7 @@ async def inv_history(
             if size_filter and norm_str(enriched.get("size")) != size_filter:
                 continue
 
-            is_client_return = (enriched.get("source_type") == "Return From Client") or bool(enriched.get("client_id"))
+            is_client_return = (enriched.get("source_type") in ("Return From Client", "B2B Return", "Client / Customer", "Client Return")) or "return" in str(enriched.get("source_type") or "").lower() or bool(enriched.get("client_id"))
 
             # Vendor filter: applies to supplier/vendor inward entries (not client returns)
             if vendor_filter:
@@ -12713,9 +12940,8 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
     for p in (existing_prods or []):
         pn_n = norm_product_name(p.get("name"))
         ps_n = norm_str(p.get("size"))
-        pu_n = norm_unit(p.get("unit"))
         if cid and pn_n:
-            prod_cache[(cid, pn_n, ps_n, pu_n)] = p
+            prod_cache[(cid, pn_n, ps_n)] = p
 
     client_map = {}
     for c in (existing_clients or []):
@@ -12730,7 +12956,7 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
             continue
         ps = r.size or ""
         pu = r.unit or gd.get("unit") or "Nos"
-        cache_key = (cid, norm_product_name(pn), norm_str(ps), norm_unit(pu))
+        cache_key = (cid, norm_product_name(pn), norm_str(ps))
         if cache_key not in prod_cache:
             prod_doc = {
                 "id": str(uuid.uuid4()),
@@ -12738,7 +12964,7 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
                 "name": pn,
                 "size": ps,
                 "category": "Solar",
-                "unit": pu or "Nos",
+                "unit": norm_unit(pu),
                 "min_stock": 0.0,
                 "status": "Active",
                 "created_at": now_iso()
@@ -12771,7 +12997,7 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
         pu = r.unit or gd.get("unit") or "Nos"
         
         # Client ID resolution from name case-insensitively for Return From Client
-        if source_type_val == "Return From Client":
+        if source_type_val in ("Return From Client", "B2B Return", "Client / Customer", "Client Return"):
             if client_name_val and not client_id_val:
                 matched_c = client_map.get(client_name_val.strip().lower())
                 if matched_c:
@@ -12782,6 +13008,7 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
             if client_id_val:
                 remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
 
+        matched_p = prod_cache.get((cid, norm_product_name(pn), norm_str(ps))) or {}
         entry_id = str(uuid.uuid4())
         ref_num = r.reference_number or r.challan_number or getattr(r, 'challan_no', None) or gd.get("reference_number") or gd.get("challan_number", "")
         bill_num = r.bill_number or gd.get("bill_number", "")
@@ -12798,6 +13025,7 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
             "company_id": cid,
             "product": pn,
             "size": ps,
+            "product_id": matched_p.get("id") or "",
             "quantity": qty,
             "unit": pu,
             "reference_number": clean_ref,
@@ -12807,6 +13035,8 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
             "bill_number": clean_bill,
             "source_type": source_type_val,
             "source_name": source_name_val,
+            "client_id": client_id_val,
+            "client_name": client_name_val,
             "date": date_val,
             "remarks": remarks_val,
             "attachment_file_id": att_id,
@@ -12883,7 +13113,13 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
         if new_prods_to_insert:
             asyncio.create_task(sync_inventory_master(cid))
 
-    return {"inserted": len(inserted_ids), "ids": inserted_ids}
+    return {
+        "received": len(data.rows),
+        "inserted": len(inserted_ids),
+        "skipped": len(data.rows) - len(docs_to_insert),
+        "errors": [],
+        "ids": inserted_ids
+    }
 
 
 @api_router.post("/inventory/bulk-inward-high-value")
@@ -13141,9 +13377,8 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
     for p in (existing_prods or []):
         pn_n = norm_product_name(p.get("name"))
         ps_n = norm_str(p.get("size"))
-        pu_n = norm_unit(p.get("unit"))
         if cid and pn_n:
-            prod_cache[(cid, pn_n, ps_n, pu_n)] = p
+            prod_cache[(cid, pn_n, ps_n)] = p
 
     client_map = {}
     for c in (existing_clients or []):
@@ -13154,11 +13389,15 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
     new_prods_to_insert = []
     for r in data.rows:
         pn = (r.product or "").strip().upper()
-        if not pn or r.quantity <= 0:
+        try:
+            qty = float(r.quantity) if r.quantity not in (None, "") else 0.0
+        except (ValueError, TypeError):
+            qty = 0.0
+        if not pn or qty <= 0:
             continue
         ps = r.size or ""
         pu = r.unit or gd.get("unit") or "Nos"
-        cache_key = (cid, norm_product_name(pn), norm_str(ps), norm_unit(pu))
+        cache_key = (cid, norm_product_name(pn), norm_str(ps))
         if cache_key not in prod_cache:
             prod_doc = {
                 "id": str(uuid.uuid4()),
@@ -13166,7 +13405,7 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
                 "name": pn,
                 "size": ps,
                 "category": "Solar",
-                "unit": pu or "Nos",
+                "unit": norm_unit(pu),
                 "min_stock": 0.0,
                 "status": "Active",
                 "created_at": now_iso()
@@ -13183,7 +13422,11 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
     # 3. Build documents in-memory
     for r in data.rows:
         pn = (r.product or "").strip().upper()
-        if not pn or r.quantity <= 0:
+        try:
+            qty = float(r.quantity) if r.quantity not in (None, "") else 0.0
+        except (ValueError, TypeError):
+            qty = 0.0
+        if not pn or qty <= 0:
             continue
 
         client_id_val = r.client_id or g_client_id
@@ -13207,6 +13450,7 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
         if status_val not in ["Pending", "Dispatched", "Cancelled"]:
             status_val = "Dispatched"
 
+        matched_p = prod_cache.get((cid, norm_product_name(pn), norm_str(r.size or ""))) or {}
         entry_id = str(uuid.uuid4())
         ref_num = r.reference_number or r.outward_challan_no or r.challan_number or getattr(r, 'challan_no', None) or gd.get("reference_number") or gd.get("outward_challan_no", "")
         challan_no = r.outward_challan_no or r.challan_number or getattr(r, 'challan_no', None) or ref_num
@@ -13222,7 +13466,8 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
             "company_id": cid,
             "product": pn,
             "size": r.size or "",
-            "quantity": r.quantity,
+            "product_id": matched_p.get("id") or "",
+            "quantity": qty,
             "unit": r.unit or gd.get("unit") or "Nos",
             "client_id": client_id_val,
             "client_name": client_name_val,
@@ -13258,7 +13503,13 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
         if new_prods_to_insert:
             asyncio.create_task(sync_inventory_master(cid))
 
-    return {"inserted": len(inserted_ids), "ids": inserted_ids}
+    return {
+        "received": len(data.rows),
+        "inserted": len(inserted_ids),
+        "skipped": len(data.rows) - len(docs_to_insert),
+        "errors": [],
+        "ids": inserted_ids
+    }
 
 
 # ============== Sprint 4: Client Data & Asset Management ==============
@@ -14946,8 +15197,7 @@ async def calculate_client_ledger(company_id: str, client_id: str):
         # then use parse_inward_client_info to extract & match client_id in Python.
         db.inward_entries.find({
             "company_id": company_id,
-            "source_type": "Return From Client",
-        }, {"_id": 0}).to_list(5000),
+        }, {"_id": 0}).to_list(10000),
     )
     
     # Fetch all products to resolve product_id to canonical master record
@@ -14998,10 +15248,10 @@ async def calculate_client_ledger(company_id: str, client_id: str):
     
     for out in outwards:
         raw_prod, raw_size, unit = _resolve_ledger_entry(out)
-        norm_name = raw_prod.upper()
+        norm_name = norm_product_name(raw_prod)
         if not norm_name:
             continue
-        norm_size = raw_size.upper()
+        norm_size = norm_str(raw_size)
         
         # Report identity key: normalized Product Name + normalized Size/Spec
         # Unit MUST NOT be part of the identity key.
@@ -15034,10 +15284,10 @@ async def calculate_client_ledger(company_id: str, client_id: str):
 
     for inv in inwards:
         raw_prod, raw_size, unit = _resolve_ledger_entry(inv)
-        norm_name = raw_prod.upper()
+        norm_name = norm_product_name(raw_prod)
         if not norm_name:
             continue
-        norm_size = raw_size.upper()
+        norm_size = norm_str(raw_size)
         
         # Report identity key: normalized Product Name + normalized Size/Spec
         key = (norm_name, norm_size)

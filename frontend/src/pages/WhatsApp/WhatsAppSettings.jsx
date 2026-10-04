@@ -76,7 +76,7 @@ export default function WhatsAppSettings() {
   // General Provider Settings State
   const [providerType, setProviderType] = useState("evolution_go");
   const [name, setName] = useState("Evolution Go Gateway");
-  const [apiUrl, setApiUrl] = useState("http://127.0.0.1:8080");
+  const [apiUrl, setApiUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [clientApiKey, setClientApiKey] = useState("");
   const [instanceName, setInstanceName] = useState("solarix_primary");
@@ -328,7 +328,7 @@ export default function WhatsAppSettings() {
       const d = res.data;
       setProviderType(d.provider_type || "evolution_go");
       setName(d.name || "Evolution Go Gateway");
-      setApiUrl(d.api_url || "http://127.0.0.1:8080");
+      setApiUrl(d.api_url || "");
       setApiKey(d.api_key || d.api_key_masked || "");
       setClientApiKey(d.api_key || d.api_key_masked || "");
       setInstanceName(d.instance_name || "solarix_primary");

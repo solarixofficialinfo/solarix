@@ -41,6 +41,7 @@ const DEFAULT_OUTWARD_CARRY_KEYS = ["date", "outward_challan_no", "reference_typ
 
 const EMPTY = () => ({
   date: today(),
+  party_type: "B2B Client",
   client_id: "", client_name: "",
   project_id: "", project_name: "",
   outward_challan_no: "",
@@ -152,8 +153,21 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
       const parsedSns = form.serial_number_required
         ? (form.serial_text || "").split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
         : (form.serial_numbers || []);
+      let cid = form.client_id;
+      let cname = form.client_name;
+      if (!cid && cname) {
+        const matched = (clients || []).find(c => (c.full_name || "").trim().toLowerCase() === cname.trim().toLowerCase());
+        if (matched) {
+          cid = matched.id;
+          cname = matched.full_name;
+        }
+      }
       const payload = {
         ...form,
+        client_id: cid,
+        client_name: cname,
+        project_id: form.project_id || cid,
+        project_name: form.project_name || cname,
         product_id: form.product_id || "",
         unit: formatUnit(form.unit || "Nos"),
         quantity: Number(form.quantity),
@@ -403,29 +417,44 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
             </div>
             <SelectField label="Status" value={form.status} onChange={(v) => setForm({ ...form, status: v })} options={STATUSES} testid="out-status" />
 
+            <SelectField
+              label="Party Type"
+              value={form.party_type || "B2B Client"}
+              onChange={(v) => setForm({ ...form, party_type: v })}
+              options={["B2B Client", "Project / Client", "Other"]}
+              testid="out-party-type"
+            />
+
             <div className="md:col-span-2">
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Client / Party Name</label>
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                {form.party_type === "B2B Client" ? "B2B Client *" : "Client / Party Name *"}
+              </label>
               <input
                 type="text"
                 value={form.client_name || ""}
                 onChange={(e) => {
                   const val = e.target.value;
-                  const c = (clients || []).find((x) => x.full_name.toUpperCase() === val.toUpperCase());
+                  const c = (clients || []).find((x) => (x.full_name || "").toUpperCase() === val.toUpperCase());
                   if (c) {
                     setForm({ ...form, client_id: c.id, client_name: c.full_name, project_id: c.id, project_name: c.full_name });
                   } else {
                     setForm({ ...form, client_name: val, client_id: "" });
                   }
                 }}
-                placeholder="Type to search onboarding clients or enter custom name…"
+                placeholder={form.party_type === "B2B Client" ? "Select B2B client..." : "Type to search clients or enter name…"}
                 className="flex-1 mt-1.5 h-10 px-3 py-2 w-full text-sm rounded-md border border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 list="outward-client-list"
                 data-testid="out-client-search"
+                required
               />
               <datalist id="outward-client-list">
                 {(clients || []).map((c) => <option key={c.id} value={c.full_name} />)}
               </datalist>
-              <div className="text-[10px] text-blue-600 mt-1">Select an onboarding client for linked project details, or enter a client name manually.</div>
+              <div className="text-[10px] text-blue-600 mt-1">
+                {form.party_type === "B2B Client"
+                  ? "Select an existing client to record B2B dispatch and track client ledger."
+                  : "Select an onboarding client for linked project details, or enter a client name manually."}
+              </div>
             </div>
             <Field label="Project" value={form.project_name} onChange={(v) => setForm({ ...form, project_name: v })} placeholder="Project label" testid="out-project" />
 

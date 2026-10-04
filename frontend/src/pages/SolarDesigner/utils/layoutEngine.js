@@ -13,6 +13,7 @@ import {
   getPolygonBounds,
   computeSetbackPolygon,
   isRectInsidePolygon,
+  isPointInPolygon,
   rotatedRectanglesIntersect,
   toRad,
   getCartesianPolygonArea,
@@ -388,7 +389,11 @@ export function validatePanelPlacement({
   // 1. Inside usable polygon (or roof boundary if setback is relaxed)
   const boundaryPoly = (usablePolygon && usablePolygon.length >= 3) ? usablePolygon : roofPolygon;
   if (!isRectInsidePolygon(candidate.x, candidate.y, pWidth, pLength, pRot, boundaryPoly)) {
-    return { valid: false, reason: isManual ? "Panel is outside the roof perimeter boundary." : "Panel extends beyond the valid roof setback boundary." };
+    if (isManual && isPointInPolygon(candidate.x, candidate.y, roofPolygon)) {
+      // In manual mode, panel center is physically inside roof boundary; allow manual placement/adjustment
+    } else {
+      return { valid: false, reason: isManual ? "Panel is outside the roof perimeter boundary." : "Panel extends beyond the valid roof setback boundary." };
+    }
   }
 
   // 2. Overlap with existing panels
@@ -804,6 +809,144 @@ export function canFitAdditionalPanel({
         hidden: false,
       },
     };
+  }
+
+  // MANUAL OVERRIDE FALLBACK:
+  // When isManual is true, automatic capacity recommendation must NOT be a hard limit.
+  // The user explicitly desires to place another panel manually.
+  if (isManual && roofPolygon && roofPolygon.length >= 3) {
+    const maxId = panels.reduce((max, p) => {
+      const n = parseInt(String(p.id || "").replace(/\D/g, ""), 10);
+      return isNaN(n) ? max : Math.max(max, n);
+    }, 0);
+    const newPanelId = `panel-${maxId + 1}`;
+
+    // A. Explicit clicked target location on roof
+    if (nearX != null && nearY != null) {
+      const nX = Number(nearX);
+      const nY = Number(nearY);
+
+      if (isPointInPolygon(nX, nY, roofPolygon)) {
+        // Try fine local nudges around clicked point to minimize collision
+        const nudges = [
+          { dx: 0, dy: 0 },
+          { dx: stepX * 0.5, dy: 0 },
+          { dx: -stepX * 0.5, dy: 0 },
+          { dx: 0, dy: stepY * 0.5 },
+          { dx: 0, dy: -stepY * 0.5 },
+          { dx: stepX, dy: 0 },
+          { dx: -stepX, dy: 0 },
+        ];
+
+        let bestPos = { x: nX, y: nY };
+        let minCollisions = Infinity;
+
+        for (const n of nudges) {
+          const testX = Math.round((nX + n.dx) * 1000) / 1000;
+          const testY = Math.round((nY + n.dy) * 1000) / 1000;
+          if (!isPointInPolygon(testX, testY, roofPolygon)) continue;
+
+          const testRect = { x: testX, y: testY, width: pWidth, height: pLength, rotation: pRotation };
+          let colls = 0;
+          for (const p of panels) {
+            if (p.hidden) continue;
+            if (rotatedRectanglesIntersect(testRect, { x: p.x, y: p.y, width: p.width, height: p.height, rotation: p.rotation || 0 })) {
+              colls++;
+            }
+          }
+
+          if (colls === 0) {
+            bestPos = { x: testX, y: testY };
+            minCollisions = 0;
+            break;
+          }
+
+          if (colls < minCollisions) {
+            minCollisions = colls;
+            bestPos = { x: testX, y: testY };
+          }
+        }
+
+        return {
+          canFit: true,
+          newPanel: {
+            id: newPanelId,
+            x: bestPos.x,
+            y: bestPos.y,
+            width: pWidth,
+            height: pLength,
+            rotation: pRotation,
+            azimuth: pAzimuth,
+            row: 0,
+            col: 0,
+            wattage: Number(panelSpecs.wattage || 550),
+            locked: false,
+            hidden: false,
+            isManual: true,
+          },
+        };
+      }
+    }
+
+    // B. Manual addition via button (+ Panel) without clicked coordinates
+    if (panels.length > 0) {
+      // Find row edges or adjacent space to expand the array
+      const sortedByX = [...panels].sort((a, b) => b.x - a.x);
+      const rightmost = sortedByX[0];
+      const sortedByY = [...panels].sort((a, b) => a.y - b.y);
+      const lowest = sortedByY[0];
+      const highest = sortedByY[sortedByY.length - 1];
+
+      const edgeCandidates = [
+        { x: rightmost.x + stepX, y: rightmost.y, row: rightmost.row ?? 0, col: (rightmost.col ?? 0) + 1 },
+        { x: sortedByX[sortedByX.length - 1].x - stepX, y: rightmost.y, row: rightmost.row ?? 0, col: (rightmost.col ?? 0) - 1 },
+        { x: lowest.x, y: lowest.y - stepY, row: (lowest.row ?? 0) + 1, col: lowest.col ?? 0 },
+        { x: highest.x, y: highest.y + stepY, row: (highest.row ?? 0) - 1, col: highest.col ?? 0 },
+      ];
+
+      for (const ec of edgeCandidates) {
+        if (isPointInPolygon(ec.x, ec.y, roofPolygon)) {
+          return {
+            canFit: true,
+            newPanel: {
+              id: newPanelId,
+              x: Math.round(ec.x * 1000) / 1000,
+              y: Math.round(ec.y * 1000) / 1000,
+              width: pWidth,
+              height: pLength,
+              rotation: pRotation,
+              azimuth: pAzimuth,
+              row: ec.row,
+              col: ec.col,
+              wattage: Number(panelSpecs.wattage || 550),
+              locked: false,
+              hidden: false,
+              isManual: true,
+            },
+          };
+        }
+      }
+
+      // If exact grid edge points touch outside, place adjacent to last panel with manual flag
+      return {
+        canFit: true,
+        newPanel: {
+          id: newPanelId,
+          x: Math.round((rightmost.x + stepX * 0.8) * 1000) / 1000,
+          y: Math.round(rightmost.y * 1000) / 1000,
+          width: pWidth,
+          height: pLength,
+          rotation: pRotation,
+          azimuth: pAzimuth,
+          row: rightmost.row ?? 0,
+          col: (rightmost.col ?? 0) + 1,
+          wattage: Number(panelSpecs.wattage || 550),
+          locked: false,
+          hidden: false,
+          isManual: true,
+        },
+      };
+    }
   }
 
   return {
