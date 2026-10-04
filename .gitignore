@@ -12,7 +12,7 @@ backend/.venv/
 # Environment files
 .env
 .env.local
-backend/.env
+!backend/.env
 
 # Dependencies & Build
 node_modules/
