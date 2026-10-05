@@ -4942,6 +4942,8 @@ async def list_clients(
     q: Dict[str, Any] = {"company_id": user["company_id"]}
     if status and status != "All":
         q["status"] = status
+    else:
+        q["status"] = {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
     if phase_type and phase_type != "All":
         q["phase_type"] = phase_type
     if subsidy_eligible is not None:
@@ -5987,9 +5989,47 @@ async def delete_client(client_id: str, user=Depends(require_active_subscription
     # Fetch material deliveries
     material_deliveries_records = await db.material_deliveries.find({"client_id": client_id, "company_id": company_id}).to_list(1000)
 
-    # Fetch inward / outward entries
-    inward_entries_records = await db.inward_entries.find({"client_id": client_id, "company_id": company_id}).to_list(1000)
-    outward_entries_records = await db.outward_entries.find({"client_id": client_id, "company_id": company_id}).to_list(1000)
+    # Fetch inward / outward entries (check both client_id and client_name)
+    c_name = (c.get("full_name") or "").strip()
+    name_cond = [{"client_name": {"$regex": f"^{re.escape(c_name)}$", "$options": "i"}}] if c_name else []
+    inward_entries_records = await db.inward_entries.find({
+        "company_id": company_id,
+        "$or": [{"client_id": client_id}] + name_cond
+    }).to_list(1000)
+    outward_entries_records = await db.outward_entries.find({
+        "company_id": company_id,
+        "$or": [{"client_id": client_id}] + name_cond
+    }).to_list(1000)
+
+    tx_count = len(inward_entries_records) + len(outward_entries_records)
+    if tx_count > 0:
+        # Client has historical transactions (outward dispatches, client returns, or warehouse movements).
+        # In accordance with Solarix Data Integrity protocols, NEVER delete historical transactions or mutate stock ledgers.
+        # Safely archive the client so they are removed from active directory, dropdowns, and search,
+        # while preserving historical transactions, client history, and report calculations.
+        now_ts = datetime.utcnow().isoformat()
+        await db.clients.update_one(
+            {"id": client_id, "company_id": company_id},
+            {"$set": {
+                "status": "Archived",
+                "is_active": False,
+                "archived_at": now_ts,
+                "updated_at": now_ts
+            }}
+        )
+        try:
+            if supabase:
+                await asyncio.to_thread(lambda: supabase.table("clients").update({"status": "Archived", "updated_at": now_ts}).eq("id", client_id).eq("company_id", company_id).execute())
+        except Exception:
+            pass
+
+        await log_activity(company_id, user["id"], user["name"], "Archived Client", f"{c.get('full_name', '')} (preserved {tx_count} historical transactions)")
+        return {
+            "ok": True,
+            "archived": True,
+            "transaction_count": tx_count,
+            "message": f"Client '{c.get('full_name')}' archived. Historical transactions preserved in ledger."
+        }
 
     # Fetch documents
     documents_records = await db.documents.find({"client_id": client_id, "company_id": company_id}).to_list(1000)
@@ -6080,8 +6120,7 @@ async def delete_client(client_id: str, user=Depends(require_active_subscription
             await db.task_updates.delete_many({"task_id": {"$in": task_ids}})
         await db.material_requests.delete_many({"client_id": client_id, "company_id": company_id})
         await db.material_deliveries.delete_many({"client_id": client_id, "company_id": company_id})
-        await db.inward_entries.delete_many({"client_id": client_id, "company_id": company_id})
-        await db.outward_entries.delete_many({"client_id": client_id, "company_id": company_id})
+        # Note: Inward & outward entries are never hard-deleted to preserve warehouse stock ledger integrity.
         await db.documents.delete_many({"client_id": client_id, "company_id": company_id})
         await db.installations.delete_many({"client_id": client_id, "company_id": company_id})
         await db.meter_testings.delete_many({"client_id": client_id, "company_id": company_id})
@@ -6124,10 +6163,6 @@ async def delete_client(client_id: str, user=Depends(require_active_subscription
                 await db.material_requests.insert_many(backup_material_requests)
             if backup_material_deliveries:
                 await db.material_deliveries.insert_many(backup_material_deliveries)
-            if backup_inward_entries:
-                await db.inward_entries.insert_many(backup_inward_entries)
-            if backup_outward_entries:
-                await db.outward_entries.insert_many(backup_outward_entries)
             if backup_documents:
                 await db.documents.insert_many(backup_documents)
             if backup_installations:
@@ -10616,7 +10651,10 @@ async def delete_outward(entry_id: str, user=Depends(get_current_user)):
 @api_router.get("/inventory/b2b-summary")
 async def get_b2b_summary(user=Depends(require_active_subscription())):
     cid = user["company_id"]
-    clients = await db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "full_name": 1, "mobile": 1, "alt_mobile": 1, "city": 1, "state": 1, "address": 1, "sol_id": 1}).sort("full_name", 1).to_list(5000)
+    clients = await db.clients.find({
+        "company_id": cid,
+        "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
+    }, {"_id": 0, "id": 1, "full_name": 1, "mobile": 1, "alt_mobile": 1, "city": 1, "state": 1, "address": 1, "sol_id": 1}).sort("full_name", 1).to_list(5000)
     outwards = await db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1}).to_list(50000)
     inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "source_name": 1, "source_type": 1, "remarks": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1}).to_list(50000)
 
@@ -13904,6 +13942,8 @@ async def list_client_data(
             pass # Filtered in memory below based on inv_status
         else:
             q["status"] = status
+    else:
+        q["status"] = {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
     if search: q["full_name"] = {"$regex": re.escape(search), "$options": "i"}
     if consumer: q["consumer_number"] = {"$regex": re.escape(consumer), "$options": "i"}
     if mobile: q["mobile"] = {"$regex": re.escape(mobile)}

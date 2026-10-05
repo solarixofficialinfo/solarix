@@ -52,6 +52,7 @@ from server import (
     _PRODUCTS_CACHE,
     invalidate_products_cache,
     ensure_product,
+    delete_client,
 )
 import server
 
@@ -168,6 +169,14 @@ class MockCollection:
                 del self.storage[doc_id]
                 return {"deleted_count": 1}
         return {"deleted_count": 0}
+
+    async def delete_many(self, query):
+        deleted = 0
+        for doc_id, d in list(self.storage.items()):
+            if self._matches(d, query):
+                del self.storage[doc_id]
+                deleted += 1
+        return {"deleted_count": deleted}
 
     async def count_documents(self, query):
         return sum(1 for d in self.storage.values() if self._matches(d, query))
@@ -1455,6 +1464,35 @@ async def main():
         run_test(205, "Q.STRESS TEST", "Zero silent record drops under heavy load",
                  total_stress_txs == 2000)
 
+        # =========================================================================
+        # SECTION R: SAFE CLIENT DELETION & ARCHIVING (206 - 207)
+        # =========================================================================
+        admin_user = {"id": "U1", "name": "Admin", "company_id": TEST_CID, "role": "Super Admin"}
+
+        # Test 206: Client with 0 transactions is safely hard-deleted
+        zero_tx_client = {
+            "id": "CLIENT-ZERO-TX",
+            "company_id": TEST_CID,
+            "full_name": "ZERO TRANSACTIONS PVT LTD",
+            "mobile": "9876500000",
+            "status": "Active"
+        }
+        await mock_db.clients.insert_one(zero_tx_client)
+        del_zero_res = await delete_client("CLIENT-ZERO-TX", user=admin_user)
+        client_in_db = await mock_db.clients.find_one({"id": "CLIENT-ZERO-TX"})
+        run_test(206, "R.SAFE CLIENT DELETION", "Client with 0 transactions is safely hard-deleted from database",
+                 del_zero_res.get("ok") is True and del_zero_res.get("archived") is not True and client_in_db is None)
+
+        # Test 207: Client with historical transactions is safely archived (transactions preserved, excluded from B2B summary)
+        del_tx_res = await delete_client("CLIENT-NIKI-001", user=admin_user)
+        niki_db = await mock_db.clients.find_one({"id": "CLIENT-NIKI-001"})
+        niki_inwards = await mock_db.inward_entries.find({"client_id": "CLIENT-NIKI-001"}).to_list(100)
+        niki_outwards = await mock_db.outward_entries.find({"client_id": "CLIENT-NIKI-001"}).to_list(100)
+        b2b_after_del = await get_b2b_summary(user={"company_id": TEST_CID})
+        niki_in_b2b = next((c for c in b2b_after_del.get("clients", []) if c.get("id") == "CLIENT-NIKI-001"), None)
+        run_test(207, "R.SAFE CLIENT DELETION", "Client with transactions is safely archived: transactions preserved, removed from active B2B summary",
+                 del_tx_res.get("ok") is True and del_tx_res.get("archived") is True and niki_db is not None and niki_db.get("status") == "Archived" and len(niki_inwards) == 1 and len(niki_outwards) == 1 and niki_in_b2b is None)
+
     finally:
         server.db = orig_db
 
@@ -1471,7 +1509,7 @@ async def main():
                 print(f"  - Test {r['num']}: {r['name']} ({r['details']})")
         sys.exit(1)
     else:
-        print("\nALL 205 AUTOMATED TESTS PASSED 100% PERFECTLY!")
+        print(f"\nALL {len(test_results)} AUTOMATED TESTS PASSED 100% PERFECTLY!")
         sys.exit(0)
 
 if __name__ == "__main__":

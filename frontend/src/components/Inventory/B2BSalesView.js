@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Users, Plus, Search, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Eye, Pencil, Building2 } from "lucide-react";
+import { Users, Plus, Search, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Eye, Pencil, Building2, Trash2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 export default function B2BSalesView({ globalSearch = "", onChanged }) {
@@ -40,6 +40,11 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
     address: ""
   });
   const [updatingClient, setUpdatingClient] = useState(false);
+
+  // Delete Client Dialog State
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [clientToDelete, setClientToDelete] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Query B2B Summary
   const { data, isLoading, refetch, isFetching } = useQuery({
@@ -185,6 +190,30 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
       toast.error(formatApiError(err, "Failed to update B2B client"));
     } finally {
       setUpdatingClient(false);
+    }
+  };
+
+  const handleOpenDeleteClient = (client, e) => {
+    if (e) e.stopPropagation();
+    setClientToDelete(client);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!clientToDelete) return;
+    setIsDeleting(true);
+    try {
+      const res = await api.delete(`/clients/${clientToDelete.id}`);
+      invalidateAllClientQueries(queryClient, clientToDelete.id);
+      await refetch();
+      setDeleteDialogOpen(false);
+      setClientToDelete(null);
+      toast.success(res.data?.message || `Client "${clientToDelete.full_name}" deleted`);
+      if (onChanged) onChanged();
+    } catch (err) {
+      toast.error(formatApiError(err, "Failed to delete client"));
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -383,6 +412,17 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
                         data-testid={`b2b-edit-btn-${client.id}`}
                       >
                         <Pencil className="w-3.5 h-3.5" /> Edit
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => handleOpenDeleteClient(client, e)}
+                        className="h-7 px-2 text-xs text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg gap-1"
+                        title="Delete B2B Client"
+                        data-testid={`b2b-delete-btn-${client.id}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" /> Delete
                       </Button>
                       <Button
                         type="button"
@@ -695,6 +735,77 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
           <DialogFooter className="pt-3 border-t border-slate-100">
             <Button variant="outline" size="sm" onClick={() => setHistoryOpen(false)} className="rounded-xl text-xs">
               Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Delete Client Confirmation Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="max-w-md p-6 rounded-2xl" data-testid="b2b-delete-dialog">
+          <DialogHeader className="pb-3 border-b border-slate-100">
+            <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2" style={{ fontFamily: "Outfit" }}>
+              <Trash2 className="w-5 h-5 text-rose-600" /> Delete Client?
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Confirm deletion of this B2B client record.
+            </DialogDescription>
+          </DialogHeader>
+
+          {clientToDelete && (
+            <div className="space-y-3 py-2">
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                <div className="font-bold text-slate-900 text-sm">
+                  {clientToDelete.full_name}
+                </div>
+                <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                  {clientToDelete.sol_id && <span className="font-mono text-slate-600">ID: {clientToDelete.sol_id}</span>}
+                  {clientToDelete.city && <span>• {clientToDelete.city}</span>}
+                  {clientToDelete.mobile && <span>• {clientToDelete.mobile}</span>}
+                </div>
+              </div>
+
+              <div className="text-xs">
+                {Number(clientToDelete.transaction_count || 0) > 0 ? (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 space-y-1.5">
+                    <div className="font-semibold flex items-center gap-1.5 text-amber-900">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                      This client has {clientToDelete.transaction_count} transaction(s).
+                    </div>
+                    <p className="text-[11px] text-amber-700 leading-relaxed">
+                      To protect historical ledger and stock balance integrity, all outward dispatches and return records will remain safely preserved in the database. The client will be archived and removed from active selection.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-slate-600 leading-relaxed">
+                    This client has 0 transactions. Deleting will permanently remove this client record.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleteDialogOpen(false)}
+              disabled={isDeleting}
+              className="h-9 px-4 text-xs rounded-xl"
+              data-testid="b2b-cancel-delete-btn"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleConfirmDelete}
+              disabled={isDeleting}
+              className="h-9 px-4 text-xs bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs gap-1.5"
+              data-testid="b2b-confirm-delete-btn"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {isDeleting ? "Deleting..." : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>

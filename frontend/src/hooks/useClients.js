@@ -95,6 +95,7 @@ export function useDeleteClient() {
         queryClient.cancelQueries({ queryKey: ["dashboard"] }),
         queryClient.cancelQueries({ queryKey: ["projects"] }),
         queryClient.cancelQueries({ queryKey: ["tasks"] }),
+        queryClient.cancelQueries({ queryKey: ["inventory-b2b-summary"] }),
       ]);
 
       const prevData = [
@@ -103,6 +104,7 @@ export function useDeleteClient() {
         ...queryClient.getQueriesData({ queryKey: ["dashboard"] }),
         ...queryClient.getQueriesData({ queryKey: ["projects"] }),
         ...queryClient.getQueriesData({ queryKey: ["tasks"] }),
+        ...queryClient.getQueriesData({ queryKey: ["inventory-b2b-summary"] }),
       ];
 
       // 2. Helper to filter out deleted client from array or wrapper object
@@ -129,6 +131,7 @@ export function useDeleteClient() {
       queryClient.setQueriesData({ queryKey: ["dashboard"] }, filterOutClient);
       queryClient.setQueriesData({ queryKey: ["projects"] }, filterOutClient);
       queryClient.setQueriesData({ queryKey: ["tasks"] }, filterOutClient);
+      queryClient.setQueriesData({ queryKey: ["inventory-b2b-summary"] }, filterOutClient);
 
       return { prevData };
     },
@@ -145,8 +148,10 @@ export function useDeleteClient() {
       queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "all" });
       queryClient.invalidateQueries({ queryKey: ["projects"], refetchType: "all" });
       queryClient.invalidateQueries({ queryKey: ["tasks"], refetchType: "all" });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"], refetchType: "all" });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-client-history"], refetchType: "all" });
     },
-    onSuccess: () => toast.success("Client deleted"),
+    onSuccess: (res) => toast.success(res?.data?.message || "Client deleted"),
   });
 }
 
