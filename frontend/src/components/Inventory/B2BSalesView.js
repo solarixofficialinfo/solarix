@@ -1,219 +1,178 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import api, { formatApiError } from "@/lib/api";
+import { useClientList } from "@/hooks/useClients";
+import { useProductList } from "@/hooks/useInventory";
 import { invalidateAllClientQueries } from "@/lib/queryKeys";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Users, Plus, Search, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Eye, Pencil, Building2, Trash2, AlertTriangle } from "lucide-react";
+import { ProductAutocompleteInput, getStandardizedUnitOptions } from "@/components/Inventory/_shared";
+import { TrendingUp, Plus, Search, RefreshCw, ShoppingCart, Users, Package, Calendar, FileText } from "lucide-react";
 import { toast } from "sonner";
+import dayjs from "dayjs";
 
 export default function B2BSalesView({ globalSearch = "", onChanged }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
-  const [selectedClient, setSelectedClient] = useState(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
 
-  // Add Client Dialog State
-  const [addClientOpen, setAddClientOpen] = useState(false);
-  const [newClient, setNewClient] = useState({
-    full_name: "",
-    mobile: "",
-    alt_mobile: "",
-    city: "",
-    state: "",
-    address: ""
+  // New B2B Sale Modal State
+  const [newSaleOpen, setNewSaleOpen] = useState(false);
+  const [saleForm, setSaleForm] = useState({
+    client_id: "",
+    client_name: "",
+    bill_number: "",
+    date: dayjs().format("YYYY-MM-DD"),
+    product: "",
+    product_id: "",
+    size: "",
+    quantity: "",
+    unit: "Nos",
+    remarks: ""
   });
-  const [savingClient, setSavingClient] = useState(false);
+  const [savingSale, setSavingSale] = useState(false);
 
-  // Edit Client Dialog State
-  const [editClientOpen, setEditClientOpen] = useState(false);
-  const [editingClient, setEditingClient] = useState(null);
-  const [editFormData, setEditFormData] = useState({
-    full_name: "",
-    mobile: "",
-    alt_mobile: "",
-    city: "",
-    state: "",
-    address: ""
-  });
-  const [updatingClient, setUpdatingClient] = useState(false);
+  // Queries
+  const { data: clientList = [] } = useClientList();
+  const { data: productList = [] } = useProductList();
 
-  // Delete Client Dialog State
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [clientToDelete, setClientToDelete] = useState(null);
-  const [isDeleting, setIsDeleting] = useState(false);
-
-  // Query B2B Summary
-  const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ["inventory-b2b-summary"],
+  const { data: salesData, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ["inventory-b2b-sales"],
     queryFn: async () => {
-      const res = await api.get("/inventory/b2b-summary");
-      return res.data?.clients || [];
+      const res = await api.get("/inventory/b2b-sales");
+      return res.data?.sales || [];
     },
     staleTime: 1000 * 30,
   });
 
-  const rawClients = data;
-  const clients = useMemo(() => (Array.isArray(rawClients) ? rawClients : []), [rawClients]);
+  const rawSales = salesData;
+  const sales = useMemo(() => (Array.isArray(rawSales) ? rawSales : []), [rawSales]);
 
-  // Query Client History when a client is selected
-  const { data: historyData, isLoading: loadingHistory } = useQuery({
-    queryKey: ["inventory-b2b-client-history", selectedClient?.id],
-    queryFn: async () => {
-      if (!selectedClient?.id) return null;
-      const res = await api.get(`/inventory/b2b-client-history/${selectedClient.id}`);
-      return res.data;
-    },
-    enabled: Boolean(selectedClient?.id && historyOpen),
-  });
-
-  const transactions = historyData?.transactions || [];
-
-  // Filtered clients list
+  // Filtered sales
   const activeSearch = (search || globalSearch || "").trim().toLowerCase();
-  const filteredClients = useMemo(() => {
-    if (!activeSearch) return clients;
-    return clients.filter((c) =>
-      (c.full_name || "").toLowerCase().includes(activeSearch) ||
-      (c.mobile || "").toLowerCase().includes(activeSearch) ||
-      (c.city || "").toLowerCase().includes(activeSearch) ||
-      (c.sol_id || "").toLowerCase().includes(activeSearch)
+  const filteredSales = useMemo(() => {
+    if (!activeSearch) return sales;
+    return sales.filter((s) =>
+      (s.client_name || "").toLowerCase().includes(activeSearch) ||
+      (s.bill_number || "").toLowerCase().includes(activeSearch) ||
+      (s.product || "").toLowerCase().includes(activeSearch) ||
+      (s.size || "").toLowerCase().includes(activeSearch) ||
+      (s.date || "").includes(activeSearch)
     );
-  }, [clients, activeSearch]);
+  }, [sales, activeSearch]);
 
   // Aggregate stats
   const stats = useMemo(() => {
-    let totOut = 0;
-    let totRet = 0;
-    let totTxs = 0;
-    clients.forEach((c) => {
-      totOut += Number(c.total_outward || 0);
-      totRet += Number(c.total_return || 0);
-      totTxs += Number(c.transaction_count || 0);
+    let totUnits = 0;
+    const uniqueClients = new Set();
+    sales.forEach((s) => {
+      totUnits += Number(s.quantity || 0);
+      if (s.client_name && s.client_name !== "—") uniqueClients.add(s.client_name);
     });
+    const dates = sales.map((s) => s.date).filter(Boolean);
+    const lastDate = dates.length ? dates[0] : "—";
+
     return {
-      totalClients: clients.length,
-      totalOutward: Math.round(totOut * 100) / 100,
-      totalReturn: Math.round(totRet * 100) / 100,
-      netQuantity: Math.round((totOut - totRet) * 100) / 100,
-      totalTransactions: totTxs
+      totalSales: sales.length,
+      totalUnits: Math.round(totUnits * 100) / 100,
+      activeClients: uniqueClients.size,
+      lastDate
     };
-  }, [clients]);
+  }, [sales]);
 
-  const openClientHistory = (client) => {
-    setSelectedClient(client);
-    setHistoryOpen(true);
-  };
+  // Open New Sale modal with suggested bill number
+  const handleOpenNewSale = () => {
+    // Generate suggested bill number if possible
+    const existingNums = sales
+      .map((s) => s.bill_number)
+      .filter((b) => b && b.startsWith("B2B-"))
+      .map((b) => parseInt(b.replace("B2B-", ""), 10))
+      .filter((n) => !isNaN(n));
+    const nextNum = existingNums.length ? Math.max(...existingNums) + 1 : sales.length + 1;
+    const suggestedBill = `B2B-${String(nextNum).padStart(3, "0")}`;
 
-  const handleOpenAddClient = () => {
-    setNewClient({
-      full_name: "",
-      mobile: "",
-      alt_mobile: "",
-      city: "",
-      state: "",
-      address: ""
+    setSaleForm({
+      client_id: "",
+      client_name: "",
+      bill_number: suggestedBill,
+      date: dayjs().format("YYYY-MM-DD"),
+      product: "",
+      product_id: "",
+      size: "",
+      quantity: "",
+      unit: "Nos",
+      remarks: ""
     });
-    setAddClientOpen(true);
+    setNewSaleOpen(true);
   };
 
-  const handleCreateClient = async (e) => {
+  const handleSelectClient = (clientId) => {
+    const selected = (clientList || []).find((c) => c.id === clientId);
+    if (selected) {
+      setSaleForm((prev) => ({
+        ...prev,
+        client_id: selected.id,
+        client_name: selected.full_name
+      }));
+    }
+  };
+
+  const handleCreateSale = async (e) => {
     e.preventDefault();
-    if (!newClient.full_name?.trim() || !newClient.mobile?.trim()) {
-      toast.error("Please provide Client Name and Mobile Number");
+    if (!saleForm.client_id || !saleForm.client_name) {
+      toast.error("Please select a B2B Client");
       return;
     }
-    setSavingClient(true);
-    try {
-      await api.post("/clients", {
-        full_name: newClient.full_name.trim(),
-        mobile: newClient.mobile.trim(),
-        alt_mobile: newClient.alt_mobile?.trim() || "",
-        city: newClient.city?.trim() || "",
-        state: newClient.state?.trim() || "",
-        address: newClient.address?.trim() || "",
-        phase_type: "Three Phase",
-        subsidy_eligible: false,
-        status: "Active"
-      });
-      invalidateAllClientQueries(queryClient);
-      await refetch();
-      setAddClientOpen(false);
-      toast.success(`B2B Client "${newClient.full_name}" added successfully`);
-      if (onChanged) onChanged();
-    } catch (err) {
-      toast.error(formatApiError(err, "Failed to add B2B client"));
-    } finally {
-      setSavingClient(false);
-    }
-  };
-
-  const handleOpenEditClient = (client, e) => {
-    if (e) e.stopPropagation();
-    setEditingClient(client);
-    setEditFormData({
-      full_name: client.full_name || "",
-      mobile: client.mobile === "—" ? "" : client.mobile || "",
-      alt_mobile: client.alt_mobile || "",
-      city: client.city === "—" ? "" : client.city || "",
-      state: client.state || "",
-      address: client.address || ""
-    });
-    setEditClientOpen(true);
-  };
-
-  const handleUpdateClient = async (e) => {
-    e.preventDefault();
-    if (!editFormData.full_name?.trim() || !editFormData.mobile?.trim()) {
-      toast.error("Please provide Client Name and Mobile Number");
+    if (!saleForm.bill_number?.trim()) {
+      toast.error("Please enter a Bill Number");
       return;
     }
-    setUpdatingClient(true);
-    try {
-      await api.put(`/clients/${editingClient.id}`, {
-        full_name: editFormData.full_name.trim(),
-        mobile: editFormData.mobile.trim(),
-        alt_mobile: editFormData.alt_mobile?.trim() || "",
-        city: editFormData.city?.trim() || "",
-        state: editFormData.state?.trim() || "",
-        address: editFormData.address?.trim() || "",
-      });
-      invalidateAllClientQueries(queryClient);
-      await refetch();
-      setEditClientOpen(false);
-      toast.success(`B2B Client "${editFormData.full_name}" updated successfully`);
-      if (onChanged) onChanged();
-    } catch (err) {
-      toast.error(formatApiError(err, "Failed to update B2B client"));
-    } finally {
-      setUpdatingClient(false);
+    if (!saleForm.product?.trim()) {
+      toast.error("Please enter a Product Name");
+      return;
     }
-  };
+    if (!saleForm.quantity || Number(saleForm.quantity) <= 0) {
+      toast.error("Please enter a valid Quantity greater than 0");
+      return;
+    }
 
-  const handleOpenDeleteClient = (client, e) => {
-    if (e) e.stopPropagation();
-    setClientToDelete(client);
-    setDeleteDialogOpen(true);
-  };
-
-  const handleConfirmDelete = async () => {
-    if (!clientToDelete) return;
-    setIsDeleting(true);
+    setSavingSale(true);
     try {
-      const res = await api.delete(`/clients/${clientToDelete.id}`);
-      invalidateAllClientQueries(queryClient, clientToDelete.id);
+      const billNo = saleForm.bill_number.trim();
+      const payload = {
+        client_id: saleForm.client_id,
+        client_name: saleForm.client_name,
+        product: saleForm.product.trim().toUpperCase(),
+        product_id: saleForm.product_id || "",
+        size: saleForm.size?.trim() || "",
+        quantity: parseFloat(saleForm.quantity),
+        unit: saleForm.unit || "Nos",
+        bill_number: billNo,
+        outward_challan_no: billNo,
+        reference_number: billNo,
+        date: saleForm.date || dayjs().format("YYYY-MM-DD"),
+        remarks: saleForm.remarks?.trim() || "",
+        status: "Dispatched",
+        party_type: "B2B Client"
+      };
+
+      await api.post("/inventory/outward", payload);
+      invalidateAllClientQueries(queryClient, saleForm.client_id);
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-sales"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory"] });
+
       await refetch();
-      setDeleteDialogOpen(false);
-      setClientToDelete(null);
-      toast.success(res.data?.message || `Client "${clientToDelete.full_name}" deleted`);
+      setNewSaleOpen(false);
+      toast.success(`B2B Sale "${billNo}" to ${saleForm.client_name} saved. Stock updated!`);
       if (onChanged) onChanged();
     } catch (err) {
-      toast.error(formatApiError(err, "Failed to delete client"));
+      toast.error(formatApiError(err, "Failed to save B2B sale"));
     } finally {
-      setIsDeleting(false);
+      setSavingSale(false);
     }
   };
 
@@ -224,14 +183,14 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-base font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-              B2B Clients
+              B2B Sales
             </h2>
-            <Badge variant="outline" className="text-[11px] font-semibold text-blue-700 bg-blue-50 border-blue-200">
-              Client Master
+            <Badge variant="outline" className="text-[11px] font-semibold text-amber-700 bg-amber-50 border-amber-200">
+              Outward Dispatches
             </Badge>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Direct B2B client master: manage clients, track outward dispatches, client returns, and transaction ledger.
+            Material sold or issued to B2B clients. Every sale decreases stock and automatically links to the Client Ledger.
           </p>
         </div>
 
@@ -241,9 +200,9 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search B2B client..."
+              placeholder="Search by client, bill #, product..."
               className="pl-8 h-9 text-xs bg-slate-50/70 border-slate-200 rounded-xl"
-              data-testid="b2b-search-input"
+              data-testid="b2b-sales-search"
             />
           </div>
 
@@ -262,12 +221,12 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
           <Button
             type="button"
             size="sm"
-            onClick={handleOpenAddClient}
-            className="h-9 px-3.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-xl gap-1.5 shadow-2xs shrink-0 font-medium"
-            title="Add B2B Client directly"
-            data-testid="b2b-add-client-btn"
+            onClick={handleOpenNewSale}
+            className="h-9 px-3.5 text-xs bg-amber-600 hover:bg-amber-700 text-white rounded-xl gap-1.5 shadow-2xs shrink-0 font-medium"
+            title="Record New B2B Sale"
+            data-testid="new-b2b-sale-btn"
           >
-            <Plus className="w-3.5 h-3.5" /> Add Client
+            <Plus className="w-3.5 h-3.5" /> New B2B Sale
           </Button>
         </div>
       </div>
@@ -277,61 +236,61 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
         <Card className="border-slate-200 shadow-2xs bg-white rounded-xl">
           <CardContent className="p-4">
             <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
-              <span>B2B Clients</span>
-              <Users className="w-4 h-4 text-blue-600" />
+              <span>B2B Sales</span>
+              <ShoppingCart className="w-4 h-4 text-amber-600" />
             </div>
             <div className="text-2xl font-bold text-slate-900 mt-2" style={{ fontFamily: "Outfit" }}>
-              {stats.totalClients}
+              {stats.totalSales}
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">Active directory records</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">Recorded dispatches</div>
           </CardContent>
         </Card>
 
         <Card className="border-slate-200 shadow-2xs bg-white rounded-xl">
           <CardContent className="p-4">
             <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
-              <span>Total Dispatched</span>
-              <ArrowUpFromLine className="w-4 h-4 text-amber-600" />
+              <span>Units Dispatched</span>
+              <Package className="w-4 h-4 text-blue-600" />
             </div>
             <div className="text-2xl font-bold text-slate-900 mt-2" style={{ fontFamily: "Outfit" }}>
-              {stats.totalOutward}
+              {stats.totalUnits}
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">Total outward units</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">Total sold quantity</div>
           </CardContent>
         </Card>
 
         <Card className="border-slate-200 shadow-2xs bg-white rounded-xl">
           <CardContent className="p-4">
             <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
-              <span>Total Returned</span>
-              <ArrowDownToLine className="w-4 h-4 text-emerald-600" />
+              <span>Active Buyers</span>
+              <Users className="w-4 h-4 text-emerald-600" />
             </div>
             <div className="text-2xl font-bold text-slate-900 mt-2" style={{ fontFamily: "Outfit" }}>
-              {stats.totalReturn}
+              {stats.activeClients}
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">B2B client returns</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">Distinct B2B clients</div>
           </CardContent>
         </Card>
 
         <Card className="border-slate-200 shadow-2xs bg-white rounded-xl">
           <CardContent className="p-4">
             <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
-              <span>Net Ledger Balance</span>
-              <Building2 className="w-4 h-4 text-indigo-600" />
+              <span>Last Sale Date</span>
+              <Calendar className="w-4 h-4 text-indigo-600" />
             </div>
-            <div className="text-2xl font-bold text-slate-900 mt-2" style={{ fontFamily: "Outfit" }}>
-              {stats.netQuantity}
+            <div className="text-2xl font-bold text-slate-900 mt-2 font-mono text-base" style={{ fontFamily: "Outfit" }}>
+              {stats.lastDate}
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">Current outstanding units</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">Most recent dispatch</div>
           </CardContent>
         </Card>
       </div>
 
-      {/* B2B Clients Table */}
+      {/* B2B Sales Table */}
       <Card className="border-slate-200 shadow-2xs bg-white rounded-2xl overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex items-center justify-between">
           <div className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-            <Users className="w-4 h-4 text-slate-500" /> B2B Client Directory ({filteredClients.length})
+            <ShoppingCart className="w-4 h-4 text-slate-500" /> B2B Sales Dispatches ({filteredSales.length})
           </div>
           {activeSearch && (
             <span className="text-xs text-slate-400">
@@ -344,99 +303,63 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
           <table className="w-full text-xs text-left border-collapse">
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200/80 text-slate-600 font-semibold uppercase tracking-wider text-[10px]">
-                <th className="py-3 px-4">Client Name</th>
-                <th className="py-3 px-4 text-right">Total Outward</th>
-                <th className="py-3 px-4 text-right">Total Return / Inward</th>
-                <th className="py-3 px-4 text-right">Net Quantity</th>
-                <th className="py-3 px-4 text-center">Tx Count</th>
-                <th className="py-3 px-4 text-center">Last Transaction</th>
-                <th className="py-3 px-4 text-right">Actions</th>
+                <th className="py-3 px-4">Date</th>
+                <th className="py-3 px-4">Bill No</th>
+                <th className="py-3 px-4">B2B Client</th>
+                <th className="py-3 px-4">Product Name</th>
+                <th className="py-3 px-4">Size / Spec</th>
+                <th className="py-3 px-4 text-right">Quantity</th>
+                <th className="py-3 px-4">Status</th>
+                <th className="py-3 px-4">Remarks</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400">
-                    Loading B2B client data...
+                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                    Loading B2B sales data...
                   </td>
                 </tr>
-              ) : filteredClients.length === 0 ? (
+              ) : filteredSales.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400">
-                    No B2B clients found. Click &ldquo;+ Add Client&rdquo; above to create your first B2B client.
+                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                    No B2B sales recorded yet. Click &ldquo;+ New B2B Sale&rdquo; above to record your first sale.
                   </td>
                 </tr>
               ) : (
-                filteredClients.map((client) => (
+                filteredSales.map((sale) => (
                   <tr
-                    key={client.id}
-                    onClick={() => openClientHistory(client)}
-                    className="hover:bg-blue-50/40 cursor-pointer transition-colors group"
-                    data-testid={`b2b-client-row-${client.id}`}
+                    key={sale.id}
+                    className="hover:bg-slate-50/60 transition-colors"
+                    data-testid={`b2b-sale-row-${sale.id}`}
                   >
+                    <td className="py-3 px-4 font-mono text-slate-600 whitespace-nowrap">
+                      {sale.date}
+                    </td>
+                    <td className="py-3 px-4 font-mono font-bold text-slate-900 whitespace-nowrap">
+                      <span className="bg-slate-100 text-slate-800 px-2 py-0.5 rounded-md border border-slate-200/60">
+                        {sale.bill_number}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 font-semibold text-slate-900">
+                      {sale.client_name}
+                    </td>
+                    <td className="py-3 px-4 font-medium text-slate-900">
+                      {sale.product}
+                    </td>
+                    <td className="py-3 px-4 text-slate-600">
+                      {sale.size || "—"}
+                    </td>
+                    <td className="py-3 px-4 text-right font-bold tabular-nums text-slate-900">
+                      {sale.quantity} {sale.unit}
+                    </td>
                     <td className="py-3 px-4">
-                      <div className="font-semibold text-slate-900 group-hover:text-blue-700 transition-colors">
-                        {client.full_name}
-                      </div>
-                      <div className="text-[10px] text-slate-400 flex items-center gap-2">
-                        {client.sol_id && <span className="font-mono text-slate-500">{client.sol_id}</span>}
-                        {client.city && <span>• {client.city}</span>}
-                        {client.mobile && <span>• {client.mobile}</span>}
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-right font-medium tabular-nums text-slate-800">
-                      {client.total_outward}
-                    </td>
-                    <td className="py-3 px-4 text-right font-medium tabular-nums text-emerald-700">
-                      {client.total_return}
-                    </td>
-                    <td className="py-3 px-4 text-right font-bold tabular-nums text-indigo-700">
-                      {client.net_quantity}
-                    </td>
-                    <td className="py-3 px-4 text-center tabular-nums">
-                      <Badge variant="outline" className="text-[10px] font-mono bg-slate-50 text-slate-700">
-                        {client.transaction_count}
+                      <Badge className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold">
+                        {sale.status || "Dispatched"}
                       </Badge>
                     </td>
-                    <td className="py-3 px-4 text-center font-mono text-slate-600 text-[11px]">
-                      {client.last_transaction}
-                    </td>
-                    <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => handleOpenEditClient(client, e)}
-                        className="h-7 px-2 text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg gap-1"
-                        title="Edit B2B Client"
-                        data-testid={`b2b-edit-btn-${client.id}`}
-                      >
-                        <Pencil className="w-3.5 h-3.5" /> Edit
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => handleOpenDeleteClient(client, e)}
-                        className="h-7 px-2 text-xs text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg gap-1"
-                        title="Delete B2B Client"
-                        data-testid={`b2b-delete-btn-${client.id}`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" /> Delete
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openClientHistory(client);
-                        }}
-                        className="h-7 px-2.5 text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-100/60 rounded-lg gap-1"
-                        data-testid={`b2b-view-history-${client.id}`}
-                      >
-                        <Eye className="w-3.5 h-3.5" /> History
-                      </Button>
+                    <td className="py-3 px-4 text-slate-500 max-w-xs truncate">
+                      {sale.remarks || "—"}
                     </td>
                   </tr>
                 ))
@@ -446,85 +369,147 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
         </div>
       </Card>
 
-      {/* Add Client Dialog */}
-      <Dialog open={addClientOpen} onOpenChange={setAddClientOpen}>
-        <DialogContent className="max-w-lg p-6 rounded-2xl">
-          <form onSubmit={handleCreateClient} className="space-y-4">
+      {/* New B2B Sale Modal */}
+      <Dialog open={newSaleOpen} onOpenChange={setNewSaleOpen}>
+        <DialogContent className="max-w-lg p-6 rounded-2xl" data-testid="new-b2b-sale-dialog">
+          <form onSubmit={handleCreateSale} className="space-y-4">
             <DialogHeader className="pb-3 border-b border-slate-100">
-              <DialogTitle className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                Add B2B Client
+              <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2" style={{ fontFamily: "Outfit" }}>
+                <Plus className="w-5 h-5 text-amber-600" /> New B2B Sale
               </DialogTitle>
               <DialogDescription className="text-xs text-slate-500">
-                Directly add a new B2B client. The client will be immediately available in Outward, Inward Returns, Reports, and Data Management.
+                Record material sold / issued to a B2B client. Deducts from warehouse stock and posts to Client Ledger.
               </DialogDescription>
             </DialogHeader>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs">
+              {/* Select Client */}
               <div className="md:col-span-2 space-y-1">
-                <label className="font-semibold text-slate-700">Business / Client Name *</label>
+                <label className="font-semibold text-slate-700">B2B Client *</label>
+                <Select value={saleForm.client_id} onValueChange={handleSelectClient}>
+                  <SelectTrigger className="h-9 text-xs" data-testid="sale-client-select">
+                    <SelectValue placeholder="Select existing B2B client..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(clientList || []).map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.full_name} {c.city ? `(${c.city})` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Bill Number */}
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Bill Number *</label>
                 <Input
                   required
-                  value={newClient.full_name}
-                  onChange={(e) => setNewClient({ ...newClient, full_name: e.target.value })}
-                  placeholder="e.g. ABC Industries, NIKI FABRIC"
-                  className="h-9 text-xs"
-                  data-testid="b2b-input-name"
+                  value={saleForm.bill_number}
+                  onChange={(e) => setSaleForm({ ...saleForm, bill_number: e.target.value })}
+                  placeholder="e.g. B2B-001"
+                  className="h-9 text-xs font-mono font-medium"
+                  data-testid="sale-bill-number"
                 />
               </div>
 
+              {/* Date */}
               <div className="space-y-1">
-                <label className="font-semibold text-slate-700">Mobile Number *</label>
+                <label className="font-semibold text-slate-700">Date *</label>
                 <Input
+                  type="date"
                   required
-                  value={newClient.mobile}
-                  onChange={(e) => setNewClient({ ...newClient, mobile: e.target.value })}
-                  placeholder="e.g. 9876543210"
+                  value={saleForm.date}
+                  onChange={(e) => setSaleForm({ ...saleForm, date: e.target.value })}
                   className="h-9 text-xs"
-                  data-testid="b2b-input-mobile"
+                  data-testid="sale-date"
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">Alternate Phone / Person</label>
-                <Input
-                  value={newClient.alt_mobile}
-                  onChange={(e) => setNewClient({ ...newClient, alt_mobile: e.target.value })}
-                  placeholder="Contact person or alternate phone"
-                  className="h-9 text-xs"
-                  data-testid="b2b-input-alt-mobile"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">City / District</label>
-                <Input
-                  value={newClient.city}
-                  onChange={(e) => setNewClient({ ...newClient, city: e.target.value })}
-                  placeholder="e.g. Surat, Ahmedabad"
-                  className="h-9 text-xs"
-                  data-testid="b2b-input-city"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">State</label>
-                <Input
-                  value={newClient.state}
-                  onChange={(e) => setNewClient({ ...newClient, state: e.target.value })}
-                  placeholder="e.g. Gujarat"
-                  className="h-9 text-xs"
-                  data-testid="b2b-input-state"
-                />
-              </div>
-
+              {/* Product */}
               <div className="md:col-span-2 space-y-1">
-                <label className="font-semibold text-slate-700">Address / Plant Location</label>
+                <label className="font-semibold text-slate-700">Product Name *</label>
+                <ProductAutocompleteInput
+                  value={saleForm.product}
+                  onChange={(val) => {
+                    if (typeof val === "object" && val !== null) {
+                      setSaleForm((prev) => ({
+                        ...prev,
+                        product: (val.name || "").toUpperCase(),
+                        product_id: val.id || "",
+                        size: val.size || prev.size,
+                        unit: val.unit || prev.unit
+                      }));
+                    } else {
+                      setSaleForm((prev) => ({
+                        ...prev,
+                        product: String(val || "").toUpperCase()
+                      }));
+                    }
+                  }}
+                  products={productList}
+                  placeholder="e.g. SOLAR PANEL 540W"
+                  testid="sale-product-input"
+                  required
+                />
+              </div>
+
+              {/* Size / Spec */}
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Size / Spec</label>
                 <Input
-                  value={newClient.address}
-                  onChange={(e) => setNewClient({ ...newClient, address: e.target.value })}
-                  placeholder="Factory, warehouse, or office address"
+                  value={saleForm.size}
+                  onChange={(e) => setSaleForm({ ...saleForm, size: e.target.value })}
+                  placeholder="e.g. 540W Mono PERC"
                   className="h-9 text-xs"
-                  data-testid="b2b-input-address"
+                  data-testid="sale-size-input"
+                />
+              </div>
+
+              {/* Quantity & Unit */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700">Quantity *</label>
+                  <Input
+                    type="number"
+                    step="any"
+                    required
+                    value={saleForm.quantity}
+                    onChange={(e) => setSaleForm({ ...saleForm, quantity: e.target.value })}
+                    placeholder="e.g. 10"
+                    className="h-9 text-xs font-bold"
+                    data-testid="sale-qty-input"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700">Unit</label>
+                  <Select
+                    value={saleForm.unit}
+                    onValueChange={(val) => setSaleForm({ ...saleForm, unit: val })}
+                  >
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {getStandardizedUnitOptions(saleForm.unit).map((u) => (
+                        <SelectItem key={u} value={u}>
+                          {u}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Remarks */}
+              <div className="md:col-span-2 space-y-1">
+                <label className="font-semibold text-slate-700">Remarks / Notes</label>
+                <Input
+                  value={saleForm.remarks}
+                  onChange={(e) => setSaleForm({ ...saleForm, remarks: e.target.value })}
+                  placeholder="Optional delivery details, transport info..."
+                  className="h-9 text-xs"
+                  data-testid="sale-remarks-input"
                 />
               </div>
             </div>
@@ -534,280 +519,22 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => setAddClientOpen(false)}
-                className="rounded-xl text-xs"
+                onClick={() => setNewSaleOpen(false)}
+                className="h-9 px-4 text-xs rounded-xl"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
                 size="sm"
-                disabled={savingClient}
-                className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs"
-                data-testid="b2b-save-client-btn"
+                disabled={savingSale}
+                className="h-9 px-4 text-xs bg-amber-600 hover:bg-amber-700 text-white rounded-xl shadow-xs"
+                data-testid="save-b2b-sale-btn"
               >
-                {savingClient ? "Saving..." : "Save Client"}
+                {savingSale ? "Saving Sale..." : "Save B2B Sale"}
               </Button>
             </DialogFooter>
           </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit Client Dialog */}
-      <Dialog open={editClientOpen} onOpenChange={setEditClientOpen}>
-        <DialogContent className="max-w-lg p-6 rounded-2xl">
-          <form onSubmit={handleUpdateClient} className="space-y-4">
-            <DialogHeader className="pb-3 border-b border-slate-100">
-              <DialogTitle className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                Edit B2B Client
-              </DialogTitle>
-              <DialogDescription className="text-xs text-slate-500">
-                Update client profile, contact number, and location details.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs">
-              <div className="md:col-span-2 space-y-1">
-                <label className="font-semibold text-slate-700">Business / Client Name *</label>
-                <Input
-                  required
-                  value={editFormData.full_name}
-                  onChange={(e) => setEditFormData({ ...editFormData, full_name: e.target.value })}
-                  className="h-9 text-xs"
-                  data-testid="b2b-edit-name"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">Mobile Number *</label>
-                <Input
-                  required
-                  value={editFormData.mobile}
-                  onChange={(e) => setEditFormData({ ...editFormData, mobile: e.target.value })}
-                  className="h-9 text-xs"
-                  data-testid="b2b-edit-mobile"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">Alternate Phone / Person</label>
-                <Input
-                  value={editFormData.alt_mobile}
-                  onChange={(e) => setEditFormData({ ...editFormData, alt_mobile: e.target.value })}
-                  className="h-9 text-xs"
-                  data-testid="b2b-edit-alt-mobile"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">City / District</label>
-                <Input
-                  value={editFormData.city}
-                  onChange={(e) => setEditFormData({ ...editFormData, city: e.target.value })}
-                  className="h-9 text-xs"
-                  data-testid="b2b-edit-city"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="font-semibold text-slate-700">State</label>
-                <Input
-                  value={editFormData.state}
-                  onChange={(e) => setEditFormData({ ...editFormData, state: e.target.value })}
-                  className="h-9 text-xs"
-                  data-testid="b2b-edit-state"
-                />
-              </div>
-
-              <div className="md:col-span-2 space-y-1">
-                <label className="font-semibold text-slate-700">Address / Plant Location</label>
-                <Input
-                  value={editFormData.address}
-                  onChange={(e) => setEditFormData({ ...editFormData, address: e.target.value })}
-                  className="h-9 text-xs"
-                  data-testid="b2b-edit-address"
-                />
-              </div>
-            </div>
-
-            <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setEditClientOpen(false)}
-                className="rounded-xl text-xs"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                size="sm"
-                disabled={updatingClient}
-                className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs"
-                data-testid="b2b-update-client-btn"
-              >
-                {updatingClient ? "Updating..." : "Update Client"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Client Transaction History Dialog */}
-      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
-        <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col p-6 rounded-2xl">
-          <DialogHeader className="pb-3 border-b border-slate-100">
-            <div className="flex items-center justify-between">
-              <div>
-                <DialogTitle className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-                  {selectedClient?.full_name} · Transaction History
-                </DialogTitle>
-                <DialogDescription className="text-xs text-slate-500">
-                  {selectedClient?.sol_id ? `ID: ${selectedClient.sol_id} · ` : ""}
-                  {selectedClient?.mobile ? `Mobile: ${selectedClient.mobile} · ` : ""}
-                  {selectedClient?.city ? `City: ${selectedClient.city}` : ""}
-                </DialogDescription>
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200">
-                  Outward: {selectedClient?.total_outward}
-                </Badge>
-                <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-700 border-emerald-200">
-                  Returned: {selectedClient?.total_return}
-                </Badge>
-                <Badge variant="outline" className="text-xs bg-indigo-50 text-indigo-700 border-indigo-200 font-bold">
-                  Net: {selectedClient?.net_quantity}
-                </Badge>
-              </div>
-            </div>
-          </DialogHeader>
-
-          <div className="flex-1 overflow-y-auto py-3">
-            {loadingHistory ? (
-              <div className="py-16 text-center text-slate-400 text-xs">Loading transaction history...</div>
-            ) : transactions.length === 0 ? (
-              <div className="py-16 text-center text-slate-400 text-xs">
-                No outward dispatches or returns recorded for this client yet.
-              </div>
-            ) : (
-              <table className="w-full text-xs text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider text-[10px]">
-                    <th className="py-2.5 px-3">Date</th>
-                    <th className="py-2.5 px-3">Type</th>
-                    <th className="py-2.5 px-3">Product Name</th>
-                    <th className="py-2.5 px-3">Size / Spec</th>
-                    <th className="py-2.5 px-3 text-right">Quantity</th>
-                    <th className="py-2.5 px-3">Challan / Ref No</th>
-                    <th className="py-2.5 px-3">Remarks</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {transactions.map((tx) => (
-                    <tr key={tx.id} className="hover:bg-slate-50/70">
-                      <td className="py-2.5 px-3 font-mono text-slate-600">{tx.date}</td>
-                      <td className="py-2.5 px-3">
-                        {tx.type === "OUTWARD" ? (
-                          <Badge className="text-[10px] bg-amber-50 text-amber-700 border-amber-200 gap-1 font-semibold">
-                            <ArrowUpFromLine className="w-3 h-3" /> Sale / Outward
-                          </Badge>
-                        ) : (
-                          <Badge className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200 gap-1 font-semibold">
-                            <ArrowDownToLine className="w-3 h-3" /> B2B Return
-                          </Badge>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 font-medium text-slate-900">{tx.product}</td>
-                      <td className="py-2.5 px-3 text-slate-600">{tx.size || "—"}</td>
-                      <td className="py-2.5 px-3 text-right font-bold tabular-nums text-slate-800">
-                        {tx.quantity} {tx.unit}
-                      </td>
-                      <td className="py-2.5 px-3 font-mono text-slate-700">{tx.reference_number || "—"}</td>
-                      <td className="py-2.5 px-3 text-slate-500 max-w-xs truncate">{tx.remarks || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-
-          <DialogFooter className="pt-3 border-t border-slate-100">
-            <Button variant="outline" size="sm" onClick={() => setHistoryOpen(false)} className="rounded-xl text-xs">
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      {/* Delete Client Confirmation Dialog */}
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent className="max-w-md p-6 rounded-2xl" data-testid="b2b-delete-dialog">
-          <DialogHeader className="pb-3 border-b border-slate-100">
-            <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2" style={{ fontFamily: "Outfit" }}>
-              <Trash2 className="w-5 h-5 text-rose-600" /> Delete Client?
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500">
-              Confirm deletion of this B2B client record.
-            </DialogDescription>
-          </DialogHeader>
-
-          {clientToDelete && (
-            <div className="space-y-3 py-2">
-              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
-                <div className="font-bold text-slate-900 text-sm">
-                  {clientToDelete.full_name}
-                </div>
-                <div className="text-xs text-slate-500 mt-1 flex items-center gap-2">
-                  {clientToDelete.sol_id && <span className="font-mono text-slate-600">ID: {clientToDelete.sol_id}</span>}
-                  {clientToDelete.city && <span>• {clientToDelete.city}</span>}
-                  {clientToDelete.mobile && <span>• {clientToDelete.mobile}</span>}
-                </div>
-              </div>
-
-              <div className="text-xs">
-                {Number(clientToDelete.transaction_count || 0) > 0 ? (
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 space-y-1.5">
-                    <div className="font-semibold flex items-center gap-1.5 text-amber-900">
-                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                      This client has {clientToDelete.transaction_count} transaction(s).
-                    </div>
-                    <p className="text-[11px] text-amber-700 leading-relaxed">
-                      To protect historical ledger and stock balance integrity, all outward dispatches and return records will remain safely preserved in the database. The client will be archived and removed from active selection.
-                    </p>
-                  </div>
-                ) : (
-                  <p className="text-slate-600 leading-relaxed">
-                    This client has 0 transactions. Deleting will permanently remove this client record.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setDeleteDialogOpen(false)}
-              disabled={isDeleting}
-              className="h-9 px-4 text-xs rounded-xl"
-              data-testid="b2b-cancel-delete-btn"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleConfirmDelete}
-              disabled={isDeleting}
-              className="h-9 px-4 text-xs bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs gap-1.5"
-              data-testid="b2b-confirm-delete-btn"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              {isDeleting ? "Deleting..." : "Delete"}
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

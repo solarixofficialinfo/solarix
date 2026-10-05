@@ -8530,6 +8530,8 @@ class OutwardIn(BaseModel):
     client_name: Optional[str] = ""
     project_id: Optional[str] = ""
     project_name: Optional[str] = ""
+    bill_number: Optional[str] = ""
+    party_type: Optional[str] = "B2B Client"
     outward_challan_no: Optional[str] = ""
     reference_number: Optional[str] = ""
     reference_type: Optional[str] = "Challan Number"  # Challan Number | Book Number | Other
@@ -9980,6 +9982,7 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
                 if sn_up in outwarded_sns_set:
                     raise HTTPException(status_code=400, detail=f"Serial number '{sn}' is already OUT / issued.")
 
+        challan_raw = (data.bill_number or data.outward_challan_no or data.reference_number or "").strip()
         doc = {
             "id": str(uuid.uuid4()),
             "company_id": company_id,
@@ -9991,8 +9994,10 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
             "client_name": client_name_val,
             "project_id": project_id_val,
             "project_name": project_name_val,
-            "outward_challan_no": numeric_only(data.outward_challan_no),
-            "reference_number": numeric_only(data.reference_number or data.outward_challan_no),
+            "bill_number": challan_raw,
+            "party_type": data.party_type or ("B2B Client" if client_id_val else ""),
+            "outward_challan_no": challan_raw or numeric_only(data.outward_challan_no),
+            "reference_number": challan_raw or numeric_only(data.reference_number or data.outward_challan_no),
             "reference_type": data.reference_type or "Challan Number",
             "date": data.date or now_iso(),
             "remarks": data.remarks or "",
@@ -10760,40 +10765,81 @@ async def get_b2b_client_history(client_id: str, user=Depends(require_active_sub
             
     txs = []
     for o in outwards:
+        bill_no = o.get("bill_number") or o.get("outward_challan_no") or o.get("reference_number") or "—"
         txs.append({
             "id": o.get("id"),
             "type": "OUTWARD",
             "label": "Dispatch (Sale)",
             "date": (o.get("date") or o.get("created_at") or "")[:10],
+            "bill_number": bill_no,
+            "reference_number": bill_no,
             "product": o.get("product") or "",
             "size": o.get("size") or "",
             "quantity": float(o.get("quantity") or 0.0),
             "unit": o.get("unit") or "Nos",
-            "reference_number": o.get("outward_challan_no") or o.get("reference_number") or "",
+            "amount": float(o.get("total_amount") or o.get("amount") or 0.0),
             "status": o.get("status") or "Dispatched",
             "remarks": o.get("remarks") or ""
         })
     for i in inwards:
+        bill_no = i.get("bill_number") or i.get("reference_number") or i.get("challan_no") or "—"
         txs.append({
             "id": i.get("id"),
             "type": "INWARD_RETURN",
             "label": "Client Return",
             "date": (i.get("date") or i.get("created_at") or "")[:10],
+            "bill_number": bill_no,
+            "reference_number": bill_no,
             "product": i.get("product") or "",
             "size": i.get("size") or "",
             "quantity": float(i.get("quantity") or 0.0),
             "unit": i.get("unit") or "Nos",
-            "reference_number": i.get("reference_number") or i.get("challan_no") or i.get("bill_number") or "",
+            "amount": float(i.get("total_amount") or i.get("line_total") or 0.0),
             "status": "Received",
             "remarks": i.get("remarks") or ""
         })
     txs.sort(key=lambda x: x["date"], reverse=True)
     return {"client": client, "transactions": txs}
 
+@api_router.get("/inventory/b2b-sales")
+async def get_b2b_sales(user=Depends(require_active_subscription())):
+    cid = user["company_id"]
+    outwards = await db.outward_entries.find({
+        "company_id": cid,
+        "$or": [
+            {"client_id": {"$exists": True, "$ne": ""}},
+            {"client_name": {"$exists": True, "$ne": ""}},
+            {"party_type": "B2B Client"}
+        ]
+    }, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(10000)
+    
+    sales = []
+    for o in outwards:
+        bill_no = o.get("bill_number") or o.get("outward_challan_no") or o.get("reference_number") or "—"
+        sales.append({
+            "id": o.get("id"),
+            "date": (o.get("date") or o.get("created_at") or "")[:10],
+            "bill_number": bill_no,
+            "reference_number": bill_no,
+            "client_id": o.get("client_id") or "",
+            "client_name": o.get("client_name") or o.get("project_name") or "—",
+            "product": o.get("product") or "",
+            "size": o.get("size") or "",
+            "quantity": float(o.get("quantity") or 0.0),
+            "unit": o.get("unit") or "Nos",
+            "amount": float(o.get("total_amount") or o.get("amount") or 0.0),
+            "status": o.get("status") or "Dispatched",
+            "remarks": o.get("remarks") or ""
+        })
+    return {"sales": sales}
+
 @api_router.get("/inventory/supply-summary")
 async def get_supply_summary(user=Depends(require_active_subscription())):
     cid = user["company_id"]
-    vendors = await db.vendors.find({"company_id": cid}, {"_id": 0}).sort("name", 1).to_list(1000)
+    vendors = await db.vendors.find({
+        "company_id": cid,
+        "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
+    }, {"_id": 0}).sort("name", 1).to_list(1000)
     inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(50000)
     
     suppliers_data = []
@@ -10838,7 +10884,24 @@ async def get_supplier_history(vendor_id: str, user=Depends(require_active_subsc
         and (i.get("source_type") in ("Supplier", "Vendor / Supplier", "Vendor", "Supply") or not i.get("source_type"))
     ]
     v_inwards.sort(key=lambda x: (x.get("date") or x.get("created_at") or "")[:10], reverse=True)
-    return {"vendor": vendor, "supplies": v_inwards}
+    
+    supplies_mapped = []
+    for s in v_inwards:
+        bill_no = s.get("bill_number") or s.get("reference_number") or s.get("challan_no") or "—"
+        supplies_mapped.append({
+            "id": s.get("id"),
+            "date": (s.get("date") or s.get("created_at") or "")[:10],
+            "bill_number": bill_no,
+            "reference_number": bill_no,
+            "product": s.get("product") or "",
+            "size": s.get("size") or "",
+            "quantity": float(s.get("quantity") or 0.0),
+            "unit": s.get("unit") or "Nos",
+            "amount": float(s.get("total_amount") or s.get("line_total") or 0.0),
+            "status": "Received",
+            "remarks": s.get("remarks") or ""
+        })
+    return {"vendor": vendor, "supplies": supplies_mapped}
 
 @api_router.get("/inventory/repair-summary")
 async def get_repair_summary(user=Depends(require_active_subscription())):
@@ -18857,6 +18920,77 @@ async def toggle_vendor_status(vendor_id: str, payload: Dict[str, Any], user=Dep
     await db.vendors.update_one({"id": vendor_id, "company_id": cid}, {"$set": {"status": new_status, "updated_at": now_iso()}})
     await log_activity(cid, user["id"], user["name"], "Updated Vendor Status", f"Vendor ID: {vendor_id} to {new_status}")
     return {"message": f"Vendor status updated to {new_status}"}
+
+@api_router.put("/vendors/{vendor_id}")
+async def update_vendor(vendor_id: str, data: VendorPayload, user=Depends(get_current_user)):
+    cid = user["company_id"]
+    vendor = await db.vendors.find_one({"id": vendor_id, "company_id": cid})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    
+    update_data = {
+        "name": data.name.strip(),
+        "contact_person": data.contact_person or "",
+        "phone": data.phone or "",
+        "email": data.email or "",
+        "gstin": data.gstin or "",
+        "address": data.address or "",
+        "category": data.category or "General Supplier",
+        "products_supplied": data.products_supplied or "",
+        "payment_terms": data.payment_terms or "Net 30",
+        "notes": data.notes or "",
+        "updated_at": now_iso()
+    }
+    await db.vendors.update_one({"id": vendor_id, "company_id": cid}, {"$set": update_data})
+    await log_activity(cid, user["id"], user["name"], "Updated Vendor", f"Vendor: {data.name}")
+    return {"message": "Vendor updated successfully", "vendor": {**vendor, **update_data}}
+
+@api_router.delete("/vendors/{vendor_id}")
+async def delete_vendor(vendor_id: str, user=Depends(get_current_user)):
+    cid = user["company_id"]
+    vendor = await db.vendors.find_one({"id": vendor_id, "company_id": cid})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    
+    v_name = (vendor.get("name") or "").strip()
+    name_cond = [{"source_name": {"$regex": f"^{re.escape(v_name)}$", "$options": "i"}}] if v_name else []
+    
+    inward_records = await db.inward_entries.find({
+        "company_id": cid,
+        "$or": [{"vendor_id": vendor_id}] + name_cond
+    }).to_list(1000)
+    pbill_records = await db.purchase_bills.find({
+        "company_id": cid,
+        "$or": [{"vendor_id": vendor_id}] + ([{"vendor_name": {"$regex": f"^{re.escape(v_name)}$", "$options": "i"}}] if v_name else [])
+    }).to_list(1000)
+    
+    tx_count = len(inward_records) + len(pbill_records)
+    if tx_count > 0:
+        now_ts = now_iso()
+        await db.vendors.update_one(
+            {"id": vendor_id, "company_id": cid},
+            {"$set": {
+                "status": "Archived",
+                "is_active": False,
+                "archived_at": now_ts,
+                "updated_at": now_ts
+            }}
+        )
+        await log_activity(cid, user["id"], user["name"], "Archived Vendor", f"{vendor.get('name', '')} (preserved {tx_count} historical transactions)")
+        return {
+            "ok": True,
+            "archived": True,
+            "transaction_count": tx_count,
+            "message": f"Supplier '{vendor.get('name')}' archived. Historical supply transactions preserved in ledger."
+        }
+    else:
+        await db.vendors.delete_one({"id": vendor_id, "company_id": cid})
+        await log_activity(cid, user["id"], user["name"], "Deleted Vendor", vendor.get("name", ""))
+        return {
+            "ok": True,
+            "archived": False,
+            "message": f"Supplier '{vendor.get('name')}' deleted successfully."
+        }
 
 async def _process_po_payload(payload: Dict[str, Any], cid: str, user: Dict[str, Any], existing_po: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     vendor_name = (payload.get("vendor_name") or (existing_po.get("vendor_name") if existing_po else "") or "").strip()

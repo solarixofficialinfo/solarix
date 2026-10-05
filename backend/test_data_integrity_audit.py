@@ -53,6 +53,10 @@ from server import (
     invalidate_products_cache,
     ensure_product,
     delete_client,
+    delete_vendor,
+    get_supplier_history,
+    get_supply_summary,
+    get_b2b_sales,
 )
 import server
 
@@ -1492,6 +1496,154 @@ async def main():
         niki_in_b2b = next((c for c in b2b_after_del.get("clients", []) if c.get("id") == "CLIENT-NIKI-001"), None)
         run_test(207, "R.SAFE CLIENT DELETION", "Client with transactions is safely archived: transactions preserved, removed from active B2B summary",
                  del_tx_res.get("ok") is True and del_tx_res.get("archived") is True and niki_db is not None and niki_db.get("status") == "Archived" and len(niki_inwards) == 1 and len(niki_outwards) == 1 and niki_in_b2b is None)
+
+        # ==========================================
+        # SECTION S: B2B REDESIGN, BILL NUMBER, AND STOCK CYCLE
+        # ==========================================
+        # 1 test product: Opening stock = 0
+        TEST_PRODUCT_NAME = "SOLAR PANEL 555 WP BIFACIAL"
+        TEST_SIZE = "555 WP"
+        TEST_UNIT = "NOS"
+        SUPPLIER_ID = "SUPP-TEST-001"
+        SUPPLIER_NAME = "ABC Electricals"
+        CLIENT_ID = "CLIENT-B2B-001"
+        CLIENT_NAME = "ABC Industries"
+
+        # Register Supplier in mock_db.vendors
+        await mock_db.vendors.insert_one({
+            "id": SUPPLIER_ID,
+            "company_id": TEST_CID,
+            "name": SUPPLIER_NAME,
+            "contact_person": "Rajesh Kumar",
+            "phone": "9876543210",
+            "category": "Solar Panels",
+            "status": "Active",
+            "is_active": True
+        })
+
+        # Register Client in mock_db.clients
+        await mock_db.clients.insert_one({
+            "id": CLIENT_ID,
+            "company_id": TEST_CID,
+            "full_name": CLIENT_NAME,
+            "mobile": "9123456780",
+            "city": "Ahmedabad",
+            "status": "Active"
+        })
+
+        # Register Product in catalog
+        await ensure_product(TEST_CID, TEST_PRODUCT_NAME, size=TEST_SIZE, unit=TEST_UNIT)
+
+        # Step 1: Supply Inward 10 units with Bill Number "SUP-101"
+        supply_payload = InwardIn(
+            product=TEST_PRODUCT_NAME,
+            size=TEST_SIZE,
+            quantity=10.0,
+            unit=TEST_UNIT,
+            source_type="Supplier",
+            source_name=SUPPLIER_NAME,
+            vendor_id=SUPPLIER_ID,
+            bill_number="SUP-101",
+            date="2026-10-01"
+        )
+        supply_doc = await save_inward_entry_logic(supply_payload, company_id=TEST_CID, user_id=admin_user["id"], user_name=admin_user["name"])
+        run_test(208, "S.B2B REDESIGN & STOCK CONSISTENCY",
+                 "Supply Entry creates inward transaction with bill_number 'SUP-101' and increases stock to 10",
+                 supply_doc is not None and supply_doc.get("bill_number") == "SUP-101" and supply_doc.get("quantity") == 10.0)
+
+        # Step 2: B2B Sale Outward 3 units with Bill Number "B2B-001"
+        sale_payload = OutwardIn(
+            product=TEST_PRODUCT_NAME,
+            size=TEST_SIZE,
+            quantity=3.0,
+            unit=TEST_UNIT,
+            client_id=CLIENT_ID,
+            client_name=CLIENT_NAME,
+            party_type="B2B Client",
+            bill_number="B2B-001",
+            date="2026-10-02"
+        )
+        sale_doc = await save_outward_entry_logic(sale_payload, company_id=TEST_CID, user_id=admin_user["id"], user_name=admin_user["name"])
+        run_test(209, "S.B2B REDESIGN & STOCK CONSISTENCY",
+                 "B2B Sale Entry creates outward transaction with bill_number 'B2B-001' and decreases stock to 7",
+                 sale_doc is not None and sale_doc.get("bill_number") == "B2B-001" and sale_doc.get("quantity") == 3.0)
+
+        # Step 3: Verify single source of truth balance = 7 across engine
+        items_s, _, _, _ = await _compute_inventory_balances(TEST_CID)
+        prod_bal = next((p for p in items_s if p.get("name") == TEST_PRODUCT_NAME or norm_product_name(p.get("name")) == norm_product_name(TEST_PRODUCT_NAME)), None)
+        run_test(210, "S.B2B REDESIGN & STOCK CONSISTENCY",
+                 "Single Source of Truth Stock: Opening (0) + Supply (10) - B2B Sale (3) = Balance (7)",
+                 prod_bal is not None and prod_bal.get("balance") == 7.0 and prod_bal.get("total_in") >= 10.0 and prod_bal.get("total_out") >= 3.0)
+
+        # Step 4: Verify Supplier Ledger contains SUP-101
+        supp_history = await get_supplier_history(SUPPLIER_ID, user=admin_user)
+        supp_entries = supp_history.get("supplies", [])
+        supp_found = next((s for s in supp_entries if s.get("bill_number") == "SUP-101" and s.get("quantity") == 10.0), None)
+        run_test(211, "S.B2B REDESIGN & STOCK CONSISTENCY",
+                 "Supplier Ledger displays actual stored Bill No 'SUP-101' and Qty 10",
+                 supp_found is not None and supp_found.get("product") == TEST_PRODUCT_NAME)
+
+        # Step 5: Verify Client Ledger contains B2B-001
+        client_history = await get_b2b_client_history(CLIENT_ID, user=admin_user)
+        client_txs = client_history.get("transactions", [])
+        sale_found = next((t for t in client_txs if t.get("bill_number") == "B2B-001" and (t.get("type") in ("OUTWARD", "Sale") or "Dispatch" in t.get("label", "")) and t.get("quantity") == 3.0), None)
+        run_test(212, "S.B2B REDESIGN & STOCK CONSISTENCY",
+                 "Client Ledger displays actual stored Bill No 'B2B-001', Type 'Sale', and Qty 3",
+                 sale_found is not None)
+
+        # Step 6: B2B Client Return Inward 2 units with Bill Number "B2B-RET-001"
+        return_payload = InwardIn(
+            product=TEST_PRODUCT_NAME,
+            size=TEST_SIZE,
+            quantity=2.0,
+            unit=TEST_UNIT,
+            source_type="Client Return",
+            source_name=CLIENT_NAME,
+            client_id=CLIENT_ID,
+            bill_number="B2B-RET-001",
+            date="2026-10-03"
+        )
+        return_doc = await save_inward_entry_logic(return_payload, company_id=TEST_CID, user_id=admin_user["id"], user_name=admin_user["name"])
+        items_ret, _, _, _ = await _compute_inventory_balances(TEST_CID)
+        prod_bal_ret = next((p for p in items_ret if p.get("name") == TEST_PRODUCT_NAME or norm_product_name(p.get("name")) == norm_product_name(TEST_PRODUCT_NAME)), None)
+        client_history_after = await get_b2b_client_history(CLIENT_ID, user=admin_user)
+        return_found = next((t for t in client_history_after.get("transactions", []) if t.get("bill_number") == "B2B-RET-001" and (t.get("type") in ("INWARD_RETURN", "Return") or "Return" in t.get("label", ""))), None)
+        run_test(213, "S.B2B REDESIGN & STOCK CONSISTENCY",
+                 "Client Return Inward 2 units updates balance to 9 (7 + 2) and reflects as Return in Client Ledger",
+                 return_doc is not None and prod_bal_ret is not None and prod_bal_ret.get("balance") == 9.0 and return_found is not None)
+
+        # Step 7: B2B Sales Endpoint returns sale with correct bill number
+        b2b_sales_data = await get_b2b_sales(user=admin_user)
+        b2b_sales_list = b2b_sales_data.get("sales", [])
+        sale_in_list = next((s for s in b2b_sales_list if s.get("bill_number") == "B2B-001" and s.get("client_id") == CLIENT_ID), None)
+        run_test(214, "S.B2B REDESIGN & STOCK CONSISTENCY",
+                 "B2B Sales endpoint (get_b2b_sales) returns dispatches with stored bill number 'B2B-001'",
+                 sale_in_list is not None and sale_in_list.get("quantity") == 3.0)
+
+        # Step 8: Safe Supplier Deletion with 0 transactions
+        zero_supp = {
+            "id": "SUPP-ZERO-TX",
+            "company_id": TEST_CID,
+            "name": "ZERO SUPPLIER LTD",
+            "phone": "9998887776",
+            "status": "Active"
+        }
+        await mock_db.vendors.insert_one(zero_supp)
+        del_zero_supp = await delete_vendor("SUPP-ZERO-TX", user=admin_user)
+        supp_in_db = await mock_db.vendors.find_one({"id": "SUPP-ZERO-TX"})
+        run_test(215, "S.SAFE SUPPLIER DELETION",
+                 "Supplier with 0 transactions is safely hard-deleted from database",
+                 del_zero_supp.get("ok") is True and del_zero_supp.get("archived") is not True and supp_in_db is None)
+
+        # Step 9: Safe Supplier Deletion with transactions preserves history and archives
+        del_supp_res = await delete_vendor(SUPPLIER_ID, user=admin_user)
+        supp_db = await mock_db.vendors.find_one({"id": SUPPLIER_ID})
+        supp_inwards = await mock_db.inward_entries.find({"vendor_id": SUPPLIER_ID}).to_list(100)
+        supply_summary = await get_supply_summary(user=admin_user)
+        supp_in_summary = next((s for s in supply_summary.get("suppliers", []) if s.get("id") == SUPPLIER_ID), None)
+        run_test(216, "S.SAFE SUPPLIER DELETION",
+                 "Supplier with transactions is safely archived: transactions preserved, removed from active supply list",
+                 del_supp_res.get("ok") is True and del_supp_res.get("archived") is True and supp_db is not None and supp_db.get("status") == "Archived" and len(supp_inwards) == 1 and supp_in_summary is None)
 
     finally:
         server.db = orig_db
