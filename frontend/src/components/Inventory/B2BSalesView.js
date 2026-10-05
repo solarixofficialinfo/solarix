@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import api, { formatApiError } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
@@ -6,24 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 import { Users, Plus, Search, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Eye, Calendar, Layers, ShieldCheck, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 
 export default function B2BSalesView({ globalSearch = "", onChanged }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [selectedClient, setSelectedClient] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [addClientOpen, setAddClientOpen] = useState(false);
-  const [busyAdd, setBusyAdd] = useState(false);
-
-  const [newClient, setNewClient] = useState({
-    full_name: "",
-    mobile: "",
-    city: "",
-    address: ""
-  });
 
   // Query B2B Summary
   const { data, isLoading, refetch, isFetching } = useQuery({
@@ -82,52 +74,6 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
     };
   }, [clients]);
 
-  // Handle Add Client
-  const handleCreateClient = async (e) => {
-    e?.preventDefault();
-    if (!newClient.full_name.trim()) {
-      toast.error("Client Name is required!");
-      return;
-    }
-    if (!newClient.mobile.trim()) {
-      toast.error("Mobile number is required!");
-      return;
-    }
-
-    // Check if client with identical name already exists to prevent duplicate master data
-    const existing = clients.find(
-      (c) => (c.full_name || "").trim().toLowerCase() === newClient.full_name.trim().toLowerCase()
-    );
-    if (existing) {
-      toast.warning(`A client named "${existing.full_name}" already exists! Reusing existing master record.`);
-      setAddClientOpen(false);
-      setSelectedClient(existing);
-      setHistoryOpen(true);
-      return;
-    }
-
-    setBusyAdd(true);
-    try {
-      await api.post("/clients", {
-        full_name: newClient.full_name.trim(),
-        mobile: newClient.mobile.trim(),
-        city: newClient.city.trim(),
-        address: newClient.address.trim()
-      });
-      toast.success("Client added successfully!");
-      setAddClientOpen(false);
-      setNewClient({ full_name: "", mobile: "", city: "", address: "" });
-      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"] });
-      queryClient.invalidateQueries({ queryKey: ["clients"] });
-      onChanged?.();
-      refetch();
-    } catch (err) {
-      toast.error(formatApiError(err));
-    } finally {
-      setBusyAdd(false);
-    }
-  };
-
   const openClientHistory = (client) => {
     setSelectedClient(client);
     setHistoryOpen(true);
@@ -178,11 +124,12 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
           <Button
             type="button"
             size="sm"
-            onClick={() => setAddClientOpen(true)}
-            className="h-9 px-3.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-xl gap-1.5 shadow-2xs shrink-0"
-            data-testid="b2b-add-client-btn"
+            onClick={() => navigate("/clients/new")}
+            className="h-9 px-3.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-xl gap-1.5 shadow-2xs shrink-0 font-medium"
+            title="Onboard new B2B client via Onboarding System"
+            data-testid="b2b-onboard-client-btn"
           >
-            <Plus className="w-3.5 h-3.5" /> + Add Client
+            <Plus className="w-3.5 h-3.5" /> Onboard Client
           </Button>
         </div>
       </div>
@@ -274,7 +221,7 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
               ) : filteredClients.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-slate-400">
-                    No clients found. Click "+ Add Client" to create one.
+                    No onboarded B2B clients found. Clients onboarded via the B2B Onboarding system will appear here automatically.
                   </td>
                 </tr>
               ) : (
@@ -418,89 +365,6 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
               Close
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Add Client Dialog */}
-      <Dialog open={addClientOpen} onOpenChange={setAddClientOpen}>
-        <DialogContent className="max-w-md p-6 rounded-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-base font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-              Add B2B Client
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500">
-              Create an authoritative client record for B2B dispatches and transaction ledger tracking.
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleCreateClient} className="space-y-4 py-2">
-            <div>
-              <Label className="text-xs font-semibold text-slate-700">Client / Company Name *</Label>
-              <Input
-                value={newClient.full_name}
-                onChange={(e) => setNewClient({ ...newClient, full_name: e.target.value })}
-                placeholder="e.g. ABC Solar Industries Ltd."
-                className="mt-1 h-9 text-xs rounded-xl"
-                required
-                data-testid="add-client-name"
-              />
-            </div>
-
-            <div>
-              <Label className="text-xs font-semibold text-slate-700">Mobile / Contact Phone *</Label>
-              <Input
-                value={newClient.mobile}
-                onChange={(e) => setNewClient({ ...newClient, mobile: e.target.value })}
-                placeholder="e.g. 9876543210"
-                className="mt-1 h-9 text-xs rounded-xl"
-                required
-                data-testid="add-client-mobile"
-              />
-            </div>
-
-            <div>
-              <Label className="text-xs font-semibold text-slate-700">City / Location</Label>
-              <Input
-                value={newClient.city}
-                onChange={(e) => setNewClient({ ...newClient, city: e.target.value })}
-                placeholder="e.g. Mumbai"
-                className="mt-1 h-9 text-xs rounded-xl"
-                data-testid="add-client-city"
-              />
-            </div>
-
-            <div>
-              <Label className="text-xs font-semibold text-slate-700">Address / Site Details</Label>
-              <Input
-                value={newClient.address}
-                onChange={(e) => setNewClient({ ...newClient, address: e.target.value })}
-                placeholder="e.g. MIDC Industrial Area Phase II"
-                className="mt-1 h-9 text-xs rounded-xl"
-                data-testid="add-client-address"
-              />
-            </div>
-
-            <DialogFooter className="pt-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setAddClientOpen(false)}
-                className="rounded-xl text-xs"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                size="sm"
-                disabled={busyAdd}
-                className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold"
-                data-testid="save-new-client-btn"
-              >
-                {busyAdd ? "Saving..." : "Save Client"}
-              </Button>
-            </DialogFooter>
-          </form>
         </DialogContent>
       </Dialog>
     </div>

@@ -10650,8 +10650,25 @@ async def get_b2b_summary(user=Depends(require_active_subscription())):
         c_name = str(c.get("full_name") or "").strip()
         c_name_lower = c_name.lower()
 
-        c_outs = out_by_client.get(c_id) or out_by_name.get(c_name_lower) or []
-        c_ins = in_by_client.get(c_id) or in_by_name.get(c_name_lower) or []
+        seen_out_ids = set()
+        c_outs = []
+        for o in (out_by_client.get(c_id, []) + out_by_name.get(c_name_lower, [])):
+            oid = o.get("id")
+            if oid and oid not in seen_out_ids:
+                seen_out_ids.add(oid)
+                c_outs.append(o)
+            elif not oid:
+                c_outs.append(o)
+
+        seen_in_ids = set()
+        c_ins = []
+        for i in (in_by_client.get(c_id, []) + in_by_name.get(c_name_lower, [])):
+            iid = i.get("id")
+            if iid and iid not in seen_in_ids:
+                seen_in_ids.add(iid)
+                c_ins.append(i)
+            elif not iid:
+                c_ins.append(i)
 
         tot_out = sum(float(o.get("quantity") or 0.0) for o in c_outs)
         tot_ret = sum(float(i.get("quantity") or 0.0) for i in c_ins)
@@ -10681,14 +10698,23 @@ async def get_b2b_client_history(client_id: str, user=Depends(require_active_sub
     client = await db.clients.find_one({"company_id": cid, "id": client_id}, {"_id": 0})
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
-    c_name = client.get("full_name") or ""
+    c_name = (client.get("full_name") or "").strip()
     
-    outwards = await db.outward_entries.find({"company_id": cid, "$or": [{"client_id": client_id}, {"client_name": c_name}]}, {"_id": 0}).to_list(5000)
+    outwards = await db.outward_entries.find({
+        "company_id": cid,
+        "$or": [
+            {"client_id": client_id},
+            {"client_name": {"$regex": f"^{re.escape(c_name)}$", "$options": "i"}}
+        ]
+    }, {"_id": 0}).to_list(5000)
     inwards_raw = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(10000)
     inwards = []
     for inv in inwards_raw:
         parsed = parse_inward_client_info(inv)
-        if parsed.get("client_id") == client_id or (parsed.get("source_type") in ("Return From Client", "B2B Return", "Client / Customer", "Client Return") and (parsed.get("source_name") or "").strip().lower() == c_name.strip().lower()):
+        if parsed.get("client_id") == client_id or (
+            parsed.get("source_type") in ("Return From Client", "B2B Return", "Client / Customer", "Client Return")
+            and (parsed.get("client_name") or parsed.get("source_name") or "").strip().lower() == c_name.lower()
+        ):
             inwards.append(parsed)
             
     txs = []
@@ -15185,13 +15211,17 @@ async def calculate_client_ledger(company_id: str, client_id: str):
     if not client:
         return None
         
+    c_name = (client.get("full_name") or "").strip()
     # Run both queries in parallel
     outwards, inwards_raw = await asyncio.gather(
         db.outward_entries.find({
             "company_id": company_id,
-            "client_id": client_id,
+            "$or": [
+                {"client_id": client_id},
+                {"client_name": {"$regex": f"^{re.escape(c_name)}$", "$options": "i"}}
+            ],
             "status": "Dispatched"
-        }, {"_id": 0}).to_list(1000),
+        }, {"_id": 0}).to_list(2000),
         # inward_entries stores client_id inside remarks as [client_id:UUID],
         # so we can only filter by company_id + source_type in the DB,
         # then use parse_inward_client_info to extract & match client_id in Python.
@@ -15241,7 +15271,10 @@ async def calculate_client_ledger(company_id: str, client_id: str):
     inwards = []
     for inv in inwards_raw:
         inv = parse_inward_client_info(inv)
-        if inv.get("client_id") == client_id:
+        if inv.get("client_id") == client_id or (
+            inv.get("source_type") in ("Return From Client", "B2B Return", "Client / Customer", "Client Return")
+            and (inv.get("client_name") or inv.get("source_name") or "").strip().lower() == c_name.lower()
+        ):
             inwards.append(inv)
     
     ledger = {}

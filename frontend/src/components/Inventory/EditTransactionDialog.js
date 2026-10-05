@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Save, Paperclip, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import { toast } from "sonner";
-import { Field, SelectField, TextareaField, UNIT_OPTIONS, REF_TYPES, SRC_TYPES, digitsOnly, ProductAutocompleteInput, formatUnit, getStandardizedUnitOptions } from "./_shared";
+import { Field, SelectField, TextareaField, UNIT_OPTIONS, REF_TYPES, SRC_TYPES, digitsOnly, ProductAutocompleteInput, ClientAutocompleteInput, formatUnit, getStandardizedUnitOptions } from "./_shared";
 
 const OUTWARD_STATUSES = ["Pending", "Dispatched", "Cancelled"];
 
@@ -17,7 +17,7 @@ export default function EditTransactionDialog({ transaction, onClose, onSaved, p
   const [clients, setClients] = useState([]);
 
   useEffect(() => {
-    if (transaction && transaction.type === "Inward") {
+    if (transaction) {
       api.get("/clients").then((r) => setClients(r.data || [])).catch(() => {});
     }
   }, [transaction]);
@@ -90,25 +90,19 @@ export default function EditTransactionDialog({ transaction, onClose, onSaved, p
               {form.source_type === "Return From Client" ? (
                 <div className="md:col-span-2">
                   <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Searchable Client</label>
-                  <input
-                    type="text"
-                    value={form.client_name || ""}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      const c = clients.find((x) => x.full_name.toUpperCase() === val.toUpperCase());
-                      if (c) {
-                        upd({ client_id: c.id, client_name: c.full_name, source_name: c.full_name });
+                  <ClientAutocompleteInput
+                    value={form.client_name || form.source_name || ""}
+                    onChange={(val, matchedClient) => {
+                      if (matchedClient) {
+                        upd({ client_id: matchedClient.id, client_name: matchedClient.full_name, source_name: matchedClient.full_name });
                       } else {
                         upd({ client_name: val, client_id: "", source_name: val });
                       }
                     }}
+                    clients={clients}
                     placeholder="Type to search onboarding clients or enter custom name…"
-                    className="flex-1 mt-1.5 h-10 px-3 py-2 w-full text-sm rounded-md border border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    list="et-client-list"
+                    className="mt-1 h-10 text-xs bg-white rounded-md"
                   />
-                  <datalist id="et-client-list">
-                    {clients.map((c) => <option key={c.id} value={c.full_name} />)}
-                  </datalist>
                   <div className="text-[10px] text-blue-600 mt-1">Select an onboarding client for linked project details, or enter a client name manually.</div>
                 </div>
               ) : (
@@ -120,7 +114,21 @@ export default function EditTransactionDialog({ transaction, onClose, onSaved, p
               <Field label="Outward Challan No." value={form.outward_challan_no} onChange={(v) => upd({ outward_challan_no: digitsOnly(v) })} testid="et-out-challan" inputMode="numeric" pattern="[0-9]*" />
               <SelectField label="Status" value={form.status} onChange={(v) => upd({ status: v })} options={OUTWARD_STATUSES} testid="et-status" />
               <div className="md:col-span-2">
-                <Field label="Client Name" value={form.client_name} onChange={(v) => upd({ client_name: v })} testid="et-client" placeholder="Client or party name" />
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Client Name</label>
+                <ClientAutocompleteInput
+                  value={form.client_name || ""}
+                  onChange={(val, matchedClient) => {
+                    if (matchedClient) {
+                      upd({ client_id: matchedClient.id, client_name: matchedClient.full_name, project_id: matchedClient.id, project_name: matchedClient.full_name });
+                    } else {
+                      upd({ client_name: val, client_id: "" });
+                    }
+                  }}
+                  clients={clients}
+                  placeholder="Select onboarding client or enter name…"
+                  className="mt-1 h-10 text-xs bg-white rounded-md"
+                  testid="et-client"
+                />
                 <div className="text-[10px] text-blue-600 mt-1">Select an onboarding client for linked project details, or enter a client name manually.</div>
               </div>
               <Field label="Project" value={form.project_name} onChange={(v) => upd({ project_name: v })} testid="et-project" />

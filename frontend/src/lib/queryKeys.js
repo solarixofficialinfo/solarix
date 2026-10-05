@@ -93,9 +93,15 @@ export const invalidateAllClientQueries = (queryClient, clientId) => {
         keyStr.includes("document") ||
         keyStr.includes("onboarding") ||
         keyStr.includes("project") ||
-        keyStr.includes("dashboard")
+        keyStr.includes("dashboard") ||
+        keyStr.includes("inventory-b2b") ||
+        keyStr.includes("ledger")
       );
     },
   });
+  queryClient.invalidateQueries({ queryKey: queryKeys.clients.list() });
+  queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"] });
+  queryClient.invalidateQueries({ queryKey: ["inventory-b2b-client-history"] });
+  queryClient.invalidateQueries({ queryKey: ["ledger"] });
 };
 

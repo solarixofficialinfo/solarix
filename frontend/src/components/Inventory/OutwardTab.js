@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Save, RotateCcw, Pencil, Trash2, Paperclip, FileText, FileImage, FileSpreadsheet, CheckCircle2, Wand2, Settings } from "lucide-react";
 import { toast } from "sonner";
 import dayjs from "dayjs";
-import { Field, SelectField, TextareaField, ConfirmDialog, UNIT_OPTIONS, OUTWARD_REF_TYPES, today, digitsOnly, ProductAutocompleteInput, formatUnit, getStandardizedUnitOptions } from "./_shared";
+import { Field, SelectField, TextareaField, ConfirmDialog, UNIT_OPTIONS, OUTWARD_REF_TYPES, today, digitsOnly, ProductAutocompleteInput, ClientAutocompleteInput, formatUnit, getStandardizedUnitOptions } from "./_shared";
 import { usePermission } from "@/lib/permissions";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import ManualBulkImport from "@/components/ManualBulkImport";
@@ -429,27 +429,31 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
               <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 {form.party_type === "B2B Client" ? "B2B Client *" : "Client / Party Name *"}
               </label>
-              <input
-                type="text"
+              <ClientAutocompleteInput
                 value={form.client_name || ""}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  const c = (clients || []).find((x) => (x.full_name || "").toUpperCase() === val.toUpperCase());
-                  if (c) {
-                    setForm({ ...form, client_id: c.id, client_name: c.full_name, project_id: c.id, project_name: c.full_name });
+                onChange={(val, matchedClient) => {
+                  if (matchedClient) {
+                    setForm((prev) => ({
+                      ...prev,
+                      client_id: matchedClient.id,
+                      client_name: matchedClient.full_name,
+                      project_id: matchedClient.id,
+                      project_name: matchedClient.full_name
+                    }));
                   } else {
-                    setForm({ ...form, client_name: val, client_id: "" });
+                    setForm((prev) => ({
+                      ...prev,
+                      client_name: val,
+                      client_id: ""
+                    }));
                   }
                 }}
+                clients={clients}
                 placeholder={form.party_type === "B2B Client" ? "Select B2B client..." : "Type to search clients or enter name…"}
-                className="flex-1 mt-1.5 h-10 px-3 py-2 w-full text-sm rounded-md border border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                list="outward-client-list"
-                data-testid="out-client-search"
+                className="mt-1.5 h-10 text-xs bg-white rounded-md"
+                testid="out-client-search"
                 required
               />
-              <datalist id="outward-client-list">
-                {(clients || []).map((c) => <option key={c.id} value={c.full_name} />)}
-              </datalist>
               <div className="text-[10px] text-blue-600 mt-1">
                 {form.party_type === "B2B Client"
                   ? "Select an existing client to record B2B dispatch and track client ledger."

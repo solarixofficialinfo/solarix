@@ -39,6 +39,8 @@ from server import (
     norm_unit_code,
     _compute_inventory_balances,
     calculate_client_ledger,
+    get_b2b_summary,
+    get_b2b_client_history,
     parse_inward_client_info,
     save_inward_entry_logic,
     save_outward_entry_logic,
@@ -1022,17 +1024,81 @@ async def main():
         run_test(121, "K.DATA MANAGE PRECISION", "Alphanumeric challan format intact across views",
                  True)
 
-        run_test(122, "K.DATA MANAGE PRECISION", "Outward client dropdown matches db.clients",
-                 await mock_db.clients.count_documents({"company_id": TEST_CID}) >= 2)
+        # Test 122: Onboarding a new B2B client into canonical db.clients
+        client_niki = {
+            "id": "CLIENT-NIKI-001",
+            "company_id": TEST_CID,
+            "full_name": "NIKI FABRIC",
+            "mobile": "9876543210",
+            "city": "Surat",
+            "sol_id": "SOL-B2B-999",
+            "created_at": "2026-10-05T10:00:00Z"
+        }
+        await mock_db.clients.insert_one(client_niki)
 
-        run_test(123, "K.DATA MANAGE PRECISION", "Supplier list matches db.vendors",
-                 await mock_db.vendors.count_documents({"company_id": TEST_CID}) >= 2)
+        # Also insert a client for OTHER_CID to verify multi-tenant company isolation
+        await mock_db.clients.insert_one({
+            "id": "CLIENT-OTHER-999",
+            "company_id": OTHER_CID,
+            "full_name": "OTHER COMP CLIENT",
+            "mobile": "9999999999",
+            "city": "Mumbai",
+            "sol_id": "SOL-OTHER-001"
+        })
 
-        run_test(124, "K.DATA MANAGE PRECISION", "Repair records match repair movements",
-                 True)
+        b2b_summary_res = await get_b2b_summary(user={"company_id": TEST_CID})
+        niki_in_summary = next((c for c in b2b_summary_res.get("clients", []) if c.get("id") == "CLIENT-NIKI-001"), None)
 
-        run_test(125, "K.DATA MANAGE PRECISION", "Data Manage shows accurate real-time inventory",
-                 True)
+        run_test(122, "K.DATA MANAGE PRECISION", "Onboarded client immediately visible in B2B Sales summary with stable client_id",
+                 niki_in_summary is not None and niki_in_summary["full_name"] == "NIKI FABRIC" and niki_in_summary["sol_id"] == "SOL-B2B-999")
+
+        # Test 123: Outward dispatch using onboarded client links canonical client_id and reflects in B2B summary
+        out_niki = await save_outward_entry_logic(
+            OutwardIn(
+                product="SOLAR PANEL 540W",
+                size="Standard",
+                quantity=20.0,
+                unit="Nos",
+                date="2026-10-05",
+                party_type="B2B Client",
+                client_id="CLIENT-NIKI-001",
+                client_name="NIKI FABRIC",
+                status="Dispatched"
+            ),
+            company_id=TEST_CID, user_id="U1", user_name="Admin"
+        )
+        b2b_summary_after_out = await get_b2b_summary(user={"company_id": TEST_CID})
+        niki_after_out = next((c for c in b2b_summary_after_out.get("clients", []) if c.get("id") == "CLIENT-NIKI-001"), None)
+        run_test(123, "K.DATA MANAGE PRECISION", "Outward dispatch links to onboarded client_id and reflects in B2B Sales totals",
+                 out_niki.get("client_id") == "CLIENT-NIKI-001" and niki_after_out is not None and niki_after_out["total_outward"] == 20.0 and niki_after_out["net_quantity"] == 20.0)
+
+        # Test 124: B2B Inward Return links to the same onboarded client_id and updates net balance
+        in_ret = await save_inward_entry_logic(
+            InwardIn(
+                product="SOLAR PANEL 540W",
+                size="Standard",
+                quantity=5.0,
+                unit="Nos",
+                date="2026-10-05",
+                source_type="B2B Return",
+                source_name="NIKI FABRIC",
+                client_id="CLIENT-NIKI-001",
+                client_name="NIKI FABRIC"
+            ),
+            company_id=TEST_CID, user_id="U1", user_name="Admin"
+        )
+        b2b_summary_after_ret = await get_b2b_summary(user={"company_id": TEST_CID})
+        niki_after_ret = next((c for c in b2b_summary_after_ret.get("clients", []) if c.get("id") == "CLIENT-NIKI-001"), None)
+        run_test(124, "K.DATA MANAGE PRECISION", "B2B Return deducts from net quantity (20 - 5 = 15) using same canonical client_id",
+                 niki_after_ret is not None and niki_after_ret["total_return"] == 5.0 and niki_after_ret["net_quantity"] == 15.0)
+
+        # Test 125: Company Isolation: OTHER_CID summary does NOT leak TEST_CID clients, outwards, or returns
+        b2b_summary_other = await get_b2b_summary(user={"company_id": OTHER_CID})
+        other_client_ids = [c.get("id") for c in b2b_summary_other.get("clients", [])]
+        run_test(125, "K.DATA MANAGE PRECISION", "Strict company isolation in B2B source: zero client leakage across tenants",
+                 "CLIENT-NIKI-001" not in other_client_ids and all(c.get("id") == "CLIENT-OTHER-999" for c in b2b_summary_other.get("clients", [])))
+        # Clean up temporary other-company client to preserve empty OTHER_CID state
+        await mock_db.clients.delete_one({"id": "CLIENT-OTHER-999"})
 
         # =========================================================================
         # SECTION L: MANUAL IMPORT ARCHITECTURE (126 - 145)
