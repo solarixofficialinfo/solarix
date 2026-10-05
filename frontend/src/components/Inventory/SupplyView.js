@@ -77,7 +77,7 @@ export default function SupplyView({ globalSearch = "", onChanged }) {
     });
     return {
       totalSuppliers: suppliers.length,
-      totalInwards,
+      totalInwards: totInwards,
       distinctProducts: allProds.size
     };
   }, [suppliers]);
