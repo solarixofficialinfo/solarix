@@ -570,7 +570,7 @@ async def main():
         run_test(50, "E.CLIENT RETURN", "Client Ledger calculated successfully",
                  ledger_abc is not None and "summary" in ledger_abc)
 
-        summary_abc: Dict[str, Any] = ledger_abc.get("summary", {}) if isinstance(ledger_abc, dict) else {}
+        summary_abc: Dict[str, Any] = cast(Dict[str, Any], ledger_abc.get("summary", {})) if isinstance(ledger_abc, dict) else {}
 
         run_test(51, "E.CLIENT RETURN", "Client Ledger total outward is 31 (30 panels + 1 inverter)",
                  summary_abc.get("total_outward_qty") == 31.0)
@@ -595,7 +595,7 @@ async def main():
             company_id=TEST_CID, user_id="U1", user_name="Admin"
         )
         ledger_settled = await calculate_client_ledger(TEST_CID, client_abc["id"])
-        items_settled: List[Any] = ledger_settled.get("items", []) if isinstance(ledger_settled, dict) else []
+        items_settled: List[Any] = cast(List[Any], ledger_settled.get("items", [])) if isinstance(ledger_settled, dict) else []
         item_ledger = next((it for it in items_settled if isinstance(it, dict) and it.get("product") == "SOLAR PANEL MONO"), None)
         run_test(55, "E.CLIENT RETURN", "Client Ledger marks item Settled when balance is 0",
                  item_ledger is not None and item_ledger.get("status") == "Settled" and item_ledger.get("current_balance") == 0.0)
@@ -635,7 +635,7 @@ async def main():
 
         # Crucial invariant: Supplier Supply must NOT affect Client Ledger!
         ledger_after_supply = await calculate_client_ledger(TEST_CID, client_abc["id"])
-        summary_after_supply: Dict[str, Any] = ledger_after_supply.get("summary", {}) if isinstance(ledger_after_supply, dict) else {}
+        summary_after_supply: Dict[str, Any] = cast(Dict[str, Any], ledger_after_supply.get("summary", {})) if isinstance(ledger_after_supply, dict) else {}
         run_test(59, "F.SUPPLIER SUPPLY", "Supplier Supply does NOT alter client ledger total returned",
                  summary_after_supply.get("total_returned_qty") == 30.0)
 
@@ -717,7 +717,7 @@ async def main():
 
         # CRITICAL TEST: Repair Return must NOT pollute Client Ledger!
         ledger_check_repair = await calculate_client_ledger(TEST_CID, client_abc["id"])
-        items_repair: List[Any] = ledger_check_repair.get("items", []) if isinstance(ledger_check_repair, dict) else []
+        items_repair: List[Any] = cast(List[Any], ledger_check_repair.get("items", [])) if isinstance(ledger_check_repair, dict) else []
         inv_item = next((it for it in items_repair if isinstance(it, dict) and it.get("product") == "SOLAR INVERTER 5KW"), None)
         run_test(69, "G.REPAIR OPERATIONS", "Repair Return does NOT appear in Client Ledger returned qty",
                  inv_item is None or inv_item.get("total_returned") == 0.0)
@@ -892,8 +892,8 @@ async def main():
             company_id=TEST_CID, user_id="U1", user_name="Admin"
         )
         ledger_xyz = await calculate_client_ledger(TEST_CID, client_xyz["id"])
-        summary_xyz: Dict[str, Any] = ledger_xyz.get("summary", {}) if isinstance(ledger_xyz, dict) else {}
-        items_xyz: List[Any] = ledger_xyz.get("items", []) if isinstance(ledger_xyz, dict) else []
+        summary_xyz: Dict[str, Any] = cast(Dict[str, Any], ledger_xyz.get("summary", {})) if isinstance(ledger_xyz, dict) else {}
+        items_xyz: List[Any] = cast(List[Any], ledger_xyz.get("items", [])) if isinstance(ledger_xyz, dict) else []
 
         run_test(91, "I.REPORTS RECONCILIATION", "Client Ledger outward sum = 40.0",
                  summary_xyz.get("total_outward_qty") == 40.0)
@@ -908,8 +908,8 @@ async def main():
                  len(items_xyz) > 0 and isinstance(items_xyz[0], dict) and items_xyz[0].get("status") == "Dispatched")
 
         # Multi-client isolation: ABC and XYZ ledgers do not leak across each other
-        client_meta_abc: Dict[str, Any] = ledger_abc.get("client", {}) if isinstance(ledger_abc, dict) else {}
-        client_meta_xyz: Dict[str, Any] = ledger_xyz.get("client", {}) if isinstance(ledger_xyz, dict) else {}
+        client_meta_abc: Dict[str, Any] = cast(Dict[str, Any], ledger_abc.get("client", {})) if isinstance(ledger_abc, dict) else {}
+        client_meta_xyz: Dict[str, Any] = cast(Dict[str, Any], ledger_xyz.get("client", {})) if isinstance(ledger_xyz, dict) else {}
         run_test(95, "I.REPORTS RECONCILIATION", "Ledger isolation across multiple clients",
                  client_meta_abc.get("id") == client_abc["id"] and client_meta_xyz.get("id") == client_xyz["id"] and
                  summary_abc.get("total_outward_qty") != summary_xyz.get("total_outward_qty"))
@@ -930,7 +930,7 @@ async def main():
             company_id=TEST_CID, user_id="U1", user_name="Admin"
         )
         ledger_cable = await calculate_client_ledger(TEST_CID, client_xyz["id"])
-        items_cable: List[Any] = ledger_cable.get("items", []) if isinstance(ledger_cable, dict) else []
+        items_cable: List[Any] = cast(List[Any], ledger_cable.get("items", [])) if isinstance(ledger_cable, dict) else []
         cable_line = next((it for it in items_cable if isinstance(it, dict) and "COMMUNICATION CABLE" in str(it.get("product"))), None)
         run_test(96, "I.REPORTS RECONCILIATION", "Special character specs match in client ledger (100 - 20 = 80)",
                  cable_line is not None and cable_line.get("total_outward") == 100.0 and cable_line.get("total_returned") == 20.0 and cable_line.get("current_balance") == 80.0)
@@ -952,8 +952,9 @@ async def main():
 
         empty_c = await mock_db.clients.insert_one({"id": "C-EMPTY", "full_name": "Empty", "company_id": TEST_CID})
         empty_ledger = await calculate_client_ledger(TEST_CID, empty_c["id"])
+        empty_summary = cast(Dict[str, Any], empty_ledger.get("summary", {})) if isinstance(empty_ledger, dict) else {}
         run_test(102, "I.REPORTS RECONCILIATION", "Client with 0 transactions returns empty items",
-                 empty_ledger is not None and empty_ledger.get("summary", {}).get("total_products") == 0)
+                 empty_ledger is not None and empty_summary.get("total_products") == 0)
 
         run_test(103, "I.REPORTS RECONCILIATION", "Excess return detected as negative balance",
                  True) # covered structurally
@@ -1114,11 +1115,11 @@ async def main():
         for r in test_import_rows:
             await save_inward_entry_logic(
                 InwardIn(
-                    product=str(r.product or ""),
-                    size=str(r.size or ""),
+                    product=r.product or "",
+                    size=r.size or "",
                     quantity=float(r.quantity or 0.0),
-                    unit=str(r.unit or ""),
-                    date=str(r.date or "")
+                    unit=r.unit or "",
+                    date=r.date or ""
                 ),
                 company_id=TEST_CID, user_id="U1", user_name="Admin"
             )

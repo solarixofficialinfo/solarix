@@ -15206,7 +15206,7 @@ async def list_assignable_users(user=Depends(get_current_user)):
 
 
 # ---------- Client Inventory Ledger Logic ----------
-async def calculate_client_ledger(company_id: str, client_id: str):
+async def calculate_client_ledger(company_id: str, client_id: str) -> Optional[Dict[str, Any]]:
     client = await db.clients.find_one({"id": client_id, "company_id": company_id}, {"_id": 0})
     if not client:
         return None
