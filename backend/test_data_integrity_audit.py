@@ -1025,7 +1025,7 @@ async def main():
         run_test(121, "K.DATA MANAGE PRECISION", "Alphanumeric challan format intact across views",
                  True)
 
-        # Test 122: Onboarding a new B2B client into canonical db.clients
+        # Test 122: Directly creating a B2B client into canonical db.clients
         client_niki = {
             "id": "CLIENT-NIKI-001",
             "company_id": TEST_CID,
@@ -1050,10 +1050,10 @@ async def main():
         b2b_summary_res = await get_b2b_summary(user={"company_id": TEST_CID})
         niki_in_summary = next((c for c in b2b_summary_res.get("clients", []) if c.get("id") == "CLIENT-NIKI-001"), None)
 
-        run_test(122, "K.DATA MANAGE PRECISION", "Onboarded client immediately visible in B2B Sales summary with stable client_id",
+        run_test(122, "K.DATA MANAGE PRECISION", "Directly added B2B client immediately visible in B2B Client Master with stable client_id",
                  niki_in_summary is not None and niki_in_summary["full_name"] == "NIKI FABRIC" and niki_in_summary["sol_id"] == "SOL-B2B-999")
 
-        # Test 123: Outward dispatch using onboarded client links canonical client_id and reflects in B2B summary
+        # Test 123: Outward dispatch using B2B client links canonical client_id and reflects in B2B summary
         out_niki = await save_outward_entry_logic(
             OutwardIn(
                 product="SOLAR PANEL 540W",
@@ -1070,7 +1070,7 @@ async def main():
         )
         b2b_summary_after_out = await get_b2b_summary(user={"company_id": TEST_CID})
         niki_after_out = next((c for c in b2b_summary_after_out.get("clients", []) if c.get("id") == "CLIENT-NIKI-001"), None)
-        run_test(123, "K.DATA MANAGE PRECISION", "Outward dispatch links to onboarded client_id and reflects in B2B Sales totals",
+        run_test(123, "K.DATA MANAGE PRECISION", "Outward dispatch links to B2B client_id and reflects in B2B Client Master totals",
                  out_niki.get("client_id") == "CLIENT-NIKI-001" and niki_after_out is not None and niki_after_out["total_outward"] == 20.0 and niki_after_out["net_quantity"] == 20.0)
 
         # Test 124: B2B Inward Return links to the same onboarded client_id and updates net balance

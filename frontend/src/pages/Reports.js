@@ -156,7 +156,7 @@ export default function Reports() {
                 ))}
               </div>
             ) : filteredClients.length === 0 ? (
-              <div className="py-20 text-center text-sm text-slate-500">No onboarding clients found.</div>
+              <div className="py-20 text-center text-sm text-slate-500">No clients found.</div>
             ) : (
               <>
                 <div className="overflow-x-auto">

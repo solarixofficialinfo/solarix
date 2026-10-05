@@ -100,10 +100,10 @@ export default function EditTransactionDialog({ transaction, onClose, onSaved, p
                       }
                     }}
                     clients={clients}
-                    placeholder="Type to search onboarding clients or enter custom name…"
+                    placeholder="Type to search clients or enter custom name…"
                     className="mt-1 h-10 text-xs bg-white rounded-md"
                   />
-                  <div className="text-[10px] text-blue-600 mt-1">Select an onboarding client for linked project details, or enter a client name manually.</div>
+                  <div className="text-[10px] text-blue-600 mt-1">Select an existing client for linked details, or enter a client name manually.</div>
                 </div>
               ) : (
                 <Field label="Vendor / Source Name" value={form.source_name} onChange={(v) => upd({ source_name: v })} testid="et-source" />
@@ -125,11 +125,11 @@ export default function EditTransactionDialog({ transaction, onClose, onSaved, p
                     }
                   }}
                   clients={clients}
-                  placeholder="Select onboarding client or enter name…"
+                  placeholder="Select client or enter name…"
                   className="mt-1 h-10 text-xs bg-white rounded-md"
                   testid="et-client"
                 />
-                <div className="text-[10px] text-blue-600 mt-1">Select an onboarding client for linked project details, or enter a client name manually.</div>
+                <div className="text-[10px] text-blue-600 mt-1">Select an existing client for linked details, or enter a client name manually.</div>
               </div>
               <Field label="Project" value={form.project_name} onChange={(v) => upd({ project_name: v })} testid="et-project" />
             </>

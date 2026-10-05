@@ -10616,7 +10616,7 @@ async def delete_outward(entry_id: str, user=Depends(get_current_user)):
 @api_router.get("/inventory/b2b-summary")
 async def get_b2b_summary(user=Depends(require_active_subscription())):
     cid = user["company_id"]
-    clients = await db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "full_name": 1, "mobile": 1, "city": 1, "address": 1, "sol_id": 1}).sort("full_name", 1).to_list(5000)
+    clients = await db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "full_name": 1, "mobile": 1, "alt_mobile": 1, "city": 1, "state": 1, "address": 1, "sol_id": 1}).sort("full_name", 1).to_list(5000)
     outwards = await db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1}).to_list(50000)
     inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "source_name": 1, "source_type": 1, "remarks": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1}).to_list(50000)
 
@@ -10682,7 +10682,10 @@ async def get_b2b_summary(user=Depends(require_active_subscription())):
             "sol_id": c.get("sol_id") or "",
             "full_name": c_name,
             "mobile": c.get("mobile") or "—",
+            "alt_mobile": c.get("alt_mobile") or "",
             "city": c.get("city") or "—",
+            "state": c.get("state") or "",
+            "address": c.get("address") or "",
             "total_outward": round(tot_out, 2),
             "total_return": round(tot_ret, 2),
             "net_quantity": net_qty,

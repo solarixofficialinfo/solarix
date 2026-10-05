@@ -457,7 +457,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
               <div className="text-[10px] text-blue-600 mt-1">
                 {form.party_type === "B2B Client"
                   ? "Select an existing client to record B2B dispatch and track client ledger."
-                  : "Select an onboarding client for linked project details, or enter a client name manually."}
+                  : "Select an existing client for linked project details, or enter a client name manually."}
               </div>
             </div>
             <Field label="Project" value={form.project_name} onChange={(v) => setForm({ ...form, project_name: v })} placeholder="Project label" testid="out-project" />

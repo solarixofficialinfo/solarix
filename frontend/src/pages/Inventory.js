@@ -125,7 +125,7 @@ export default function Inventory() {
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
         <div className="sticky top-2 z-10 w-full overflow-x-auto scrollbar-none touch-pan-x bg-slate-100/95 backdrop-blur rounded-lg p-1 shadow-sm border border-slate-200/60">
           <TabsList className="bg-transparent p-0 h-auto w-max min-w-full flex items-center justify-start flex-nowrap gap-1">
-            <TabsTrigger value="b2b-sales" data-testid="tab-b2b-sales" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Building2 className="w-3.5 h-3.5 mr-1.5" /> B2B Sales</TabsTrigger>
+            <TabsTrigger value="b2b-sales" data-testid="tab-b2b-sales" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Building2 className="w-3.5 h-3.5 mr-1.5" /> B2B Clients</TabsTrigger>
             <TabsTrigger value="supply" data-testid="tab-supply" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Truck className="w-3.5 h-3.5 mr-1.5" /> Supply</TabsTrigger>
             <TabsTrigger value="repair" data-testid="tab-repair" className="shrink-0 whitespace-nowrap data-[state=active]:text-blue-700 data-[state=active]:font-semibold"><Wrench className="w-3.5 h-3.5 mr-1.5" /> Repair</TabsTrigger>
             <div className="h-4 w-px bg-slate-300 mx-1 shrink-0" />

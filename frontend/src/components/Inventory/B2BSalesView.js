@@ -1,21 +1,45 @@
 import React, { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import api, { formatApiError } from "@/lib/api";
+import { invalidateAllClientQueries } from "@/lib/queryKeys";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Users, Plus, Search, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Eye, Calendar, Layers, ShieldCheck, AlertCircle } from "lucide-react";
+import { Users, Plus, Search, ArrowUpFromLine, ArrowDownToLine, RefreshCw, Eye, Pencil, Building2 } from "lucide-react";
 import { toast } from "sonner";
 
 export default function B2BSalesView({ globalSearch = "", onChanged }) {
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [selectedClient, setSelectedClient] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+
+  // Add Client Dialog State
+  const [addClientOpen, setAddClientOpen] = useState(false);
+  const [newClient, setNewClient] = useState({
+    full_name: "",
+    mobile: "",
+    alt_mobile: "",
+    city: "",
+    state: "",
+    address: ""
+  });
+  const [savingClient, setSavingClient] = useState(false);
+
+  // Edit Client Dialog State
+  const [editClientOpen, setEditClientOpen] = useState(false);
+  const [editingClient, setEditingClient] = useState(null);
+  const [editFormData, setEditFormData] = useState({
+    full_name: "",
+    mobile: "",
+    alt_mobile: "",
+    city: "",
+    state: "",
+    address: ""
+  });
+  const [updatingClient, setUpdatingClient] = useState(false);
 
   // Query B2B Summary
   const { data, isLoading, refetch, isFetching } = useQuery({
@@ -79,6 +103,91 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
     setHistoryOpen(true);
   };
 
+  const handleOpenAddClient = () => {
+    setNewClient({
+      full_name: "",
+      mobile: "",
+      alt_mobile: "",
+      city: "",
+      state: "",
+      address: ""
+    });
+    setAddClientOpen(true);
+  };
+
+  const handleCreateClient = async (e) => {
+    e.preventDefault();
+    if (!newClient.full_name?.trim() || !newClient.mobile?.trim()) {
+      toast.error("Please provide Client Name and Mobile Number");
+      return;
+    }
+    setSavingClient(true);
+    try {
+      await api.post("/clients", {
+        full_name: newClient.full_name.trim(),
+        mobile: newClient.mobile.trim(),
+        alt_mobile: newClient.alt_mobile?.trim() || "",
+        city: newClient.city?.trim() || "",
+        state: newClient.state?.trim() || "",
+        address: newClient.address?.trim() || "",
+        phase_type: "Three Phase",
+        subsidy_eligible: false,
+        status: "Active"
+      });
+      invalidateAllClientQueries(queryClient);
+      await refetch();
+      setAddClientOpen(false);
+      toast.success(`B2B Client "${newClient.full_name}" added successfully`);
+      if (onChanged) onChanged();
+    } catch (err) {
+      toast.error(formatApiError(err, "Failed to add B2B client"));
+    } finally {
+      setSavingClient(false);
+    }
+  };
+
+  const handleOpenEditClient = (client, e) => {
+    if (e) e.stopPropagation();
+    setEditingClient(client);
+    setEditFormData({
+      full_name: client.full_name || "",
+      mobile: client.mobile === "—" ? "" : client.mobile || "",
+      alt_mobile: client.alt_mobile || "",
+      city: client.city === "—" ? "" : client.city || "",
+      state: client.state || "",
+      address: client.address || ""
+    });
+    setEditClientOpen(true);
+  };
+
+  const handleUpdateClient = async (e) => {
+    e.preventDefault();
+    if (!editFormData.full_name?.trim() || !editFormData.mobile?.trim()) {
+      toast.error("Please provide Client Name and Mobile Number");
+      return;
+    }
+    setUpdatingClient(true);
+    try {
+      await api.put(`/clients/${editingClient.id}`, {
+        full_name: editFormData.full_name.trim(),
+        mobile: editFormData.mobile.trim(),
+        alt_mobile: editFormData.alt_mobile?.trim() || "",
+        city: editFormData.city?.trim() || "",
+        state: editFormData.state?.trim() || "",
+        address: editFormData.address?.trim() || "",
+      });
+      invalidateAllClientQueries(queryClient);
+      await refetch();
+      setEditClientOpen(false);
+      toast.success(`B2B Client "${editFormData.full_name}" updated successfully`);
+      if (onChanged) onChanged();
+    } catch (err) {
+      toast.error(formatApiError(err, "Failed to update B2B client"));
+    } finally {
+      setUpdatingClient(false);
+    }
+  };
+
   return (
     <div className="space-y-5" data-testid="b2b-sales-view">
       {/* Top Banner & Action Bar */}
@@ -86,14 +195,14 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-base font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
-              B2B Sales & Client Master
+              B2B Clients
             </h2>
             <Badge variant="outline" className="text-[11px] font-semibold text-blue-700 bg-blue-50 border-blue-200">
-              Authoritative Ledger
+              Client Master
             </Badge>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Single source of truth tracking outward dispatches, client returns, and real-time net inventory balances.
+            Direct B2B client master: manage clients, track outward dispatches, client returns, and transaction ledger.
           </p>
         </div>
 
@@ -124,12 +233,12 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
           <Button
             type="button"
             size="sm"
-            onClick={() => navigate("/clients/new")}
+            onClick={handleOpenAddClient}
             className="h-9 px-3.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-xl gap-1.5 shadow-2xs shrink-0 font-medium"
-            title="Onboard new B2B client via Onboarding System"
-            data-testid="b2b-onboard-client-btn"
+            title="Add B2B Client directly"
+            data-testid="b2b-add-client-btn"
           >
-            <Plus className="w-3.5 h-3.5" /> Onboard Client
+            <Plus className="w-3.5 h-3.5" /> Add Client
           </Button>
         </div>
       </div>
@@ -138,37 +247,37 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Card className="border-slate-200 shadow-2xs bg-white rounded-xl">
           <CardContent className="p-4">
-            <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
               <span>B2B Clients</span>
               <Users className="w-4 h-4 text-blue-600" />
             </div>
-            <div className="text-2xl font-bold text-slate-900 mt-1 tabular-nums" style={{ fontFamily: "Outfit" }}>
+            <div className="text-2xl font-bold text-slate-900 mt-2" style={{ fontFamily: "Outfit" }}>
               {stats.totalClients}
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">Active client accounts</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">Active directory records</div>
           </CardContent>
         </Card>
 
         <Card className="border-slate-200 shadow-2xs bg-white rounded-xl">
           <CardContent className="p-4">
-            <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-              <span>Total Outward</span>
+            <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
+              <span>Total Dispatched</span>
               <ArrowUpFromLine className="w-4 h-4 text-amber-600" />
             </div>
-            <div className="text-2xl font-bold text-amber-700 mt-1 tabular-nums" style={{ fontFamily: "Outfit" }}>
+            <div className="text-2xl font-bold text-slate-900 mt-2" style={{ fontFamily: "Outfit" }}>
               {stats.totalOutward}
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">Dispatched units</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">Total outward units</div>
           </CardContent>
         </Card>
 
         <Card className="border-slate-200 shadow-2xs bg-white rounded-xl">
           <CardContent className="p-4">
-            <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-              <span>Total Returns</span>
+            <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
+              <span>Total Returned</span>
               <ArrowDownToLine className="w-4 h-4 text-emerald-600" />
             </div>
-            <div className="text-2xl font-bold text-emerald-700 mt-1 tabular-nums" style={{ fontFamily: "Outfit" }}>
+            <div className="text-2xl font-bold text-slate-900 mt-2" style={{ fontFamily: "Outfit" }}>
               {stats.totalReturn}
             </div>
             <div className="text-[11px] text-slate-400 mt-0.5">B2B client returns</div>
@@ -177,25 +286,29 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
 
         <Card className="border-slate-200 shadow-2xs bg-white rounded-xl">
           <CardContent className="p-4">
-            <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-              <span>Net On Site</span>
-              <Layers className="w-4 h-4 text-indigo-600" />
+            <div className="flex items-center justify-between text-xs text-slate-500 font-medium">
+              <span>Net Ledger Balance</span>
+              <Building2 className="w-4 h-4 text-indigo-600" />
             </div>
-            <div className="text-2xl font-bold text-indigo-700 mt-1 tabular-nums" style={{ fontFamily: "Outfit" }}>
+            <div className="text-2xl font-bold text-slate-900 mt-2" style={{ fontFamily: "Outfit" }}>
               {stats.netQuantity}
             </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">Net outward balance</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">Current outstanding units</div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Clients Table */}
+      {/* B2B Clients Table */}
       <Card className="border-slate-200 shadow-2xs bg-white rounded-2xl overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+          <div className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
             <Users className="w-4 h-4 text-slate-500" /> B2B Client Directory ({filteredClients.length})
-          </h3>
-          <span className="text-[11px] text-slate-400">Click any client row to view transaction history</span>
+          </div>
+          {activeSearch && (
+            <span className="text-xs text-slate-400">
+              Matching &ldquo;{activeSearch}&rdquo;
+            </span>
+          )}
         </div>
 
         <div className="overflow-x-auto">
@@ -208,7 +321,7 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
                 <th className="py-3 px-4 text-right">Net Quantity</th>
                 <th className="py-3 px-4 text-center">Tx Count</th>
                 <th className="py-3 px-4 text-center">Last Transaction</th>
-                <th className="py-3 px-4 text-right">Action</th>
+                <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -221,7 +334,7 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
               ) : filteredClients.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-slate-400">
-                    No onboarded B2B clients found. Clients onboarded via the B2B Onboarding system will appear here automatically.
+                    No B2B clients found. Click &ldquo;+ Add Client&rdquo; above to create your first B2B client.
                   </td>
                 </tr>
               ) : (
@@ -259,7 +372,18 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
                     <td className="py-3 px-4 text-center font-mono text-slate-600 text-[11px]">
                       {client.last_transaction}
                     </td>
-                    <td className="py-3 px-4 text-right">
+                    <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => handleOpenEditClient(client, e)}
+                        className="h-7 px-2 text-xs text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg gap-1"
+                        title="Edit B2B Client"
+                        data-testid={`b2b-edit-btn-${client.id}`}
+                      >
+                        <Pencil className="w-3.5 h-3.5" /> Edit
+                      </Button>
                       <Button
                         type="button"
                         variant="ghost"
@@ -281,6 +405,214 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
           </table>
         </div>
       </Card>
+
+      {/* Add Client Dialog */}
+      <Dialog open={addClientOpen} onOpenChange={setAddClientOpen}>
+        <DialogContent className="max-w-lg p-6 rounded-2xl">
+          <form onSubmit={handleCreateClient} className="space-y-4">
+            <DialogHeader className="pb-3 border-b border-slate-100">
+              <DialogTitle className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
+                Add B2B Client
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                Directly add a new B2B client. The client will be immediately available in Outward, Inward Returns, Reports, and Data Management.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs">
+              <div className="md:col-span-2 space-y-1">
+                <label className="font-semibold text-slate-700">Business / Client Name *</label>
+                <Input
+                  required
+                  value={newClient.full_name}
+                  onChange={(e) => setNewClient({ ...newClient, full_name: e.target.value })}
+                  placeholder="e.g. ABC Industries, NIKI FABRIC"
+                  className="h-9 text-xs"
+                  data-testid="b2b-input-name"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Mobile Number *</label>
+                <Input
+                  required
+                  value={newClient.mobile}
+                  onChange={(e) => setNewClient({ ...newClient, mobile: e.target.value })}
+                  placeholder="e.g. 9876543210"
+                  className="h-9 text-xs"
+                  data-testid="b2b-input-mobile"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Alternate Phone / Person</label>
+                <Input
+                  value={newClient.alt_mobile}
+                  onChange={(e) => setNewClient({ ...newClient, alt_mobile: e.target.value })}
+                  placeholder="Contact person or alternate phone"
+                  className="h-9 text-xs"
+                  data-testid="b2b-input-alt-mobile"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">City / District</label>
+                <Input
+                  value={newClient.city}
+                  onChange={(e) => setNewClient({ ...newClient, city: e.target.value })}
+                  placeholder="e.g. Surat, Ahmedabad"
+                  className="h-9 text-xs"
+                  data-testid="b2b-input-city"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">State</label>
+                <Input
+                  value={newClient.state}
+                  onChange={(e) => setNewClient({ ...newClient, state: e.target.value })}
+                  placeholder="e.g. Gujarat"
+                  className="h-9 text-xs"
+                  data-testid="b2b-input-state"
+                />
+              </div>
+
+              <div className="md:col-span-2 space-y-1">
+                <label className="font-semibold text-slate-700">Address / Plant Location</label>
+                <Input
+                  value={newClient.address}
+                  onChange={(e) => setNewClient({ ...newClient, address: e.target.value })}
+                  placeholder="Factory, warehouse, or office address"
+                  className="h-9 text-xs"
+                  data-testid="b2b-input-address"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setAddClientOpen(false)}
+                className="rounded-xl text-xs"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={savingClient}
+                className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs"
+                data-testid="b2b-save-client-btn"
+              >
+                {savingClient ? "Saving..." : "Save Client"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Client Dialog */}
+      <Dialog open={editClientOpen} onOpenChange={setEditClientOpen}>
+        <DialogContent className="max-w-lg p-6 rounded-2xl">
+          <form onSubmit={handleUpdateClient} className="space-y-4">
+            <DialogHeader className="pb-3 border-b border-slate-100">
+              <DialogTitle className="text-lg font-bold text-slate-900" style={{ fontFamily: "Outfit" }}>
+                Edit B2B Client
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                Update client profile, contact number, and location details.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs">
+              <div className="md:col-span-2 space-y-1">
+                <label className="font-semibold text-slate-700">Business / Client Name *</label>
+                <Input
+                  required
+                  value={editFormData.full_name}
+                  onChange={(e) => setEditFormData({ ...editFormData, full_name: e.target.value })}
+                  className="h-9 text-xs"
+                  data-testid="b2b-edit-name"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Mobile Number *</label>
+                <Input
+                  required
+                  value={editFormData.mobile}
+                  onChange={(e) => setEditFormData({ ...editFormData, mobile: e.target.value })}
+                  className="h-9 text-xs"
+                  data-testid="b2b-edit-mobile"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Alternate Phone / Person</label>
+                <Input
+                  value={editFormData.alt_mobile}
+                  onChange={(e) => setEditFormData({ ...editFormData, alt_mobile: e.target.value })}
+                  className="h-9 text-xs"
+                  data-testid="b2b-edit-alt-mobile"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">City / District</label>
+                <Input
+                  value={editFormData.city}
+                  onChange={(e) => setEditFormData({ ...editFormData, city: e.target.value })}
+                  className="h-9 text-xs"
+                  data-testid="b2b-edit-city"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">State</label>
+                <Input
+                  value={editFormData.state}
+                  onChange={(e) => setEditFormData({ ...editFormData, state: e.target.value })}
+                  className="h-9 text-xs"
+                  data-testid="b2b-edit-state"
+                />
+              </div>
+
+              <div className="md:col-span-2 space-y-1">
+                <label className="font-semibold text-slate-700">Address / Plant Location</label>
+                <Input
+                  value={editFormData.address}
+                  onChange={(e) => setEditFormData({ ...editFormData, address: e.target.value })}
+                  className="h-9 text-xs"
+                  data-testid="b2b-edit-address"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setEditClientOpen(false)}
+                className="rounded-xl text-xs"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={updatingClient}
+                className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs"
+                data-testid="b2b-update-client-btn"
+              >
+                {updatingClient ? "Updating..." : "Update Client"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* Client Transaction History Dialog */}
       <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
