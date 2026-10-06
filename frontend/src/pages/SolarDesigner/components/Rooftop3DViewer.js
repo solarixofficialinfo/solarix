@@ -274,6 +274,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     setSelectedPanelIds = null,
     selectedGroupId: propSelectedGroupId = undefined,
     setSelectedGroupId: propSetSelectedGroupId = null,
+    selectedMemberId: propSelectedMemberId = undefined,
+    setSelectedMemberId: propSetSelectedMemberId = null,
+    isMicroAdjustActive = false,
     selectionMode = "row", // 'row' | 'group' | 'custom' | 'structure'
     setSelectionMode = null,
     selectedRowIndex = null,
@@ -332,8 +335,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const [pendingPoint, setPendingPoint] = useState(null); // first click for member/brace
   const pendingPointRef = useRef(null);
   const [selectedNodeId, setSelectedNodeId] = useState(null);
-  const [selectedMemberId, setSelectedMemberId] = useState(null);
-  const [selectedGroupId, setSelectedGroupId] = useState(null);
+  const [internalSelectedMemberId, setInternalSelectedMemberId] = useState(null);
+  const selectedMemberId = propSelectedMemberId !== undefined ? propSelectedMemberId : internalSelectedMemberId;
+  const setSelectedMemberId = propSetSelectedMemberId || setInternalSelectedMemberId;
+
+  const [internalSelectedGroupId, setInternalSelectedGroupId] = useState(null);
+  const selectedGroupId = propSelectedGroupId !== undefined ? propSelectedGroupId : internalSelectedGroupId;
+  const setSelectedGroupId = propSetSelectedGroupId || setInternalSelectedGroupId;
+
   const [deletedMemberIds, setDeletedMemberIds] = useState(new Set());
   const [viewMode, setViewMode] = useState("visual"); // 'visual' | 'engineering'
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -696,7 +705,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         },
       };
     }
-  }, []);
+  }, [setSelectedMemberId, setSelectedGroupId]);
 
   // ─── Camera Utilities ────────────────────────────────────────────────────────
   const updateCameraPosition = useCallback(() => {
@@ -1933,11 +1942,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             panelMeshMapRef.current[p.id] = panelMesh;
           }
 
-          // 3D Panel Selection Outline Highlight
+          // 3D Panel Selection Outline Highlight with Section Isolation
+          const isSameSection = !selectedSectionId || p.sectionId === selectedSectionId || (!p.sectionId && activeSec?.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon));
           const isSingleSel = activeSelectedPanelId === p.id || (Array.isArray(selectedPanelIds) && selectedPanelIds.includes(p.id));
-          const isRowSel = activeSelectionMode === "row" && activeSelectedRowIndex != null && p.row === activeSelectedRowIndex;
-          const isGroupSel = (activeSelectionMode === "group" || selectionMode === "group") && selectedGroupId != null && (p.groupId === selectedGroupId || p.tableId === selectedGroupId || p.row === selectedGroupId);
-          const isArraySel = activeSelectionMode === "array" && (activeSelectedPanelId != null || activeSelectedRowIndex != null);
+          const isRowSel = isMicroAdjustActive && activeSelectionMode === "row" && isSameSection && activeSelectedRowIndex != null && p.row === activeSelectedRowIndex;
+          const isGroupSel = isMicroAdjustActive && (activeSelectionMode === "group" || selectionMode === "group") && isSameSection && selectedGroupId != null && (p.groupId === selectedGroupId || p.tableId === selectedGroupId || p.row === selectedGroupId);
+          const isArraySel = isMicroAdjustActive && activeSelectionMode === "array" && isSameSection && (activeSelectedPanelId != null || activeSelectedRowIndex != null);
           const isPanelHighlighted = isSingleSel || isRowSel || isGroupSel || isArraySel;
 
           if (isPanelHighlighted) {
@@ -2478,6 +2488,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     showPanels, showStructures, showPosts, showRoof, showBuilding, showObstacles,
     selectedMemberId, selectedGroupId, viewMode, deletedMemberIds, renderNonce,
     activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode,
+    isMicroAdjustActive, selectedPanelIds, selectionMode, activeSec,
   ]);
 
   // ─── Build / Update Interactive Structure Nodes & Members ─────────────────────
@@ -2607,7 +2618,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     setDeletedMemberIds((prev) => new Set([...prev, selectedMemberId]));
     setSelectedMemberId(null);
     setSelectedGroupId(null);
-  }, [selectedMemberId, onStructureMembersChange]);
+  }, [selectedMemberId, onStructureMembersChange, setSelectedMemberId, setSelectedGroupId]);
 
   // Keyboard navigation & deletion shortcuts (Esc = deselect, Del/Backspace = remove selected)
   useEffect(() => {

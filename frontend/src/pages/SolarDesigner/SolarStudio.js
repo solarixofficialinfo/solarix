@@ -1242,6 +1242,17 @@ export default function SolarStudio() {
         const secPoly = sec.polygon;
         if (!secPoly || secPoly.length < 3) return;
 
+        // Section isolation: If a different section is being specifically updated, preserve this section's panels
+        const existingSecPanels = (designData.panels || []).filter(
+          (p) => p.sectionId === sec.id || (!p.sectionId && sIdx === 0)
+        );
+        if (customOverrides.targetSectionId && customOverrides.targetSectionId !== sec.id) {
+          if (existingSecPanels.length > 0) {
+            allPanels.push(...existingSecPanels);
+            return;
+          }
+        }
+
         const secAzimuth = Number(sec.azimuth ?? designData.azimuth_angle ?? 180);
         const secSetback = Number(sec.setback_m ?? sec.setback ?? setback);
         const secRowGap = Number(sec.row_spacing_m ?? sec.rowSpacing ?? rowGap);
@@ -2470,8 +2481,8 @@ export default function SolarStudio() {
                 onClick={() => {
                   setShowMicroAdjust((prev) => {
                     const next = !prev;
-                    if (next) {
-                      setSelectionMode(null); // Show mode selection first
+                    if (next && (!selectionMode || selectionMode === "custom")) {
+                      setSelectionMode("row");
                     }
                     return next;
                   });
@@ -2510,59 +2521,57 @@ export default function SolarStudio() {
       )}
 
       {/* ──────────────────────────────────────────────────────────────────────────
-          2C. FIXED MICRO CONTROL BAR (PANEL / ROW / ARRAY SELECTION & MICRO-MOVE)
-      ────────────────────────────────────────────────────────────────────────── */}
-      {showMicroAdjust && designData.panels && designData.panels.length > 0 && (
-        <LayoutMicroAdjuster
-          variant="fixed-bar"
-          panels={designData.panels}
-          setPanels={handleSetPanels}
-          roofPolygon={designData.roof_polygon}
-          activeSection={activeSection}
-          roofSections={effectiveSections}
-          setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
-          obstacles={designData.obstacles}
-          walkways={designData.walkways}
-          panelSpecs={{
-            length_m: designData.panel_dimensions?.length_m || 2.278,
-            width_m: designData.panel_dimensions?.width_m || 1.134,
-            wattage: designData.panel_wattage || 550,
-          }}
-          orientation={designData.orientation}
-          selectionMode={selectionMode}
-          setSelectionMode={setSelectionMode}
-          selectedPanelId={selectedPanelId}
-          setSelectedPanelId={setSelectedPanelId}
-          selectedPanelIds={selectedPanelIds}
-          setSelectedPanelIds={setSelectedPanelIds}
-          selectedRowIndex={selectedRowIndex}
-          setSelectedRowIndex={setSelectedRowIndex}
-          selectedGroupId={selectedGroupId}
-          setSelectedGroupId={setSelectedGroupId}
-          structureMembers={designData.structure_members || []}
-          setStructureMembers={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
-          structureNodes={designData.structure_nodes || []}
-          setStructureNodes={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
-          selectedMemberId={selectedMemberId}
-          setSelectedMemberId={setSelectedMemberId}
-          autoLayoutBaselinePanels={autoLayoutBaselinePanels}
-          hasManualAdjustments={hasManualAdjustments}
-          setHasManualAdjustments={setHasManualAdjustments}
-          snapEnabled={snapEnabled}
-          setSnapEnabled={setSnapEnabled}
-          setActiveTool={setActiveTool}
-          onClose={() => setShowMicroAdjust(false)}
-          recommendedCapacity={autoLayoutBaselinePanels?.length || designData.panel_count || 0}
-          onAddManualPanel={handleIncreasePanelCount}
-        />
-      )}
-
-      {/* ──────────────────────────────────────────────────────────────────────────
           3. MAIN WORKSPACE (MAP DOMINANT ~80% + RIGHT INFO PANEL ~20%)
       ────────────────────────────────────────────────────────────────────────── */}
       <div className={`grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-2.5 flex-1 min-h-0 ${isFullscreen ? "h-full" : ""}`}>
         {/* CENTER / DOMINANT WORKSPACE (9 cols on xl = 75% width, 8 cols on lg = ~67%) */}
         <div className="xl:col-span-9 lg:col-span-8 flex flex-col relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl min-h-[580px] h-full">
+          {/* FLOATING MICRO ADJUST CONTROL PANEL POPOVER */}
+          {showMicroAdjust && designData.panels && designData.panels.length > 0 && (
+            <div className="absolute top-4 right-4 z-30 pointer-events-auto max-h-[calc(100%-2rem)] overflow-y-auto">
+              <LayoutMicroAdjuster
+                panels={designData.panels}
+                setPanels={handleSetPanels}
+                roofPolygon={designData.roof_polygon}
+                activeSection={activeSection}
+                roofSections={effectiveSections}
+                setbackMeters={Number(designData.roof?.setback_m || designData.setback_m || 0.5)}
+                obstacles={designData.obstacles}
+                walkways={designData.walkways}
+                panelSpecs={{
+                  length_m: designData.panel_dimensions?.length_m || 2.278,
+                  width_m: designData.panel_dimensions?.width_m || 1.134,
+                  wattage: designData.panel_wattage || 550,
+                }}
+                orientation={designData.orientation}
+                selectionMode={selectionMode}
+                setSelectionMode={setSelectionMode}
+                selectedPanelId={selectedPanelId}
+                setSelectedPanelId={setSelectedPanelId}
+                selectedPanelIds={selectedPanelIds}
+                setSelectedPanelIds={setSelectedPanelIds}
+                selectedRowIndex={selectedRowIndex}
+                setSelectedRowIndex={setSelectedRowIndex}
+                selectedGroupId={selectedGroupId}
+                setSelectedGroupId={setSelectedGroupId}
+                structureMembers={designData.structure_members || []}
+                setStructureMembers={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
+                structureNodes={designData.structure_nodes || []}
+                setStructureNodes={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
+                selectedMemberId={selectedMemberId}
+                setSelectedMemberId={setSelectedMemberId}
+                autoLayoutBaselinePanels={autoLayoutBaselinePanels}
+                hasManualAdjustments={hasManualAdjustments}
+                setHasManualAdjustments={setHasManualAdjustments}
+                snapEnabled={snapEnabled}
+                setSnapEnabled={setSnapEnabled}
+                setActiveTool={setActiveTool}
+                onClose={() => setShowMicroAdjust(false)}
+                recommendedCapacity={autoLayoutBaselinePanels?.length || designData.panel_count || 0}
+                onAddManualPanel={handleIncreasePanelCount}
+              />
+            </div>
+          )}
           <div className="flex flex-row flex-1 min-h-0 w-full h-full relative overflow-hidden">
             {/* FIXED SECTION CONTROL DRAWER (Left fixed side panel) */}
             {openSection && (
@@ -3984,6 +3993,9 @@ export default function SolarStudio() {
                 }>
                   <Rooftop3DViewer
                     ref={viewer3dRef}
+                    isMicroAdjustActive={showMicroAdjust}
+                    selectedMemberId={selectedMemberId}
+                    setSelectedMemberId={setSelectedMemberId}
                     roofPolygon={designData.roof_polygon}
                     roof={designData.roof}
                     roofSections={effectiveSections}
@@ -4109,6 +4121,9 @@ export default function SolarStudio() {
                   }>
                     <Rooftop3DViewer
                       ref={viewer3dRef}
+                      isMicroAdjustActive={showMicroAdjust}
+                      selectedMemberId={selectedMemberId}
+                      setSelectedMemberId={setSelectedMemberId}
                       roofPolygon={designData.roof_polygon}
                       roof={designData.roof}
                       roofSections={effectiveSections}

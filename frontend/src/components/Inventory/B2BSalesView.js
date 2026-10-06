@@ -14,10 +14,23 @@ import { ProductAutocompleteInput, getStandardizedUnitOptions } from "@/componen
 import { TrendingUp, Plus, Search, RefreshCw, ShoppingCart, Users, Package, Calendar, FileText } from "lucide-react";
 import { toast } from "sonner";
 import dayjs from "dayjs";
+import B2BClientsView from "@/components/Inventory/B2BClientsView";
 
 export default function B2BSalesView({ globalSearch = "", onChanged }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
+  const [b2bTab, setB2bTab] = useState("sales"); // "sales" | "clients"
+
+  // Quick Add Client Modal State (accessible directly from New B2B Sale)
+  const [quickAddClientOpen, setQuickAddClientOpen] = useState(false);
+  const [quickClientForm, setQuickClientForm] = useState({
+    full_name: "",
+    mobile: "",
+    city: "",
+    state: "",
+    address: ""
+  });
+  const [savingQuickClient, setSavingQuickClient] = useState(false);
 
   // New B2B Sale Modal State
   const [newSaleOpen, setNewSaleOpen] = useState(false);
@@ -176,8 +189,101 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
     }
   };
 
+  const handleCreateQuickClient = async (e) => {
+    e.preventDefault();
+    if (!quickClientForm.full_name?.trim() || !quickClientForm.mobile?.trim()) {
+      toast.error("Please provide Client Name and Mobile Number");
+      return;
+    }
+    setSavingQuickClient(true);
+    try {
+      const res = await api.post("/clients", {
+        full_name: quickClientForm.full_name.trim(),
+        mobile: quickClientForm.mobile.trim(),
+        city: quickClientForm.city?.trim() || "",
+        state: quickClientForm.state?.trim() || "",
+        address: quickClientForm.address?.trim() || "",
+        phase_type: "Three Phase",
+        subsidy_eligible: false,
+        status: "Active"
+      });
+      invalidateAllClientQueries(queryClient);
+      const createdClient = res.data;
+      const createdId = createdClient?.id || createdClient?.client?.id;
+      const createdName = quickClientForm.full_name.trim();
+
+      setSaleForm((prev) => ({
+        ...prev,
+        client_id: createdId || prev.client_id,
+        client_name: createdName
+      }));
+
+      setQuickAddClientOpen(false);
+      setQuickClientForm({ full_name: "", mobile: "", city: "", state: "", address: "" });
+      toast.success(`B2B Client "${createdName}" added successfully and selected`);
+      if (onChanged) onChanged();
+    } catch (err) {
+      toast.error(formatApiError(err, "Failed to create client"));
+    } finally {
+      setSavingQuickClient(false);
+    }
+  };
+
   return (
-    <div className="space-y-5" data-testid="b2b-sales-view">
+    <div className="space-y-4" data-testid="b2b-module-container">
+      {/* Sub-Navigation Switcher: Sales vs Clients & Ledger */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-2.5 rounded-2xl border border-slate-200/80 shadow-2xs">
+        <div className="flex items-center gap-1.5 bg-slate-100/90 p-1 rounded-xl border border-slate-200/60">
+          <button
+            type="button"
+            onClick={() => setB2bTab("sales")}
+            data-testid="b2b-subtab-sales"
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              b2bTab === "sales"
+                ? "bg-white text-slate-900 shadow-2xs border border-slate-200/50"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <ShoppingCart className="w-3.5 h-3.5 text-amber-600" />
+            <span>B2B Sales</span>
+            <span className="text-[10px] bg-slate-100 text-slate-700 px-1.5 py-0.2 rounded-full font-mono border border-slate-200/40">
+              {sales.length}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setB2bTab("clients")}
+            data-testid="b2b-subtab-clients"
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              b2bTab === "clients"
+                ? "bg-white text-slate-900 shadow-2xs border border-slate-200/50"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            <Users className="w-3.5 h-3.5 text-blue-600" />
+            <span>Clients &amp; Ledger</span>
+          </button>
+        </div>
+
+        <div className="text-xs text-slate-500 hidden sm:flex items-center gap-2 pr-2">
+          {b2bTab === "sales" ? (
+            <span className="flex items-center gap-1.5 text-slate-600 font-medium">
+              <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
+              Direct B2B Sales &amp; Outward Dispatches
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-slate-600 font-medium">
+              <span className="w-2 h-2 rounded-full bg-blue-500 inline-block" />
+              B2B Client Directory &amp; Transaction Ledger
+            </span>
+          )}
+        </div>
+      </div>
+
+      {b2bTab === "clients" ? (
+        <B2BClientsView globalSearch={globalSearch} onChanged={onChanged} />
+      ) : (
+        <div className="space-y-5" data-testid="b2b-sales-view">
       {/* Top Banner & Action Bar */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs">
         <div>
@@ -385,7 +491,17 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs">
               {/* Select Client */}
               <div className="md:col-span-2 space-y-1">
-                <label className="font-semibold text-slate-700">B2B Client *</label>
+                <div className="flex items-center justify-between">
+                  <label className="font-semibold text-slate-700">B2B Client *</label>
+                  <button
+                    type="button"
+                    onClick={() => setQuickAddClientOpen(true)}
+                    className="text-[11px] text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 hover:underline"
+                    data-testid="quick-add-client-btn"
+                  >
+                    <Plus className="w-3 h-3" /> Add New Client
+                  </button>
+                </div>
                 <Select value={saleForm.client_id} onValueChange={handleSelectClient}>
                   <SelectTrigger className="h-9 text-xs" data-testid="sale-client-select">
                     <SelectValue placeholder="Select existing B2B client..." />
@@ -537,6 +653,105 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Quick Add Client Dialog */}
+      <Dialog open={quickAddClientOpen} onOpenChange={setQuickAddClientOpen}>
+        <DialogContent className="max-w-md p-6 rounded-2xl" data-testid="quick-add-client-dialog">
+          <form onSubmit={handleCreateQuickClient} className="space-y-4">
+            <DialogHeader className="pb-3 border-b border-slate-100">
+              <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2" style={{ fontFamily: "Outfit" }}>
+                <Users className="w-4 h-4 text-blue-600" /> Add New B2B Client
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                Directly register a new B2B client. The client will be immediately selected for this sale and saved to the Client Master.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3 text-xs">
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Client / Company Name *</label>
+                <Input
+                  required
+                  value={quickClientForm.full_name}
+                  onChange={(e) => setQuickClientForm({ ...quickClientForm, full_name: e.target.value })}
+                  placeholder="e.g. Apex Solar Distributors"
+                  className="h-9 text-xs font-medium"
+                  data-testid="quick-client-name"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Mobile Number *</label>
+                <Input
+                  required
+                  value={quickClientForm.mobile}
+                  onChange={(e) => setQuickClientForm({ ...quickClientForm, mobile: e.target.value })}
+                  placeholder="e.g. 9876543210"
+                  className="h-9 text-xs font-mono"
+                  data-testid="quick-client-mobile"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700">City</label>
+                  <Input
+                    value={quickClientForm.city}
+                    onChange={(e) => setQuickClientForm({ ...quickClientForm, city: e.target.value })}
+                    placeholder="e.g. Mumbai"
+                    className="h-9 text-xs"
+                    data-testid="quick-client-city"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-semibold text-slate-700">State</label>
+                  <Input
+                    value={quickClientForm.state}
+                    onChange={(e) => setQuickClientForm({ ...quickClientForm, state: e.target.value })}
+                    placeholder="e.g. Maharashtra"
+                    className="h-9 text-xs"
+                    data-testid="quick-client-state"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-slate-700">Address</label>
+                <Input
+                  value={quickClientForm.address}
+                  onChange={(e) => setQuickClientForm({ ...quickClientForm, address: e.target.value })}
+                  placeholder="Optional business premises address"
+                  className="h-9 text-xs"
+                  data-testid="quick-client-address"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setQuickAddClientOpen(false)}
+                className="h-9 px-4 text-xs rounded-xl"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={savingQuickClient}
+                className="h-9 px-4 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-xs"
+                data-testid="save-quick-client-btn"
+              >
+                {savingQuickClient ? "Saving..." : "Save & Select Client"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+        </div>
+      )}
     </div>
   );
 }
