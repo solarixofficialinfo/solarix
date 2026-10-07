@@ -2475,29 +2475,27 @@ export default function SolarStudio() {
 
           <div className="flex items-center gap-2">
             {/* Explicit Micro Adjust Launcher */}
-            {designData.panels && designData.panels.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  setShowMicroAdjust((prev) => {
-                    const next = !prev;
-                    if (next && (!selectionMode || selectionMode === "custom")) {
-                      setSelectionMode("row");
-                    }
-                    return next;
-                  });
-                }}
-                className={`h-7 px-3 text-xs rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
-                  showMicroAdjust
-                    ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300 border-amber-400"
-                    : "text-amber-400 hover:text-white bg-amber-950/40 hover:bg-amber-900/60 border-amber-600/40"
-                }`}
-                title="Toggle manual panel/row/array micro-adjustment controls"
-              >
-                <Move className="w-3.5 h-3.5" />
-                <span>Micro Adjust</span>
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setShowMicroAdjust((prev) => {
+                  const next = !prev;
+                  if (next && (!selectionMode || selectionMode === "custom")) {
+                    setSelectionMode("row");
+                  }
+                  return next;
+                });
+              }}
+              className={`h-7 px-3 text-xs rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
+                showMicroAdjust
+                  ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300 border-amber-400"
+                  : "text-amber-400 hover:text-white bg-amber-950/40 hover:bg-amber-900/60 border-amber-600/40"
+              }`}
+              title="Toggle manual panel/row/array micro-adjustment controls"
+            >
+              <Move className="w-3.5 h-3.5" />
+              <span>Micro Adjust</span>
+            </button>
 
             {/* Active Tool Guidance & Done Button */}
             {activeTool !== "select" && (
@@ -2527,7 +2525,7 @@ export default function SolarStudio() {
         {/* CENTER / DOMINANT WORKSPACE (9 cols on xl = 75% width, 8 cols on lg = ~67%) */}
         <div className="xl:col-span-9 lg:col-span-8 flex flex-col relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl min-h-[580px] h-full">
           {/* FLOATING MICRO ADJUST CONTROL PANEL POPOVER */}
-          {showMicroAdjust && designData.panels && designData.panels.length > 0 && (
+          {showMicroAdjust && (
             <div className="absolute top-4 right-4 z-30 pointer-events-auto max-h-[calc(100%-2rem)] overflow-y-auto">
               <LayoutMicroAdjuster
                 panels={designData.panels}
@@ -3980,6 +3978,26 @@ export default function SolarStudio() {
                 title="Open Manual 3D Roof Creator"
               >
                 <Box className="w-3.5 h-3.5" /> Manual Roof
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMicroAdjust((prev) => {
+                    const next = !prev;
+                    if (next && (!selectionMode || selectionMode === "custom")) {
+                      setSelectionMode("row");
+                    }
+                    return next;
+                  });
+                }}
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition flex items-center gap-1.5 shadow-sm border cursor-pointer ${
+                  showMicroAdjust
+                    ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300 border-amber-400"
+                    : "bg-amber-950/70 hover:bg-amber-900 border-amber-600/50 text-amber-300"
+                }`}
+                title="Toggle manual panel/row/group/structure micro-adjustment controls"
+              >
+                <Sliders className="w-3.5 h-3.5" /> Micro Adjust
               </button>
             </div>
 
