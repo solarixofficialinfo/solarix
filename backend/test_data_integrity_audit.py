@@ -1704,6 +1704,91 @@ async def main():
                  "Zero-transaction B2B Customer is cleanly deleted from b2b_customers master",
                  del_arvind.get("ok") is True and arvind_after_del is None)
 
+        # =========================================================================
+        # SECTION U: FOUR CORE BUSINESS FLOWS & RECONCILIATION
+        # Flow 1: Supply Receipt (Inward +10)
+        # Flow 2: B2B Sale (Outward -3)
+        # Flow 3: B2B Return (Inward +2)
+        # Flow 4: Supplier Return (Outward -1)
+        # Net balance: 0 + 10 - 3 + 2 - 1 = 8.0
+        # =========================================================================
+        FLOW_PROD = "WAREE 540W MONO"
+        FLOW_VENDOR_ID = "VND-FLOW-01"
+        FLOW_VENDOR_NAME = "WAREE OEM SUPPLIER"
+        FLOW_B2B_CUST_ID = "B2B-CUST-FLOW-01"
+        FLOW_B2B_CUST_NAME = "ABC MANUFACTURING CORP"
+        
+        await mock_db.vendors.insert_one({"id": FLOW_VENDOR_ID, "company_id": TEST_CID, "name": FLOW_VENDOR_NAME, "status": "Active"})
+        await mock_db.b2b_customers.insert_one({"id": FLOW_B2B_CUST_ID, "company_id": TEST_CID, "name": FLOW_B2B_CUST_NAME, "status": "Active"})
+        p_flow = await ensure_product(TEST_CID, FLOW_PROD, size="540W", unit="Nos")
+
+        # Flow 1: Supply Entry (+10 Inward)
+        await save_inward_entry_logic(
+            InwardIn(
+                product=FLOW_PROD, size="540W", quantity=10.0, unit="Nos",
+                source_type="Supplier", source_name=FLOW_VENDOR_NAME, vendor_id=FLOW_VENDOR_ID,
+                bill_number="INV-WAR-001", date="2026-10-07"
+            ),
+            company_id=TEST_CID, user_id="U1", user_name="Admin"
+        )
+
+        # Flow 2: B2B Sale (-3 Outward)
+        await save_outward_entry_logic(
+            OutwardIn(
+                product=FLOW_PROD, size="540W", quantity=3.0, unit="Nos",
+                party_type="B2B Customer", client_id=FLOW_B2B_CUST_ID, client_name=FLOW_B2B_CUST_NAME,
+                bill_number="B2B-SAL-001", date="2026-10-07"
+            ),
+            company_id=TEST_CID, user_id="U1", user_name="Admin"
+        )
+
+        # Flow 3: B2B Return (+2 Inward)
+        await save_inward_entry_logic(
+            InwardIn(
+                product=FLOW_PROD, size="540W", quantity=2.0, unit="Nos",
+                source_type="B2B Return", source_name=FLOW_B2B_CUST_NAME, client_id=FLOW_B2B_CUST_ID, client_name=FLOW_B2B_CUST_NAME,
+                bill_number="RET-B2B-001", date="2026-10-07"
+            ),
+            company_id=TEST_CID, user_id="U1", user_name="Admin"
+        )
+
+        # Flow 4: Supplier Return (-1 Outward)
+        await save_outward_entry_logic(
+            OutwardIn(
+                product=FLOW_PROD, size="540W", quantity=1.0, unit="Nos",
+                party_type="Supplier Return", vendor_id=FLOW_VENDOR_ID, client_name=FLOW_VENDOR_NAME,
+                reference_number="RET-SUP-001", date="2026-10-07"
+            ),
+            company_id=TEST_CID, user_id="U1", user_name="Admin"
+        )
+
+        invalidate_products_cache(TEST_CID)
+        items_flow, _, _, _ = await _compute_inventory_balances(TEST_CID)
+        flow_doc = next((p for p in items_flow if p["id"] == p_flow["id"]), None)
+
+        # Reconcile Stock
+        run_test(221, "U.FOUR CORE FLOWS & RECONCILIATION",
+                 "Stock computation across 4 flows: 0 + 10 (Supply) - 3 (B2B Sale) + 2 (B2B Return) - 1 (Supplier Return) = 8",
+                 flow_doc is not None and flow_doc.get("balance") == 8.0)
+
+        # Reconcile B2B Ledger
+        b2b_hist = await get_b2b_client_history(FLOW_B2B_CUST_ID, user=admin_user)
+        b2b_txs = b2b_hist.get("transactions", [])
+        b2b_sale_tx = next((t for t in b2b_txs if t.get("type") == "OUTWARD"), None)
+        b2b_ret_tx = next((t for t in b2b_txs if t.get("type") == "INWARD_RETURN"), None)
+        run_test(222, "U.FOUR CORE FLOWS & RECONCILIATION",
+                 "B2B Ledger contains both B2B Sale (3.0 Outward) and B2B Return (2.0 Inward)",
+                 len(b2b_txs) == 2 and b2b_sale_tx is not None and b2b_sale_tx.get("quantity") == 3.0 and b2b_ret_tx is not None and b2b_ret_tx.get("quantity") == 2.0)
+
+        # Reconcile Supplier Ledger
+        supp_hist = await get_supplier_history(FLOW_VENDOR_ID, user=admin_user)
+        supp_txs = supp_hist.get("transactions", [])
+        supp_in_tx = next((t for t in supp_txs if t.get("type") == "INWARD"), None)
+        supp_ret_tx = next((t for t in supp_txs if t.get("type") == "OUTWARD_RETURN"), None)
+        run_test(223, "U.FOUR CORE FLOWS & RECONCILIATION",
+                 "Supplier Ledger contains both Supply Receipt (10.0 Inward) and Supplier Return (1.0 Outward)",
+                 len(supp_txs) == 2 and supp_in_tx is not None and supp_in_tx.get("quantity") == 10.0 and supp_ret_tx is not None and supp_ret_tx.get("quantity") == 1.0)
+
     finally:
         server.db = orig_db
 

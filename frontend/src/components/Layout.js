@@ -175,7 +175,7 @@ export default function Layout({ children }) {
     if (isExternalUser) return false;
     if (isSuperOrAdmin) return true;
     if (user?.permissions?.[page]?.view === true) return true;
-    if ((page === "b2b" || page === "supply") && (user?.permissions?.["data_management"]?.view === true || user?.permissions?.["inventory"]?.view === true)) return true;
+    if ((page === "b2b_supply" || page === "b2b" || page === "supply") && (user?.permissions?.["data_management"]?.view === true || user?.permissions?.["inventory"]?.view === true)) return true;
     return false;
   };
   const ALWAYS_VISIBLE = new Set(["complaints", "whatsapp"]);
@@ -207,8 +207,7 @@ export default function Layout({ children }) {
     {
       title: "OPERATIONS",
       items: [
-        { to: "/b2b", label: "B2B", icon: Building2, key: "b2b" },
-        { to: "/supply", label: "Supply", icon: Truck, key: "supply" },
+        { to: "/b2b-supply", label: "B2B & Supply", icon: Building2, key: "b2b_supply" },
         { to: "/receivables", label: "Receivables & Collection", icon: DollarSign, key: "receivables" },
         { to: "/inventory", label: "Data Management", icon: Boxes, key: "data_management" },
         { to: "/material", label: "Material Requests", icon: PackageSearch, key: "material_requests" },

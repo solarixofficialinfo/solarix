@@ -26,8 +26,7 @@ const ActivityLog = lazy(() => import("@/pages/ActivityLog"));
 const ProjectExecution = lazy(() => import("@/pages/ProjectExecution"));
 const TaskPortal = lazy(() => import("@/pages/TaskPortal"));
 const Inventory = lazy(() => import("@/pages/Inventory"));
-const B2B = lazy(() => import("@/pages/B2B"));
-const Supply = lazy(() => import("@/pages/Supply"));
+const B2BSupply = lazy(() => import("@/pages/B2BSupply"));
 const DocumentTemplates = lazy(() => import("@/pages/DocumentTemplates"));
 const Quotation = lazy(() => import("@/pages/Quotation"));
 const TaxInvoice = lazy(() => import("@/pages/TaxInvoice"));
@@ -157,7 +156,7 @@ function PermissionRoute({ page, children }) {
   // 2. Check Role / User Permissions
   const checkPerm = (p) => {
     if (user?.permissions?.[p]?.view === true) return true;
-    if ((p === "b2b" || p === "supply") && (user?.permissions?.["data_management"]?.view === true || user?.permissions?.["inventory"]?.view === true)) return true;
+    if ((p === "b2b_supply" || p === "b2b" || p === "supply") && (user?.permissions?.["data_management"]?.view === true || user?.permissions?.["inventory"]?.view === true)) return true;
     return false;
   };
   const hasPerm = isSuperOrAdmin || page === "complaints" || page === "whatsapp" || checkPerm(page);
@@ -171,8 +170,9 @@ function PermissionRoute({ page, children }) {
       { key: "project_execution", path: "/projects" },
       { key: "task_portal", path: "/tasks" },
       { key: "whatsapp", path: "/whatsapp" },
-      { key: "b2b", path: "/b2b" },
-      { key: "supply", path: "/supply" },
+      { key: "b2b_supply", path: "/b2b-supply" },
+      { key: "b2b", path: "/b2b-supply" },
+      { key: "supply", path: "/b2b-supply" },
       { key: "receivables", path: "/receivables" },
       { key: "data_management", path: "/inventory" },
       { key: "material_requests", path: "/material" },
@@ -337,9 +337,10 @@ function App() {
             <Route path="/projects" element={<Protected><PermissionRoute page="project_execution"><MainTabShell activeTab="projects" /></PermissionRoute></Protected>} />
             <Route path="/tasks" element={<Protected><PermissionRoute page="task_portal"><MainTabShell activeTab="tasks" /></PermissionRoute></Protected>} />
             <Route path="/inventory" element={<Protected><PermissionRoute page="data_management"><MainTabShell activeTab="inventory" /></PermissionRoute></Protected>} />
-            <Route path="/b2b" element={<Protected><PermissionRoute page="b2b"><B2B /></PermissionRoute></Protected>} />
-            <Route path="/b2b-sales" element={<Navigate to="/b2b" replace />} />
-            <Route path="/supply" element={<Protected><PermissionRoute page="supply"><Supply /></PermissionRoute></Protected>} />
+            <Route path="/b2b-supply" element={<Protected><PermissionRoute page="b2b_supply"><B2BSupply /></PermissionRoute></Protected>} />
+            <Route path="/b2b" element={<Protected><PermissionRoute page="b2b_supply"><B2BSupply /></PermissionRoute></Protected>} />
+            <Route path="/b2b-sales" element={<Navigate to="/b2b-supply?section=b2b&tab=sales" replace />} />
+            <Route path="/supply" element={<Protected><PermissionRoute page="b2b_supply"><B2BSupply /></PermissionRoute></Protected>} />
             <Route path="/templates" element={<Protected><PermissionRoute page="documents"><DocumentTemplates /></PermissionRoute></Protected>} />
             <Route path="/document-templates" element={<Protected><PermissionRoute page="documents"><DocumentTemplates /></PermissionRoute></Protected>} />
             <Route path="/documents" element={<Protected><PermissionRoute page="documents"><DocumentTemplates /></PermissionRoute></Protected>} />

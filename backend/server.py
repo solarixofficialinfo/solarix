@@ -10969,6 +10969,7 @@ async def get_supply_summary(user=Depends(require_active_subscription())):
         "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
     }, {"_id": 0}).sort("name", 1).to_list(1000)
     inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(50000)
+    outwards = await db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {"_id": 0}).to_list(50000)
     
     suppliers_data = []
     for v in vendors:
@@ -10979,9 +10980,18 @@ async def get_supply_summary(user=Depends(require_active_subscription())):
             if (i.get("vendor_id") == v_id or (i.get("source_name") or "").strip().lower() == v_name)
             and (i.get("source_type") in ("Supplier", "Vendor / Supplier", "Vendor", "Supply") or not i.get("source_type"))
         ]
+        v_outwards = [
+            o for o in outwards
+            if (o.get("vendor_id") == v_id or ((o.get("party_type") in ("Supplier Return", "Vendor Return") or "supplier return" in str(o.get("remarks") or "").lower()) and (o.get("client_name") or "").strip().lower() == v_name))
+        ]
+        
+        tot_in = sum(float(i.get("quantity") or 0.0) for i in v_inwards)
+        tot_ret = sum(float(o.get("quantity") or 0.0) for o in v_outwards)
+        net_qty = round(tot_in - tot_ret, 2)
         
         products = sorted(list({i.get("product") for i in v_inwards if i.get("product")}))
-        dates = [(i.get("date") or i.get("created_at") or "")[:10] for i in v_inwards if (i.get("date") or i.get("created_at"))]
+        dates = [(i.get("date") or i.get("created_at") or "")[:10] for i in v_inwards if (i.get("date") or i.get("created_at"))] + \
+                [(o.get("date") or o.get("created_at") or "")[:10] for o in v_outwards if (o.get("date") or o.get("created_at"))]
         last_date = max(dates) if dates else "—"
         
         suppliers_data.append({
@@ -10992,6 +11002,10 @@ async def get_supply_summary(user=Depends(require_active_subscription())):
             "email": v.get("email") or "",
             "category": v.get("category") or "Supplier",
             "inward_count": len(v_inwards),
+            "return_count": len(v_outwards),
+            "total_supplied": round(tot_in, 2),
+            "total_returned": round(tot_ret, 2),
+            "net_quantity": net_qty,
             "last_supply": last_date,
             "products_supplied": products,
             "products_count": len(products)
@@ -11006,18 +11020,25 @@ async def get_supplier_history(vendor_id: str, user=Depends(require_active_subsc
         raise HTTPException(status_code=404, detail="Vendor not found")
     v_name = (vendor.get("name") or "").strip().lower()
     inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(50000)
+    outwards = await db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {"_id": 0}).to_list(50000)
+    
     v_inwards = [
         i for i in inwards 
         if (i.get("vendor_id") == vendor_id or (i.get("source_name") or "").strip().lower() == v_name)
         and (i.get("source_type") in ("Supplier", "Vendor / Supplier", "Vendor", "Supply") or not i.get("source_type"))
     ]
-    v_inwards.sort(key=lambda x: (x.get("date") or x.get("created_at") or "")[:10], reverse=True)
+    v_outwards = [
+        o for o in outwards
+        if (o.get("vendor_id") == vendor_id or ((o.get("party_type") in ("Supplier Return", "Vendor Return") or "supplier return" in str(o.get("remarks") or "").lower()) and (o.get("client_name") or "").strip().lower() == v_name))
+    ]
     
-    supplies_mapped = []
+    txs = []
     for s in v_inwards:
         bill_no = s.get("bill_number") or s.get("reference_number") or s.get("challan_no") or "—"
-        supplies_mapped.append({
+        txs.append({
             "id": s.get("id"),
+            "type": "INWARD",
+            "label": "Supply (Inward)",
             "date": (s.get("date") or s.get("created_at") or "")[:10],
             "bill_number": bill_no,
             "reference_number": bill_no,
@@ -11029,7 +11050,25 @@ async def get_supplier_history(vendor_id: str, user=Depends(require_active_subsc
             "status": "Received",
             "remarks": s.get("remarks") or ""
         })
-    return {"vendor": vendor, "supplies": supplies_mapped}
+    for o in v_outwards:
+        bill_no = o.get("bill_number") or o.get("outward_challan_no") or o.get("reference_number") or "—"
+        txs.append({
+            "id": o.get("id"),
+            "type": "OUTWARD_RETURN",
+            "label": "Supplier Return (Outward)",
+            "date": (o.get("date") or o.get("created_at") or "")[:10],
+            "bill_number": bill_no,
+            "reference_number": bill_no,
+            "product": o.get("product") or "",
+            "size": o.get("size") or "",
+            "quantity": float(o.get("quantity") or 0.0),
+            "unit": o.get("unit") or "Nos",
+            "amount": float(o.get("total_amount") or o.get("amount") or 0.0),
+            "status": "Dispatched",
+            "remarks": o.get("remarks") or ""
+        })
+    txs.sort(key=lambda x: x["date"], reverse=True)
+    return {"vendor": vendor, "supplies": [t for t in txs if t["type"] == "INWARD"], "transactions": txs}
 
 @api_router.get("/inventory/repair-summary")
 async def get_repair_summary(user=Depends(require_active_subscription())):
