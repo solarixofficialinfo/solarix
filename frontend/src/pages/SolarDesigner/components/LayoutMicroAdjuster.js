@@ -162,12 +162,23 @@ export default function LayoutMicroAdjuster({
 
   // Selected group data
   const currentGroupId =
-    selectedGroupId != null ? selectedGroupId : currentSelectedRow ? currentSelectedRow.rowIndex : 0;
+    selectedGroupId != null
+      ? selectedGroupId
+      : currentSelectedRow
+      ? currentSelectedRow.rowIndex
+      : rows.length > 0
+      ? rows[0].rowIndex
+      : 0;
+
   const currentGroupPanels = useMemo(() => {
-    return effectivePanels.filter((p) =>
-      p.groupId != null ? p.groupId === currentGroupId : p.row === currentGroupId
-    );
-  }, [effectivePanels, currentGroupId]);
+    return effectivePanels.filter((p) => {
+      if (p.groupId != null && p.groupId === currentGroupId) return true;
+      if (p.tableId != null && p.tableId === currentGroupId) return true;
+      if (p.row != null && p.row === currentGroupId) return true;
+      const targetRow = rows.find((r) => r.rowIndex === currentGroupId);
+      return targetRow ? targetRow.panels.some((rp) => rp.id === p.id) : false;
+    });
+  }, [effectivePanels, currentGroupId, rows]);
 
   // Multi-selected panels list
   const activeSelectedIds = useMemo(() => {
@@ -362,22 +373,58 @@ export default function LayoutMicroAdjuster({
 
       // MODE 4: STRUCTURE ADJUST
       if (selectionMode === "structure") {
-        if (selectedMemberId && structureMembers.length > 0 && setStructureMembers) {
-          setStructureMembers((prev) =>
-            prev.map((m) =>
-              m.id === selectedMemberId
-                ? {
-                    ...m,
-                    x: Math.round(((m.x || 0) + finalDx) * 1000) / 1000,
-                    y: Math.round(((m.y || 0) + finalDy) * 1000) / 1000,
-                  }
-                : m
-            )
-          );
-          setHasManualAdjustments?.(true);
-          toast.success("Shifted selected structure member");
+        if (selectedMemberId) {
+          const manualMember = structureMembers.find((m) => m.id === selectedMemberId);
+          if (manualMember && setStructureNodes && structureNodes.length > 0) {
+            const affectedNodeIds = new Set([manualMember.nodeAId, manualMember.nodeBId].filter(Boolean));
+            setStructureNodes((prev) =>
+              prev.map((n) =>
+                affectedNodeIds.has(n.id)
+                  ? {
+                      ...n,
+                      x: Math.round(((n.x || 0) + finalDx) * 1000) / 1000,
+                      y: Math.round(((n.y || 0) + finalDy) * 1000) / 1000,
+                    }
+                  : n
+              )
+            );
+            if (setStructureMembers) {
+              setStructureMembers((prev) =>
+                prev.map((m) =>
+                  m.id === selectedMemberId
+                    ? {
+                        ...m,
+                        x: Math.round(((m.x || 0) + finalDx) * 1000) / 1000,
+                        y: Math.round(((m.y || 0) + finalDy) * 1000) / 1000,
+                      }
+                    : m
+                )
+              );
+            }
+            setHasManualAdjustments?.(true);
+            toast.success("Shifted structure member");
+            return;
+          } else if (setStructureMembers && structureMembers.length > 0) {
+            setStructureMembers((prev) =>
+              prev.map((m) =>
+                m.id === selectedMemberId
+                  ? {
+                      ...m,
+                      x: Math.round(((m.x || 0) + finalDx) * 1000) / 1000,
+                      y: Math.round(((m.y || 0) + finalDy) * 1000) / 1000,
+                    }
+                  : m
+              )
+            );
+            setHasManualAdjustments?.(true);
+            toast.success("Shifted structure member");
+            return;
+          } else {
+            toast.info("Auto-generated rails & posts move synchronously with panels in Row/Group mode.");
+            return;
+          }
         } else {
-          toast.info("Please click a structure support post or rail to select it.");
+          toast.info("Please click a structure support post, member, or rail in the 3D scene.");
         }
       }
     },
@@ -393,8 +440,10 @@ export default function LayoutMicroAdjuster({
       obstacles,
       walkways,
       structureMembers,
+      structureNodes,
       setPanels,
       setStructureMembers,
+      setStructureNodes,
       setHasManualAdjustments,
       selectedMemberId,
     ]
@@ -528,13 +577,15 @@ export default function LayoutMicroAdjuster({
   // ROTATE SELECTION
   // ─────────────────────────────────────────────────────────────────────────────
   const handleRotateSelection = (deg = 15) => {
-    if (activeSelectedIds.length === 0 && !currentSelectedRow) {
-      toast.info("Please select panel(s) or a row first.");
+    if (activeSelectedIds.length === 0 && !currentSelectedRow && currentGroupPanels.length === 0) {
+      toast.info("Please select panel(s), a row, or a group first.");
       return;
     }
     const targetSet = new Set(
       selectionMode === "row" && currentSelectedRow
         ? currentSelectedRow.panels.map((p) => p.id)
+        : selectionMode === "group" && currentGroupPanels.length > 0
+        ? currentGroupPanels.map((p) => p.id)
         : activeSelectedIds
     );
 
@@ -669,8 +720,14 @@ export default function LayoutMicroAdjuster({
             type="button"
             onClick={() => {
               setSelectionMode?.("row");
-              if (rows.length > 0 && selectedRowIndex == null) {
-                setSelectedRowIndex?.(rows[0].rowIndex);
+              setSelectedPanelIds?.([]);
+              setSelectedPanelId?.(null);
+              setSelectedMemberId?.(null);
+              if (rows.length > 0) {
+                const targetRow = (selectedRowIndex != null && rows.some((r) => r.rowIndex === selectedRowIndex))
+                  ? selectedRowIndex
+                  : rows[0].rowIndex;
+                setSelectedRowIndex?.(targetRow);
               }
             }}
             className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 ${
@@ -687,7 +744,13 @@ export default function LayoutMicroAdjuster({
             type="button"
             onClick={() => {
               setSelectionMode?.("group");
-              setSelectedGroupId?.(currentSelectedRow ? currentSelectedRow.rowIndex : 0);
+              setSelectedPanelIds?.([]);
+              setSelectedPanelId?.(null);
+              setSelectedMemberId?.(null);
+              const targetGrp = (selectedGroupId != null)
+                ? selectedGroupId
+                : (currentSelectedRow ? currentSelectedRow.rowIndex : (rows.length > 0 ? rows[0].rowIndex : 0));
+              setSelectedGroupId?.(targetGrp);
             }}
             className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 ${
               activeMode === "group"
@@ -701,7 +764,12 @@ export default function LayoutMicroAdjuster({
 
           <button
             type="button"
-            onClick={() => setSelectionMode?.("panel")}
+            onClick={() => {
+              setSelectionMode?.("panel");
+              setSelectedRowIndex?.(null);
+              setSelectedGroupId?.(null);
+              setSelectedMemberId?.(null);
+            }}
             className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 ${
               isPanelMode
                 ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300"
@@ -714,7 +782,13 @@ export default function LayoutMicroAdjuster({
 
           <button
             type="button"
-            onClick={() => setSelectionMode?.("structure")}
+            onClick={() => {
+              setSelectionMode?.("structure");
+              setSelectedPanelIds?.([]);
+              setSelectedPanelId?.(null);
+              setSelectedRowIndex?.(null);
+              setSelectedGroupId?.(null);
+            }}
             className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 ${
               activeMode === "structure"
                 ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300"

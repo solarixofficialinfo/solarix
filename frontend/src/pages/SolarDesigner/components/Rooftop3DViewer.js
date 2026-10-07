@@ -19,6 +19,7 @@ import {
   getPolygonArea,
 } from "../utils/geoCalculations";
 import { validatePanelPlacement } from "../utils/layoutEngine";
+import { getPanelsByRow } from "./LayoutMicroAdjuster";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Engineering-Grade 3D Rooftop WebGL Visualizer
@@ -417,36 +418,49 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       return;
     }
 
-    // MODE 1: Single Panel Move
-    if (activeSelectionMode === "panel") {
-      if (!activeSelectedPanelId || !currentSelectedPanel) {
+    // MODE 1: Panel Move (Single or Multi-Selected)
+    if (activeSelectionMode === "panel" || activeSelectionMode === "custom") {
+      const targetIds = (Array.isArray(selectedPanelIds) && selectedPanelIds.length > 0)
+        ? selectedPanelIds
+        : (activeSelectedPanelId ? [activeSelectedPanelId] : []);
+
+      if (targetIds.length === 0) {
         toast.info("Click a solar panel in 3D to select and move it.");
         return;
       }
 
-      const candidate = {
-        ...currentSelectedPanel,
-        x: Math.round((currentSelectedPanel.x + finalDx) * 1000) / 1000,
-        y: Math.round((currentSelectedPanel.y + finalDy) * 1000) / 1000,
-      };
+      const targetIdSet = new Set(targetIds);
+      const movingPanels = panels.filter((p) => targetIdSet.has(p.id));
+      const staticPanels = panels.filter((p) => !targetIdSet.has(p.id));
 
-      const validation = validatePanelPlacement({
-        candidate,
-        roofPolygon: targetPolygon,
-        setbackMeters,
-        panels,
-        obstacles,
-        walkways,
-        excludePanelId: currentSelectedPanel.id,
-      });
+      const candidatePanels = movingPanels.map((p) => ({
+        ...p,
+        x: Math.round((p.x + finalDx) * 1000) / 1000,
+        y: Math.round((p.y + finalDy) * 1000) / 1000,
+        isManual: true,
+      }));
 
-      if (!validation.valid) {
-        toast.warning(validation.reason || "Movement blocked: panel would leave usable roof area.");
-        return;
+      for (const cand of candidatePanels) {
+        const validation = validatePanelPlacement({
+          candidate: cand,
+          roofPolygon: targetPolygon,
+          setbackMeters,
+          panels: staticPanels,
+          obstacles,
+          walkways,
+          excludePanelId: cand.id,
+          isManual: true,
+        });
+
+        if (!validation.valid) {
+          toast.warning(validation.reason || "Movement blocked: panel would leave usable roof area.");
+          return;
+        }
       }
 
+      const candMap = new Map(candidatePanels.map((p) => [p.id, p]));
       setPanels((prev) =>
-        prev.map((p) => (p.id === currentSelectedPanel.id ? { ...p, x: candidate.x, y: candidate.y } : p))
+        prev.map((p) => (candMap.has(p.id) ? { ...p, x: candMap.get(p.id).x, y: candMap.get(p.id).y, isManual: true } : p))
       );
       setHasManualAdjustments?.(true);
       return;
@@ -459,7 +473,14 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         return;
       }
 
-      const rowPanels = panels.filter((p) => p.row === activeSelectedRowIndex);
+      const secPanels = activeSec
+        ? (panels || []).filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
+        : (panels || []);
+      const effectiveSecPanels = secPanels.length > 0 ? secPanels : (panels || []);
+      const secRows = getPanelsByRow(effectiveSecPanels);
+      const activeRowObj = secRows.find((r) => r.rowIndex === activeSelectedRowIndex);
+      const rowPanels = activeRowObj ? activeRowObj.panels : panels.filter((p) => p.row === activeSelectedRowIndex);
+
       if (rowPanels.length === 0) return;
 
       const rowPanelIds = new Set(rowPanels.map((p) => p.id));
@@ -467,6 +488,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         ...p,
         x: Math.round((p.x + finalDx) * 1000) / 1000,
         y: Math.round((p.y + finalDy) * 1000) / 1000,
+        isManual: true,
       }));
 
       const otherPanels = panels.filter((p) => !rowPanelIds.has(p.id));
@@ -480,6 +502,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           obstacles,
           walkways,
           excludePanelId: cand.id,
+          isManual: true,
         });
 
         if (!validation.valid) {
@@ -493,7 +516,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         prev.map((p) => {
           if (candMap.has(p.id)) {
             const u = candMap.get(p.id);
-            return { ...p, x: u.x, y: u.y };
+            return { ...p, x: u.x, y: u.y, isManual: true };
           }
           return p;
         })
@@ -502,12 +525,75 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       return;
     }
 
-    // MODE 3: Entire Array Move
+    // MODE 3: Group Move
+    if (activeSelectionMode === "group") {
+      const secPanels = activeSec
+        ? (panels || []).filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
+        : (panels || []);
+      const effectiveSecPanels = secPanels.length > 0 ? secPanels : (panels || []);
+      const secRows = getPanelsByRow(effectiveSecPanels);
+      const activeGroupObj = selectedGroupId != null ? secRows.find((r) => r.rowIndex === selectedGroupId) : null;
+      const groupPanels = effectiveSecPanels.filter((p) => {
+        if (p.groupId != null && p.groupId === selectedGroupId) return true;
+        if (p.tableId != null && p.tableId === selectedGroupId) return true;
+        if (p.row != null && p.row === selectedGroupId) return true;
+        return activeGroupObj ? activeGroupObj.panels.some((rp) => rp.id === p.id) : false;
+      });
+
+      if (groupPanels.length === 0) {
+        toast.info("Please select a group to move.");
+        return;
+      }
+
+      const groupPanelIds = new Set(groupPanels.map((p) => p.id));
+      const candidatePanels = groupPanels.map((p) => ({
+        ...p,
+        x: Math.round((p.x + finalDx) * 1000) / 1000,
+        y: Math.round((p.y + finalDy) * 1000) / 1000,
+        isManual: true,
+      }));
+
+      const otherPanels = panels.filter((p) => !groupPanelIds.has(p.id));
+
+      for (const cand of candidatePanels) {
+        const validation = validatePanelPlacement({
+          candidate: cand,
+          roofPolygon: targetPolygon,
+          setbackMeters,
+          panels: otherPanels,
+          obstacles,
+          walkways,
+          excludePanelId: cand.id,
+          isManual: true,
+        });
+
+        if (!validation.valid) {
+          toast.warning(validation.reason || "Group movement blocked: would push panels outside usable roof area.");
+          return;
+        }
+      }
+
+      const candMap = new Map(candidatePanels.map((p) => [p.id, p]));
+      setPanels((prev) =>
+        prev.map((p) => {
+          if (candMap.has(p.id)) {
+            const u = candMap.get(p.id);
+            return { ...p, x: u.x, y: u.y, isManual: true };
+          }
+          return p;
+        })
+      );
+      setHasManualAdjustments?.(true);
+      return;
+    }
+
+    // MODE 4: Entire Array Move
     if (activeSelectionMode === "array") {
       const candidatePanels = panels.map((p) => ({
         ...p,
         x: Math.round((p.x + finalDx) * 1000) / 1000,
         y: Math.round((p.y + finalDy) * 1000) / 1000,
+        isManual: true,
       }));
 
       for (const cand of candidatePanels) {
@@ -519,6 +605,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           obstacles,
           walkways,
           excludePanelId: cand.id,
+          isManual: true,
         });
 
         if (!validation.valid) {
@@ -531,7 +618,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       setHasManualAdjustments?.(true);
       return;
     }
-  }, [panels, setPanels, activeSelectedPanelId, activeSelectedRowIndex, activeSelectionMode, activeSec, roofSections, roofPolygon, setbackMeters, obstacles, walkways, setHasManualAdjustments]);
+  }, [panels, setPanels, activeSelectedPanelId, selectedPanelIds, activeSelectedRowIndex, selectedGroupId, activeSelectionMode, activeSec, roofSections, roofPolygon, setbackMeters, obstacles, walkways, setHasManualAdjustments]);
 
   // Delete currently selected panel in 3D
   const handleDeleteSelectedPanel = useCallback(() => {
@@ -1142,7 +1229,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const pIntersects = raycasterRef.current.intersectObjects(panelObjects, false);
           if (pIntersects.length > 0) {
             const hit = pIntersects[0].object;
-            const pId = hit.userData?.panelId;
+            const pId = hit.userData?.panelId || hit.parent?.userData?.panelId;
             if (pId) {
               const isShift = Boolean(e.shiftKey);
               const clickedP = panels.find((item) => item.id === pId);
@@ -1164,12 +1251,36 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                   changeSelectedPanelId(pId);
                 }
               } else if (activeSelectionMode === "row") {
-                if (clickedP && clickedP.row != null) {
+                const secPanels = activeSec
+                  ? (panels || []).filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
+                  : (panels || []);
+                const effectiveSecPanels = secPanels.length > 0 ? secPanels : (panels || []);
+                const secRows = getPanelsByRow(effectiveSecPanels);
+                const matchedRow = secRows.find((r) => r.panels.some((rp) => rp.id === pId));
+                if (matchedRow) {
+                  changeSelectedRowIndex(matchedRow.rowIndex);
+                } else if (clickedP && clickedP.row != null) {
                   changeSelectedRowIndex(clickedP.row);
                 }
               } else if (activeSelectionMode === "group") {
-                if (clickedP && (clickedP.groupId != null || clickedP.tableId != null || clickedP.row != null)) {
-                  setSelectedGroupId?.(clickedP.groupId ?? clickedP.tableId ?? clickedP.row);
+                const secPanels = activeSec
+                  ? (panels || []).filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
+                  : (panels || []);
+                const effectiveSecPanels = secPanels.length > 0 ? secPanels : (panels || []);
+                const secRows = getPanelsByRow(effectiveSecPanels);
+                const matchedRow = secRows.find((r) => r.panels.some((rp) => rp.id === pId));
+                const grpId = clickedP?.groupId ?? clickedP?.tableId ?? (matchedRow ? matchedRow.rowIndex : (clickedP?.row ?? 0));
+                if (setSelectedGroupId) {
+                  setSelectedGroupId(grpId);
+                }
+              } else if (activeSelectionMode === "structure") {
+                // In structure mode, clicking a panel selects its corresponding rail
+                if (clickedP) {
+                  const railCandidates = Object.keys(memberMeshMapRef.current);
+                  const matchedRail = railCandidates.find((k) => k.includes(String(clickedP.row || 0)));
+                  if (matchedRail) {
+                    setSelectedMemberId(matchedRail);
+                  }
                 }
               } else {
                 // Neutral mode: select panel and register row without opening drawers
@@ -1889,6 +2000,16 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           return !sec || sec.solarEnabled !== false;
         });
 
+        const effectiveSecPanels = activeSec
+          ? renderablePanels.filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
+          : renderablePanels;
+        const clusteredSecRows = getPanelsByRow(effectiveSecPanels.length > 0 ? effectiveSecPanels : renderablePanels);
+        const activeRowObj = activeSelectedRowIndex != null ? clusteredSecRows.find((r) => r.rowIndex === activeSelectedRowIndex) : null;
+        const activeRowPanelIdSet = new Set(activeRowObj ? activeRowObj.panels.map((p) => p.id) : []);
+
+        const activeGroupRowObj = selectedGroupId != null ? clusteredSecRows.find((r) => r.rowIndex === selectedGroupId) : null;
+        const activeGroupPanelIdSet = new Set(activeGroupRowObj ? activeGroupRowObj.panels.map((p) => p.id) : []);
+
         renderablePanels.forEach((p) => {
           const pw = Number(p.width || 1.134);
           const pl = Number(p.height || 2.278);
@@ -1944,9 +2065,11 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
           // 3D Panel Selection Outline Highlight with Section Isolation
           const isSameSection = !selectedSectionId || p.sectionId === selectedSectionId || (!p.sectionId && activeSec?.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon));
-          const isSingleSel = activeSelectedPanelId === p.id || (Array.isArray(selectedPanelIds) && selectedPanelIds.includes(p.id));
-          const isRowSel = isMicroAdjustActive && activeSelectionMode === "row" && isSameSection && activeSelectedRowIndex != null && p.row === activeSelectedRowIndex;
-          const isGroupSel = isMicroAdjustActive && (activeSelectionMode === "group" || selectionMode === "group") && isSameSection && selectedGroupId != null && (p.groupId === selectedGroupId || p.tableId === selectedGroupId || p.row === selectedGroupId);
+          const isSingleSel = (activeSelectionMode === "panel" || activeSelectionMode === "custom" || !activeSelectionMode) && (activeSelectedPanelId === p.id || (Array.isArray(selectedPanelIds) && selectedPanelIds.includes(p.id)));
+          const isRowSel = isMicroAdjustActive && activeSelectionMode === "row" && isSameSection && activeSelectedRowIndex != null && (p.row === activeSelectedRowIndex || activeRowPanelIdSet.has(p.id));
+          const isGroupSel = isMicroAdjustActive && (activeSelectionMode === "group" || selectionMode === "group") && isSameSection && (
+            selectedGroupId != null && (p.groupId === selectedGroupId || p.tableId === selectedGroupId || p.row === selectedGroupId || activeGroupPanelIdSet.has(p.id))
+          );
           const isArraySel = isMicroAdjustActive && activeSelectionMode === "array" && isSameSection && (activeSelectedPanelId != null || activeSelectedRowIndex != null);
           const isPanelHighlighted = isSingleSel || isRowSel || isGroupSel || isArraySel;
 
