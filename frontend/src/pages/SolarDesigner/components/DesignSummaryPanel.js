@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import {
   Sun, Zap, Layers, Compass, Save, FileDown, ArrowUpRight, CheckCircle2,
   AlertTriangle, Sparkles, Building2, MapPin, Box, Ruler, Download,
-  FileText, ChevronDown, ChevronUp, Sliders, Info, Edit2, Eye, RefreshCw, Image
+  FileText, ChevronDown, ChevronUp, ChevronRight, ChevronLeft, Sliders, Info, Edit2, Eye, RefreshCw, Image
 } from "lucide-react";
 import dayjs from "dayjs";
 import { calculateBillOfMaterials } from "../utils/layoutEngine";
@@ -32,6 +32,7 @@ export default function DesignSummaryPanel({
   exporting = false,
   autoLayoutBaselinePanels = null,
   recommendedPanels = null,
+  onCollapse = null,
 }) {
   const [showBomModal, setShowBomModal] = useState(false);
   const [showTechSpecs, setShowTechSpecs] = useState(false);
@@ -93,12 +94,24 @@ export default function DesignSummaryPanel({
               Design Gallery ({savedViews.length || 4})
             </span>
           </div>
-          <button
-            onClick={onOpenGallery}
-            className="text-[11px] font-semibold text-blue-400 hover:text-blue-300 transition cursor-pointer"
-          >
-            View All
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onOpenGallery}
+              className="text-[11px] font-semibold text-blue-400 hover:text-blue-300 transition cursor-pointer"
+            >
+              View All
+            </button>
+            {onCollapse && (
+              <button
+                type="button"
+                onClick={onCollapse}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer flex items-center"
+                title="Collapse Side Panel (>)"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* 2x2 Thumbnail Grid */}

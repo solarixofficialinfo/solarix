@@ -13,8 +13,8 @@ import {
   Sun, MapPin, PenTool, Box, Sparkles, Layers, ArrowLeft, ArrowRight,
   Save, FileDown, Plus, Trash2, RotateCw, RotateCcw, RefreshCw, Check, CheckCircle2,
   AlertTriangle, ShieldCheck, Download, Sliders, Ruler, Maximize2, Minimize2,
-  Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, ChevronUp, Eye, Focus,
-  PlusCircle, Undo2, Edit3, X, HelpCircle, Bell, Grid, Layers2, Image as ImageIcon, ChevronRight, Edit2, Zap,
+  Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Eye, Focus,
+  PlusCircle, Undo2, Edit3, X, HelpCircle, Bell, Grid, Layers2, Image as ImageIcon, Edit2, Zap,
   Scissors, Move
 } from "lucide-react";
 import { toast } from "sonner";
@@ -251,6 +251,38 @@ export default function SolarStudio() {
 
   // Active section controls: which floating drawer is open
   const [openSection, setOpenSection] = useState(null); // 'location' | 'roof' | 'obstacles' | 'pv_module' | 'structure' | 'layout' | null
+
+  // Collapsible Workspace Layout state
+  const [isLeftDrawerCollapsed, setIsLeftDrawerCollapsed] = useState(false);
+  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
+  const prevLayoutStateRef = useRef({ rightCollapsed: false, leftDrawerCollapsed: false });
+
+  // Micro Adjust Layout Auto-Collapse & Restore Handler
+  const handleToggleMicroAdjust = useCallback(() => {
+    setShowMicroAdjust((prev) => {
+      const next = !prev;
+      if (next) {
+        // Save current layout state before collapsing
+        prevLayoutStateRef.current = {
+          rightCollapsed: isRightPanelCollapsed,
+          leftDrawerCollapsed: isLeftDrawerCollapsed,
+        };
+        // Auto-collapse side panels to maximize 3D workspace
+        setIsRightPanelCollapsed(true);
+        setIsLeftDrawerCollapsed(true);
+        if (!selectionMode || selectionMode === "custom") {
+          setSelectionMode("row");
+        }
+      } else {
+        // Restore previous layout state when Micro Adjust is closed
+        if (prevLayoutStateRef.current) {
+          setIsRightPanelCollapsed(prevLayoutStateRef.current.rightCollapsed || false);
+          setIsLeftDrawerCollapsed(prevLayoutStateRef.current.leftDrawerCollapsed || false);
+        }
+      }
+      return next;
+    });
+  }, [isRightPanelCollapsed, isLeftDrawerCollapsed, selectionMode]);
 
   const [saving, setSaving] = useState(false);
   const [lastSavedTime, setLastSavedTime] = useState(null);
@@ -2283,10 +2315,11 @@ export default function SolarStudio() {
               <button
                 key={stage.key}
                 onClick={() => {
-                  if (isActive) {
+                  if (isActive && !isLeftDrawerCollapsed) {
                     setOpenSection(null);
                   } else {
                     setOpenSection(stage.key);
+                    setIsLeftDrawerCollapsed(false);
                     setIsSectionSettingsOpen(false);
                     if (stage.key === "roof") {
                       if (!designData.roof_polygon || designData.roof_polygon.length < 3) {
@@ -2474,18 +2507,25 @@ export default function SolarStudio() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Side Panel Toggle in 2D View */}
+            <button
+              type="button"
+              onClick={() => setIsRightPanelCollapsed((prev) => !prev)}
+              className={`h-7 px-2.5 text-xs rounded-xl font-semibold flex items-center gap-1 transition cursor-pointer border ${
+                isRightPanelCollapsed
+                  ? "bg-blue-950/70 hover:bg-blue-900 border-blue-700/60 text-blue-300"
+                  : "bg-slate-800/80 hover:bg-slate-700 border-slate-700 text-slate-400 hover:text-white"
+              }`}
+              title={isRightPanelCollapsed ? "Show Information & Gallery Panel" : "Hide Information & Gallery Panel"}
+            >
+              {isRightPanelCollapsed ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+              <span className="hidden sm:inline">{isRightPanelCollapsed ? "Show Info" : "Hide Info"}</span>
+            </button>
+
             {/* Explicit Micro Adjust Launcher */}
             <button
               type="button"
-              onClick={() => {
-                setShowMicroAdjust((prev) => {
-                  const next = !prev;
-                  if (next && (!selectionMode || selectionMode === "custom")) {
-                    setSelectionMode("row");
-                  }
-                  return next;
-                });
-              }}
+              onClick={handleToggleMicroAdjust}
               className={`h-7 px-3 text-xs rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
                 showMicroAdjust
                   ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300 border-amber-400"
@@ -2521,9 +2561,9 @@ export default function SolarStudio() {
       {/* ──────────────────────────────────────────────────────────────────────────
           3. MAIN WORKSPACE (MAP DOMINANT ~80% + RIGHT INFO PANEL ~20%)
       ────────────────────────────────────────────────────────────────────────── */}
-      <div className={`grid grid-cols-1 xl:grid-cols-12 lg:grid-cols-12 gap-2.5 flex-1 min-h-0 ${isFullscreen ? "h-full" : ""}`}>
-        {/* CENTER / DOMINANT WORKSPACE (9 cols on xl = 75% width, 8 cols on lg = ~67%) */}
-        <div className="xl:col-span-9 lg:col-span-8 flex flex-col relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl min-h-[580px] h-full">
+      <div className={`grid grid-cols-1 ${isRightPanelCollapsed ? "xl:grid-cols-12 lg:grid-cols-12" : "xl:grid-cols-12 lg:grid-cols-12"} gap-2.5 flex-1 min-h-0 ${isFullscreen ? "h-full" : ""}`}>
+        {/* CENTER / DOMINANT WORKSPACE */}
+        <div className={`${isRightPanelCollapsed ? "xl:col-span-12 lg:col-span-12" : "xl:col-span-9 lg:col-span-8"} flex flex-col relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl min-h-[580px] h-full`}>
           {/* FLOATING MICRO ADJUST CONTROL PANEL POPOVER */}
           {showMicroAdjust && (
             <div className="absolute top-4 right-4 z-30 pointer-events-auto max-h-[calc(100%-2rem)] overflow-y-auto">
@@ -2564,7 +2604,7 @@ export default function SolarStudio() {
                 snapEnabled={snapEnabled}
                 setSnapEnabled={setSnapEnabled}
                 setActiveTool={setActiveTool}
-                onClose={() => setShowMicroAdjust(false)}
+                onClose={() => handleToggleMicroAdjust()}
                 recommendedCapacity={autoLayoutBaselinePanels?.length || designData.panel_count || 0}
                 onAddManualPanel={handleIncreasePanelCount}
               />
@@ -2572,7 +2612,7 @@ export default function SolarStudio() {
           )}
           <div className="flex flex-row flex-1 min-h-0 w-full h-full relative overflow-hidden">
             {/* FIXED SECTION CONTROL DRAWER (Left fixed side panel) */}
-            {openSection && (
+            {openSection && !isLeftDrawerCollapsed && (
               <div
                 className="w-88 sm:w-[360px] shrink-0 border-r border-slate-800 bg-slate-900/98 flex flex-col h-full z-20 shadow-2xl text-white animate-in fade-in slide-in-from-left-2 duration-150 overflow-hidden"
                 style={{ pointerEvents: "auto" }}
@@ -2590,12 +2630,24 @@ export default function SolarStudio() {
                       {DESIGN_STAGES.find((s) => s.key === openSection)?.label}
                     </span>
                   </div>
-                  <button
-                    onClick={() => setOpenSection(null)}
-                    className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsLeftDrawerCollapsed(true)}
+                      className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                      title="Collapse Settings Panel (<)"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOpenSection(null)}
+                      className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                      title="Close Settings"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Scrollable Content Body */}
@@ -3321,7 +3373,7 @@ export default function SolarStudio() {
           )}
 
           {/* PERSISTENT CANONICAL SECTION INSPECTOR (Active across 2D, 3D, and Split) */}
-          {!openSection && isSectionSettingsOpen && activeSection && (
+          {!openSection && isSectionSettingsOpen && activeSection && !isLeftDrawerCollapsed && (
             <div
               className="w-88 sm:w-[360px] shrink-0 border-r border-slate-800 bg-slate-900/98 flex flex-col h-full overflow-hidden z-20 shadow-2xl animate-in fade-in slide-in-from-left-2 duration-150"
               style={{ pointerEvents: "auto" }}
@@ -3342,13 +3394,23 @@ export default function SolarStudio() {
                     </div>
                   </div>
                 </div>
-                <button
-                  onClick={() => setIsSectionSettingsOpen(false)}
-                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
-                  title="Close Inspector"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsLeftDrawerCollapsed(true)}
+                    className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                    title="Collapse Inspector (<)"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setIsSectionSettingsOpen(false)}
+                    className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                    title="Close Inspector"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               {/* Quick Section Switcher Bar */}
@@ -3844,6 +3906,20 @@ export default function SolarStudio() {
 
           {/* ── CANVAS WORKING AREA (Takes remaining space, NEVER covered by inspector) ── */}
           <div className="flex-1 relative min-w-0 h-full overflow-hidden">
+            {/* Floating Expand Tab when Left Drawer is Collapsed */}
+            {(Boolean(openSection) || Boolean(isSectionSettingsOpen && activeSection)) && isLeftDrawerCollapsed && (
+              <div className="absolute left-3 top-3 z-30 pointer-events-auto">
+                <button
+                  type="button"
+                  onClick={() => setIsLeftDrawerCollapsed(false)}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-900/95 hover:bg-slate-800 text-slate-200 hover:text-white border border-slate-700/90 shadow-2xl text-xs font-semibold backdrop-blur transition cursor-pointer"
+                  title="Expand Settings Panel (>)"
+                >
+                  <ChevronRight className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>{openSection ? (DESIGN_STAGES.find((s) => s.key === openSection)?.label || "Settings") : (activeSection?.name || "Section Inspector")}</span>
+                </button>
+              </div>
+            )}
             {/* 2D SATELLITE MAP CONTAINER (Kept mounted to preserve state & prevent re-init lag) */}
             <div className={`w-full h-full relative ${activeTab === "2d" ? "block" : "hidden"}`}>
             <LiveSatelliteMap
@@ -3981,15 +4057,20 @@ export default function SolarStudio() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setShowMicroAdjust((prev) => {
-                    const next = !prev;
-                    if (next && (!selectionMode || selectionMode === "custom")) {
-                      setSelectionMode("row");
-                    }
-                    return next;
-                  });
-                }}
+                onClick={() => setIsRightPanelCollapsed((prev) => !prev)}
+                className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition flex items-center gap-1.5 shadow-sm border cursor-pointer ${
+                  isRightPanelCollapsed
+                    ? "bg-blue-950/70 hover:bg-blue-900 border-blue-700/60 text-blue-300"
+                    : "bg-slate-900/80 hover:bg-slate-800 border-slate-700 text-slate-400 hover:text-white"
+                }`}
+                title={isRightPanelCollapsed ? "Show Information & Gallery Panel" : "Hide Information & Gallery Panel"}
+              >
+                {isRightPanelCollapsed ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                <span className="hidden sm:inline">{isRightPanelCollapsed ? "Show Info Panel" : "Hide Info Panel"}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleToggleMicroAdjust}
                 className={`px-2.5 py-1 text-xs font-bold rounded-lg transition flex items-center gap-1.5 shadow-sm border cursor-pointer ${
                   showMicroAdjust
                     ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300 border-amber-400"
@@ -4188,29 +4269,32 @@ export default function SolarStudio() {
         </div>
 
         {/* RIGHT COLUMN: COMPACT DESIGN INFORMATION & GALLERY (3 cols on xl = 25%, 4 cols on lg = 33%) */}
-        <div className="xl:col-span-3 lg:col-span-4 flex flex-col min-h-0 h-full overflow-hidden">
-          <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 scrollbar-thin">
-            <DesignSummaryPanel
-              designData={designData}
-              autoLayoutBaselinePanels={autoLayoutBaselinePanels}
-              savedViews={savedViews}
-              onSelectView={(view) => {
-                setActiveGalleryView(view);
-                setShowGalleryModal(true);
-              }}
-              onOpenGallery={() => setShowGalleryModal(true)}
-              onGenerateViews={handleGenerateViews}
-              onSave={() => handleSaveDesign(false)}
-              onSaveNewVersion={() => handleSaveDesign(true)}
-              onExportPdf={handleExportPdf}
-              onExportDocx={handleExportDocx}
-              onTransferToQuotation={handleTransferToQuotation}
-              onTransferToProposal={handleTransferToProposal}
-              saving={saving}
-              exporting={exporting}
-            />
+        {!isRightPanelCollapsed && (
+          <div className="xl:col-span-3 lg:col-span-4 flex flex-col min-h-0 h-full overflow-hidden">
+            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 scrollbar-thin">
+              <DesignSummaryPanel
+                designData={designData}
+                autoLayoutBaselinePanels={autoLayoutBaselinePanels}
+                savedViews={savedViews}
+                onSelectView={(view) => {
+                  setActiveGalleryView(view);
+                  setShowGalleryModal(true);
+                }}
+                onOpenGallery={() => setShowGalleryModal(true)}
+                onGenerateViews={handleGenerateViews}
+                onSave={() => handleSaveDesign(false)}
+                onSaveNewVersion={() => handleSaveDesign(true)}
+                onExportPdf={handleExportPdf}
+                onExportDocx={handleExportDocx}
+                onTransferToQuotation={handleTransferToQuotation}
+                onTransferToProposal={handleTransferToProposal}
+                saving={saving}
+                exporting={exporting}
+                onCollapse={() => setIsRightPanelCollapsed(true)}
+              />
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* ──────────────────────────────────────────────────────────────────────────
