@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { useInwardList } from "@/hooks/useInventory";
-import { useClientList } from "@/hooks/useClients";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invalidateFrontendProductCache } from "@/lib/productCache";
-import { ProductAutocompleteInput, VendorAutocompleteInput, ClientAutocompleteInput, UNIT_OPTIONS, formatUnit, getStandardizedUnitOptions } from "./_shared";
+import { ProductAutocompleteInput, VendorAutocompleteInput, UNIT_OPTIONS, formatUnit, getStandardizedUnitOptions } from "./_shared";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,7 +23,7 @@ import { usePermission } from "@/lib/permissions";
 import { useAuth } from "@/context/AuthContext";
 import { useEntitlements } from "@/hooks/useEntitlements";
 
-const SOURCE_TYPE_OPTIONS = ["Supplier", "B2B Return", "Repair Return", "Other"];
+const SOURCE_TYPE_OPTIONS = ["Supplier", "Internal / Warehouse", "Repair Return", "Other"];
 
 const INWARD_CARRY_OPTIONS = [
   { key: "date", label: "Date" },
@@ -111,16 +110,11 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
     }
   });
 
-  // Fetch Master Clients List
-  const { data: clientsData } = useClientList();
-
   const vendors = useMemo(() => {
     if (Array.isArray(vendorsData)) return vendorsData;
     if (vendorsData?.vendors && Array.isArray(vendorsData.vendors)) return vendorsData.vendors;
     return [];
   }, [vendorsData]);
-
-  const clients = useMemo(() => (Array.isArray(clientsData) ? clientsData : []), [clientsData]);
 
   // Options for Vendor Dropdown
   const vendorOptions = useMemo(() => {
@@ -132,16 +126,6 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
       raw: v
     }));
   }, [vendors]);
-
-  // Options for Client Dropdown
-  const clientOptions = useMemo(() => {
-    return clients.map((c) => ({
-      label: c.full_name,
-      value: c.full_name,
-      subtext: `Phone: ${c.mobile || "N/A"} · System: ${c.system_kw || "—"} kW`,
-      raw: c
-    }));
-  }, [clients]);
 
   // Auto suggest next challan number
   const suggestNextChallan = async () => {
@@ -227,14 +211,10 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
     submittingRef.current = true;
     setBusy(true);
     try {
-      const isClient = form.source_type === "B2B Return" || form.source_type === "Return From Client" || form.source_type === "Client / Customer";
       const isVendor = form.source_type === "Supplier" || form.source_type === "Vendor / Supplier" || form.source_type === "Supply";
       
-      const matchedClient = isClient ? clients.find((c) => (c.full_name || "").trim().toLowerCase() === (form.source_name || "").trim().toLowerCase()) : null;
       const matchedVendor = isVendor ? vendors.find((v) => (v.name || "").trim().toLowerCase() === (form.source_name || "").trim().toLowerCase()) : null;
-      
-      const vendorId = matchedVendor?.id || form.vendor_id || (!isClient ? form.source_id : "") || "";
-      const clientId = matchedClient?.id || form.client_id || (isClient ? form.source_id : "") || "";
+      const vendorId = matchedVendor?.id || form.vendor_id || form.source_id || "";
 
       const sns = form.serial_number_required
         ? (form.serial_text || "").split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
@@ -248,10 +228,10 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
         bill_number: form.bill_number,
         source_type: form.source_type,
         source_name: form.source_name,
-        source_id: isClient ? clientId : vendorId,
+        source_id: vendorId,
         vendor_id: vendorId,
-        client_id: clientId,
-        client_name: isClient ? (matchedClient?.full_name || form.client_name || form.source_name) : "",
+        client_id: "",
+        client_name: "",
         product: form.product.trim(),
         product_id: form.product_id || "",
         size: (form.size || "").trim(),
@@ -386,7 +366,6 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
   }, [entries, globalSearch]);
 
   const isVendorSource = form.source_type === "Supplier" || form.source_type === "Vendor / Supplier" || form.source_type === "Supply";
-  const isClientSource = form.source_type === "B2B Return" || form.source_type === "Return From Client" || form.source_type === "Client / Customer";
   const isRepairSource = form.source_type === "Repair Return";
 
   return (
@@ -544,7 +523,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                 </div>
                 <div className="md:col-span-2">
                   <Label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
-                    {isVendorSource ? "Supplier *" : isClientSource ? "B2B Client *" : isRepairSource ? "Repair Party *" : "Source Name *"}
+                    {isVendorSource ? "Supplier *" : isRepairSource ? "Repair Party *" : "Source Name *"}
                   </Label>
                   {isVendorSource ? (
                     <VendorAutocompleteInput
@@ -561,23 +540,6 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                       placeholder="Select existing supplier..."
                       className="h-10 text-xs bg-white mt-1 rounded-xl"
                       testid="inw-vendor-input"
-                    />
-                  ) : isClientSource ? (
-                    <ClientAutocompleteInput
-                      value={form.source_name}
-                      onChange={(val, matchedClient) => {
-                        setForm((prev) => ({
-                          ...prev,
-                          source_name: val,
-                          source_id: matchedClient?.id || "",
-                          client_id: matchedClient?.id || "",
-                          client_name: matchedClient?.full_name || val
-                        }));
-                      }}
-                      clients={clients}
-                      placeholder="Select existing B2B client..."
-                      className="h-10 text-xs bg-white mt-1 rounded-xl"
-                      testid="inw-client-input"
                     />
                   ) : isRepairSource ? (
                     <VendorAutocompleteInput
@@ -597,8 +559,8 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                   ) : (
                     <Input
                       value={form.source_name}
-                      onChange={(e) => setForm({ ...form, source_name: e.target.value })}
-                      placeholder="Source name"
+                      onChange={(e) => setForm({ ...form, source_name: e.target.value, source_id: "" })}
+                      placeholder="Enter source / warehouse / party name..."
                       className="h-10 text-xs bg-white mt-1 rounded-xl"
                       data-testid="inw-source-input"
                     />

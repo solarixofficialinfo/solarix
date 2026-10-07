@@ -41,7 +41,6 @@ const DEFAULT_OUTWARD_CARRY_KEYS = ["date", "outward_challan_no", "reference_typ
 
 const EMPTY = () => ({
   date: today(),
-  party_type: "B2B Client",
   client_id: "", client_name: "",
   project_id: "", project_name: "",
   outward_challan_no: "",
@@ -417,17 +416,9 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
             </div>
             <SelectField label="Status" value={form.status} onChange={(v) => setForm({ ...form, status: v })} options={STATUSES} testid="out-status" />
 
-            <SelectField
-              label="Party Type"
-              value={form.party_type || "B2B Client"}
-              onChange={(v) => setForm({ ...form, party_type: v })}
-              options={["B2B Client", "Project / Client", "Other"]}
-              testid="out-party-type"
-            />
-
             <div className="md:col-span-2">
               <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                {form.party_type === "B2B Client" ? "B2B Client *" : "Client / Party Name *"}
+                Client / Project Name <span className="text-red-500">*</span>
               </label>
               <ClientAutocompleteInput
                 value={form.client_name || ""}
@@ -449,15 +440,13 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
                   }
                 }}
                 clients={clients}
-                placeholder={form.party_type === "B2B Client" ? "Select B2B client..." : "Type to search clients or enter name…"}
+                placeholder="Type to search clients or enter name…"
                 className="mt-1.5 h-10 text-xs bg-white rounded-md"
                 testid="out-client-search"
                 required
               />
-              <div className="text-[10px] text-blue-600 mt-1">
-                {form.party_type === "B2B Client"
-                  ? "Select an existing client to record B2B dispatch and track client ledger."
-                  : "Select an existing client for linked project details, or enter a client name manually."}
+              <div className="text-[10px] text-slate-500 mt-1">
+                Select an existing client for linked project details, or enter a client name manually.
               </div>
             </div>
             <Field label="Project" value={form.project_name} onChange={(v) => setForm({ ...form, project_name: v })} placeholder="Project label" testid="out-project" />
