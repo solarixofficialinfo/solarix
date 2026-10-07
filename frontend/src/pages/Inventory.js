@@ -41,12 +41,14 @@ export default function Inventory() {
   const invalidateInventory = useInvalidateInventory();
   const queryClient = useQueryClient();
   const [stats, setStats] = useState(null);
+  const [defaults, setDefaults] = useState({ inward: {}, outward: {} });
+  const location = useLocation();
   const navigate = useNavigate();
   const initialTab = useMemo(() => {
     const p = new URLSearchParams(location.search).get("tab");
     if (p === "b2b-clients" || p === "b2b-sales" || p === "supply") return "inward";
     return p || "inward";
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [location.search]);
   const [tab, setTab] = useState(initialTab);
   const [visitedTabs, setVisitedTabs] = useState(new Set([initialTab]));
   useEffect(() => {
