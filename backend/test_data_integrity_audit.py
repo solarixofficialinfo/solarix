@@ -57,6 +57,11 @@ from server import (
     get_supplier_history,
     get_supply_summary,
     get_b2b_sales,
+    create_b2b_customer,
+    update_b2b_customer,
+    delete_b2b_customer,
+    list_b2b_customers,
+    B2BCustomerPayload,
 )
 import server
 
@@ -1038,33 +1043,37 @@ async def main():
         run_test(121, "K.DATA MANAGE PRECISION", "Alphanumeric challan format intact across views",
                  True)
 
-        # Test 122: Directly creating a B2B client into canonical db.clients
+        # Test 122: Directly creating a B2B business customer into dedicated db.b2b_customers
         client_niki = {
             "id": "CLIENT-NIKI-001",
             "company_id": TEST_CID,
+            "name": "NIKI FABRIC",
             "full_name": "NIKI FABRIC",
             "mobile": "9876543210",
             "city": "Surat",
             "sol_id": "SOL-B2B-999",
+            "status": "Active",
             "created_at": "2026-10-05T10:00:00Z"
         }
-        await mock_db.clients.insert_one(client_niki)
+        await mock_db.b2b_customers.insert_one(client_niki)
 
-        # Also insert a client for OTHER_CID to verify multi-tenant company isolation
-        await mock_db.clients.insert_one({
+        # Also insert a customer for OTHER_CID to verify multi-tenant company isolation
+        await mock_db.b2b_customers.insert_one({
             "id": "CLIENT-OTHER-999",
             "company_id": OTHER_CID,
+            "name": "OTHER COMP CLIENT",
             "full_name": "OTHER COMP CLIENT",
             "mobile": "9999999999",
             "city": "Mumbai",
-            "sol_id": "SOL-OTHER-001"
+            "sol_id": "SOL-OTHER-001",
+            "status": "Active"
         })
 
         b2b_summary_res = await get_b2b_summary(user={"company_id": TEST_CID})
-        niki_in_summary = next((c for c in b2b_summary_res.get("clients", []) if c.get("id") == "CLIENT-NIKI-001"), None)
+        niki_in_summary = next((c for c in b2b_summary_res.get("customers", []) if c.get("id") == "CLIENT-NIKI-001"), None)
 
-        run_test(122, "K.DATA MANAGE PRECISION", "Directly added B2B client immediately visible in B2B Client Master with stable client_id",
-                 niki_in_summary is not None and niki_in_summary["full_name"] == "NIKI FABRIC" and niki_in_summary["sol_id"] == "SOL-B2B-999")
+        run_test(122, "K.DATA MANAGE PRECISION", "Directly added B2B customer immediately visible in B2B Customer Master with stable client_id",
+                 niki_in_summary is not None and (niki_in_summary.get("name") == "NIKI FABRIC" or niki_in_summary.get("full_name") == "NIKI FABRIC") and niki_in_summary["sol_id"] == "SOL-B2B-999")
 
         # Test 123: Outward dispatch using B2B client links canonical client_id and reflects in B2B summary
         out_niki = await save_outward_entry_logic(
@@ -1074,7 +1083,7 @@ async def main():
                 quantity=20.0,
                 unit="Nos",
                 date="2026-10-05",
-                party_type="B2B Client",
+                party_type="B2B Customer",
                 client_id="CLIENT-NIKI-001",
                 client_name="NIKI FABRIC",
                 status="Dispatched"
@@ -1082,8 +1091,8 @@ async def main():
             company_id=TEST_CID, user_id="U1", user_name="Admin"
         )
         b2b_summary_after_out = await get_b2b_summary(user={"company_id": TEST_CID})
-        niki_after_out = next((c for c in b2b_summary_after_out.get("clients", []) if c.get("id") == "CLIENT-NIKI-001"), None)
-        run_test(123, "K.DATA MANAGE PRECISION", "Outward dispatch links to B2B client_id and reflects in B2B Client Master totals",
+        niki_after_out = next((c for c in b2b_summary_after_out.get("customers", []) if c.get("id") == "CLIENT-NIKI-001"), None)
+        run_test(123, "K.DATA MANAGE PRECISION", "Outward dispatch links to B2B client_id and reflects in B2B Customer Master totals",
                  out_niki.get("client_id") == "CLIENT-NIKI-001" and niki_after_out is not None and niki_after_out["total_outward"] == 20.0 and niki_after_out["net_quantity"] == 20.0)
 
         # Test 124: B2B Inward Return links to the same onboarded client_id and updates net balance
@@ -1102,17 +1111,17 @@ async def main():
             company_id=TEST_CID, user_id="U1", user_name="Admin"
         )
         b2b_summary_after_ret = await get_b2b_summary(user={"company_id": TEST_CID})
-        niki_after_ret = next((c for c in b2b_summary_after_ret.get("clients", []) if c.get("id") == "CLIENT-NIKI-001"), None)
+        niki_after_ret = next((c for c in b2b_summary_after_ret.get("customers", []) if c.get("id") == "CLIENT-NIKI-001"), None)
         run_test(124, "K.DATA MANAGE PRECISION", "B2B Return deducts from net quantity (20 - 5 = 15) using same canonical client_id",
                  niki_after_ret is not None and niki_after_ret["total_return"] == 5.0 and niki_after_ret["net_quantity"] == 15.0)
 
         # Test 125: Company Isolation: OTHER_CID summary does NOT leak TEST_CID clients, outwards, or returns
         b2b_summary_other = await get_b2b_summary(user={"company_id": OTHER_CID})
-        other_client_ids = [c.get("id") for c in b2b_summary_other.get("clients", [])]
+        other_client_ids = [c.get("id") for c in b2b_summary_other.get("customers", [])]
         run_test(125, "K.DATA MANAGE PRECISION", "Strict company isolation in B2B source: zero client leakage across tenants",
-                 "CLIENT-NIKI-001" not in other_client_ids and all(c.get("id") == "CLIENT-OTHER-999" for c in b2b_summary_other.get("clients", [])))
+                 "CLIENT-NIKI-001" not in other_client_ids and all(c.get("id") == "CLIENT-OTHER-999" for c in b2b_summary_other.get("customers", [])))
         # Clean up temporary other-company client to preserve empty OTHER_CID state
-        await mock_db.clients.delete_one({"id": "CLIENT-OTHER-999"})
+        await mock_db.b2b_customers.delete_one({"id": "CLIENT-OTHER-999"})
 
         # =========================================================================
         # SECTION L: MANUAL IMPORT ARCHITECTURE (126 - 145)
@@ -1487,14 +1496,14 @@ async def main():
         run_test(206, "R.SAFE CLIENT DELETION", "Client with 0 transactions is safely hard-deleted from database",
                  del_zero_res.get("ok") is True and del_zero_res.get("archived") is not True and client_in_db is None)
 
-        # Test 207: Client with historical transactions is safely archived (transactions preserved, excluded from B2B summary)
-        del_tx_res = await delete_client("CLIENT-NIKI-001", user=admin_user)
-        niki_db = await mock_db.clients.find_one({"id": "CLIENT-NIKI-001"})
+        # Test 207: B2B Customer with historical transactions is safely archived (transactions preserved, excluded from B2B summary)
+        del_tx_res = await delete_b2b_customer("CLIENT-NIKI-001", user=admin_user)
+        niki_db = await mock_db.b2b_customers.find_one({"id": "CLIENT-NIKI-001"})
         niki_inwards = await mock_db.inward_entries.find({"client_id": "CLIENT-NIKI-001"}).to_list(100)
         niki_outwards = await mock_db.outward_entries.find({"client_id": "CLIENT-NIKI-001"}).to_list(100)
         b2b_after_del = await get_b2b_summary(user={"company_id": TEST_CID})
-        niki_in_b2b = next((c for c in b2b_after_del.get("clients", []) if c.get("id") == "CLIENT-NIKI-001"), None)
-        run_test(207, "R.SAFE CLIENT DELETION", "Client with transactions is safely archived: transactions preserved, removed from active B2B summary",
+        niki_in_b2b = next((c for c in b2b_after_del.get("customers", []) if c.get("id") == "CLIENT-NIKI-001"), None)
+        run_test(207, "R.SAFE CLIENT DELETION", "B2B Customer with transactions is safely archived: transactions preserved, removed from active B2B summary",
                  del_tx_res.get("ok") is True and del_tx_res.get("archived") is True and niki_db is not None and niki_db.get("status") == "Archived" and len(niki_inwards) == 1 and len(niki_outwards) == 1 and niki_in_b2b is None)
 
         # ==========================================
@@ -1521,11 +1530,13 @@ async def main():
             "is_active": True
         })
 
-        # Register Client in mock_db.clients
-        await mock_db.clients.insert_one({
+        # Register B2B Business Customer in mock_db.b2b_customers (Completely isolated from CRM clients)
+        await mock_db.b2b_customers.insert_one({
             "id": CLIENT_ID,
             "company_id": TEST_CID,
+            "name": CLIENT_NAME,
             "full_name": CLIENT_NAME,
+            "contact_person": "Rajesh Trading Head",
             "mobile": "9123456780",
             "city": "Ahmedabad",
             "status": "Active"
@@ -1644,6 +1655,54 @@ async def main():
         run_test(216, "S.SAFE SUPPLIER DELETION",
                  "Supplier with transactions is safely archived: transactions preserved, removed from active supply list",
                  del_supp_res.get("ok") is True and del_supp_res.get("archived") is True and supp_db is not None and supp_db.get("status") == "Archived" and len(supp_inwards) == 1 and supp_in_summary is None)
+
+        # Step 10: Isolation Test — Existing CRM installation clients NEVER appear in B2B summary
+        await mock_db.clients.insert_one({"id": "CRM-GIRIRAJ-01", "company_id": TEST_CID, "full_name": "Giriraj Dhoot", "status": "Approved"})
+        await mock_db.clients.insert_one({"id": "CRM-SHUBHAM-02", "company_id": TEST_CID, "full_name": "SHUBHAM JADHAV", "status": "Approved"})
+        await mock_db.clients.insert_one({"id": "CRM-KETAN-03", "company_id": TEST_CID, "full_name": "KETAN SABNE", "status": "Approved"})
+        
+        b2b_summary_chk = await get_b2b_summary(user=admin_user)
+        b2b_names_found = [(c.get("name") or c.get("full_name") or "") for c in b2b_summary_chk.get("customers", [])]
+        crm_leaked = any(name in ("Giriraj Dhoot", "SHUBHAM JADHAV", "KETAN SABNE") for name in b2b_names_found)
+        run_test(217, "T.B2B ISOLATION & CRM INTEGRITY",
+                 "CRM Installation clients (Giriraj Dhoot, SHUBHAM JADHAV, KETAN SABNE) strictly excluded from B2B summary",
+                 crm_leaked is False)
+
+        # Step 11: Isolation Test — Material Request / Project installation dispatches NEVER leak into B2B sales
+        await mock_db.outward_entries.insert_one({
+            "id": "OUT-INSTALL-01",
+            "company_id": TEST_CID,
+            "client_id": "CRM-GIRIRAJ-01",
+            "client_name": "Giriraj Dhoot",
+            "project_id": "CRM-GIRIRAJ-01",
+            "material_request_id": "MR-1001",
+            "product": "SOLAR PANEL 540W",
+            "quantity": 25.0,
+            "status": "Dispatched",
+            "date": "2026-10-06"
+        })
+        b2b_sales_chk = await get_b2b_sales(user=admin_user)
+        b2b_sale_clients = [s.get("client_name") for s in b2b_sales_chk.get("sales", [])]
+        run_test(218, "T.B2B ISOLATION & CRM INTEGRITY",
+                 "CRM Installation outward dispatch strictly excluded from get_b2b_sales",
+                 "Giriraj Dhoot" not in b2b_sale_clients)
+
+        # Step 12: Isolation Test — Adding B2B customer does NOT pollute CRM clients
+        b2b_new_res = await create_b2b_customer(B2BCustomerPayload(name="ARVIND MILL", contact_person="Arvind Head", mobile="9823456789", city="Surat"), user=admin_user)
+        arvind_in_crm = await mock_db.clients.find_one({"company_id": TEST_CID, "full_name": "ARVIND MILL"})
+        arvind_in_b2b = await mock_db.b2b_customers.find_one({"company_id": TEST_CID, "name": "ARVIND MILL"})
+        run_test(219, "T.B2B ISOLATION & CRM INTEGRITY",
+                 "Creating B2B customer 'ARVIND MILL' saves in b2b_customers and does NOT become an installation client",
+                 arvind_in_b2b is not None and arvind_in_crm is None)
+
+        # Step 13: B2B Customer CRUD & Zero-tx Deletion
+        b2b_cust_list = await list_b2b_customers(user=admin_user)
+        arvind_cust = next((c for c in b2b_cust_list.get("customers", []) if c.get("name") == "ARVIND MILL"), None)
+        del_arvind = await delete_b2b_customer(arvind_cust["id"], user=admin_user) if arvind_cust else {}
+        arvind_after_del = await mock_db.b2b_customers.find_one({"id": arvind_cust["id"]}) if arvind_cust else None
+        run_test(220, "T.B2B ISOLATION & CRM INTEGRITY",
+                 "Zero-transaction B2B Customer is cleanly deleted from b2b_customers master",
+                 del_arvind.get("ok") is True and arvind_after_del is None)
 
     finally:
         server.db = orig_db

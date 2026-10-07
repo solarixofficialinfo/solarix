@@ -6007,7 +6007,7 @@ async def delete_client(client_id: str, user=Depends(require_active_subscription
         # In accordance with Solarix Data Integrity protocols, NEVER delete historical transactions or mutate stock ledgers.
         # Safely archive the client so they are removed from active directory, dropdowns, and search,
         # while preserving historical transactions, client history, and report calculations.
-        now_ts = datetime.utcnow().isoformat()
+        now_ts = now_iso()
         await db.clients.update_one(
             {"id": client_id, "company_id": company_id},
             {"$set": {
@@ -8531,7 +8531,7 @@ class OutwardIn(BaseModel):
     project_id: Optional[str] = ""
     project_name: Optional[str] = ""
     bill_number: Optional[str] = ""
-    party_type: Optional[str] = "B2B Client"
+    party_type: Optional[str] = ""
     outward_challan_no: Optional[str] = ""
     reference_number: Optional[str] = ""
     reference_type: Optional[str] = "Challan Number"  # Challan Number | Book Number | Other
@@ -9995,7 +9995,7 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
             "project_id": project_id_val,
             "project_name": project_name_val,
             "bill_number": challan_raw,
-            "party_type": data.party_type or ("B2B Client" if client_id_val else ""),
+            "party_type": data.party_type or "",
             "outward_challan_no": challan_raw or numeric_only(data.outward_challan_no),
             "reference_number": challan_raw or numeric_only(data.reference_number or data.outward_challan_no),
             "reference_type": data.reference_type or "Challan Number",
@@ -10652,15 +10652,119 @@ async def delete_outward(entry_id: str, user=Depends(get_current_user)):
     invalidate_products_cache(cid)
     return {"ok": True}
 
-# ---------- Unified B2B Sales, Supply, and Repair Views ----------
+# ---------- Dedicated B2B Business Customers, Sales, and Ledger ----------
+class B2BCustomerPayload(BaseModel):
+    name: str  # Business Name e.g. "ABC Industries"
+    contact_person: Optional[str] = ""
+    mobile: Optional[str] = ""
+    alt_mobile: Optional[str] = ""
+    email: Optional[str] = ""
+    address: Optional[str] = ""
+    city: Optional[str] = ""
+    state: Optional[str] = ""
+    gstin: Optional[str] = ""
+    notes: Optional[str] = ""
+
+@api_router.get("/inventory/b2b-customers")
+async def list_b2b_customers(user=Depends(require_active_subscription())):
+    cid = user["company_id"]
+    customers = await db.b2b_customers.find({
+        "company_id": cid,
+        "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
+    }, {"_id": 0}).sort("name", 1).to_list(5000)
+    for c in customers:
+        if "name" not in c and "full_name" in c:
+            c["name"] = c["full_name"]
+        if "full_name" not in c and "name" in c:
+            c["full_name"] = c["name"]
+    return {"customers": customers}
+
+@api_router.post("/inventory/b2b-customers")
+async def create_b2b_customer(payload: B2BCustomerPayload, user=Depends(require_active_subscription())):
+    cid = user["company_id"]
+    cust_id = f"b2b_cust_{uuid.uuid4().hex[:12]}"
+    b_name = payload.name.strip()
+    if not b_name:
+        raise HTTPException(status_code=400, detail="Business Name is required")
+    now = now_iso()
+    doc = {
+        "id": cust_id,
+        "company_id": cid,
+        "name": b_name,
+        "full_name": b_name,
+        "contact_person": (payload.contact_person or "").strip(),
+        "mobile": (payload.mobile or "").strip(),
+        "alt_mobile": (payload.alt_mobile or "").strip(),
+        "email": (payload.email or "").strip(),
+        "address": (payload.address or "").strip(),
+        "city": (payload.city or "").strip(),
+        "state": (payload.state or "").strip(),
+        "gstin": (payload.gstin or "").strip(),
+        "notes": (payload.notes or "").strip(),
+        "status": "Active",
+        "created_at": now,
+        "updated_at": now
+    }
+    await db.b2b_customers.insert_one(doc)
+    await log_activity(cid, user["id"], user["name"], "Created B2B Customer", f"Customer: {b_name}")
+    doc.pop("_id", None)
+    return {"message": "B2B Business Customer created successfully", "customer": doc, "client": doc}
+
+@api_router.put("/inventory/b2b-customers/{customer_id}")
+async def update_b2b_customer(customer_id: str, payload: B2BCustomerPayload, user=Depends(require_active_subscription())):
+    cid = user["company_id"]
+    existing = await db.b2b_customers.find_one({"company_id": cid, "id": customer_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="B2B Business Customer not found")
+    b_name = payload.name.strip()
+    if not b_name:
+        raise HTTPException(status_code=400, detail="Business Name cannot be empty")
+    patch = {
+        "name": b_name,
+        "full_name": b_name,
+        "contact_person": (payload.contact_person or "").strip(),
+        "mobile": (payload.mobile or "").strip(),
+        "alt_mobile": (payload.alt_mobile or "").strip(),
+        "email": (payload.email or "").strip(),
+        "address": (payload.address or "").strip(),
+        "city": (payload.city or "").strip(),
+        "state": (payload.state or "").strip(),
+        "gstin": (payload.gstin or "").strip(),
+        "notes": (payload.notes or "").strip(),
+        "updated_at": now_iso()
+    }
+    await db.b2b_customers.update_one({"company_id": cid, "id": customer_id}, {"$set": patch})
+    await log_activity(cid, user["id"], user["name"], "Updated B2B Customer", f"Customer: {b_name}")
+    return {"message": "B2B Business Customer updated successfully", "customer": {**existing, **patch}}
+
+@api_router.delete("/inventory/b2b-customers/{customer_id}")
+async def delete_b2b_customer(customer_id: str, user=Depends(require_active_subscription())):
+    cid = user["company_id"]
+    existing = await db.b2b_customers.find_one({"company_id": cid, "id": customer_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="B2B Business Customer not found")
+    has_out = await db.outward_entries.count_documents({"company_id": cid, "client_id": customer_id})
+    has_in = await db.inward_entries.count_documents({"company_id": cid, "client_id": customer_id})
+    c_name = existing.get("name") or existing.get("full_name") or ""
+    if has_out > 0 or has_in > 0:
+        await db.b2b_customers.update_one({"company_id": cid, "id": customer_id}, {"$set": {"status": "Archived", "updated_at": now_iso()}})
+        await log_activity(cid, user["id"], user["name"], "Archived B2B Customer", f"Customer: {c_name}")
+        return {"ok": True, "archived": True, "message": "Customer has transactions and was safely archived"}
+    else:
+        await db.b2b_customers.delete_one({"company_id": cid, "id": customer_id})
+        await log_activity(cid, user["id"], user["name"], "Deleted B2B Customer", f"Customer: {c_name}")
+        return {"ok": True, "deleted": True, "message": "Customer deleted successfully"}
+
 @api_router.get("/inventory/b2b-summary")
 async def get_b2b_summary(user=Depends(require_active_subscription())):
     cid = user["company_id"]
-    clients = await db.clients.find({
+    # STRICT ARCHITECTURAL SEPARATION:
+    # Query ONLY dedicated B2B Business Customers master. Never fetch from CRM / installation db.clients.
+    customers = await db.b2b_customers.find({
         "company_id": cid,
         "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
-    }, {"_id": 0, "id": 1, "full_name": 1, "mobile": 1, "alt_mobile": 1, "city": 1, "state": 1, "address": 1, "sol_id": 1}).sort("full_name", 1).to_list(5000)
-    outwards = await db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1}).to_list(50000)
+    }, {"_id": 0}).sort("name", 1).to_list(5000)
+    outwards = await db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1, "party_type": 1}).to_list(50000)
     inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "source_name": 1, "source_type": 1, "remarks": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1}).to_list(50000)
 
     # Pre-index outwards and inwards by client_id and lower-cased name
@@ -10687,10 +10791,10 @@ async def get_b2b_summary(user=Depends(require_active_subscription())):
             if cname_i:
                 in_by_name.setdefault(cname_i, []).append(parsed)
 
-    clients_data = []
-    for c in clients:
+    customers_data = []
+    for c in customers:
         c_id = str(c.get("id") or "").strip()
-        c_name = str(c.get("full_name") or "").strip()
+        c_name = str(c.get("name") or c.get("full_name") or "").strip()
         c_name_lower = c_name.lower()
 
         seen_out_ids = set()
@@ -10720,15 +10824,19 @@ async def get_b2b_summary(user=Depends(require_active_subscription())):
         dates = [(o.get("date") or o.get("created_at") or "")[:10] for o in c_outs] + [(i.get("date") or i.get("created_at") or "")[:10] for i in c_ins]
         last_date = max(dates) if dates else "—"
 
-        clients_data.append({
+        customers_data.append({
             "id": c_id,
             "sol_id": c.get("sol_id") or "",
+            "name": c_name,
             "full_name": c_name,
+            "contact_person": c.get("contact_person") or "—",
             "mobile": c.get("mobile") or "—",
             "alt_mobile": c.get("alt_mobile") or "",
+            "email": c.get("email") or "—",
             "city": c.get("city") or "—",
             "state": c.get("state") or "",
             "address": c.get("address") or "",
+            "gstin": c.get("gstin") or "—",
             "total_outward": round(tot_out, 2),
             "total_return": round(tot_ret, 2),
             "net_quantity": net_qty,
@@ -10736,15 +10844,17 @@ async def get_b2b_summary(user=Depends(require_active_subscription())):
             "last_transaction": last_date
         })
 
-    return {"clients": clients_data}
+    return {"customers": customers_data, "clients": customers_data}
 
 @api_router.get("/inventory/b2b-client-history/{client_id}")
 async def get_b2b_client_history(client_id: str, user=Depends(require_active_subscription())):
     cid = user["company_id"]
-    client = await db.clients.find_one({"company_id": cid, "id": client_id}, {"_id": 0})
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    c_name = (client.get("full_name") or "").strip()
+    customer = await db.b2b_customers.find_one({"company_id": cid, "id": client_id}, {"_id": 0})
+    if not customer:
+        customer = await db.b2b_customers.find_one({"company_id": cid, "sol_id": client_id}, {"_id": 0})
+    if not customer:
+        raise HTTPException(status_code=404, detail="B2B Business Customer not found")
+    c_name = (customer.get("name") or customer.get("full_name") or "").strip()
     
     outwards = await db.outward_entries.find({
         "company_id": cid,
@@ -10799,38 +10909,56 @@ async def get_b2b_client_history(client_id: str, user=Depends(require_active_sub
             "remarks": i.get("remarks") or ""
         })
     txs.sort(key=lambda x: x["date"], reverse=True)
-    return {"client": client, "transactions": txs}
+    return {"customer": customer, "client": customer, "transactions": txs}
 
 @api_router.get("/inventory/b2b-sales")
 async def get_b2b_sales(user=Depends(require_active_subscription())):
     cid = user["company_id"]
+    # Fetch authoritative B2B Business Customers to ensure ZERO leakage of installation clients
+    b2b_custs = await db.b2b_customers.find({"company_id": cid}, {"_id": 0, "id": 1, "name": 1, "full_name": 1}).to_list(10000)
+    b2b_cust_ids = {c["id"] for c in b2b_custs if c.get("id")}
+    b2b_cust_names = {((c.get("name") or c.get("full_name") or "")).strip().lower() for c in b2b_custs if (c.get("name") or c.get("full_name"))}
+
     outwards = await db.outward_entries.find({
         "company_id": cid,
-        "$or": [
-            {"client_id": {"$exists": True, "$ne": ""}},
-            {"client_name": {"$exists": True, "$ne": ""}},
-            {"party_type": "B2B Client"}
-        ]
+        "status": "Dispatched"
     }, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(10000)
     
     sales = []
     for o in outwards:
-        bill_no = o.get("bill_number") or o.get("outward_challan_no") or o.get("reference_number") or "—"
-        sales.append({
-            "id": o.get("id"),
-            "date": (o.get("date") or o.get("created_at") or "")[:10],
-            "bill_number": bill_no,
-            "reference_number": bill_no,
-            "client_id": o.get("client_id") or "",
-            "client_name": o.get("client_name") or o.get("project_name") or "—",
-            "product": o.get("product") or "",
-            "size": o.get("size") or "",
-            "quantity": float(o.get("quantity") or 0.0),
-            "unit": o.get("unit") or "Nos",
-            "amount": float(o.get("total_amount") or o.get("amount") or 0.0),
-            "status": o.get("status") or "Dispatched",
-            "remarks": o.get("remarks") or ""
-        })
+        party_type = (o.get("party_type") or "").strip()
+        o_client_id = str(o.get("client_id") or "").strip()
+        o_client_name = str(o.get("client_name") or "").strip().lower()
+        
+        # An outward is a B2B sale ONLY IF:
+        # 1. Explicit party_type is "B2B Customer" or "B2B Client"
+        # 2. Or client_id exists in b2b_customers master
+        # 3. Or client_name matches a B2B customer name without project/material request link
+        is_b2b = False
+        if party_type in ("B2B Customer", "B2B Client"):
+            is_b2b = True
+        elif o_client_id and o_client_id in b2b_cust_ids:
+            is_b2b = True
+        elif o_client_name and o_client_name in b2b_cust_names and not o.get("project_id") and not o.get("material_request_id"):
+            is_b2b = True
+            
+        if is_b2b:
+            bill_no = o.get("bill_number") or o.get("outward_challan_no") or o.get("reference_number") or "—"
+            sales.append({
+                "id": o.get("id"),
+                "date": (o.get("date") or o.get("created_at") or "")[:10],
+                "bill_number": bill_no,
+                "reference_number": bill_no,
+                "client_id": o.get("client_id") or "",
+                "client_name": o.get("client_name") or o.get("project_name") or "—",
+                "product": o.get("product") or "",
+                "size": o.get("size") or "",
+                "quantity": float(o.get("quantity") or 0.0),
+                "unit": o.get("unit") or "Nos",
+                "amount": float(o.get("total_amount") or o.get("amount") or 0.0),
+                "status": o.get("status") or "Dispatched",
+                "remarks": o.get("remarks") or ""
+            })
     return {"sales": sales}
 
 @api_router.get("/inventory/supply-summary")
@@ -13056,7 +13184,7 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail=chk_imp["message"])
     inserted_ids: List[str] = []
     gd = data.global_defaults or {}  # v2 global defaults
-    prod_cache: Dict[Tuple[str, str, str, str], Any] = {}
+    prod_cache: Dict[Tuple[str, str, str], Any] = {}
     docs_to_insert = []
     new_assets = []
     all_assets = _load_local_assets()
@@ -13496,7 +13624,7 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
     gd = data.global_defaults or {}  # v2 global defaults
     g_client_id = gd.get("client_id", "")
     g_client_name = gd.get("client_name", "")
-    prod_cache: Dict[Tuple[str, str, str, str], Any] = {}
+    prod_cache: Dict[Tuple[str, str, str], Any] = {}
     docs_to_insert = []
 
     # 1. Pre-fetch existing products and clients for company in bulk

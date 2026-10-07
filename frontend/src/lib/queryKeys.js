@@ -80,6 +80,17 @@ export const queryKeys = {
   plans: {
     list: () => ["plans", "list"],
   },
+  b2b: {
+    customers: () => ["inventory-b2b-customers"],
+    summary: () => ["inventory-b2b-summary"],
+    sales: () => ["inventory-b2b-sales"],
+    history: (id) => ["inventory-b2b-history", id],
+  },
+  supply: {
+    suppliers: () => ["inventory-suppliers"],
+    entries: () => ["inventory-supply-entries"],
+    ledger: (name) => ["inventory-supplier-ledger", name],
+  },
 };
 
 export const invalidateAllClientQueries = (queryClient, clientId) => {

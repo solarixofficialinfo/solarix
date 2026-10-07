@@ -171,7 +171,13 @@ export default function Layout({ children }) {
     );
   const isSuperOrAdmin = !isExternalUser && (isSuperAdmin || user?.role === "Admin" || user?.role === "Owner" || user?.user_type === "owner" || user?.is_owner);
   const isAdmin = isSuperOrAdmin;
-  const allowed = (page) => !isExternalUser && (isSuperOrAdmin || (user?.permissions?.[page]?.view === true));
+  const allowed = (page) => {
+    if (isExternalUser) return false;
+    if (isSuperOrAdmin) return true;
+    if (user?.permissions?.[page]?.view === true) return true;
+    if ((page === "b2b" || page === "supply") && (user?.permissions?.["data_management"]?.view === true || user?.permissions?.["inventory"]?.view === true)) return true;
+    return false;
+  };
   const ALWAYS_VISIBLE = new Set(["complaints", "whatsapp"]);
 
   const navSections = [
@@ -201,6 +207,8 @@ export default function Layout({ children }) {
     {
       title: "OPERATIONS",
       items: [
+        { to: "/b2b", label: "B2B", icon: Building2, key: "b2b" },
+        { to: "/supply", label: "Supply", icon: Truck, key: "supply" },
         { to: "/receivables", label: "Receivables & Collection", icon: DollarSign, key: "receivables" },
         { to: "/inventory", label: "Data Management", icon: Boxes, key: "data_management" },
         { to: "/material", label: "Material Requests", icon: PackageSearch, key: "material_requests" },
