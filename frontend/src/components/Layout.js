@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
-import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, FileCheck, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp, ShieldAlert, Sparkles, PackageSearch, UserPlus, Layers, MessageSquare, Send, Users, Inbox as InboxIcon, Zap, Settings as SettingsIcon } from "lucide-react";
+import { Sun, LayoutDashboard, Users2, UserCog, Building2, ScrollText, LogOut, Briefcase, ClipboardList, Boxes, FileText, FileCheck, LifeBuoy, Megaphone, Menu, X, Wrench, PhoneCall, DollarSign, Truck, Search, CreditCard, TrendingUp, ShieldAlert, Sparkles, PackageSearch, UserPlus, Layers, MessageSquare, Send, Users, Inbox as InboxIcon, Zap, Settings as SettingsIcon, ChevronDown, ChevronRight } from "lucide-react";
 import NotificationBell from "@/components/NotificationBell";
 import ProfileMenu from "@/components/ProfileMenu";
 import TrialBanner from "@/components/TrialBanner";
@@ -151,6 +151,7 @@ export default function Layout({ children }) {
   const { pathname } = useLocation();
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [whatsappExpanded, setWhatsappExpanded] = useState(true);
   const { isPageAllowed } = useEntitlements();
 
   const userEmail = (user?.email || "").trim().toLowerCase();
@@ -185,9 +186,9 @@ export default function Layout({ children }) {
       title: "WORKSPACE",
       items: [
         { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, key: "dashboard" },
-        { to: "/solar-designer", label: "3D Solar Designer", icon: Layers, key: "solar_designer" },
         { to: "/leads", label: "Leads", icon: UserPlus, key: "leads" },
         { to: "/clients", label: "Clients", icon: Users2, key: "clients" },
+        { to: "/solar-designer", label: "3D Solar Designer", icon: Layers, key: "solar_designer" },
         { to: "/projects", label: "Project Execution", icon: Briefcase, key: "project_execution" },
         { to: "/tasks", label: "Task Portal", icon: ClipboardList, key: "task_portal" },
       ],
@@ -279,12 +280,32 @@ export default function Layout({ children }) {
 
           if (visibleItems.length === 0) return null;
 
+          const isCollapsible = sec.title === "WHATSAPP";
+          const isExpanded = isCollapsible ? whatsappExpanded : true;
+
           return (
             <div key={sec.title} className="space-y-1">
-              <div className="text-[10px] font-bold tracking-wider text-slate-400 uppercase px-3 pb-1">
-                {sec.title}
-              </div>
-              {visibleItems.map((it) => {
+              {isCollapsible ? (
+                <button
+                  type="button"
+                  onClick={() => setWhatsappExpanded((prev) => !prev)}
+                  className="w-full flex items-center justify-between text-[10px] font-bold tracking-wider text-slate-400 hover:text-slate-600 uppercase px-3 pb-1 cursor-pointer transition select-none"
+                  data-testid="toggle-whatsapp-section"
+                  title={isExpanded ? "Collapse WhatsApp section" : "Expand WhatsApp section"}
+                >
+                  <span>{sec.title}</span>
+                  {isExpanded ? (
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                  ) : (
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                  )}
+                </button>
+              ) : (
+                <div className="text-[10px] font-bold tracking-wider text-slate-400 uppercase px-3 pb-1">
+                  {sec.title}
+                </div>
+              )}
+              {isExpanded && visibleItems.map((it) => {
                 const Icon = it.icon;
                 const active = pathname.startsWith(it.to);
                 return (
