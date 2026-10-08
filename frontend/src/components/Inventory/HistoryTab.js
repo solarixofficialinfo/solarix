@@ -339,11 +339,64 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
                       </td>
                       <td className="px-4 py-2.5 text-xs text-slate-700 tabular-nums">{dayjs(r.date || r.created_at).format("DD MMM YYYY")}</td>
                       <td className="px-4 py-2.5">
-                        {r.type === "Inward" ? (
-                          <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]"><ArrowDownToLine className="w-2.5 h-2.5 mr-1" /> Inward</Badge>
-                        ) : (
-                          <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px]"><ArrowUpFromLine className="w-2.5 h-2.5 mr-1" /> Outward</Badge>
-                        )}
+                        {(() => {
+                          if (r.type === "Inward") {
+                            const isB2bReturn = r.source_type === "B2B Return" || (r.source_name && !r.vendor_id && !r.vendor && !r.vendor_name && r.client_id);
+                            const isRepair = r.source_type === "Repair Return";
+                            const isInternal = r.source_type === "Internal / Warehouse";
+                            
+                            if (isB2bReturn) {
+                              return (
+                                <Badge variant="outline" className="bg-teal-50 text-teal-700 border-teal-200 text-[10px] whitespace-nowrap">
+                                  <ArrowDownToLine className="w-2.5 h-2.5 mr-1" /> B2B Return
+                                </Badge>
+                              );
+                            }
+                            if (isRepair) {
+                              return (
+                                <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200 text-[10px] whitespace-nowrap">
+                                  <ArrowDownToLine className="w-2.5 h-2.5 mr-1" /> Repair Return
+                                </Badge>
+                              );
+                            }
+                            if (isInternal) {
+                              return (
+                                <Badge variant="outline" className="bg-slate-50 text-slate-700 border-slate-200 text-[10px] whitespace-nowrap">
+                                  <ArrowDownToLine className="w-2.5 h-2.5 mr-1" /> Internal / WH
+                                </Badge>
+                              );
+                            }
+                            return (
+                              <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] whitespace-nowrap">
+                                <ArrowDownToLine className="w-2.5 h-2.5 mr-1" /> Supplier Supply
+                              </Badge>
+                            );
+                          } else {
+                            // Outward
+                            const isB2b = r.party_type === "B2B Customer" || r.party_type === "B2B Sale" || (r.remarks || "").startsWith("B2B Sale");
+                            const isSupplierReturn = r.party_type === "Supplier Return" || r.party_type === "Vendor Return" || r.vendor_id || (r.remarks || "").toLowerCase().includes("supplier return");
+                            
+                            if (isB2b) {
+                              return (
+                                <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[10px] whitespace-nowrap">
+                                  <ArrowUpFromLine className="w-2.5 h-2.5 mr-1" /> B2B Sale
+                                </Badge>
+                              );
+                            }
+                            if (isSupplierReturn) {
+                              return (
+                                <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-200 text-[10px] whitespace-nowrap">
+                                  <ArrowUpFromLine className="w-2.5 h-2.5 mr-1" /> Supplier Return
+                                </Badge>
+                              );
+                            }
+                            return (
+                              <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] whitespace-nowrap">
+                                <ArrowUpFromLine className="w-2.5 h-2.5 mr-1" /> Client Sale
+                              </Badge>
+                            );
+                          }
+                        })()}
                       </td>
                       <td className="px-4 py-2.5">
                         <div className="font-semibold text-slate-900 text-xs">{r.product}</div>

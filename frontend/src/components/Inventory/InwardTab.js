@@ -3,7 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { useInwardList } from "@/hooks/useInventory";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invalidateFrontendProductCache } from "@/lib/productCache";
-import { ProductAutocompleteInput, VendorAutocompleteInput, UNIT_OPTIONS, formatUnit, getStandardizedUnitOptions } from "./_shared";
+import { ProductAutocompleteInput, VendorAutocompleteInput, B2BCustomerAutocompleteInput, UNIT_OPTIONS, formatUnit, getStandardizedUnitOptions } from "./_shared";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,7 +23,7 @@ import { usePermission } from "@/lib/permissions";
 import { useAuth } from "@/context/AuthContext";
 import { useEntitlements } from "@/hooks/useEntitlements";
 
-const SOURCE_TYPE_OPTIONS = ["Supplier", "Internal / Warehouse", "Repair Return", "Other"];
+const SOURCE_TYPE_OPTIONS = ["Supplier", "B2B Return", "Internal / Warehouse", "Repair Return", "Other"];
 
 const INWARD_CARRY_OPTIONS = [
   { key: "date", label: "Date" },
@@ -115,6 +115,34 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
     if (vendorsData?.vendors && Array.isArray(vendorsData.vendors)) return vendorsData.vendors;
     return [];
   }, [vendorsData]);
+
+  // Fetch B2B Customers for B2B Return inward entries
+  const { data: b2bCustomersData } = useQuery({
+    queryKey: ["inventory-b2b-customers"],
+    queryFn: async () => {
+      const res = await api.get("/inventory/b2b-customers");
+      return res.data?.customers || [];
+    },
+    staleTime: 30000,
+  });
+
+  const b2bCustomers = useMemo(() => {
+    return Array.isArray(b2bCustomersData) ? b2bCustomersData : [];
+  }, [b2bCustomersData]);
+
+  // Sync URL query param ?type=...
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const typeParam = params.get("type");
+    if (typeParam) {
+      const low = typeParam.toLowerCase();
+      if (low.includes("b2b")) {
+        setForm(f => ({ ...f, source_type: "B2B Return" }));
+      } else if (low.includes("supplier") || low.includes("supply")) {
+        setForm(f => ({ ...f, source_type: "Supplier" }));
+      }
+    }
+  }, []);
 
   // Options for Vendor Dropdown
   const vendorOptions = useMemo(() => {
@@ -212,9 +240,18 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
     setBusy(true);
     try {
       const isVendor = form.source_type === "Supplier" || form.source_type === "Vendor / Supplier" || form.source_type === "Supply";
+      const isB2b = form.source_type === "B2B Return";
       
       const matchedVendor = isVendor ? vendors.find((v) => (v.name || "").trim().toLowerCase() === (form.source_name || "").trim().toLowerCase()) : null;
-      const vendorId = matchedVendor?.id || form.vendor_id || form.source_id || "";
+      const vendorId = matchedVendor?.id || form.vendor_id || (isVendor ? form.source_id : "") || "";
+
+      let clientId = "";
+      let clientName = "";
+      if (isB2b) {
+        const matchedCust = b2bCustomers.find((c) => (c.name || c.full_name || "").trim().toLowerCase() === (form.source_name || "").trim().toLowerCase());
+        clientId = matchedCust?.id || form.client_id || form.source_id || "";
+        clientName = matchedCust?.name || matchedCust?.full_name || form.client_name || form.source_name;
+      }
 
       const sns = form.serial_number_required
         ? (form.serial_text || "").split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
@@ -228,10 +265,10 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
         bill_number: form.bill_number,
         source_type: form.source_type,
         source_name: form.source_name,
-        source_id: vendorId,
-        vendor_id: vendorId,
-        client_id: "",
-        client_name: "",
+        source_id: isVendor ? vendorId : (isB2b ? clientId : form.source_id),
+        vendor_id: isVendor ? vendorId : "",
+        client_id: isB2b ? clientId : "",
+        client_name: isB2b ? clientName : "",
         product: form.product.trim(),
         product_id: form.product_id || "",
         size: (form.size || "").trim(),
@@ -260,6 +297,10 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
       invalidateFrontendProductCache();
       queryClient.invalidateQueries({ queryKey: ["inventory"] });
       queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-history"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-supply-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-supplier-history"] });
       queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
       queryClient.invalidateQueries({ queryKey: ["vendors"] });
       onChanged?.();
@@ -345,6 +386,10 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
       queryClient.invalidateQueries({ queryKey: ["inventory"] });
       queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
       queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-history"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-supply-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-supplier-history"] });
       onChanged?.();
     } catch (e) {
       toast.error(formatApiError(e));
@@ -366,6 +411,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
   }, [entries, globalSearch]);
 
   const isVendorSource = form.source_type === "Supplier" || form.source_type === "Vendor / Supplier" || form.source_type === "Supply";
+  const isB2bReturn = form.source_type === "B2B Return";
   const isRepairSource = form.source_type === "Repair Return";
 
   return (
@@ -511,7 +557,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                   <Label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">Source Type *</Label>
                   <Select
                     value={form.source_type}
-                    onValueChange={(v) => setForm({ ...form, source_type: v, source_name: "", source_id: "" })}
+                    onValueChange={(v) => setForm({ ...form, source_type: v, source_name: "", source_id: "", client_id: "", client_name: "", vendor_id: "" })}
                   >
                     <SelectTrigger className="h-10 text-xs bg-white mt-1 rounded-xl"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -523,7 +569,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                 </div>
                 <div className="md:col-span-2">
                   <Label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
-                    {isVendorSource ? "Supplier *" : isRepairSource ? "Repair Party *" : "Source Name *"}
+                    {isVendorSource ? "Supplier *" : isB2bReturn ? "B2B Business Customer *" : isRepairSource ? "Repair Party *" : "Source Name *"}
                   </Label>
                   {isVendorSource ? (
                     <VendorAutocompleteInput
@@ -533,13 +579,33 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                           ...prev,
                           source_name: val,
                           source_id: matchedVendor?.id || "",
-                          vendor_id: matchedVendor?.id || ""
+                          vendor_id: matchedVendor?.id || "",
+                          client_id: "",
+                          client_name: ""
                         }));
                       }}
                       vendors={vendors}
                       placeholder="Select existing supplier..."
                       className="h-10 text-xs bg-white mt-1 rounded-xl"
                       testid="inw-vendor-input"
+                    />
+                  ) : isB2bReturn ? (
+                    <B2BCustomerAutocompleteInput
+                      value={form.source_name}
+                      onChange={(val, matchedCustomer) => {
+                        setForm((prev) => ({
+                          ...prev,
+                          source_name: val,
+                          source_id: matchedCustomer?.id || "",
+                          client_id: matchedCustomer?.id || "",
+                          client_name: val,
+                          vendor_id: ""
+                        }));
+                      }}
+                      customers={b2bCustomers}
+                      placeholder="Select B2B customer..."
+                      className="h-10 text-xs bg-white mt-1 rounded-xl"
+                      testid="inw-b2b-input"
                     />
                   ) : isRepairSource ? (
                     <VendorAutocompleteInput
@@ -548,7 +614,10 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                         setForm((prev) => ({
                           ...prev,
                           source_name: val,
-                          source_id: matchedVendor?.id || ""
+                          source_id: matchedVendor?.id || "",
+                          vendor_id: matchedVendor?.id || "",
+                          client_id: "",
+                          client_name: ""
                         }));
                       }}
                       vendors={vendors}
@@ -559,7 +628,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                   ) : (
                     <Input
                       value={form.source_name}
-                      onChange={(e) => setForm({ ...form, source_name: e.target.value, source_id: "" })}
+                      onChange={(e) => setForm({ ...form, source_name: e.target.value, source_id: "", client_id: "", client_name: "" })}
                       placeholder="Enter source / warehouse / party name..."
                       className="h-10 text-xs bg-white mt-1 rounded-xl"
                       data-testid="inw-source-input"

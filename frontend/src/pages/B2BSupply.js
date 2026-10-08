@@ -880,16 +880,18 @@ export default function B2BSupply() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setB2bReturnOpen(true)}
+                onClick={() => navigate("/inventory?tab=inward&type=B2B Return")}
                 className="h-8 text-xs border-indigo-200 bg-indigo-50/50 text-indigo-700 hover:bg-indigo-100"
+                title="Record B2B Return in Data Management"
               >
                 <RotateCcw className="w-3.5 h-3.5 mr-1" /> + B2B Return (Inward)
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setNewSaleOpen(true)}
+                onClick={() => navigate("/inventory?tab=outward&type=B2B Sale")}
                 className="h-8 text-xs border-amber-200 bg-amber-50/50 text-amber-800 hover:bg-amber-100"
+                title="Record B2B Sale in Data Management"
               >
                 <ArrowUpFromLine className="w-3.5 h-3.5 mr-1" /> + New B2B Sale (Outward)
               </Button>
@@ -1308,16 +1310,18 @@ export default function B2BSupply() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setSupplierReturnOpen(true)}
+                onClick={() => navigate("/inventory?tab=outward&type=Supplier Return")}
                 className="h-8 text-xs border-rose-200 bg-rose-50/50 text-rose-700 hover:bg-rose-100"
+                title="Record Supplier Return in Data Management"
               >
                 <ArrowUpFromLine className="w-3.5 h-3.5 mr-1" /> + Supplier Return (Outward)
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setNewSupplyOpen(true)}
+                onClick={() => navigate("/inventory?tab=inward&type=Supplier")}
                 className="h-8 text-xs border-emerald-200 bg-emerald-50/50 text-emerald-800 hover:bg-emerald-100"
+                title="Record Supply Entry in Data Management"
               >
                 <ArrowDownToLine className="w-3.5 h-3.5 mr-1" /> + New Supply (Inward)
               </Button>
@@ -1465,8 +1469,9 @@ export default function B2BSupply() {
                 </div>
                 <Button
                   size="sm"
-                  onClick={() => setNewSupplyOpen(true)}
+                  onClick={() => navigate("/inventory?tab=inward&type=Supplier")}
                   className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                  title="Record Supply Entry in Data Management"
                 >
                   <Plus className="w-3.5 h-3.5 mr-1" /> + New Supply Entry
                 </Button>

@@ -614,23 +614,50 @@ def _clean_products_doc(doc: dict) -> dict:
 def _clean_inward_doc(doc: dict) -> dict:
     cleaned = {k: v for k, v in doc.items() if k in _INWARD_VALID_COLS and k not in ("serial_numbers", "serial_number_required", "product_id")}
     sns = doc.get("serial_numbers") or []
+    rem = str(doc.get("remarks") or cleaned.get("remarks") or "")
+    cid = doc.get("client_id") or ""
+    vid = doc.get("vendor_id") or ""
+    tags = []
+    if cid and f"[client_id:" not in rem:
+        tags.append(f"[client_id:{cid}]")
+    if vid and f"[vendor_id:" not in rem:
+        tags.append(f"[vendor_id:{vid}]")
+    if tags:
+        tag_str = "".join(tags)
+        rem = f"{tag_str} {rem}".strip()
     if sns and isinstance(sns, list):
-        rem = str(doc.get("remarks") or cleaned.get("remarks") or "")
         if "__SERIALS__:" in rem:
             parts = rem.split(":", 2)
             rem = parts[2] if len(parts) > 2 else ""
         cleaned["remarks"] = f"__SERIALS__:{json.dumps(sns)}:{rem}"
+    else:
+        cleaned["remarks"] = rem
     return cleaned
 
 def _clean_outward_doc(doc: dict) -> dict:
     cleaned = {k: v for k, v in doc.items() if k in _OUTWARD_VALID_COLS and k not in ("serial_numbers", "serial_number_required", "product_id")}
     sns = doc.get("serial_numbers") or []
+    rem = str(doc.get("remarks") or cleaned.get("remarks") or "")
+    pt = doc.get("party_type") or ""
+    vid = doc.get("vendor_id") or ""
+    bno = doc.get("bill_number") or ""
+    tags = []
+    if pt and f"[party_type:" not in rem:
+        tags.append(f"[party_type:{pt}]")
+    if vid and f"[vendor_id:" not in rem:
+        tags.append(f"[vendor_id:{vid}]")
+    if bno and f"[bill_number:" not in rem:
+        tags.append(f"[bill_number:{bno}]")
+    if tags:
+        tag_str = "".join(tags)
+        rem = f"{tag_str} {rem}".strip()
     if sns and isinstance(sns, list):
-        rem = str(doc.get("remarks") or cleaned.get("remarks") or "")
         if "__SERIALS__:" in rem:
             parts = rem.split(":", 2)
             rem = parts[2] if len(parts) > 2 else ""
         cleaned["remarks"] = f"__SERIALS__:{json.dumps(sns)}:{rem}"
+    else:
+        cleaned["remarks"] = rem
     return cleaned
 
 def _enrich_inward_doc(doc: dict) -> dict:
@@ -645,8 +672,20 @@ def _enrich_inward_doc(doc: dict) -> dict:
                 doc["serial_numbers"] = parsed_sns
                 doc["serial_number_required"] = True
             doc["remarks"] = parts[2] if len(parts) > 2 else ""
+            rem = doc["remarks"]
         except Exception:
             pass
+    if "[client_id:" in rem:
+        m = re.search(r"\[client_id:([^\]]+)\]", rem)
+        if m:
+            doc["client_id"] = m.group(1)
+            rem = re.sub(r"\[client_id:[^\]]+\]\s*", "", rem).strip()
+    if "[vendor_id:" in rem:
+        m = re.search(r"\[vendor_id:([^\]]+)\]", rem)
+        if m:
+            doc["vendor_id"] = m.group(1)
+            rem = re.sub(r"\[vendor_id:[^\]]+\]\s*", "", rem).strip()
+    doc["remarks"] = rem
     if not doc.get("serial_numbers"):
         doc["serial_numbers"] = []
     return doc
@@ -663,8 +702,30 @@ def _enrich_outward_doc(doc: dict) -> dict:
                 doc["serial_numbers"] = parsed_sns
                 doc["serial_number_required"] = True
             doc["remarks"] = parts[2] if len(parts) > 2 else ""
+            rem = doc["remarks"]
         except Exception:
             pass
+    if "[party_type:" in rem:
+        m = re.search(r"\[party_type:([^\]]+)\]", rem)
+        if m:
+            doc["party_type"] = m.group(1)
+            rem = re.sub(r"\[party_type:[^\]]+\]\s*", "", rem).strip()
+    if "[vendor_id:" in rem:
+        m = re.search(r"\[vendor_id:([^\]]+)\]", rem)
+        if m:
+            doc["vendor_id"] = m.group(1)
+            rem = re.sub(r"\[vendor_id:[^\]]+\]\s*", "", rem).strip()
+    if "[bill_number:" in rem:
+        m = re.search(r"\[bill_number:([^\]]+)\]", rem)
+        if m:
+            doc["bill_number"] = m.group(1)
+            rem = re.sub(r"\[bill_number:[^\]]+\]\s*", "", rem).strip()
+    if not doc.get("party_type"):
+        if doc.get("vendor_id"):
+            doc["party_type"] = "Supplier Return"
+        elif doc.get("project_name") or doc.get("project_id"):
+            doc["party_type"] = "Client Sale"
+    doc["remarks"] = rem
     if not doc.get("serial_numbers"):
         doc["serial_numbers"] = []
     return doc
@@ -8532,6 +8593,7 @@ class OutwardIn(BaseModel):
     project_name: Optional[str] = ""
     bill_number: Optional[str] = ""
     party_type: Optional[str] = ""
+    vendor_id: Optional[str] = ""
     outward_challan_no: Optional[str] = ""
     reference_number: Optional[str] = ""
     reference_type: Optional[str] = "Challan Number"  # Challan Number | Book Number | Other
@@ -9726,7 +9788,25 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
         resolved_pid = data.product_id or (prod_doc["id"] if prod_doc else "")
         
         # Client ID resolution from name case-insensitively
-        if source_type_val in ("Return From Client", "B2B Return", "Client / Customer", "Client Return"):
+        if source_type_val == "B2B Return":
+            if client_name_val and not client_id_val:
+                b2b_cust = await db.b2b_customers.find_one({
+                    "company_id": company_id,
+                    "$or": [
+                        {"name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}},
+                        {"full_name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}}
+                    ]
+                })
+                if b2b_cust:
+                    client_id_val = b2b_cust["id"]
+                    client_name_val = b2b_cust.get("name") or b2b_cust.get("full_name") or client_name_val
+            elif client_id_val and not client_name_val:
+                b2b_cust = await db.b2b_customers.find_one({"company_id": company_id, "id": client_id_val})
+                if b2b_cust:
+                    client_name_val = b2b_cust.get("name") or b2b_cust.get("full_name") or client_name_val
+            if client_name_val:
+                source_name_val = client_name_val
+        elif source_type_val in ("Return From Client", "Client / Customer", "Client Return"):
             if client_name_val and not client_id_val:
                 client = await db.clients.find_one({
                     "company_id": company_id,
@@ -9921,27 +10001,64 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
         client_name_val = data.client_name or ""
         project_id_val = data.project_id or ""
         project_name_val = data.project_name or ""
+        vendor_id_val = getattr(data, "vendor_id", "") or ""
+        party_type_val = (data.party_type or "").strip()
         
-        # Client ID and Name resolution case-insensitively
-        if client_name_val and not client_id_val:
-            client = await db.clients.find_one({
-                "company_id": company_id,
-                "full_name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}
-            })
-            if client:
-                client_id_val = client["id"]
-                client_name_val = client["full_name"]
-        elif client_id_val and not client_name_val:
-            client = await db.clients.find_one({"company_id": company_id, "id": client_id_val})
-            if client:
-                client_name_val = client["full_name"]
+        # Entity resolution based on party_type
+        if party_type_val in ("B2B Customer", "B2B Sale"):
+            if client_name_val and not client_id_val:
+                b2b_cust = await db.b2b_customers.find_one({
+                    "company_id": company_id,
+                    "$or": [
+                        {"name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}},
+                        {"full_name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}}
+                    ]
+                })
+                if b2b_cust:
+                    client_id_val = b2b_cust["id"]
+                    client_name_val = b2b_cust.get("name") or b2b_cust.get("full_name") or client_name_val
+            elif client_id_val and not client_name_val:
+                b2b_cust = await db.b2b_customers.find_one({"company_id": company_id, "id": client_id_val})
+                if b2b_cust:
+                    client_name_val = b2b_cust.get("name") or b2b_cust.get("full_name") or client_name_val
+            project_id_val = ""
+            project_name_val = ""
+        elif party_type_val in ("Supplier Return", "Vendor Return"):
+            if client_name_val and not vendor_id_val:
+                v_doc = await db.vendors.find_one({
+                    "company_id": company_id,
+                    "name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}
+                })
+                if v_doc:
+                    vendor_id_val = v_doc["id"]
+                    client_name_val = v_doc["name"]
+            elif vendor_id_val and not client_name_val:
+                v_doc = await db.vendors.find_one({"company_id": company_id, "id": vendor_id_val})
+                if v_doc:
+                    client_name_val = v_doc["name"]
+            project_id_val = ""
+            project_name_val = ""
+        else:
+            # Client ID and Name resolution case-insensitively
+            if client_name_val and not client_id_val:
+                client = await db.clients.find_one({
+                    "company_id": company_id,
+                    "full_name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}
+                })
+                if client:
+                    client_id_val = client["id"]
+                    client_name_val = client["full_name"]
+            elif client_id_val and not client_name_val:
+                client = await db.clients.find_one({"company_id": company_id, "id": client_id_val})
+                if client:
+                    client_name_val = client["full_name"]
 
-        # Align project ID and project Name with client if empty or missing (same as Normal UI entry)
-        if client_id_val:
-            if not project_id_val:
-                project_id_val = client_id_val
-            if not project_name_val:
-                project_name_val = client_name_val
+            # Align project ID and project Name with client if empty or missing (same as Normal UI entry)
+            if client_id_val:
+                if not project_id_val:
+                    project_id_val = client_id_val
+                if not project_name_val:
+                    project_name_val = client_name_val
 
         challan_val = (data.outward_challan_no or data.reference_number or "").strip()
         sns = [sn.strip() for sn in (data.serial_numbers or []) if sn and sn.strip()]
@@ -9992,6 +10109,7 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
             "unit": data.unit or "Nos",
             "client_id": client_id_val,
             "client_name": client_name_val,
+            "vendor_id": vendor_id_val,
             "project_id": project_id_val,
             "project_name": project_name_val,
             "bill_number": challan_raw,
@@ -10185,11 +10303,12 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
                 a["asset_remarks"] = data.asset_remarks or ""
         _save_local_assets(all_assets)
         
-        await log_activity(company_id, user_id, user_name, "Outward Entry", f"{pn} × {data.quantity}")
-        _apply_transaction_balance_delta(company_id, pn, data.size or "", delta_in=0.0, delta_out=float(data.quantity or 0.0), prod_id=data.product_id)
-        invalidate_products_cache(company_id)
-        _recent_outward_txs[out_tx_key] = (time.time(), dict(doc))
-        return doc
+    await log_activity(company_id, user_id, user_name, "Outward Entry", f"{pn} × {data.quantity}")
+    _apply_transaction_balance_delta(company_id, pn, data.size or "", delta_in=0.0, delta_out=float(data.quantity or 0.0), prod_id=data.product_id)
+    invalidate_products_cache(company_id)
+    _recent_outward_txs[out_tx_key] = (time.time(), dict(doc))
+    return doc
+
 
 @api_router.post("/inventory/inward")
 async def add_inward(data: InwardIn, user=Depends(require_active_subscription())):
@@ -10232,6 +10351,45 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
     remarks_val = data.remarks or ""
     source_type_val = data.source_type or existing.get("source_type") or "Supplier"
     client_id_val = data.client_id or existing.get("client_id") or ""
+    client_name_val = data.client_name or existing.get("client_name") or ""
+    vendor_id_val = getattr(data, "vendor_id", None) or existing.get("vendor_id") or ""
+    source_name_val = data.source_name or existing.get("source_name") or ""
+
+    if source_type_val == "B2B Return":
+        client_name_val = client_name_val or source_name_val
+        source_name_val = client_name_val
+        if client_name_val and not client_id_val:
+            b2b_cust = await db.b2b_customers.find_one({
+                "company_id": cid,
+                "$or": [
+                    {"name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}},
+                    {"full_name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}}
+                ]
+            })
+            if b2b_cust:
+                client_id_val = b2b_cust["id"]
+                client_name_val = b2b_cust.get("name") or b2b_cust.get("full_name") or client_name_val
+        elif client_id_val and not client_name_val:
+            b2b_cust = await db.b2b_customers.find_one({"company_id": cid, "id": client_id_val})
+            if b2b_cust:
+                client_name_val = b2b_cust.get("name") or b2b_cust.get("full_name") or client_name_val
+        vendor_id_val = ""
+    elif source_type_val == "Supplier":
+        if source_name_val and not vendor_id_val:
+            v_doc = await db.vendors.find_one({
+                "company_id": cid,
+                "name": {"$regex": f"^{re.escape(source_name_val)}$", "$options": "i"}
+            })
+            if v_doc:
+                vendor_id_val = v_doc["id"]
+                source_name_val = v_doc["name"]
+        elif vendor_id_val and not source_name_val:
+            v_doc = await db.vendors.find_one({"company_id": cid, "id": vendor_id_val})
+            if v_doc:
+                source_name_val = v_doc["name"]
+        client_id_val = ""
+        client_name_val = ""
+
     if (source_type_val in ("Return From Client", "B2B Return", "Client / Customer", "Client Return") or client_id_val) and client_id_val:
         if f"[client_id:{client_id_val}]" not in remarks_val:
             remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
@@ -10247,9 +10405,11 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
         "challan_number": ref_num,
         "reference_type": data.reference_type or "Challan Number",
         "bill_number": (data.bill_number or "").strip() or numeric_only(data.bill_number),
-        "source_type": source_type_val, "source_name": data.source_name or existing.get("source_name") or "",
+        "source_type": source_type_val, "source_name": source_name_val,
+        "source_id": (vendor_id_val if source_type_val == "Supplier" else (client_id_val if source_type_val == "B2B Return" else (data.source_id or ""))),
+        "vendor_id": vendor_id_val,
         "client_id": client_id_val,
-        "client_name": data.client_name or existing.get("client_name") or "",
+        "client_name": client_name_val,
         "date": data.date or existing.get("date") or now_iso(), "remarks": remarks_val,
         "attachment_file_id": data.attachment_file_id if data.attachment_file_id is not None else existing.get("attachment_file_id", ""),
         "attachment_filename": data.attachment_filename if data.attachment_filename is not None else existing.get("attachment_filename", ""),
@@ -10412,14 +10572,76 @@ async def update_outward(entry_id: str, data: OutwardIn, user=Depends(get_curren
         raise HTTPException(status_code=404, detail="Outward entry not found")
     pn = (data.product or existing["product"]).strip().upper()
     await ensure_product(cid, pn, size=data.size or "", unit=data.unit or existing.get("unit") or "Nos")
+    party_type_val = (data.party_type or existing.get("party_type") or "").strip()
+    client_id_val = data.client_id or existing.get("client_id") or ""
+    client_name_val = data.client_name or existing.get("client_name") or ""
+    vendor_id_val = getattr(data, "vendor_id", None) or existing.get("vendor_id") or ""
+    project_id_val = data.project_id or existing.get("project_id") or ""
+    project_name_val = data.project_name or existing.get("project_name") or ""
+
+    if party_type_val in ("B2B Customer", "B2B Sale"):
+        if client_name_val and not client_id_val:
+            b2b_cust = await db.b2b_customers.find_one({
+                "company_id": cid,
+                "$or": [
+                    {"name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}},
+                    {"full_name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}}
+                ]
+            })
+            if b2b_cust:
+                client_id_val = b2b_cust["id"]
+                client_name_val = b2b_cust.get("name") or b2b_cust.get("full_name") or client_name_val
+        elif client_id_val and not client_name_val:
+            b2b_cust = await db.b2b_customers.find_one({"company_id": cid, "id": client_id_val})
+            if b2b_cust:
+                client_name_val = b2b_cust.get("name") or b2b_cust.get("full_name") or client_name_val
+        project_id_val = ""
+        project_name_val = ""
+    elif party_type_val in ("Supplier Return", "Vendor Return"):
+        if client_name_val and not vendor_id_val:
+            v_doc = await db.vendors.find_one({
+                "company_id": cid,
+                "name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}
+            })
+            if v_doc:
+                vendor_id_val = v_doc["id"]
+                client_name_val = v_doc["name"]
+        elif vendor_id_val and not client_name_val:
+            v_doc = await db.vendors.find_one({"company_id": cid, "id": vendor_id_val})
+            if v_doc:
+                client_name_val = v_doc["name"]
+        project_id_val = ""
+        project_name_val = ""
+    else:
+        # Client Sale
+        if client_name_val and not client_id_val:
+            client = await db.clients.find_one({
+                "company_id": cid,
+                "full_name": {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}
+            })
+            if client:
+                client_id_val = client["id"]
+                client_name_val = client["full_name"]
+        if client_id_val:
+            if not project_id_val:
+                project_id_val = client_id_val
+            if not project_name_val:
+                project_name_val = client_name_val
+
+    b_num = (data.bill_number or existing.get("bill_number") or "").strip()
+    raw_challan = (data.outward_challan_no or data.reference_number or existing.get("outward_challan_no") or "").strip()
+
     patch = {
         "product": pn, "size": data.size or "", "quantity": data.quantity,
         "product_id": data.product_id or existing.get("product_id", ""),
         "unit": data.unit or existing.get("unit") or "Nos",
-        "client_id": data.client_id or "", "client_name": data.client_name or "",
-        "project_id": data.project_id or "", "project_name": data.project_name or "",
-        "outward_challan_no": numeric_only(data.outward_challan_no),
-        "reference_number": numeric_only(data.reference_number or data.outward_challan_no),
+        "client_id": client_id_val, "client_name": client_name_val,
+        "vendor_id": vendor_id_val,
+        "project_id": project_id_val, "project_name": project_name_val,
+        "party_type": party_type_val,
+        "bill_number": b_num or raw_challan,
+        "outward_challan_no": raw_challan or numeric_only(data.outward_challan_no),
+        "reference_number": raw_challan or numeric_only(data.reference_number or data.outward_challan_no),
         "reference_type": data.reference_type or existing.get("reference_type") or "Challan Number",
         "date": data.date or existing.get("date") or now_iso(),
         "remarks": data.remarks or "",
@@ -10935,7 +11157,7 @@ async def get_b2b_sales(user=Depends(require_active_subscription())):
         # 2. Or client_id exists in b2b_customers master
         # 3. Or client_name matches a B2B customer name without project/material request link
         is_b2b = False
-        if party_type in ("B2B Customer", "B2B Client"):
+        if party_type in ("B2B Customer", "B2B Client", "B2B Sale"):
             is_b2b = True
         elif o_client_id and o_client_id in b2b_cust_ids:
             is_b2b = True
@@ -11486,6 +11708,7 @@ async def inv_history(
         "source_type": 1,
         "vendor": 1,
         "vendor_name": 1,
+        "vendor_id": 1,
         "client_name": 1,
         "client_id": 1,
         "remarks": 1,
@@ -11511,6 +11734,9 @@ async def inv_history(
         "unit": 1,
         "outward_challan_no": 1,
         "reference_number": 1,
+        "bill_number": 1,
+        "party_type": 1,
+        "vendor_id": 1,
         "client_name": 1,
         "client_id": 1,
         "project_name": 1,

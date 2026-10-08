@@ -457,3 +457,87 @@ export function ClientAutocompleteInput({ value, onChange, clients = [], placeho
     </Popover>
   );
 }
+
+export function B2BCustomerAutocompleteInput({ value, onChange, customers = [], placeholder = "Select B2B customer...", className, testid, required }) {
+  const [open, setOpen] = useState(false);
+  const [inputVal, setInputVal] = useState(value || "");
+
+  useEffect(() => {
+    setInputVal(value || "");
+  }, [value]);
+
+  const filtered = useMemo(() => {
+    const q = (inputVal || "").trim().toLowerCase();
+    if (!q) return customers.slice(0, 50);
+    return customers.filter((c) => {
+      const n = (c.name || c.full_name || "").toLowerCase();
+      const p = (c.mobile || c.phone || "").toLowerCase();
+      const cp = (c.contact_person || "").toLowerCase();
+      const g = (c.gstin || "").toLowerCase();
+      return n.includes(q) || p.includes(q) || cp.includes(q) || g.includes(q);
+    }).slice(0, 50);
+  }, [customers, inputVal]);
+
+  const handleTextChange = (val) => {
+    setInputVal(val);
+    const matched = customers.find(c => (c.name || c.full_name || "").trim().toLowerCase() === val.trim().toLowerCase());
+    onChange(val, matched);
+  };
+
+  const handleSelect = (c) => {
+    const cName = c.name || c.full_name || "";
+    setInputVal(cName);
+    onChange(cName, c);
+    setOpen(false);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <div className="relative w-full">
+          <Input
+            value={inputVal}
+            onChange={(e) => handleTextChange(e.target.value)}
+            onFocus={() => setOpen(true)}
+            placeholder={placeholder}
+            className={className}
+            data-testid={testid}
+            required={required}
+          />
+        </div>
+      </PopoverTrigger>
+      {open && filtered.length > 0 && (
+        <PopoverContent
+          className="p-0 border border-slate-200 bg-white rounded-xl shadow-2xl z-[99999] min-w-[280px] w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto text-xs py-1 text-left"
+          align="start"
+          sideOffset={4}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider bg-slate-50 sticky top-0 z-10 border-b border-slate-100">
+            B2B BUSINESS CUSTOMERS
+          </div>
+          {filtered.map((c) => (
+            <button
+              key={c.id || c.name}
+              type="button"
+              className="w-full text-left px-4 py-2 hover:bg-blue-50/80 font-medium text-slate-800 transition-colors border-b border-slate-50 last:border-0"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleSelect(c);
+              }}
+            >
+              <div className="flex flex-col">
+                <span className="font-semibold text-slate-900">{c.name || c.full_name}</span>
+                {(c.contact_person || c.mobile || c.gstin) && (
+                  <span className="text-[10px] text-slate-400 font-normal mt-0.5">
+                    {c.contact_person ? `Contact: ${c.contact_person}` : ""} {c.mobile ? `· ${c.mobile}` : ""} {c.gstin ? `· GSTIN: ${c.gstin}` : ""}
+                  </span>
+                )}
+              </div>
+            </button>
+          ))}
+        </PopoverContent>
+      )}
+    </Popover>
+  );
+}
