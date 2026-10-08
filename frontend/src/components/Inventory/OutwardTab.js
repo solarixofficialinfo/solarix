@@ -140,7 +140,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
       const res = await api.get("/inventory/b2b-customers");
       return res.data?.customers || [];
     },
-    staleTime: 30000,
+    staleTime: 5000,
   });
   const b2bCustomers = useMemo(() => {
     return Array.isArray(b2bCustomersData) ? b2bCustomersData : [];
@@ -153,7 +153,7 @@ export default function OutwardTab({ products, onChanged, globalSearch }) {
       const res = await api.get("/vendors");
       return res.data?.vendors || (Array.isArray(res.data) ? res.data : []);
     },
-    staleTime: 30000,
+    staleTime: 5000,
   });
   const vendors = useMemo(() => {
     if (Array.isArray(vendorsData)) return vendorsData;

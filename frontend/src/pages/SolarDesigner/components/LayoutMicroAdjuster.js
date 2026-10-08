@@ -669,28 +669,28 @@ export default function LayoutMicroAdjuster({
   const isOverridden = panels.length > baselineCount;
 
   return (
-    <div className="w-88 sm:w-96 bg-slate-900/98 backdrop-blur-xl border border-amber-500/40 rounded-2xl shadow-2xl p-3.5 text-xs text-white shrink-0 select-none flex flex-col gap-3 font-sans animate-in fade-in zoom-in-95 duration-150">
+    <div className="w-80 sm:w-96 max-w-[calc(100vw-2rem)] bg-slate-900/98 backdrop-blur-xl border border-amber-500/40 rounded-2xl shadow-2xl p-3.5 text-xs text-white shrink-0 select-none flex flex-col gap-3 font-sans animate-in fade-in zoom-in-95 duration-150">
       {/* ── HEADER ── */}
-      <div className="flex items-center justify-between pb-2.5 border-b border-slate-800/80">
-        <div className="flex items-center gap-2">
-          <span className="p-1.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-400">
+      <div className="flex items-center justify-between pb-2.5 border-b border-slate-800/80 gap-2 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="p-1.5 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-400 shrink-0">
             <Sliders className="w-4 h-4" />
           </span>
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-sm tracking-wide text-white uppercase">
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+            <span className="font-bold text-sm tracking-wide text-white uppercase whitespace-nowrap">
               Micro Adjust
             </span>
             {activeSection && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-800 text-cyan-300 font-mono font-semibold">
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-800 text-cyan-300 font-mono font-semibold truncate max-w-[140px]">
                 {activeSection.name || "Section"}
               </span>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
           {hasManualAdjustments && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-400 font-mono font-bold">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-400 font-mono font-bold whitespace-nowrap">
               Override: ON
             </span>
           )}
@@ -698,7 +698,7 @@ export default function LayoutMicroAdjuster({
             <button
               type="button"
               onClick={onClose}
-              className="w-7 h-7 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-white flex items-center justify-center font-bold text-xs cursor-pointer transition"
+              className="w-7 h-7 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-400 hover:text-white flex items-center justify-center font-bold text-xs cursor-pointer transition shrink-0"
               title="Close Micro Adjust"
             >
               ✕
@@ -715,7 +715,7 @@ export default function LayoutMicroAdjuster({
             {activeMode.toUpperCase()} ACTIVE
           </span>
         </div>
-        <div className="grid grid-cols-4 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+        <div className="grid grid-cols-4 gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 min-w-0">
           <button
             type="button"
             onClick={() => {
@@ -730,14 +730,14 @@ export default function LayoutMicroAdjuster({
                 setSelectedRowIndex?.(targetRow);
               }
             }}
-            className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 ${
+            className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 min-w-0 overflow-hidden ${
               activeMode === "row"
                 ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300"
                 : "text-slate-400 hover:text-white hover:bg-slate-900"
             }`}
           >
-            <Layers className="w-4 h-4" />
-            <span className="text-[11px]">ROW</span>
+            <Layers className="w-4 h-4 shrink-0" />
+            <span className="text-[10px] sm:text-[11px] truncate tracking-tight">ROW</span>
           </button>
 
           <button
@@ -752,14 +752,14 @@ export default function LayoutMicroAdjuster({
                 : (currentSelectedRow ? currentSelectedRow.rowIndex : (rows.length > 0 ? rows[0].rowIndex : 0));
               setSelectedGroupId?.(targetGrp);
             }}
-            className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 ${
+            className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 min-w-0 overflow-hidden ${
               activeMode === "group"
                 ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300"
                 : "text-slate-400 hover:text-white hover:bg-slate-900"
             }`}
           >
-            <Grid className="w-4 h-4" />
-            <span className="text-[11px]">GROUP</span>
+            <Grid className="w-4 h-4 shrink-0" />
+            <span className="text-[10px] sm:text-[11px] truncate tracking-tight">GROUP</span>
           </button>
 
           <button
@@ -770,14 +770,14 @@ export default function LayoutMicroAdjuster({
               setSelectedGroupId?.(null);
               setSelectedMemberId?.(null);
             }}
-            className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 ${
+            className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 min-w-0 overflow-hidden ${
               isPanelMode
                 ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300"
                 : "text-slate-400 hover:text-white hover:bg-slate-900"
             }`}
           >
-            <MousePointer className="w-4 h-4" />
-            <span className="text-[11px]">PANEL</span>
+            <MousePointer className="w-4 h-4 shrink-0" />
+            <span className="text-[10px] sm:text-[11px] truncate tracking-tight">PANEL</span>
           </button>
 
           <button
@@ -789,20 +789,20 @@ export default function LayoutMicroAdjuster({
               setSelectedRowIndex?.(null);
               setSelectedGroupId?.(null);
             }}
-            className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 ${
+            className={`py-2 px-1 rounded-lg text-xs font-bold transition cursor-pointer flex flex-col items-center gap-1 min-w-0 overflow-hidden ${
               activeMode === "structure"
                 ? "bg-amber-500 text-slate-950 shadow-md ring-1 ring-amber-300"
                 : "text-slate-400 hover:text-white hover:bg-slate-900"
             }`}
           >
-            <Box className="w-4 h-4" />
-            <span className="text-[11px]">STRUCTURE</span>
+            <Box className="w-4 h-4 shrink-0" />
+            <span className="text-[10px] sm:text-[11px] truncate tracking-tight">STRUCT</span>
           </button>
         </div>
       </div>
 
       {/* ── SELECTION STATUS CARD ── */}
-      <div className="bg-slate-950/80 border border-slate-800/90 rounded-xl p-2.5 flex flex-col gap-2">
+      <div className="bg-slate-950/80 border border-slate-800/90 rounded-xl p-2.5 flex flex-col gap-2 min-w-0">
         {/* ROW MODE SELECTION INFO */}
         {activeMode === "row" && (
           <div className="flex flex-col gap-2">
@@ -831,9 +831,9 @@ export default function LayoutMicroAdjuster({
                   const prevIdx = cIdx > 0 ? cIdx - 1 : rows.length - 1;
                   setSelectedRowIndex?.(rows[prevIdx].rowIndex);
                 }}
-                className="flex-1 py-1 px-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer"
+                className="flex-1 py-1 px-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer min-w-0"
               >
-                <span>‹ Prev Row</span>
+                <span className="truncate">‹ Prev Row</span>
               </button>
               <button
                 type="button"
@@ -843,9 +843,9 @@ export default function LayoutMicroAdjuster({
                   const nextIdx = cIdx < rows.length - 1 ? cIdx + 1 : 0;
                   setSelectedRowIndex?.(rows[nextIdx].rowIndex);
                 }}
-                className="flex-1 py-1 px-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer"
+                className="flex-1 py-1 px-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer min-w-0"
               >
-                <span>Next Row ›</span>
+                <span className="truncate">Next Row ›</span>
               </button>
             </div>
           </div>
@@ -876,9 +876,9 @@ export default function LayoutMicroAdjuster({
                   const nextGroupId = (Number(currentGroupId) + 1) % Math.max(1, rows.length);
                   setSelectedGroupId?.(nextGroupId);
                 }}
-                className="w-full py-1 px-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer"
+                className="w-full py-1 px-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-[11px] font-semibold flex items-center justify-center gap-1 transition cursor-pointer min-w-0"
               >
-                <span>Next Group ›</span>
+                <span className="truncate">Next Group ›</span>
               </button>
             </div>
           </div>
@@ -903,7 +903,7 @@ export default function LayoutMicroAdjuster({
                     setSelectedPanelId?.(null);
                     setSelectedPanelIds?.([]);
                   }}
-                  className="px-2 py-0.5 rounded-lg bg-red-950/60 hover:bg-red-900 text-red-300 border border-red-800/60 text-[10.5px] font-bold cursor-pointer transition"
+                  className="px-2 py-0.5 rounded-lg bg-red-950/60 hover:bg-red-900 text-red-300 border border-red-800/60 text-[10.5px] font-bold cursor-pointer transition shrink-0"
                   title="Clear all panel selections"
                 >
                   Clear Selection
@@ -922,7 +922,7 @@ export default function LayoutMicroAdjuster({
             <div className="flex items-center justify-between">
               <div>
                 <span className="text-[10px] text-slate-400 block">Selected Member</span>
-                <span className="font-bold text-amber-400 font-mono text-sm">
+                <span className="font-bold text-amber-400 font-mono text-sm truncate max-w-[120px]">
                   {selectedMemberId ? `#${selectedMemberId.slice(-6)}` : "None"}
                 </span>
               </div>
@@ -930,7 +930,7 @@ export default function LayoutMicroAdjuster({
                 <button
                   type="button"
                   onClick={() => setSelectedMemberId?.(null)}
-                  className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700 text-[10px] font-semibold cursor-pointer"
+                  className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700 text-[10px] font-semibold cursor-pointer shrink-0"
                 >
                   Deselect
                 </button>
@@ -945,20 +945,20 @@ export default function LayoutMicroAdjuster({
 
       {/* ── MOVEMENT & DIRECTION CONTROLS ── */}
       <div className="flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+        <div className="flex items-center justify-between gap-1 flex-wrap sm:flex-nowrap">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
             Movement
           </span>
 
           {/* Step Size Selector */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 flex-wrap shrink-0">
             <span className="text-[9.5px] text-slate-500 font-medium mr-0.5">Step:</span>
             {[0.02, 0.05, 0.1, 0.2].map((inc) => (
               <button
                 key={inc}
                 type="button"
                 onClick={() => setStepIncrement(inc)}
-                className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded transition cursor-pointer ${
+                className={`px-1.5 py-0.5 text-[10px] font-mono font-bold rounded transition cursor-pointer whitespace-nowrap ${
                   stepIncrement === inc
                     ? "bg-amber-500 text-slate-950 shadow-sm"
                     : "bg-slate-800/80 text-slate-400 hover:text-white border border-slate-700/60"
@@ -976,22 +976,22 @@ export default function LayoutMicroAdjuster({
           <button
             type="button"
             onClick={() => handleMicroMove(0, stepIncrement)}
-            className="h-8 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-200 font-bold text-xs transition border border-slate-700 flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-sm"
+            className="h-8 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-200 font-bold text-xs transition border border-slate-700 flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-sm min-w-0"
             title="Move North / Up (+Y)"
           >
-            <ArrowUp className="w-3.5 h-3.5" />
-            <span>Up</span>
+            <ArrowUp className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Up</span>
           </button>
           <div />
 
           <button
             type="button"
             onClick={() => handleMicroMove(-stepIncrement, 0)}
-            className="h-8 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-200 font-bold text-xs transition border border-slate-700 flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-sm"
+            className="h-8 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-200 font-bold text-xs transition border border-slate-700 flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-sm min-w-0"
             title="Move West / Left (-X)"
           >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Left</span>
+            <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Left</span>
           </button>
 
           <button
@@ -1000,31 +1000,31 @@ export default function LayoutMicroAdjuster({
               if (activeMode === "row") handleResetRowCenter();
             }}
             disabled={activeMode !== "row"}
-            className="h-8 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-cyan-400 font-mono text-[10px] font-bold transition border border-slate-800 flex items-center justify-center cursor-pointer"
+            className="h-8 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-cyan-400 font-mono text-[10px] font-bold transition border border-slate-800 flex items-center justify-center cursor-pointer min-w-0"
             title={activeMode === "row" ? "Reset row center alignment" : "Center"}
           >
-            {activeMode === "row" ? "Center" : "•"}
+            <span className="truncate">{activeMode === "row" ? "Center" : "•"}</span>
           </button>
 
           <button
             type="button"
             onClick={() => handleMicroMove(stepIncrement, 0)}
-            className="h-8 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-200 font-bold text-xs transition border border-slate-700 flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-sm"
+            className="h-8 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-200 font-bold text-xs transition border border-slate-700 flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-sm min-w-0"
             title="Move East / Right (+X)"
           >
-            <span>Right</span>
-            <ArrowRight className="w-3.5 h-3.5" />
+            <span className="truncate">Right</span>
+            <ArrowRight className="w-3.5 h-3.5 shrink-0" />
           </button>
 
           <div />
           <button
             type="button"
             onClick={() => handleMicroMove(0, -stepIncrement)}
-            className="h-8 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-200 font-bold text-xs transition border border-slate-700 flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-sm"
+            className="h-8 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-200 font-bold text-xs transition border border-slate-700 flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-sm min-w-0"
             title="Move South / Down (-Y)"
           >
-            <ArrowDown className="w-3.5 h-3.5" />
-            <span>Down</span>
+            <ArrowDown className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Down</span>
           </button>
           <div />
         </div>
@@ -1033,30 +1033,30 @@ export default function LayoutMicroAdjuster({
         {activeMode === "row" && (
           <div className="flex flex-col gap-2 pt-1 border-t border-slate-800/80">
             {/* Quick 3-State Row Shift */}
-            <div className="grid grid-cols-3 gap-1">
+            <div className="grid grid-cols-3 gap-1 min-w-0">
               <button
                 type="button"
                 onClick={handleShiftRowLeft}
-                className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 font-bold text-[11px] border border-slate-700 flex items-center justify-center gap-1 transition cursor-pointer"
+                className="py-1.5 px-1 sm:px-2 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 font-bold text-[10px] sm:text-[11px] border border-slate-700 flex items-center justify-center gap-1 transition cursor-pointer min-w-0 overflow-hidden"
               >
-                <ArrowLeft className="w-3 h-3" />
-                <span>Shift Left</span>
+                <ArrowLeft className="w-3 h-3 shrink-0" />
+                <span className="truncate">Shift Left</span>
               </button>
               <button
                 type="button"
                 onClick={handleResetRowCenter}
-                className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 font-bold text-[11px] border border-slate-700 flex items-center justify-center gap-1 transition cursor-pointer"
+                className="py-1.5 px-1 sm:px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 font-bold text-[10px] sm:text-[11px] border border-slate-700 flex items-center justify-center gap-1 transition cursor-pointer min-w-0 overflow-hidden"
               >
-                <RotateCcw className="w-3 h-3" />
-                <span>Reset Center</span>
+                <RotateCcw className="w-3 h-3 shrink-0" />
+                <span className="truncate">Center</span>
               </button>
               <button
                 type="button"
                 onClick={handleShiftRowRight}
-                className="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 font-bold text-[11px] border border-slate-700 flex items-center justify-center gap-1 transition cursor-pointer"
+                className="py-1.5 px-1 sm:px-2 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 font-bold text-[10px] sm:text-[11px] border border-slate-700 flex items-center justify-center gap-1 transition cursor-pointer min-w-0 overflow-hidden"
               >
-                <span>Shift Right</span>
-                <ArrowRight className="w-3 h-3" />
+                <span className="truncate">Shift Right</span>
+                <ArrowRight className="w-3 h-3 shrink-0" />
               </button>
             </div>
 
@@ -1091,59 +1091,59 @@ export default function LayoutMicroAdjuster({
             <button
               type="button"
               onClick={() => handleRotateSelection(15)}
-              className="w-full py-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center justify-center gap-1.5 font-semibold text-xs transition cursor-pointer"
+              className="w-full py-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center justify-center gap-1.5 font-semibold text-xs transition cursor-pointer min-w-0"
             >
-              <RotateCw className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Rotate Group 15°</span>
+              <RotateCw className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <span className="truncate">Rotate Group 15°</span>
             </button>
           </div>
         )}
 
         {isPanelMode && (
           <div className="flex flex-col gap-1.5 pt-1 border-t border-slate-800/80">
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-2 gap-1.5 min-w-0">
               <button
                 type="button"
                 onClick={() => handleRotateSelection(15)}
                 disabled={activeSelectedIds.length === 0}
-                className="py-1.5 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 hover:text-white border border-slate-700 flex items-center justify-center gap-1 font-semibold text-xs cursor-pointer"
+                className="py-1.5 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 hover:text-white border border-slate-700 flex items-center justify-center gap-1 font-semibold text-xs cursor-pointer min-w-0"
               >
-                <RotateCw className="w-3 h-3 text-blue-400" />
-                <span>Rotate 15°</span>
+                <RotateCw className="w-3 h-3 text-blue-400 shrink-0" />
+                <span className="truncate">Rotate 15°</span>
               </button>
 
               <button
                 type="button"
                 onClick={handleDeleteSelected}
                 disabled={activeSelectedIds.length === 0}
-                className="py-1.5 px-2 rounded-xl bg-red-950/60 hover:bg-red-900 disabled:opacity-40 text-red-300 hover:text-white border border-red-800/60 flex items-center justify-center gap-1 font-semibold text-xs cursor-pointer"
+                className="py-1.5 px-2 rounded-xl bg-red-950/60 hover:bg-red-900 disabled:opacity-40 text-red-300 hover:text-white border border-red-800/60 flex items-center justify-center gap-1 font-semibold text-xs cursor-pointer min-w-0"
               >
-                <Trash2 className="w-3 h-3 text-red-400" />
-                <span>Delete ({activeSelectedIds.length})</span>
+                <Trash2 className="w-3 h-3 text-red-400 shrink-0" />
+                <span className="truncate">Delete ({activeSelectedIds.length})</span>
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-2 gap-1.5 min-w-0">
               <button
                 type="button"
                 onClick={handleAddSinglePanelNear}
-                className="py-1.5 px-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center justify-center gap-1 font-bold text-xs shadow-md transition cursor-pointer"
+                className="py-1.5 px-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center justify-center gap-1 font-bold text-xs shadow-md transition cursor-pointer min-w-0"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>+ Add Panel</span>
+                <Plus className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">+ Add Panel</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setSnapEnabled?.(!snapEnabled)}
-                className={`py-1.5 px-2 rounded-xl border flex items-center justify-center gap-1 font-bold text-xs transition cursor-pointer ${
+                className={`py-1.5 px-2 rounded-xl border flex items-center justify-center gap-1 font-bold text-xs transition cursor-pointer min-w-0 ${
                   snapEnabled
                     ? "bg-emerald-950/60 border-emerald-600/70 text-emerald-300"
                     : "bg-slate-800 border-slate-700 text-slate-400 hover:text-white"
                 }`}
               >
-                <Magnet className="w-3.5 h-3.5" />
-                <span>Snap {snapEnabled ? "ON" : "OFF"}</span>
+                <Magnet className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Snap {snapEnabled ? "ON" : "OFF"}</span>
               </button>
             </div>
           </div>

@@ -1871,6 +1871,10 @@ export default function SolarStudio() {
       remaining_area_sqm: Math.round(remainingArea * 100) / 100,
     }));
 
+    setSelectedPanelId(taggedPanel.id);
+    setSelectedPanelIds([taggedPanel.id]);
+    setHasManualAdjustments(true);
+
     toast.success(`Added panel #${updatedPanels.length}${targetSection ? ` in ${targetSection.name}` : ""}`);
   };
 
@@ -4133,6 +4137,10 @@ export default function SolarStudio() {
                     structureMembers={designData.structure_members || []}
                     onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
                     onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
+                    snapEnabled={snapEnabled}
+                    setSnapEnabled={setSnapEnabled}
+                    onAddManualPanel={handleIncreasePanelCount}
+                    onOpenMicroAdjust={() => setShowMicroAdjust(true)}
                     onSwitchTo2D={() => {
                       setActiveTab("2d");
                       setActiveTool("draw_roof");
@@ -4253,6 +4261,10 @@ export default function SolarStudio() {
                       structureMembers={designData.structure_members || []}
                       onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
                       onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
+                      snapEnabled={snapEnabled}
+                      setSnapEnabled={setSnapEnabled}
+                      onAddManualPanel={handleIncreasePanelCount}
+                      onOpenMicroAdjust={() => setShowMicroAdjust(true)}
                       onSwitchTo2D={() => {
                         setActiveTab("2d");
                         setActiveTool("draw_roof");

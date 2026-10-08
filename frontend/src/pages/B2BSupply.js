@@ -263,6 +263,8 @@ export default function B2BSupply() {
     queryClient.invalidateQueries({ queryKey: ["inventory-supplier-history"] });
     queryClient.invalidateQueries({ queryKey: ["inventory-supply-entries"] });
     queryClient.invalidateQueries({ queryKey: ["inventory"] });
+    queryClient.invalidateQueries({ queryKey: ["vendors"] });
+    queryClient.invalidateQueries({ queryKey: ["clients"] });
     queryClient.invalidateQueries({ queryKey: ["ledger"] });
   };
 

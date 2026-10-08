@@ -9039,12 +9039,12 @@ def _save_local_high_value_product(product_name: str, is_high_value: bool):
         pass
 
 _PRODUCTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
-_PRODUCTS_CACHE_TTL_S = 60.0
+_PRODUCTS_CACHE_TTL_S = 5.0
 
 # Separate ultra-lightweight cache for the dropdown/search endpoint.
 # Only contains the 6 fields needed for product selection — NO aggregation at all.
 _PRODUCTS_SEARCH_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
-_PRODUCTS_SEARCH_CACHE_TTL_S = 300.0  # 5 min – refreshed on every product write
+_PRODUCTS_SEARCH_CACHE_TTL_S = 5.0  # 5s – refreshed on every product write
 
 def invalidate_products_cache(company_id: Optional[str] = None):
     global _PRODUCTS_CACHE, _PRODUCTS_SEARCH_CACHE
@@ -9102,8 +9102,8 @@ def _apply_transaction_balance_delta(
 
 async def _compute_inventory_balances(cid: str):
     items = await db.products.find({"company_id": cid, "status": {"$ne": "Archived"}}, {"_id": 0}).sort("name", 1).to_list(10000)
-    inward_projection = {"_id": 0, "id": 1, "product": 1, "size": 1, "quantity": 1, "product_id": 1, "status": 1, "source": 1, "source_type": 1}
-    outward_projection = {"_id": 0, "id": 1, "product": 1, "size": 1, "quantity": 1, "product_id": 1, "status": 1}
+    inward_projection = {"_id": 0, "id": 1, "product": 1, "size": 1, "quantity": 1, "product_id": 1, "status": 1, "source": 1, "source_type": 1, "unit": 1, "category": 1}
+    outward_projection = {"_id": 0, "id": 1, "product": 1, "size": 1, "quantity": 1, "product_id": 1, "status": 1, "unit": 1, "category": 1}
     inward_entries = await db.inward_entries.find({"company_id": cid}, inward_projection).to_list(100000)
     outward_entries = await db.outward_entries.find({"company_id": cid}, outward_projection).to_list(100000)
 
@@ -9121,6 +9121,51 @@ async def _compute_inventory_balances(cid: str):
             key = (p_name, p_size)
             prod_key_map[key] = p
             prod_name_map.setdefault(p_name, []).append(p)
+
+    # Auto-heal: Ensure any products present in transactions exist in Product Master
+    unmatched_specs: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for ie in inward_entries:
+        raw_pn = norm_product_name(ie.get("product"))
+        raw_ps = norm_str(ie.get("size"))
+        pid = ie.get("product_id")
+        if raw_pn and (raw_pn, raw_ps) not in prod_key_map and (not pid or pid not in prod_id_map):
+            unmatched_specs[(raw_pn, raw_ps)] = {
+                "name": raw_pn,
+                "size": raw_ps,
+                "unit": norm_unit(ie.get("unit")),
+                "category": ie.get("category") or "Solar",
+            }
+    for oe in outward_entries:
+        raw_pn = norm_product_name(oe.get("product"))
+        raw_ps = norm_str(oe.get("size"))
+        pid = oe.get("product_id")
+        if raw_pn and (raw_pn, raw_ps) not in prod_key_map and (not pid or pid not in prod_id_map):
+            unmatched_specs[(raw_pn, raw_ps)] = {
+                "name": raw_pn,
+                "size": raw_ps,
+                "unit": norm_unit(oe.get("unit")),
+                "category": oe.get("category") or "Solar",
+            }
+
+    if unmatched_specs:
+        for (upn, ups), uinfo in unmatched_specs.items():
+            try:
+                new_p = await ensure_product(
+                    company_id=cid,
+                    name=upn,
+                    size=ups,
+                    unit=uinfo.get("unit", "Nos"),
+                    category=uinfo.get("category", "Solar")
+                )
+                if new_p:
+                    p_id = new_p.get("id")
+                    if p_id and p_id not in prod_id_map:
+                        items.append(new_p)
+                        prod_id_map[p_id] = new_p
+                        prod_key_map[(upn, ups)] = new_p
+                        prod_name_map.setdefault(upn, []).append(new_p)
+            except Exception:
+                pass
 
     in_map: Dict[Tuple[str, str], float] = {}
     out_map: Dict[Tuple[str, str], float] = {}

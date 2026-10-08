@@ -56,6 +56,9 @@ export function useInvalidateInventory() {
     queryClient.invalidateQueries({ queryKey: ["inventory", "stats"] });
     queryClient.invalidateQueries({ queryKey: ["serial-tracking"] });
     queryClient.invalidateQueries({ queryKey: ["inventory-intelligence"] });
+    queryClient.invalidateQueries({ queryKey: ["vendors"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory-b2b-customers"] });
+    queryClient.invalidateQueries({ queryKey: ["clients"] });
   };
 }
 

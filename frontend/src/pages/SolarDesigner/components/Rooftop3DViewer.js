@@ -2,10 +2,10 @@ import React, { useEffect, useRef, useState, useCallback, useImperativeHandle, f
 import * as THREE from "three";
 import { toast } from "sonner";
 import {
-  RotateCcw, Eye, Layers, Compass, ZoomIn, ZoomOut, Maximize2, Minimize2,
+  RotateCcw, RotateCw, Eye, Layers, Compass, ZoomIn, ZoomOut, Maximize2, Minimize2,
   Box, Camera, Sun, Info, Focus, Sliders, Check, Plus, Trash2, Copy,
   Move, AlertTriangle, Grid, Magnet, Triangle, Sparkles,
-  ArrowUp, ArrowDown, ArrowLeft, ArrowRight, X
+  ArrowUp, ArrowDown, ArrowLeft, ArrowRight, X, MousePointer
 } from "lucide-react";
 import {
   toRad,
@@ -304,6 +304,10 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     structureMembers = [],
     onStructureNodesChange,
     onStructureMembersChange,
+    snapEnabled: propSnapEnabled = undefined,
+    setSnapEnabled: propSetSnapEnabled = null,
+    onAddManualPanel = null,
+    onOpenMicroAdjust = null,
     onSwitchTo2D,
     onApplyTemplateRoof,
   },
@@ -346,8 +350,10 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
   const [deletedMemberIds, setDeletedMemberIds] = useState(new Set());
   const [viewMode, setViewMode] = useState("visual"); // 'visual' | 'engineering'
-  const [snapEnabled, setSnapEnabled] = useState(true);
-  const snapEnabledRef = useRef(true);
+  const [internalSnapEnabled, setInternalSnapEnabled] = useState(true);
+  const snapEnabled = propSnapEnabled !== undefined ? propSnapEnabled : internalSnapEnabled;
+  const setSnapEnabled = propSetSnapEnabled || setInternalSnapEnabled;
+  const snapEnabledRef = useRef(snapEnabled);
   const structureToolRef = useRef("none");
   const deletedMemberIdsRef = useRef(deletedMemberIds);
   const viewModeRef = useRef(viewMode);
@@ -391,7 +397,18 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const [internalSelectedPanelId, setInternalSelectedPanelId] = useState(null);
   const [internalSelectionMode, setInternalSelectionMode] = useState("panel");
   const [internalSelectedRowIndex, setInternalSelectedRowIndex] = useState(null);
-  const [stepIncrement, setStepIncrement] = useState(0.05); // 0.01, 0.05, 0.10
+  const [stepIncrement, setStepIncrement] = useState(0.05); // 0.02, 0.05, 0.10, 0.20
+
+  // CAD Micro-Adjust Hold Progress & Contextual Popup State
+  const [holdProgress, setHoldProgress] = useState(null);
+  const [contextPopup, setContextPopup] = useState(null);
+  const longPressTimerRef = useRef(null);
+  const longPressCandidateRef = useRef(null);
+  const longPressFiredRef = useRef(false);
+  const pointerStartPosRef = useRef({ x: 0, y: 0 });
+  const findIntersected3DObjectRef = useRef(null);
+  const triggerLongPressActionRef = useRef(null);
+  const rowBaselinesRef = useRef(new Map());
 
   const activeSelectedPanelId = selectedPanelId !== undefined && selectedPanelId !== null ? selectedPanelId : internalSelectedPanelId;
   const changeSelectedPanelId = setSelectedPanelId || setInternalSelectedPanelId;
@@ -402,7 +419,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const activeSelectedRowIndex = selectedRowIndex !== undefined && selectedRowIndex !== null ? selectedRowIndex : internalSelectedRowIndex;
   const changeSelectedRowIndex = setSelectedRowIndex || setInternalSelectedRowIndex;
 
-  // 3D Micro-Move Handler with Boundary Collision Checks
+  // 3D Micro-Move Handler with Boundary Collision Checks & Section Isolation
   const handle3DMicroMove = useCallback((dx, dy) => {
     if (!panels || panels.length === 0 || !setPanels) return;
     const finalDx = Math.round(dx * 1000) / 1000;
@@ -418,7 +435,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       return;
     }
 
-    // MODE 1: Panel Move (Single or Multi-Selected)
+    // MODE 1: Panel Move (Single or Multi-Selected with Preserved Relative Spacing)
     if (activeSelectionMode === "panel" || activeSelectionMode === "custom") {
       const targetIds = (Array.isArray(selectedPanelIds) && selectedPanelIds.length > 0)
         ? selectedPanelIds
@@ -479,7 +496,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       const effectiveSecPanels = secPanels.length > 0 ? secPanels : (panels || []);
       const secRows = getPanelsByRow(effectiveSecPanels);
       const activeRowObj = secRows.find((r) => r.rowIndex === activeSelectedRowIndex);
-      const rowPanels = activeRowObj ? activeRowObj.panels : panels.filter((p) => p.row === activeSelectedRowIndex);
+      const rowPanels = activeRowObj ? activeRowObj.panels : panels.filter((p) => p.row === activeSelectedRowIndex && (p.sectionId === activeSec?.id || !activeSec));
 
       if (rowPanels.length === 0) return;
 
@@ -583,6 +600,21 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           return p;
         })
       );
+
+      if (structureMembers && structureMembers.length > 0 && onStructureMembersChange) {
+        onStructureMembersChange(
+          structureMembers.map((m) =>
+            m.groupId === selectedGroupId || m.row === selectedGroupId
+              ? {
+                  ...m,
+                  x: Math.round(((m.x || 0) + finalDx) * 1000) / 1000,
+                  y: Math.round(((m.y || 0) + finalDy) * 1000) / 1000,
+                }
+              : m
+          )
+        );
+      }
+
       setHasManualAdjustments?.(true);
       return;
     }
@@ -618,21 +650,481 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       setHasManualAdjustments?.(true);
       return;
     }
-  }, [panels, setPanels, activeSelectedPanelId, selectedPanelIds, activeSelectedRowIndex, selectedGroupId, activeSelectionMode, activeSec, roofSections, roofPolygon, setbackMeters, obstacles, walkways, setHasManualAdjustments]);
 
-  // Delete currently selected panel in 3D
-  const handleDeleteSelectedPanel = useCallback(() => {
-    if (!activeSelectedPanelId || !setPanels) return;
-    setPanels((prev) => prev.filter((p) => p.id !== activeSelectedPanelId));
+    // MODE 5: Structure Member Move
+    if (activeSelectionMode === "structure" || (selectedMemberId && !activeSelectedPanelId)) {
+      if (selectedMemberId) {
+        const manualMember = (structureMembers || []).find((m) => m.id === selectedMemberId);
+        if (manualMember && onStructureNodesChange && (structureNodes || []).length > 0) {
+          const affectedNodeIds = new Set([manualMember.nodeAId, manualMember.nodeBId].filter(Boolean));
+          onStructureNodesChange(
+            (structureNodes || []).map((n) =>
+              affectedNodeIds.has(n.id)
+                ? {
+                    ...n,
+                    x: Math.round(((n.x || 0) + finalDx) * 1000) / 1000,
+                    y: Math.round(((n.y || 0) + finalDy) * 1000) / 1000,
+                  }
+                : n
+            )
+          );
+          if (onStructureMembersChange) {
+            onStructureMembersChange(
+              (structureMembers || []).map((m) =>
+                m.id === selectedMemberId
+                  ? {
+                      ...m,
+                      x: Math.round(((m.x || 0) + finalDx) * 1000) / 1000,
+                      y: Math.round(((m.y || 0) + finalDy) * 1000) / 1000,
+                    }
+                  : m
+              )
+            );
+          }
+          setHasManualAdjustments?.(true);
+          toast.success("Shifted structure member");
+          return;
+        } else if (onStructureMembersChange && (structureMembers || []).length > 0) {
+          onStructureMembersChange(
+            (structureMembers || []).map((m) =>
+              m.id === selectedMemberId
+                ? {
+                    ...m,
+                    x: Math.round(((m.x || 0) + finalDx) * 1000) / 1000,
+                    y: Math.round(((m.y || 0) + finalDy) * 1000) / 1000,
+                  }
+                : m
+            )
+          );
+          setHasManualAdjustments?.(true);
+          toast.success("Shifted structure member");
+          return;
+        } else {
+          toast.info("Auto-generated rails & posts move synchronously with panels in Row/Group mode.");
+          return;
+        }
+      }
+    }
+  }, [
+    panels,
+    setPanels,
+    activeSelectedPanelId,
+    selectedPanelIds,
+    activeSelectedRowIndex,
+    selectedGroupId,
+    selectedMemberId,
+    activeSelectionMode,
+    activeSec,
+    roofSections,
+    roofPolygon,
+    setbackMeters,
+    obstacles,
+    walkways,
+    structureNodes,
+    structureMembers,
+    onStructureNodesChange,
+    onStructureMembersChange,
+    setHasManualAdjustments,
+  ]);
+
+  // Rotate Selection Handler (+deg)
+  const handle3DRotateSelection = useCallback((deg = 15) => {
+    if (!panels || panels.length === 0 || !setPanels) return;
+    let targetPanelIds = new Set();
+
+    if (activeSelectionMode === "row") {
+      const secPanels = activeSec
+        ? panels.filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
+        : panels;
+      const secRows = getPanelsByRow(secPanels);
+      const rowObj = secRows.find((r) => r.rowIndex === activeSelectedRowIndex);
+      if (rowObj) targetPanelIds = new Set(rowObj.panels.map((p) => p.id));
+    } else if (activeSelectionMode === "group") {
+      const secPanels = activeSec
+        ? panels.filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
+        : panels;
+      targetPanelIds = new Set(
+        secPanels
+          .filter((p) => p.groupId === selectedGroupId || p.tableId === selectedGroupId || p.row === selectedGroupId)
+          .map((p) => p.id)
+      );
+    } else {
+      const activeIds = selectedPanelIds && selectedPanelIds.length > 0
+        ? selectedPanelIds
+        : (activeSelectedPanelId ? [activeSelectedPanelId] : []);
+      targetPanelIds = new Set(activeIds);
+    }
+
+    if (targetPanelIds.size === 0) {
+      toast.info("Please select panel(s) first.");
+      return;
+    }
+
+    setPanels((prev) =>
+      prev.map((p) =>
+        targetPanelIds.has(p.id)
+          ? { ...p, rotation: ((Number(p.rotation) || 0) + deg) % 360, isManual: true }
+          : p
+      )
+    );
+    setHasManualAdjustments?.(true);
+    toast.success(`Rotated selection by +${deg}°`);
+  }, [panels, setPanels, activeSelectionMode, activeSec, activeSelectedRowIndex, selectedGroupId, selectedPanelIds, activeSelectedPanelId, setHasManualAdjustments]);
+
+  // Adjust Row Tilt
+  const handle3DAdjustRowTilt = useCallback((deltaDeg) => {
+    if (!panels || panels.length === 0 || !setPanels) return;
+    const targetRow = activeSelectedRowIndex != null ? activeSelectedRowIndex : 0;
+    const secPanels = activeSec
+      ? panels.filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
+      : panels;
+    const secRows = getPanelsByRow(secPanels);
+    const rowObj = secRows.find((r) => r.rowIndex === targetRow);
+    const rowPanelIds = new Set(rowObj ? rowObj.panels.map((p) => p.id) : secPanels.filter((p) => p.row === targetRow).map((p) => p.id));
+    if (rowPanelIds.size === 0) return;
+
+    setPanels((prev) =>
+      prev.map((p) => {
+        if (rowPanelIds.has(p.id)) {
+          const currentTilt = Number(p.tilt ?? 15);
+          const newTilt = Math.max(0, Math.min(60, currentTilt + deltaDeg));
+          return { ...p, tilt: newTilt, isManual: true };
+        }
+        return p;
+      })
+    );
+    setHasManualAdjustments?.(true);
+    toast.success(`Adjusted row tilt by ${deltaDeg > 0 ? `+${deltaDeg}` : deltaDeg}°`);
+  }, [panels, setPanels, activeSelectedRowIndex, activeSec, setHasManualAdjustments]);
+
+  // Reset Row to Center
+  const handle3DResetRowCenter = useCallback(() => {
+    if (!panels || panels.length === 0 || !setPanels) return;
+    const targetRow = activeSelectedRowIndex != null ? activeSelectedRowIndex : 0;
+    const secPanels = activeSec
+      ? panels.filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
+      : panels;
+    const secRows = getPanelsByRow(secPanels);
+    const rowObj = secRows.find((r) => r.rowIndex === targetRow);
+    if (!rowObj || rowObj.panels.length === 0) return;
+
+    const rowAvgX = rowObj.panels.reduce((sum, p) => sum + p.x, 0) / rowObj.panels.length;
+    const baselineAvgX = rowBaselinesRef.current.get(targetRow);
+    const targetCenter = baselineAvgX != null ? baselineAvgX : 0;
+    const deltaX = Math.round((targetCenter - rowAvgX) * 1000) / 1000;
+    if (Math.abs(deltaX) < 0.005) {
+      toast.info("Row is already centered.");
+      return;
+    }
+    handle3DMicroMove(deltaX, 0);
+  }, [panels, setPanels, activeSelectedRowIndex, activeSec, handle3DMicroMove]);
+
+  // Delete Selection Handler (Panel / Row / Group / Structure)
+  const handle3DDeleteSelection = useCallback(() => {
+    if (!setPanels) return;
+
+    if (activeSelectionMode === "row") {
+      if (activeSelectedRowIndex == null) {
+        toast.warning("Please select a row first.");
+        return;
+      }
+      const secPanels = activeSec
+        ? panels.filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
+        : panels;
+      const secRows = getPanelsByRow(secPanels);
+      const rowObj = secRows.find((r) => r.rowIndex === activeSelectedRowIndex);
+      const rowPanelIds = new Set(rowObj ? rowObj.panels.map((p) => p.id) : secPanels.filter((p) => p.row === activeSelectedRowIndex).map((p) => p.id));
+      setPanels((prev) => prev.filter((p) => !rowPanelIds.has(p.id)));
+      changeSelectedRowIndex(null);
+      changeSelectedPanelId(null);
+      if (setSelectedPanelIds) setSelectedPanelIds([]);
+      setHasManualAdjustments?.(true);
+      setContextPopup(null);
+      toast.success("Removed row.");
+      return;
+    }
+
+    if (activeSelectionMode === "group") {
+      if (selectedGroupId == null) {
+        toast.warning("Please select a group first.");
+        return;
+      }
+      const secPanels = activeSec
+        ? panels.filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
+        : panels;
+      const grpPanelIds = new Set(
+        secPanels
+          .filter((p) => p.groupId === selectedGroupId || p.tableId === selectedGroupId || p.row === selectedGroupId)
+          .map((p) => p.id)
+      );
+      setPanels((prev) => prev.filter((p) => !grpPanelIds.has(p.id)));
+      if (setSelectedGroupId) setSelectedGroupId(null);
+      changeSelectedPanelId(null);
+      if (setSelectedPanelIds) setSelectedPanelIds([]);
+      setHasManualAdjustments?.(true);
+      setContextPopup(null);
+      toast.success("Removed group.");
+      return;
+    }
+
+    if (activeSelectionMode === "structure") {
+      if (selectedMemberId) {
+        setDeletedMemberIds((prev) => new Set([...prev, selectedMemberId]));
+        setSelectedMemberId(null);
+        setContextPopup(null);
+        toast.success("Removed structure member.");
+        return;
+      }
+      if (selectedNodeId) {
+        setSelectedNodeId(null);
+        setContextPopup(null);
+        return;
+      }
+    }
+
+    // Default: panel deletion (Single or Multi-select)
+    const targetIds = selectedPanelIds && selectedPanelIds.length > 0
+      ? selectedPanelIds
+      : (activeSelectedPanelId ? [activeSelectedPanelId] : []);
+
+    if (targetIds.length === 0) {
+      toast.warning("Please select panel(s) first.");
+      return;
+    }
+
+    const delSet = new Set(targetIds);
+    setPanels((prev) => prev.filter((p) => !delSet.has(p.id)));
     changeSelectedPanelId(null);
-    changeSelectedRowIndex(null);
-    toast.success("Panel removed.");
-  }, [activeSelectedPanelId, setPanels, changeSelectedPanelId, changeSelectedRowIndex]);
+    if (setSelectedPanelIds) setSelectedPanelIds([]);
+    setHasManualAdjustments?.(true);
+    setContextPopup(null);
+    toast.success(`Removed ${targetIds.length} panel${targetIds.length > 1 ? "s" : ""}.`);
+  }, [
+    panels,
+    setPanels,
+    activeSelectionMode,
+    activeSelectedRowIndex,
+    selectedGroupId,
+    selectedMemberId,
+    selectedNodeId,
+    selectedPanelIds,
+    activeSelectedPanelId,
+    activeSec,
+    changeSelectedRowIndex,
+    changeSelectedPanelId,
+    setSelectedPanelIds,
+    setSelectedGroupId,
+    setSelectedMemberId,
+    setSelectedNodeId,
+    setHasManualAdjustments,
+  ]);
+
+  // Record initial row baseline X for centering
+  useEffect(() => {
+    if (panels && panels.length > 0) {
+      const rows = getPanelsByRow(panels);
+      rows.forEach((r) => {
+        if (!rowBaselinesRef.current.has(r.rowIndex) && r.panels.length > 0) {
+          const avgX = r.panels.reduce((sum, p) => sum + p.x, 0) / r.panels.length;
+          rowBaselinesRef.current.set(r.rowIndex, avgX);
+        }
+      });
+    }
+  }, [panels]);
+
+  // Raycaster helper to locate interactive 3D objects at cursor
+  const findIntersected3DObject = useCallback((clientX, clientY) => {
+    if (!rendererRef.current || !cameraRef.current || !mountRef.current) return null;
+    const rect = mountRef.current.getBoundingClientRect();
+    const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera({ x: ndcX, y: ndcY }, cameraRef.current);
+
+    // 1. Check interactive nodes
+    const nodeObjects = Object.values(nodeMeshMapRef.current || {});
+    if (nodeObjects.length > 0) {
+      const nodeHits = raycaster.intersectObjects(nodeObjects, false);
+      if (nodeHits.length > 0) {
+        const hit = nodeHits[0].object;
+        const nodeId = hit.userData?.nodeId;
+        if (nodeId) {
+          return { type: "node", id: nodeId, mesh: hit, point: nodeHits[0].point, userData: hit.userData };
+        }
+      }
+    }
+
+    // 2. Check structure members
+    const memberObjects = Object.values(memberMeshMapRef.current || {});
+    if (memberObjects.length > 0) {
+      const memberHits = raycaster.intersectObjects(memberObjects, false);
+      if (memberHits.length > 0) {
+        const hit = memberHits[0].object;
+        const memberId = hit.userData?.memberId;
+        if (memberId) {
+          return { type: "structure", id: memberId, mesh: hit, point: memberHits[0].point, userData: hit.userData };
+        }
+      }
+    }
+
+    // 3. Check panels
+    const panelObjects = Object.values(panelMeshMapRef.current || {});
+    if (panelObjects.length > 0) {
+      const panelHits = raycaster.intersectObjects(panelObjects, false);
+      if (panelHits.length > 0) {
+        const hit = panelHits[0].object;
+        const pId = hit.userData?.panelId || hit.parent?.userData?.panelId;
+        if (pId) {
+          return { type: "panel", id: pId, mesh: hit, point: panelHits[0].point, userData: hit.userData };
+        }
+      }
+    }
+
+    return null;
+  }, []);
+
+  // Long-Press CAD Action Trigger (~2000ms hold)
+  const triggerLongPressAction = useCallback((hit, clientX, clientY) => {
+    if (!hit || !containerRef.current || !cameraRef.current) return;
+    longPressFiredRef.current = true;
+    setHoldProgress(null);
+
+    if (controlsRef.current) {
+      controlsRef.current.isDragging = false;
+      controlsRef.current.isPanning = false;
+    }
+
+    let resolvedMode = activeSelectionMode || "panel";
+    let clickedP = null;
+    let pSec = null;
+    let rowIndex = null;
+    let visualIndex = 1;
+    let rowPanelsList = [];
+    let grpId = 0;
+    let groupPanelsList = [];
+
+    if (hit.type === "panel") {
+      clickedP = (panels || []).find((item) => item.id === hit.id);
+      pSec = (roofSections || []).find((s) => s.id === clickedP?.sectionId) || activeSec;
+      const secPanels = pSec
+        ? (panels || []).filter((p) => p.sectionId === pSec.id || (!p.sectionId && pSec.polygon && isPointInsidePolygon(p.x, p.y, pSec.polygon)))
+        : (panels || []);
+      const effectiveSecPanels = secPanels.length > 0 ? secPanels : (panels || []);
+      const secRows = getPanelsByRow(effectiveSecPanels);
+      const matchedRow = secRows.find((r) => r.panels.some((rp) => rp.id === hit.id));
+      rowIndex = matchedRow ? matchedRow.rowIndex : (clickedP?.row ?? 0);
+      visualIndex = matchedRow ? matchedRow.visualIndex : Number(rowIndex) + 1;
+      rowPanelsList = matchedRow ? matchedRow.panels : [];
+      grpId = clickedP?.groupId ?? clickedP?.tableId ?? (matchedRow ? matchedRow.rowIndex : (clickedP?.row ?? 0));
+      groupPanelsList = effectiveSecPanels.filter((p) => p.groupId === grpId || p.tableId === grpId || p.row === grpId);
+
+      if (activeSelectionMode === "panel" || activeSelectionMode === "custom" || !activeSelectionMode) {
+        resolvedMode = "panel";
+        changeSelectedPanelId(hit.id);
+        if (setSelectedPanelIds) setSelectedPanelIds([hit.id]);
+        changeSelectedRowIndex(rowIndex);
+        if (setSelectedGroupId) setSelectedGroupId(grpId);
+      } else if (activeSelectionMode === "row") {
+        resolvedMode = "row";
+        changeSelectedRowIndex(rowIndex);
+        if (setSelectedPanelIds) setSelectedPanelIds(rowPanelsList.map((p) => p.id));
+        changeSelectedPanelId(hit.id);
+      } else if (activeSelectionMode === "group") {
+        resolvedMode = "group";
+        if (setSelectedGroupId) setSelectedGroupId(grpId);
+        if (setSelectedPanelIds) setSelectedPanelIds(groupPanelsList.map((p) => p.id));
+        changeSelectedPanelId(hit.id);
+      } else if (activeSelectionMode === "structure") {
+        resolvedMode = "structure";
+        const railCandidates = Object.keys(memberMeshMapRef.current);
+        const matchedRail = railCandidates.find((k) => k.includes(String(clickedP?.row ?? 0)));
+        if (matchedRail) setSelectedMemberId(matchedRail);
+      }
+    } else if (hit.type === "structure") {
+      resolvedMode = "structure";
+      setSelectedMemberId(hit.id);
+      setSelectedNodeId(null);
+    } else if (hit.type === "node") {
+      resolvedMode = "structure";
+      setSelectedNodeId(hit.id);
+      setSelectedMemberId(null);
+    }
+
+    // Project 3D position to 2D container viewport pixels
+    const rect = containerRef.current.getBoundingClientRect();
+    const center = new THREE.Vector3();
+    if (hit.mesh) {
+      const box = new THREE.Box3().setFromObject(hit.mesh);
+      box.getCenter(center);
+      center.y += 0.25;
+    } else if (hit.point) {
+      center.copy(hit.point);
+      center.y += 0.25;
+    }
+    center.project(cameraRef.current);
+
+    const screenX = (center.x * 0.5 + 0.5) * rect.width;
+    const screenY = (-center.y * 0.5 + 0.5) * rect.height;
+
+    // Viewport-safe boundary clamping
+    const popupWidth = 256;
+    const popupHeight = 310;
+    const maxRight = isMicroAdjustActive ? rect.width - 390 : rect.width - popupWidth - 16;
+    let clampedX = screenX + 16;
+    if (clampedX > maxRight) {
+      clampedX = screenX - popupWidth - 16;
+    }
+    clampedX = Math.max(16, Math.min(Math.max(16, maxRight), clampedX));
+    let clampedY = screenY - popupHeight / 2;
+    clampedY = Math.max(55, Math.min(rect.height - popupHeight - 45, clampedY));
+
+    setContextPopup({
+      visible: true,
+      x: clampedX,
+      y: clampedY,
+      objectType: resolvedMode,
+      data: {
+        id: hit.id,
+        panelId: hit.id,
+        panel: clickedP,
+        sectionId: pSec?.id,
+        sectionName: pSec?.name,
+        rowIndex,
+        visualIndex,
+        rowPanelsCount: rowPanelsList.length,
+        groupId: grpId,
+        groupPanelsCount: groupPanelsList.length,
+        memberId: hit.id,
+      },
+    });
+  }, [
+    activeSelectionMode,
+    panels,
+    roofSections,
+    activeSec,
+    changeSelectedPanelId,
+    setSelectedPanelIds,
+    changeSelectedRowIndex,
+    setSelectedGroupId,
+    setSelectedMemberId,
+    setSelectedNodeId,
+    isMicroAdjustActive,
+  ]);
+
+  // Keep callback refs updated
+  useEffect(() => { findIntersected3DObjectRef.current = findIntersected3DObject; }, [findIntersected3DObject]);
+  useEffect(() => { triggerLongPressActionRef.current = triggerLongPressAction; }, [triggerLongPressAction]);
 
   // Arrow keys listener when panel is selected
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (!activeSelectedPanelId && activeSelectedRowIndex == null) return;
+      if (e.key === "Escape") {
+        setContextPopup(null);
+        return;
+      }
+
+      if (!activeSelectedPanelId && activeSelectedRowIndex == null && !selectedGroupId && !selectedMemberId) return;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) return;
 
       const step = stepIncrement;
@@ -653,7 +1145,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeSelectedPanelId, activeSelectedRowIndex, stepIncrement, handle3DMicroMove]);
+  }, [activeSelectedPanelId, activeSelectedRowIndex, selectedGroupId, selectedMemberId, stepIncrement, handle3DMicroMove]);
 
   // Keep refs in sync with state
   useEffect(() => { structureToolRef.current = structureTool; }, [structureTool]);
@@ -1016,9 +1508,49 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       controlsRef.current.prevY = e.clientY;
       controlsRef.current.startX = e.clientX;
       controlsRef.current.startY = e.clientY;
+
+      if (e.button === 0 && structureToolRef.current === "none") {
+        pointerStartPosRef.current = { x: e.clientX, y: e.clientY };
+        longPressFiredRef.current = false;
+        const hit = findIntersected3DObjectRef.current?.(e.clientX, e.clientY);
+        if (hit && (hit.type === "panel" || hit.type === "structure" || hit.type === "node")) {
+          longPressCandidateRef.current = hit;
+          if (containerRef.current) {
+            const cRect = containerRef.current.getBoundingClientRect();
+            setHoldProgress({
+              x: e.clientX - cRect.left,
+              y: e.clientY - cRect.top,
+              label: hit.type === "panel" ? "Hold for Micro Adjust…" : "Hold for Structure…",
+            });
+          }
+          if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = setTimeout(() => {
+            longPressTimerRef.current = null;
+            longPressFiredRef.current = true;
+            setHoldProgress(null);
+            triggerLongPressActionRef.current?.(hit, e.clientX, e.clientY);
+          }, 2000);
+        }
+      }
     };
     const onMouseMove = (e) => {
+      if (longPressTimerRef.current || longPressCandidateRef.current) {
+        const dx = e.clientX - pointerStartPosRef.current.x;
+        const dy = e.clientY - pointerStartPosRef.current.y;
+        if (Math.hypot(dx, dy) > 6) {
+          if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+          }
+          longPressCandidateRef.current = null;
+          setHoldProgress(null);
+        }
+      }
+
       const ctr = controlsRef.current;
+      if (ctr.isDragging || ctr.isPanning) {
+        setContextPopup(null);
+      }
       if (!ctr.isDragging && !ctr.isPanning) return;
       const deltaX = e.clientX - ctr.prevX;
       const deltaY = e.clientY - ctr.prevY;
@@ -1039,9 +1571,20 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       updateCameraPosition();
     };
     const onMouseUp = (e) => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+      setHoldProgress(null);
+      longPressCandidateRef.current = null;
+
       controlsRef.current.isDragging = false;
       controlsRef.current.isPanning = false;
       if (e && e.button === 0) {
+        if (longPressFiredRef.current) {
+          longPressFiredRef.current = false;
+          return;
+        }
         const dx = e.clientX - (controlsRef.current.startX ?? e.clientX);
         const dy = e.clientY - (controlsRef.current.startY ?? e.clientY);
         if (Math.hypot(dx, dy) < 6) {
@@ -1055,12 +1598,64 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     let touchStartY = 0;
     const onTouchStart = (e) => {
       if (e.touches && e.touches.length === 1) {
-        touchStartX = e.touches[0].clientX;
-        touchStartY = e.touches[0].clientY;
+        const touch = e.touches[0];
+        touchStartX = touch.clientX;
+        touchStartY = touch.clientY;
+        pointerStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+        longPressFiredRef.current = false;
+
+        if (structureToolRef.current === "none") {
+          const hit = findIntersected3DObjectRef.current?.(touch.clientX, touch.clientY);
+          if (hit && (hit.type === "panel" || hit.type === "structure" || hit.type === "node")) {
+            longPressCandidateRef.current = hit;
+            if (containerRef.current) {
+              const cRect = containerRef.current.getBoundingClientRect();
+              setHoldProgress({
+                x: touch.clientX - cRect.left,
+                y: touch.clientY - cRect.top,
+                label: hit.type === "panel" ? "Hold for Micro Adjust…" : "Hold for Structure…",
+              });
+            }
+            if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = setTimeout(() => {
+              longPressTimerRef.current = null;
+              longPressFiredRef.current = true;
+              setHoldProgress(null);
+              triggerLongPressActionRef.current?.(hit, touch.clientX, touch.clientY);
+            }, 2000);
+          }
+        }
+      }
+    };
+    const onTouchMove = (e) => {
+      if (e.touches && e.touches.length === 1) {
+        const touch = e.touches[0];
+        const dx = touch.clientX - touchStartX;
+        const dy = touch.clientY - touchStartY;
+        if (Math.hypot(dx, dy) > 10) {
+          if (longPressTimerRef.current) {
+            clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+          }
+          longPressCandidateRef.current = null;
+          setHoldProgress(null);
+          setContextPopup(null);
+        }
       }
     };
     const onTouchEnd = (e) => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+      setHoldProgress(null);
+      longPressCandidateRef.current = null;
+
       if (e.changedTouches && e.changedTouches.length === 1) {
+        if (longPressFiredRef.current) {
+          longPressFiredRef.current = false;
+          return;
+        }
         const touch = e.changedTouches[0];
         const dx = touch.clientX - touchStartX;
         const dy = touch.clientY - touchStartY;
@@ -1147,6 +1742,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
     dom.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: true });
     dom.addEventListener("touchend", onTouchEnd, { passive: true });
     dom.addEventListener("wheel", onWheel, { passive: false });
     dom.addEventListener("contextmenu", onContextMenu);
@@ -1179,6 +1775,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
       dom.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
       dom.removeEventListener("touchend", onTouchEnd);
       dom.removeEventListener("wheel", onWheel);
       dom.removeEventListener("contextmenu", onContextMenu);
@@ -2057,6 +2654,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             sectionId: pSec?.id,
             sectionName: pSec?.name,
             row: p.row,
+            groupId: p.groupId ?? p.tableId ?? p.row,
+            structureId: p.structureId,
+            panel: p,
           };
           panelGroup.add(panelMesh);
           if (p.id) {
@@ -2066,8 +2666,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           // 3D Panel Selection Outline Highlight with Section Isolation
           const isSameSection = !selectedSectionId || p.sectionId === selectedSectionId || (!p.sectionId && activeSec?.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon));
           const isSingleSel = (activeSelectionMode === "panel" || activeSelectionMode === "custom" || !activeSelectionMode) && (activeSelectedPanelId === p.id || (Array.isArray(selectedPanelIds) && selectedPanelIds.includes(p.id)));
-          const isRowSel = isMicroAdjustActive && activeSelectionMode === "row" && isSameSection && activeSelectedRowIndex != null && (p.row === activeSelectedRowIndex || activeRowPanelIdSet.has(p.id));
-          const isGroupSel = isMicroAdjustActive && (activeSelectionMode === "group" || selectionMode === "group") && isSameSection && (
+          const isRowSel = activeSelectionMode === "row" && isSameSection && activeSelectedRowIndex != null && (p.row === activeSelectedRowIndex || activeRowPanelIdSet.has(p.id));
+          const isGroupSel = (activeSelectionMode === "group" || selectionMode === "group") && isSameSection && (
             selectedGroupId != null && (p.groupId === selectedGroupId || p.tableId === selectedGroupId || p.row === selectedGroupId || activeGroupPanelIdSet.has(p.id))
           );
           const isArraySel = isMicroAdjustActive && activeSelectionMode === "array" && isSameSection && (activeSelectedPanelId != null || activeSelectedRowIndex != null);
@@ -2089,6 +2689,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           const frameLipMesh = new THREE.Mesh(frameLipGeom, frameMat);
           frameLipMesh.position.set(0, -0.016, 0);
           frameLipMesh.rotation.x = -tiltRad;
+          frameLipMesh.userData = { isPanel: true, panelId: p.id };
           panelGroup.add(frameLipMesh);
 
           rootGroup.add(panelGroup);
@@ -3111,6 +3712,271 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           )}
         </div>
       </div>
+
+      {/* ── 2000ms HOLD PROGRESS INDICATOR ─────────────────────────────────── */}
+      {holdProgress && (
+        <div
+          className="absolute pointer-events-none z-50 flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2"
+          style={{ left: holdProgress.x, top: holdProgress.y }}
+        >
+          <div className="relative w-14 h-14 flex items-center justify-center">
+            <svg className="w-14 h-14 -rotate-90" viewBox="0 0 48 48">
+              <circle
+                cx="24"
+                cy="24"
+                r="20"
+                className="stroke-slate-800/80"
+                strokeWidth="4"
+                fill="none"
+              />
+              <circle
+                cx="24"
+                cy="24"
+                r="20"
+                className="stroke-cyan-400"
+                strokeWidth="4"
+                fill="none"
+                strokeDasharray="125.66"
+                strokeDashoffset="125.66"
+                strokeLinecap="round"
+                style={{
+                  animation: "holdProgressAnim 2s linear forwards",
+                }}
+              />
+            </svg>
+            <MousePointer className="w-4 h-4 text-cyan-400 absolute animate-pulse" />
+          </div>
+          <span className="mt-1 px-2.5 py-0.5 rounded-full bg-slate-900/95 text-cyan-300 text-[10px] font-bold tracking-wide border border-cyan-500/40 whitespace-nowrap shadow-xl">
+            {holdProgress.label}
+          </span>
+          <style>{`
+            @keyframes holdProgressAnim {
+              from { stroke-dashoffset: 125.66; }
+              to { stroke-dashoffset: 0; }
+            }
+          `}</style>
+        </div>
+      )}
+
+      {/* ── CAD CONTEXTUAL ACTION POPUP ────────────────────────────────────── */}
+      {contextPopup?.visible && (
+        <div
+          className="absolute z-40 w-64 bg-slate-900/95 backdrop-blur-md border border-cyan-500/40 rounded-xl shadow-2xl p-3 text-xs text-slate-200 select-none pointer-events-auto transition-all animate-in fade-in zoom-in-95 duration-150"
+          style={{ left: contextPopup.x, top: contextPopup.y }}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between pb-2 border-b border-slate-800 mb-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <div className="w-2 h-2 rounded-full bg-cyan-400 shrink-0 shadow-sm shadow-cyan-400/50" />
+              <div className="font-bold text-slate-100 truncate text-[11px]">
+                {contextPopup.objectType === "row"
+                  ? `Row ${contextPopup.data?.visualIndex ?? ((Number(contextPopup.data?.rowIndex) || 0) + 1)}`
+                  : contextPopup.objectType === "group"
+                  ? `Group ${contextPopup.data?.groupId ?? 1}`
+                  : contextPopup.objectType === "structure"
+                  ? `Structure ${contextPopup.data?.memberId?.split("-")[0] || ""}`
+                  : `Panel #${String(contextPopup.data?.id || "").slice(-6)}`}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setContextPopup(null)}
+              className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded-md transition-colors"
+              title="Close (Esc)"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Context Details */}
+          <div className="flex items-center justify-between text-[10px] text-slate-400 mb-2 px-1">
+            <span className="truncate max-w-[130px]">
+              {contextPopup.data?.sectionName || "Rooftop Section"}
+            </span>
+            <span className="font-medium text-cyan-400 shrink-0">
+              {contextPopup.objectType === "row" && contextPopup.data?.rowPanelsCount != null
+                ? `${contextPopup.data.rowPanelsCount} Panels`
+                : contextPopup.objectType === "group" && contextPopup.data?.groupPanelsCount != null
+                ? `${contextPopup.data.groupPanelsCount} Panels`
+                : contextPopup.objectType === "structure"
+                ? "Active Rail/Member"
+                : "Single Module"}
+            </span>
+          </div>
+
+          {/* Scope Selector Tabs */}
+          <div className="grid grid-cols-4 gap-1 p-0.5 bg-slate-950/80 rounded-lg border border-slate-800 mb-2.5">
+            {[
+              { id: "panel", label: "PANEL" },
+              { id: "row", label: "ROW" },
+              { id: "group", label: "GROUP" },
+              { id: "structure", label: "STRUCT" },
+            ].map((tab) => {
+              const isActive = (activeSelectionMode || "panel") === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    changeSelectionMode(tab.id);
+                    setContextPopup((prev) => (prev ? { ...prev, objectType: tab.id } : null));
+                  }}
+                  className={`py-1 text-[9px] font-bold rounded tracking-tight transition-all text-center ${
+                    isActive
+                      ? "bg-cyan-500 text-slate-950 shadow-sm"
+                      : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Step Size Selector */}
+          <div className="flex items-center justify-between mb-2 px-0.5">
+            <span className="text-[10px] text-slate-400 font-medium">Step</span>
+            <div className="flex gap-1">
+              {[0.02, 0.05, 0.10, 0.20].map((step) => (
+                <button
+                  key={step}
+                  type="button"
+                  onClick={() => setStepIncrement(step)}
+                  className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all ${
+                    stepIncrement === step
+                      ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/50"
+                      : "bg-slate-800/80 text-slate-400 border border-slate-700/60 hover:text-slate-200"
+                  }`}
+                >
+                  {step}m
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Directional Nudge Pad */}
+          <div className="flex flex-col items-center gap-1 my-2 bg-slate-950/40 p-2 rounded-lg border border-slate-800/60">
+            <button
+              type="button"
+              onClick={() => handle3DMicroMove(0, stepIncrement)}
+              className="w-10 h-7 flex items-center justify-center bg-slate-800 hover:bg-cyan-500 hover:text-slate-950 text-slate-200 border border-slate-700 rounded-md transition-all active:scale-95"
+              title="Move Up"
+            >
+              <ArrowUp className="w-3.5 h-3.5" />
+            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handle3DMicroMove(-stepIncrement, 0)}
+                className="w-10 h-7 flex items-center justify-center bg-slate-800 hover:bg-cyan-500 hover:text-slate-950 text-slate-200 border border-slate-700 rounded-md transition-all active:scale-95"
+                title="Move Left"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+              </button>
+              <div className="w-8 h-7 flex items-center justify-center text-[10px] font-mono font-bold text-cyan-400 bg-slate-900 rounded border border-slate-800">
+                {stepIncrement}
+              </div>
+              <button
+                type="button"
+                onClick={() => handle3DMicroMove(stepIncrement, 0)}
+                className="w-10 h-7 flex items-center justify-center bg-slate-800 hover:bg-cyan-500 hover:text-slate-950 text-slate-200 border border-slate-700 rounded-md transition-all active:scale-95"
+                title="Move Right"
+              >
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => handle3DMicroMove(0, -stepIncrement)}
+              className="w-10 h-7 flex items-center justify-center bg-slate-800 hover:bg-cyan-500 hover:text-slate-950 text-slate-200 border border-slate-700 rounded-md transition-all active:scale-95"
+              title="Move Down"
+            >
+              <ArrowDown className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Contextual Action Buttons */}
+          <div className="grid grid-cols-2 gap-1.5 mt-2">
+            <button
+              type="button"
+              onClick={() => handle3DRotateSelection(15)}
+              className="h-7 px-1.5 flex items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-md text-[10px] font-medium transition-all"
+            >
+              <RotateCw className="w-3 h-3 text-cyan-400" /> Rotate 15°
+            </button>
+
+            {activeSelectionMode === "row" ? (
+              <button
+                type="button"
+                onClick={handle3DResetRowCenter}
+                className="h-7 px-1.5 flex items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-md text-[10px] font-medium transition-all"
+                title="Align row to baseline center"
+              >
+                <Focus className="w-3 h-3 text-amber-400" /> Center
+              </button>
+            ) : onAddManualPanel ? (
+              <button
+                type="button"
+                onClick={onAddManualPanel}
+                className="h-7 px-1.5 flex items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 rounded-md text-[10px] font-medium transition-all"
+              >
+                <Plus className="w-3 h-3 text-emerald-400" /> + Add Panel
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setSnapEnabled?.(!snapEnabled)}
+                className={`h-7 px-1.5 flex items-center justify-center gap-1 rounded-md text-[10px] font-medium transition-all border ${
+                  snapEnabled
+                    ? "bg-cyan-950/60 border-cyan-600 text-cyan-300"
+                    : "bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Magnet className="w-3 h-3" /> Snap: {snapEnabled ? "ON" : "OFF"}
+              </button>
+            )}
+
+            {activeSelectionMode === "row" && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handle3DAdjustRowTilt(1)}
+                  className="h-7 px-1.5 flex items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-md text-[10px] font-medium transition-all"
+                >
+                  <ArrowUp className="w-3 h-3 text-indigo-400" /> Tilt +1°
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handle3DAdjustRowTilt(-1)}
+                  className="h-7 px-1.5 flex items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-md text-[10px] font-medium transition-all"
+                >
+                  <ArrowDown className="w-3 h-3 text-indigo-400" /> Tilt -1°
+                </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={handle3DDeleteSelection}
+              className="h-7 px-1.5 flex items-center justify-center gap-1 bg-red-950/60 hover:bg-red-900 border border-red-800 text-red-200 rounded-md text-[10px] font-medium transition-all"
+            >
+              <Trash2 className="w-3 h-3 text-red-400" /> Delete
+            </button>
+
+            {onOpenMicroAdjust && !isMicroAdjustActive && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenMicroAdjust();
+                }}
+                className="h-7 px-1.5 flex items-center justify-center gap-1 bg-indigo-950/60 hover:bg-indigo-900 border border-indigo-700 text-indigo-200 rounded-md text-[10px] font-medium transition-all"
+              >
+                <Sliders className="w-3 h-3 text-indigo-400" /> Open Drawer
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 });

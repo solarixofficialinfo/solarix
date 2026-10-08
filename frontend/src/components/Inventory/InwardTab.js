@@ -110,7 +110,8 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
     queryFn: async () => {
       const res = await api.get("/vendors");
       return res.data?.vendors || (Array.isArray(res.data) ? res.data : []);
-    }
+    },
+    staleTime: 5000,
   });
 
   const vendors = useMemo(() => {
@@ -126,7 +127,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
       const res = await api.get("/inventory/b2b-customers");
       return res.data?.customers || [];
     },
-    staleTime: 30000,
+    staleTime: 5000,
   });
 
   const b2bCustomers = useMemo(() => {

@@ -210,7 +210,6 @@ export default function InventoryIntelligenceTab({ globalSearch = "", refreshTri
   const materialUtilization = data?.material_utilization || [];
   const productPerformance = data?.product_performance || [];
   const serialStatusDist = data?.serial_status_distribution || [];
-  const serialItems = data?.serial_items || [];
   const sitePerformance = data?.site_performance || [];
   const movementTrends = trendView === "daily" ? (data?.movement_trend_daily || []) : (data?.movement_trend_monthly || []);
   const stockHealth = data?.stock_health || { healthy_count: 0, low_stock_count: 0, out_of_stock_count: 0, distribution: [] };
@@ -1023,81 +1022,7 @@ export default function InventoryIntelligenceTab({ globalSearch = "", refreshTri
         </Card>
       </div>
 
-      {/* SECTION 4 & 13: Serial / Asset Intelligence Global Table */}
-      <Card className="border-slate-200 shadow-sm bg-white">
-        <CardHeader className="p-4 pb-2 border-b border-slate-100 flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="text-sm font-semibold text-slate-900" style={{ fontFamily: "Outfit" }}>
-              Serialized Asset Intelligence & Audit Logs
-            </CardTitle>
-            <CardDescription className="text-xs text-slate-500">
-              Trace equipment by serial numbers, current location, client project & movement history
-            </CardDescription>
-          </div>
-          <Badge variant="outline" className="text-slate-600 text-xs font-normal">
-            Showing {serialItems.length} matching serials
-          </Badge>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto max-h-[340px]">
-            <table className="w-full text-xs text-left" data-testid="serialized-assets-table">
-              <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 sticky top-0 z-10 border-b border-slate-200">
-                <tr>
-                  <th className="px-3 py-2.5 font-semibold">Serial Number</th>
-                  <th className="px-2 py-2.5 font-semibold">Equipment Product</th>
-                  <th className="px-2 py-2.5 font-semibold">Brand / Model</th>
-                  <th className="px-2 py-2.5 font-semibold">Current Status</th>
-                  <th className="px-2 py-2.5 font-semibold">Location / Site</th>
-                  <th className="px-2 py-2.5 font-semibold">Client</th>
-                  <th className="px-2 py-2.5 font-semibold">Project</th>
-                  <th className="px-2 py-2.5 text-right font-semibold">Outward Date</th>
-                  <th className="px-2 py-2.5 font-semibold">Reference</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {serialItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center text-xs text-slate-400">
-                      No serial numbers match the active filters
-                    </td>
-                  </tr>
-                ) : (
-                  serialItems.map((sa) => (
-                    <tr key={sa.serial_number} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="px-3 py-2 font-mono font-bold text-slate-900">{sa.serial_number}</td>
-                      <td className="px-2 py-2 font-medium text-slate-800">{sa.product}</td>
-                      <td className="px-2 py-2 text-slate-600">{sa.brand} {sa.model !== "—" ? `(${sa.model})` : ""}</td>
-                      <td className="px-2 py-2">
-                        <Badge
-                          variant="secondary"
-                          className={`text-[10px] px-1.5 py-0 ${
-                            sa.status === "In Stock"
-                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                              : sa.status === "Installed"
-                              ? "bg-blue-50 text-blue-700 border border-blue-200"
-                              : sa.status === "Damaged"
-                              ? "bg-red-50 text-red-700 border border-red-200"
-                              : sa.status === "Returned"
-                              ? "bg-amber-50 text-amber-700 border border-amber-200"
-                              : "bg-blue-50 text-blue-700 border border-blue-200"
-                          }`}
-                        >
-                          {sa.status}
-                        </Badge>
-                      </td>
-                      <td className="px-2 py-2 text-slate-600 truncate max-w-[150px]">{sa.location}</td>
-                      <td className="px-2 py-2 text-slate-600 truncate">{sa.client_name}</td>
-                      <td className="px-2 py-2 text-slate-600 truncate">{sa.project_name}</td>
-                      <td className="px-2 py-2 text-right text-slate-500 text-[11px]">{sa.outward_date || "—"}</td>
-                      <td className="px-2 py-2 text-slate-500 font-mono text-[10px]">{sa.reference}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+
 
       {/* Drill-down Product Modal */}
       {drilldownProduct && (

@@ -100,6 +100,8 @@ export default function Inventory() {
     queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
     queryClient.refetchQueries({ queryKey: ["inventory", "products"] });
     queryClient.refetchQueries({ queryKey: ["inventory", "history"] });
+    queryClient.refetchQueries({ queryKey: ["vendors"] });
+    queryClient.refetchQueries({ queryKey: ["inventory-b2b-customers"] });
     reload();
     console.log("[IMPORT] Inventory bump() finished");
   }, [invalidateInventory, reload, queryClient]);
