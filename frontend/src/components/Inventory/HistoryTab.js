@@ -341,10 +341,18 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
                       <td className="px-4 py-2.5">
                         {(() => {
                           if (r.type === "Inward") {
+                            const isClientReturn = r.source_type === "Client Return" || r.source_type === "Return From Client" || (r.remarks || "").toLowerCase().includes("client return");
                             const isB2bReturn = r.source_type === "B2B Return" || (r.source_name && !r.vendor_id && !r.vendor && !r.vendor_name && r.client_id);
                             const isRepair = r.source_type === "Repair Return";
                             const isInternal = r.source_type === "Internal / Warehouse";
-                            
+
+                            if (isClientReturn) {
+                              return (
+                                <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200 text-[10px] whitespace-nowrap">
+                                  <ArrowDownToLine className="w-2.5 h-2.5 mr-1" /> Client Return
+                                </Badge>
+                              );
+                            }
                             if (isB2bReturn) {
                               return (
                                 <Badge variant="outline" className="bg-teal-50 text-teal-700 border-teal-200 text-[10px] whitespace-nowrap">
@@ -374,8 +382,8 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
                           } else {
                             // Outward
                             const isB2b = r.party_type === "B2B Customer" || r.party_type === "B2B Sale" || (r.remarks || "").startsWith("B2B Sale");
-                            const isSupplierReturn = r.party_type === "Supplier Return" || r.party_type === "Vendor Return" || r.vendor_id || (r.remarks || "").toLowerCase().includes("supplier return");
-                            
+                            const isSupplierReturn = r.party_type === "Supplier Return" || r.party_type === "Return to Supplier" || r.party_type === "Vendor Return" || r.vendor_id || (r.remarks || "").toLowerCase().includes("supplier return") || (r.remarks || "").toLowerCase().includes("return to supplier");
+
                             if (isB2b) {
                               return (
                                 <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[10px] whitespace-nowrap">
@@ -386,13 +394,13 @@ export default function HistoryTab({ globalSearch, products, onChanged }) {
                             if (isSupplierReturn) {
                               return (
                                 <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-200 text-[10px] whitespace-nowrap">
-                                  <ArrowUpFromLine className="w-2.5 h-2.5 mr-1" /> Supplier Return
+                                  <ArrowUpFromLine className="w-2.5 h-2.5 mr-1" /> Return to Supplier
                                 </Badge>
                               );
                             }
                             return (
                               <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px] whitespace-nowrap">
-                                <ArrowUpFromLine className="w-2.5 h-2.5 mr-1" /> Client Sale
+                                <ArrowUpFromLine className="w-2.5 h-2.5 mr-1" /> Client Outward
                               </Badge>
                             );
                           }

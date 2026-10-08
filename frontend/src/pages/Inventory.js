@@ -89,12 +89,17 @@ export default function Inventory() {
 
   useEffect(() => { reload(); }, [reload]);
 
+  const [refreshCounter, setRefreshCounter] = useState(0);
+
   // bump() invalidates inventory cache so all consumers (tabs) re-fetch
   const bump = useCallback(() => {
     console.log("[IMPORT] Inventory bump() starting");
+    setRefreshCounter((c) => c + 1);
     invalidateInventory();
     queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
     queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
+    queryClient.refetchQueries({ queryKey: ["inventory", "products"] });
+    queryClient.refetchQueries({ queryKey: ["inventory", "history"] });
     reload();
     console.log("[IMPORT] Inventory bump() finished");
   }, [invalidateInventory, reload, queryClient]);
@@ -279,7 +284,7 @@ export default function Inventory() {
                 ]}
               />
             ) : (
-              <SerialTrackingTab globalSearch={search} />
+              <SerialTrackingTab globalSearch={search} refreshTrigger={refreshCounter} isActive={tab === "serial-tracking"} />
             )
           )}
         </div>
@@ -299,7 +304,7 @@ export default function Inventory() {
               />
             ) : (
               <Suspense fallback={<div className="py-12 flex justify-center text-slate-400 text-sm">Loading inventory intelligence...</div>}>
-                <InventoryIntelligenceTab globalSearch={search} />
+                <InventoryIntelligenceTab globalSearch={search} refreshTrigger={refreshCounter} isActive={tab === "intelligence"} />
               </Suspense>
             )
           )}

@@ -617,11 +617,20 @@ def _clean_inward_doc(doc: dict) -> dict:
     rem = str(doc.get("remarks") or cleaned.get("remarks") or "")
     cid = doc.get("client_id") or ""
     vid = doc.get("vendor_id") or ""
+    orig_id = doc.get("original_entry_id") or ""
+    orig_ch = doc.get("original_challan_no") or ""
+    pid = doc.get("product_id") or ""
     tags = []
     if cid and f"[client_id:" not in rem:
         tags.append(f"[client_id:{cid}]")
     if vid and f"[vendor_id:" not in rem:
         tags.append(f"[vendor_id:{vid}]")
+    if orig_id and f"[orig_id:" not in rem:
+        tags.append(f"[orig_id:{orig_id}]")
+    if orig_ch and f"[orig_ch:" not in rem:
+        tags.append(f"[orig_ch:{orig_ch}]")
+    if pid and f"[product_id:" not in rem:
+        tags.append(f"[product_id:{pid}]")
     if tags:
         tag_str = "".join(tags)
         rem = f"{tag_str} {rem}".strip()
@@ -641,6 +650,9 @@ def _clean_outward_doc(doc: dict) -> dict:
     pt = doc.get("party_type") or ""
     vid = doc.get("vendor_id") or ""
     bno = doc.get("bill_number") or ""
+    orig_id = doc.get("original_entry_id") or ""
+    orig_ch = doc.get("original_challan_no") or ""
+    pid = doc.get("product_id") or ""
     tags = []
     if pt and f"[party_type:" not in rem:
         tags.append(f"[party_type:{pt}]")
@@ -648,6 +660,12 @@ def _clean_outward_doc(doc: dict) -> dict:
         tags.append(f"[vendor_id:{vid}]")
     if bno and f"[bill_number:" not in rem:
         tags.append(f"[bill_number:{bno}]")
+    if orig_id and f"[orig_id:" not in rem:
+        tags.append(f"[orig_id:{orig_id}]")
+    if orig_ch and f"[orig_ch:" not in rem:
+        tags.append(f"[orig_ch:{orig_ch}]")
+    if pid and f"[product_id:" not in rem:
+        tags.append(f"[product_id:{pid}]")
     if tags:
         tag_str = "".join(tags)
         rem = f"{tag_str} {rem}".strip()
@@ -675,6 +693,11 @@ def _enrich_inward_doc(doc: dict) -> dict:
             rem = doc["remarks"]
         except Exception:
             pass
+    if "[product_id:" in rem:
+        m = re.search(r"\[product_id:([^\]]+)\]", rem)
+        if m:
+            doc["product_id"] = m.group(1)
+            rem = re.sub(r"\[product_id:[^\]]+\]\s*", "", rem).strip()
     if "[client_id:" in rem:
         m = re.search(r"\[client_id:([^\]]+)\]", rem)
         if m:
@@ -685,6 +708,16 @@ def _enrich_inward_doc(doc: dict) -> dict:
         if m:
             doc["vendor_id"] = m.group(1)
             rem = re.sub(r"\[vendor_id:[^\]]+\]\s*", "", rem).strip()
+    if "[orig_id:" in rem:
+        m = re.search(r"\[orig_id:([^\]]+)\]", rem)
+        if m:
+            doc["original_entry_id"] = m.group(1)
+            rem = re.sub(r"\[orig_id:[^\]]+\]\s*", "", rem).strip()
+    if "[orig_ch:" in rem:
+        m = re.search(r"\[orig_ch:([^\]]+)\]", rem)
+        if m:
+            doc["original_challan_no"] = m.group(1)
+            rem = re.sub(r"\[orig_ch:[^\]]+\]\s*", "", rem).strip()
     doc["remarks"] = rem
     if not doc.get("serial_numbers"):
         doc["serial_numbers"] = []
@@ -705,6 +738,11 @@ def _enrich_outward_doc(doc: dict) -> dict:
             rem = doc["remarks"]
         except Exception:
             pass
+    if "[product_id:" in rem:
+        m = re.search(r"\[product_id:([^\]]+)\]", rem)
+        if m:
+            doc["product_id"] = m.group(1)
+            rem = re.sub(r"\[product_id:[^\]]+\]\s*", "", rem).strip()
     if "[party_type:" in rem:
         m = re.search(r"\[party_type:([^\]]+)\]", rem)
         if m:
@@ -720,6 +758,16 @@ def _enrich_outward_doc(doc: dict) -> dict:
         if m:
             doc["bill_number"] = m.group(1)
             rem = re.sub(r"\[bill_number:[^\]]+\]\s*", "", rem).strip()
+    if "[orig_id:" in rem:
+        m = re.search(r"\[orig_id:([^\]]+)\]", rem)
+        if m:
+            doc["original_entry_id"] = m.group(1)
+            rem = re.sub(r"\[orig_id:[^\]]+\]\s*", "", rem).strip()
+    if "[orig_ch:" in rem:
+        m = re.search(r"\[orig_ch:([^\]]+)\]", rem)
+        if m:
+            doc["original_challan_no"] = m.group(1)
+            rem = re.sub(r"\[orig_ch:[^\]]+\]\s*", "", rem).strip()
     if not doc.get("party_type"):
         if doc.get("vendor_id"):
             doc["party_type"] = "Supplier Return"
@@ -1235,7 +1283,9 @@ class CollectionAdapter:
         for k, v in query.items():
             if self.table_name == "products" and k == "brand":
                 continue
-            if self.table_name in ("inward_entries", "outward_entries") and k == "product_id":
+            if self.table_name == "inward_entries" and k in ("product_id", "serial_numbers", "serial_number_required", "high_value_goods", "high_value_asset", "status", "vendor_id", "client_id", "original_entry_id", "original_challan_no"):
+                continue
+            if self.table_name == "outward_entries" and k in ("product_id", "serial_numbers", "serial_number_required", "high_value_goods", "high_value_asset", "party_type", "vendor_id", "bill_number", "original_entry_id", "original_challan_no"):
                 continue
             if self.table_name == "companies":
                 if k == "subscription_status":
@@ -1250,6 +1300,10 @@ class CollectionAdapter:
                 parts = []
                 for cond in v:
                     for cond_k, cond_v in cond.items():
+                        if self.table_name == "inward_entries" and cond_k in ("product_id", "serial_numbers", "serial_number_required", "high_value_goods", "high_value_asset", "status", "vendor_id", "client_id", "original_entry_id", "original_challan_no"):
+                            continue
+                        if self.table_name == "outward_entries" and cond_k in ("product_id", "serial_numbers", "serial_number_required", "high_value_goods", "high_value_asset", "party_type", "vendor_id", "bill_number", "original_entry_id", "original_challan_no"):
+                            continue
                         col = cond_k.replace(".", "->")
                         if isinstance(cond_v, dict):
                             for op, val in cond_v.items():
@@ -8580,6 +8634,8 @@ class InwardIn(BaseModel):
     payment_status: Optional[str] = "Unpaid"
     vendor_id: Optional[str] = ""
     bill_type: Optional[str] = "Product Bill"
+    original_entry_id: Optional[str] = ""
+    original_challan_no: Optional[str] = ""
 
 class OutwardIn(BaseModel):
     product: str
@@ -8610,6 +8666,8 @@ class OutwardIn(BaseModel):
     installation_notes: Optional[str] = ""
     warranty_start_date: Optional[str] = ""
     asset_remarks: Optional[str] = ""
+    original_entry_id: Optional[str] = ""
+    original_challan_no: Optional[str] = ""
 
 class AssetEditIn(BaseModel):
     serial_number: Optional[str] = None
@@ -8644,6 +8702,7 @@ def norm_str(s: Optional[str]) -> str:
         return ""
     val = s.strip()
     val = re.sub(r'\s*[xX×\*]\s*', '*', val)
+    val = re.sub(r'\s+', '', val)
     return val.strip().upper()
 
 def norm_product_name(s: Optional[str]) -> str:
@@ -8783,6 +8842,23 @@ async def sync_inventory_master(company_id: Optional[str] = None):
                     except Exception:
                         pass
                 spec_to_prods[key] = [primary]
+
+        # Auto-create any missing Product Master records in db.products
+        for key, spec_info in history_specs.items():
+            if key not in spec_to_prods:
+                cid_k, pn_k, ps_k, pu_k = key
+                try:
+                    created_p = await ensure_product(
+                        company_id=cid_k,
+                        name=pn_k,
+                        size=ps_k,
+                        unit=pu_k,
+                        category=spec_info.get("category") or ""
+                    )
+                    if created_p:
+                        spec_to_prods[key] = [created_p]
+                except Exception:
+                    pass
     except Exception as e:
         logger.warning(f"sync_inventory_master error: {e}")
 
@@ -9602,6 +9678,20 @@ def parse_inward_client_info(entry):
         if m:
             cid = m.group(1)
             entry["remarks"] = re.sub(r"\s*\[client_id:[^\]]+\]", "", r).strip()
+            r = entry["remarks"]
+    if "[orig_id:" in r:
+        import re
+        m = re.search(r"\[orig_id:([^\]]+)\]", r)
+        if m:
+            entry["original_entry_id"] = m.group(1)
+            entry["remarks"] = re.sub(r"\s*\[orig_id:[^\]]+\]", "", entry.get("remarks") or "").strip()
+            r = entry["remarks"]
+    if "[orig_ch:" in r:
+        import re
+        m = re.search(r"\[orig_ch:([^\]]+)\]", r)
+        if m:
+            entry["original_challan_no"] = m.group(1)
+            entry["remarks"] = re.sub(r"\s*\[orig_ch:[^\]]+\]", "", entry.get("remarks") or "").strip()
     entry["client_id"] = cid
     entry["client_name"] = entry.get("client_name") or (entry.get("source_name") if (entry.get("source_type") in ("Return From Client", "B2B Return", "Client / Customer", "Client Return") or cid) else "")
     entry["challan_number"] = entry.get("reference_number") or ""
@@ -9654,6 +9744,20 @@ def _enrich_outward_with_assets(outward_doc: Optional[dict]) -> Optional[dict]:
         outward_doc["installation_notes"] = ""
         outward_doc["warranty_start_date"] = ""
         outward_doc["asset_remarks"] = ""
+    r = str(outward_doc.get("remarks") or "")
+    if not outward_doc.get("original_entry_id") and "[orig_id:" in r:
+        import re
+        m = re.search(r"\[orig_id:([^\]]+)\]", r)
+        if m:
+            outward_doc["original_entry_id"] = m.group(1)
+            outward_doc["remarks"] = re.sub(r"\s*\[orig_id:[^\]]+\]", "", r).strip()
+            r = outward_doc["remarks"]
+    if not outward_doc.get("original_challan_no") and "[orig_ch:" in r:
+        import re
+        m = re.search(r"\[orig_ch:([^\]]+)\]", r)
+        if m:
+            outward_doc["original_challan_no"] = m.group(1)
+            outward_doc["remarks"] = re.sub(r"\s*\[orig_ch:[^\]]+\]", "", r).strip()
     return outward_doc
 
 async def _enrich_bill_challan(bill: Dict[str, Any], company_id: str) -> Dict[str, Any]:
@@ -9828,6 +9932,78 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
         if (source_type_val in ("Return From Client", "B2B Return", "Client / Customer", "Client Return") or client_id_val) and client_id_val:
             if f"[client_id:{client_id_val}]" not in remarks_val:
                 remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
+
+        orig_entry_id_val = getattr(data, "original_entry_id", "") or ""
+        orig_ch_val = getattr(data, "original_challan_no", "") or ""
+        if orig_entry_id_val and f"[orig_id:" not in remarks_val:
+            remarks_val = f"{remarks_val} [orig_id:{orig_entry_id_val}]".strip()
+        if orig_ch_val and f"[orig_ch:" not in remarks_val:
+            remarks_val = f"{remarks_val} [orig_ch:{orig_ch_val}]".strip()
+
+        # Return ceiling validation for B2B Return and Client Return
+        if source_type_val in ("B2B Return", "Client Return", "Return From Client"):
+            orig_doc = None
+            if orig_entry_id_val:
+                orig_doc = await db.outward_entries.find_one({"company_id": company_id, "id": orig_entry_id_val})
+                if not orig_doc:
+                    raise HTTPException(status_code=400, detail="Original outward transaction not found.")
+            
+            if orig_doc:
+                orig_qty = float(orig_doc.get("quantity") or 0.0)
+                all_prev = await db.inward_entries.find({
+                    "company_id": company_id,
+                    "source_type": {"$in": ["B2B Return", "Client Return", "Return From Client"]}
+                }).to_list(5000)
+                prev_returns = [
+                    r for r in all_prev
+                    if (r.get("original_entry_id") == orig_entry_id_val or f"[orig_id:{orig_entry_id_val}]" in str(r.get("remarks") or ""))
+                ]
+                already_ret = sum(float(r.get("quantity") or 0.0) for r in prev_returns)
+                avail_qty = max(0.0, orig_qty - already_ret)
+                if float(data.quantity or 0.0) > avail_qty + 1e-6:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Return quantity ({data.quantity}) exceeds remaining eligible quantity ({avail_qty}) for original transaction. Maximum allowed is {avail_qty}."
+                    )
+            elif client_id_val or client_name_val:
+                q_out: Dict[str, Any] = {"company_id": company_id, "status": "Dispatched"}
+                if client_id_val:
+                    q_out["client_id"] = client_id_val
+                else:
+                    q_out["client_name"] = {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}
+                all_entity_outs = await db.outward_entries.find(q_out).to_list(5000)
+                matching_outs = [
+                    o for o in all_entity_outs
+                    if norm_product_name(o.get("product")) == norm_product_name(pn)
+                    and norm_str(o.get("size")) == norm_str(data.size)
+                ]
+                tot_dispatched = sum(float(o.get("quantity") or 0.0) for o in matching_outs)
+
+                q_in: Dict[str, Any] = {
+                    "company_id": company_id,
+                    "source_type": {"$in": ["B2B Return", "Client Return", "Return From Client"]}
+                }
+                if client_id_val:
+                    q_in["$or"] = [
+                        {"client_id": client_id_val},
+                        {"source_id": client_id_val},
+                        {"remarks": {"$regex": f"\\[client_id:{re.escape(client_id_val)}\\]"}}
+                    ]
+                else:
+                    q_in["source_name"] = {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}
+                all_entity_ins = await db.inward_entries.find(q_in).to_list(5000)
+                matching_ins = [
+                    i for i in all_entity_ins
+                    if norm_product_name(i.get("product")) == norm_product_name(pn)
+                    and norm_str(i.get("size")) == norm_str(data.size)
+                ]
+                tot_already_returned = sum(float(i.get("quantity") or 0.0) for i in matching_ins)
+                avail_entity_qty = max(0.0, tot_dispatched - tot_already_returned)
+                if float(data.quantity or 0.0) > avail_entity_qty + 1e-6:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Return quantity ({data.quantity}) exceeds total eligible quantity ({avail_entity_qty}) dispatched to {client_name_val or 'client'}. Maximum allowed is {avail_entity_qty}."
+                    )
             
         sns = [sn.strip() for sn in (data.serial_numbers or []) if sn and sn.strip()]
 
@@ -9869,14 +10045,22 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
             
             existing_inwards = await db.inward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
             existing_outwards = await db.outward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
-            outwarded_sns_set = {str(s).strip().upper() for o in existing_outwards for s in (o.get("serial_numbers") or []) if str(s).strip()}
+            sn_in_counts = {}
+            for inw in existing_inwards:
+                for s in (inw.get("serial_numbers") or []):
+                    su = str(s).strip().upper()
+                    if su: sn_in_counts[su] = sn_in_counts.get(su, 0) + 1
+            sn_out_counts = {}
+            for outw in existing_outwards:
+                for s in (outw.get("serial_numbers") or []):
+                    su = str(s).strip().upper()
+                    if su: sn_out_counts[su] = sn_out_counts.get(su, 0) + 1
 
             for sn in sns:
                 sn_up = sn.upper()
-                for inw in existing_inwards:
-                    inw_sns = [str(s).strip().upper() for s in (inw.get("serial_numbers") or []) if str(s).strip()]
-                    if sn_up in inw_sns and sn_up not in outwarded_sns_set:
-                        raise HTTPException(status_code=400, detail=f"Serial number '{sn}' already exists in active stock.")
+                net_active = sn_in_counts.get(sn_up, 0) - sn_out_counts.get(sn_up, 0)
+                if net_active > 0:
+                    raise HTTPException(status_code=400, detail=f"Serial number '{sn}' already exists in active stock.")
         doc = {
             "id": str(uuid.uuid4()),
             "company_id": company_id,
@@ -9912,6 +10096,8 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
             "created_by_name": user_name,
             "created_at": now_iso(),
             "product_id": resolved_pid,
+            "original_entry_id": orig_entry_id_val,
+            "original_challan_no": orig_ch_val,
         }
         if import_batch:
             doc["import_batch"] = import_batch
@@ -10023,7 +10209,7 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
                     client_name_val = b2b_cust.get("name") or b2b_cust.get("full_name") or client_name_val
             project_id_val = ""
             project_name_val = ""
-        elif party_type_val in ("Supplier Return", "Vendor Return"):
+        elif party_type_val in ("Supplier Return", "Return to Supplier", "Vendor Return"):
             if client_name_val and not vendor_id_val:
                 v_doc = await db.vendors.find_one({
                     "company_id": company_id,
@@ -10061,6 +10247,79 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
                     project_name_val = client_name_val
 
         challan_val = (data.outward_challan_no or data.reference_number or "").strip()
+        orig_entry_id_val = getattr(data, "original_entry_id", "") or ""
+        orig_ch_val = getattr(data, "original_challan_no", "") or ""
+        remarks_val = data.remarks or ""
+        if orig_entry_id_val and f"[orig_id:" not in remarks_val:
+            remarks_val = f"{remarks_val} [orig_id:{orig_entry_id_val}]".strip()
+        if orig_ch_val and f"[orig_ch:" not in remarks_val:
+            remarks_val = f"{remarks_val} [orig_ch:{orig_ch_val}]".strip()
+
+        # Return ceiling validation for Supplier Return
+        if party_type_val in ("Supplier Return", "Return to Supplier", "Vendor Return"):
+            orig_doc = None
+            if orig_entry_id_val:
+                orig_doc = await db.inward_entries.find_one({"company_id": company_id, "id": orig_entry_id_val})
+                if not orig_doc:
+                    raise HTTPException(status_code=400, detail="Original supply transaction not found.")
+            
+            if orig_doc:
+                orig_qty = float(orig_doc.get("quantity") or 0.0)
+                all_prev = await db.outward_entries.find({
+                    "company_id": company_id,
+                    "status": {"$ne": "Cancelled"}
+                }).to_list(5000)
+                prev_returns = [
+                    r for r in all_prev
+                    if (r.get("original_entry_id") == orig_entry_id_val or f"[orig_id:{orig_entry_id_val}]" in str(r.get("remarks") or ""))
+                ]
+                already_ret = sum(float(r.get("quantity") or 0.0) for r in prev_returns)
+                avail_qty = max(0.0, orig_qty - already_ret)
+                if float(data.quantity or 0.0) > avail_qty + 1e-6:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Return quantity ({data.quantity}) exceeds remaining eligible quantity ({avail_qty}) from original supply. Maximum allowed is {avail_qty}."
+                    )
+            elif vendor_id_val or client_name_val:
+                q_in: Dict[str, Any] = {
+                    "company_id": company_id,
+                    "source_type": {"$in": ["Supplier", "Supplier Supply", "Vendor / Supplier", "Vendor", "Supply"]}
+                }
+                if vendor_id_val:
+                    q_in["$or"] = [{"vendor_id": vendor_id_val}, {"source_id": vendor_id_val}]
+                else:
+                    q_in["source_name"] = {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}
+                all_vendor_ins = await db.inward_entries.find(q_in).to_list(5000)
+                matching_ins = [
+                    i for i in all_vendor_ins
+                    if norm_product_name(i.get("product")) == norm_product_name(pn)
+                    and norm_str(i.get("size")) == norm_str(data.size)
+                ]
+                tot_supplied = sum(float(i.get("quantity") or 0.0) for i in matching_ins)
+
+                q_out: Dict[str, Any] = {
+                    "company_id": company_id,
+                    "status": "Dispatched"
+                }
+                if vendor_id_val:
+                    q_out["vendor_id"] = vendor_id_val
+                else:
+                    q_out["client_name"] = {"$regex": f"^{re.escape(client_name_val)}$", "$options": "i"}
+                all_vendor_outs = await db.outward_entries.find(q_out).to_list(5000)
+                matching_outs = [
+                    o for o in all_vendor_outs
+                    if (o.get("party_type") in ["Supplier Return", "Return to Supplier", "Vendor Return"] or "[party_type:" in str(o.get("remarks") or ""))
+                    and norm_product_name(o.get("product")) == norm_product_name(pn)
+                    and norm_str(o.get("size")) == norm_str(data.size)
+                ]
+                tot_already_returned = sum(float(o.get("quantity") or 0.0) for o in matching_outs)
+                avail_vendor_qty = max(0.0, tot_supplied - tot_already_returned)
+                if float(data.quantity or 0.0) > avail_vendor_qty + 1e-6:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Return quantity ({data.quantity}) exceeds total eligible quantity ({avail_vendor_qty}) supplied by {client_name_val or 'supplier'}. Maximum allowed is {avail_vendor_qty}."
+                    )
+
         sns = [sn.strip() for sn in (data.serial_numbers or []) if sn and sn.strip()]
 
         # Idempotency check: if identical outward created in last 4 seconds, return existing
@@ -10091,13 +10350,24 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
             if len(sns) != len(set(sns)):
                 raise HTTPException(status_code=400, detail="Duplicate serial numbers in outward entry")
             
+            existing_inwards = await db.inward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
             existing_outwards = await db.outward_entries.find({"company_id": company_id}, {"_id": 0}).to_list(10000)
-            outwarded_sns_set = {str(s).strip().upper() for o in existing_outwards for s in (o.get("serial_numbers") or []) if str(s).strip()}
+            sn_in_counts = {}
+            for inw in existing_inwards:
+                for s in (inw.get("serial_numbers") or []):
+                    su = str(s).strip().upper()
+                    if su: sn_in_counts[su] = sn_in_counts.get(su, 0) + 1
+            sn_out_counts = {}
+            for outw in existing_outwards:
+                for s in (outw.get("serial_numbers") or []):
+                    su = str(s).strip().upper()
+                    if su: sn_out_counts[su] = sn_out_counts.get(su, 0) + 1
 
             for sn in sns:
                 sn_up = sn.upper()
-                if sn_up in outwarded_sns_set:
-                    raise HTTPException(status_code=400, detail=f"Serial number '{sn}' is already OUT / issued.")
+                net_active = sn_in_counts.get(sn_up, 0) - sn_out_counts.get(sn_up, 0)
+                if net_active <= 0:
+                    raise HTTPException(status_code=400, detail=f"Serial number '{sn}' is not in active stock (already OUT or not in inward).")
 
         challan_raw = (data.bill_number or data.outward_challan_no or data.reference_number or "").strip()
         doc = {
@@ -10118,7 +10388,7 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
             "reference_number": challan_raw or numeric_only(data.reference_number or data.outward_challan_no),
             "reference_type": data.reference_type or "Challan Number",
             "date": data.date or now_iso(),
-            "remarks": data.remarks or "",
+            "remarks": remarks_val,
             "status": data.status or "Dispatched",
             "attachment_file_id": data.attachment_file_id or "",
             "attachment_filename": data.attachment_filename or "",
@@ -10131,6 +10401,8 @@ async def save_outward_entry_logic(data: OutwardIn, company_id: str, user_id: st
             "created_by_name": user_name,
             "created_at": now_iso(),
             "product_id": resolved_pid,
+            "original_entry_id": orig_entry_id_val,
+            "original_challan_no": orig_ch_val,
         }
         if import_batch:
             doc["import_batch"] = import_batch
@@ -10331,6 +10603,216 @@ async def add_inward(data: InwardIn, user=Depends(require_active_subscription())
     return _enrich_inward_with_assets(parse_inward_client_info(doc))
 
 
+@api_router.get("/inventory/eligible-returns")
+async def get_eligible_returns(
+    return_type: str,
+    entity_id: Optional[str] = None,
+    entity_name: Optional[str] = None,
+    product: Optional[str] = None,
+    size: Optional[str] = None,
+    exclude_entry_id: Optional[str] = None,
+    user=Depends(get_current_user)
+):
+    cid = user.get("company_id") or "COMP-001"
+    rtype = (return_type or "").strip().lower()
+    ent_id = (entity_id or "").strip()
+    ent_name = (entity_name or "").strip()
+    prod_filter = norm_product_name(product) if product else None
+    size_filter = norm_str(size) if size else None
+    
+    if not ent_id and not ent_name:
+        return {"transactions": [], "total_eligible": 0.0}
+
+    candidates = []
+
+    if rtype in ("b2b_return", "b2b"):
+        q_out = {
+            "company_id": cid,
+            "status": "Dispatched"
+        }
+        if ent_id:
+            q_out["client_id"] = ent_id
+        elif ent_name:
+            q_out["client_name"] = {"$regex": f"^{re.escape(ent_name)}$", "$options": "i"}
+
+        all_outs = await db.outward_entries.find(q_out, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(5000)
+        
+        filtered_outs = []
+        for o in all_outs:
+            pt = (o.get("party_type") or "").strip()
+            rem = str(o.get("remarks") or "")
+            o_cid = str(o.get("client_id") or "").strip()
+            o_cname = str(o.get("client_name") or "").strip().lower()
+            if ent_id and o_cid == ent_id:
+                filtered_outs.append(o)
+            elif ent_name and o_cname == ent_name.lower():
+                filtered_outs.append(o)
+            elif pt in ("B2B Customer", "B2B Sale") and (not ent_id or o_cid == ent_id):
+                filtered_outs.append(o)
+            elif "[party_type:B2B" in rem:
+                filtered_outs.append(o)
+
+        q_in = {
+            "company_id": cid,
+            "source_type": "B2B Return"
+        }
+        if exclude_entry_id:
+            q_in["id"] = {"$ne": exclude_entry_id}
+        all_returns = await db.inward_entries.find(q_in, {"_id": 0}).to_list(5000)
+
+        for o in filtered_outs:
+            if prod_filter and norm_product_name(o.get("product")) != prod_filter:
+                continue
+            if size_filter and norm_str(o.get("size")) != size_filter:
+                continue
+            orig_q = float(o.get("quantity") or 0.0)
+            matched_rets = [
+                r for r in all_returns
+                if (r.get("original_entry_id") == o.get("id") or f"[orig_id:{o.get('id')}]" in str(r.get("remarks") or ""))
+            ]
+            already_ret = sum(float(r.get("quantity") or 0.0) for r in matched_rets)
+            avail_q = max(0.0, orig_q - already_ret)
+            if avail_q > 0:
+                bill_no = o.get("bill_number") or o.get("outward_challan_no") or o.get("reference_number") or "—"
+                ch_no = o.get("outward_challan_no") or o.get("reference_number") or bill_no
+                candidates.append({
+                    "id": o.get("id"),
+                    "date": (o.get("date") or o.get("created_at") or "")[:10],
+                    "challan_no": ch_no,
+                    "reference_number": ch_no,
+                    "bill_number": bill_no,
+                    "product": o.get("product") or "",
+                    "product_id": o.get("product_id") or "",
+                    "size": o.get("size") or "",
+                    "unit": o.get("unit") or "Nos",
+                    "original_quantity": orig_q,
+                    "already_returned": round(already_ret, 2),
+                    "available_quantity": round(avail_q, 2),
+                    "party_name": o.get("client_name") or ent_name
+                })
+
+    elif rtype in ("client_return", "client"):
+        q_out = {
+            "company_id": cid,
+            "status": "Dispatched"
+        }
+        if ent_id:
+            q_out["client_id"] = ent_id
+        elif ent_name:
+            q_out["client_name"] = {"$regex": f"^{re.escape(ent_name)}$", "$options": "i"}
+
+        all_outs = await db.outward_entries.find(q_out, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(5000)
+        filtered_outs = [
+            o for o in all_outs
+            if (o.get("party_type") or "") not in ["B2B Customer", "B2B Sale", "Supplier Return", "Return to Supplier", "Vendor Return"]
+            and "[party_type:B2B" not in str(o.get("remarks") or "")
+            and "[party_type:Supplier Return" not in str(o.get("remarks") or "")
+            and "[party_type:Return to Supplier" not in str(o.get("remarks") or "")
+        ]
+
+        q_in = {
+            "company_id": cid,
+            "source_type": {"$in": ["Client Return", "Return From Client"]}
+        }
+        if exclude_entry_id:
+            q_in["id"] = {"$ne": exclude_entry_id}
+        all_returns = await db.inward_entries.find(q_in, {"_id": 0}).to_list(5000)
+
+        for o in filtered_outs:
+            if prod_filter and norm_product_name(o.get("product")) != prod_filter:
+                continue
+            if size_filter and norm_str(o.get("size")) != size_filter:
+                continue
+            orig_q = float(o.get("quantity") or 0.0)
+            matched_rets = [
+                r for r in all_returns
+                if (r.get("original_entry_id") == o.get("id") or f"[orig_id:{o.get('id')}]" in str(r.get("remarks") or ""))
+            ]
+            already_ret = sum(float(r.get("quantity") or 0.0) for r in matched_rets)
+            avail_q = max(0.0, orig_q - already_ret)
+            if avail_q > 0:
+                bill_no = o.get("bill_number") or o.get("outward_challan_no") or o.get("reference_number") or "—"
+                ch_no = o.get("outward_challan_no") or o.get("reference_number") or bill_no
+                candidates.append({
+                    "id": o.get("id"),
+                    "date": (o.get("date") or o.get("created_at") or "")[:10],
+                    "challan_no": ch_no,
+                    "reference_number": ch_no,
+                    "bill_number": bill_no,
+                    "product": o.get("product") or "",
+                    "product_id": o.get("product_id") or "",
+                    "size": o.get("size") or "",
+                    "unit": o.get("unit") or "Nos",
+                    "original_quantity": orig_q,
+                    "already_returned": round(already_ret, 2),
+                    "available_quantity": round(avail_q, 2),
+                    "party_name": o.get("client_name") or ent_name
+                })
+
+    elif rtype in ("supplier_return", "return_to_supplier", "supplier"):
+        q_in = {
+            "company_id": cid,
+            "source_type": {"$in": ["Supplier", "Supplier Supply", "Vendor / Supplier", "Vendor", "Supply"]}
+        }
+        if ent_id:
+            q_in["$or"] = [{"vendor_id": ent_id}, {"source_id": ent_id}]
+        elif ent_name:
+            q_in["source_name"] = {"$regex": f"^{re.escape(ent_name)}$", "$options": "i"}
+
+        filtered_ins = await db.inward_entries.find(q_in, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(5000)
+
+        q_out = {
+            "company_id": cid,
+            "status": "Dispatched"
+        }
+        if exclude_entry_id:
+            q_out["id"] = {"$ne": exclude_entry_id}
+        raw_outs = await db.outward_entries.find(q_out, {"_id": 0}).to_list(5000)
+        all_returns = [
+            o for o in raw_outs
+            if (o.get("party_type") or "") in ["Supplier Return", "Return to Supplier", "Vendor Return"]
+            or "[party_type:Supplier Return" in str(o.get("remarks") or "")
+            or "[party_type:Return to Supplier" in str(o.get("remarks") or "")
+            or "supplier return" in str(o.get("remarks") or "").lower()
+            or "return to supplier" in str(o.get("remarks") or "").lower()
+        ]
+
+        for i in filtered_ins:
+            if prod_filter and norm_product_name(i.get("product")) != prod_filter:
+                continue
+            if size_filter and norm_str(i.get("size")) != size_filter:
+                continue
+            orig_q = float(i.get("quantity") or 0.0)
+            matched_rets = [
+                r for r in all_returns
+                if (r.get("original_entry_id") == i.get("id") or f"[orig_id:{i.get('id')}]" in str(r.get("remarks") or ""))
+            ]
+            already_ret = sum(float(r.get("quantity") or 0.0) for r in matched_rets)
+            avail_q = max(0.0, orig_q - already_ret)
+            if avail_q > 0:
+                bill_no = i.get("bill_number") or i.get("reference_number") or i.get("challan_no") or "—"
+                ch_no = i.get("reference_number") or i.get("challan_no") or bill_no
+                candidates.append({
+                    "id": i.get("id"),
+                    "date": (i.get("date") or i.get("created_at") or "")[:10],
+                    "challan_no": ch_no,
+                    "reference_number": ch_no,
+                    "bill_number": bill_no,
+                    "product": i.get("product") or "",
+                    "product_id": i.get("product_id") or "",
+                    "size": i.get("size") or "",
+                    "unit": i.get("unit") or "Nos",
+                    "original_quantity": orig_q,
+                    "already_returned": round(already_ret, 2),
+                    "available_quantity": round(avail_q, 2),
+                    "party_name": i.get("source_name") or ent_name
+                })
+
+    candidates.sort(key=lambda c: c.get("date", ""), reverse=True)
+    total_eligible = round(sum(c["available_quantity"] for c in candidates), 2)
+    return {"transactions": candidates, "total_eligible": total_eligible}
+
+
 @api_router.get("/inventory/inward")
 async def list_inward(user=Depends(get_current_user)):
     cid = user.get("company_id") or "COMP-001"
@@ -10394,9 +10876,38 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
         if f"[client_id:{client_id_val}]" not in remarks_val:
             remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
         
+    orig_entry_id_val = getattr(data, "original_entry_id", None) or existing.get("original_entry_id", "") or ""
+    orig_ch_val = getattr(data, "original_challan_no", None) or existing.get("original_challan_no", "") or ""
+    if orig_entry_id_val and f"[orig_id:" not in remarks_val:
+        remarks_val = f"{remarks_val} [orig_id:{orig_entry_id_val}]".strip()
+    if orig_ch_val and f"[orig_ch:" not in remarks_val:
+        remarks_val = f"{remarks_val} [orig_ch:{orig_ch_val}]".strip()
+
+    if source_type_val in ("B2B Return", "Client Return", "Return From Client"):
+        orig_doc = None
+        if orig_entry_id_val:
+            orig_doc = await db.outward_entries.find_one({"company_id": cid, "id": orig_entry_id_val})
+        if orig_doc:
+            orig_qty = float(orig_doc.get("quantity") or 0.0)
+            all_prev = await db.inward_entries.find({
+                "company_id": cid,
+                "source_type": {"$in": ["B2B Return", "Client Return", "Return From Client"]}
+            }).to_list(5000)
+            prev_returns = [
+                r for r in all_prev
+                if r.get("id") != entry_id and (r.get("original_entry_id") == orig_entry_id_val or f"[orig_id:{orig_entry_id_val}]" in str(r.get("remarks") or ""))
+            ]
+            already_ret = sum(float(r.get("quantity") or 0.0) for r in prev_returns)
+            avail_qty = max(0.0, orig_qty - already_ret)
+            if float(data.quantity or 0.0) > avail_qty + 1e-6:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Return quantity ({data.quantity}) exceeds remaining eligible quantity ({avail_qty}) for original transaction. Maximum allowed is {avail_qty}."
+                )
+
     raw_ch = (data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None) or "").strip()
     ref_num = raw_ch or numeric_only(data.reference_number or getattr(data, "challan_no", None) or getattr(data, "challan_number", None))
-    patch = {
+    patch: Dict[str, Any] = {
         "product": pn, "size": data.size or "", "quantity": data.quantity,
         "product_id": data.product_id or existing.get("product_id", ""),
         "unit": data.unit or existing.get("unit") or "Nos",
@@ -10413,6 +10924,8 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
         "date": data.date or existing.get("date") or now_iso(), "remarks": remarks_val,
         "attachment_file_id": data.attachment_file_id if data.attachment_file_id is not None else existing.get("attachment_file_id", ""),
         "attachment_filename": data.attachment_filename if data.attachment_filename is not None else existing.get("attachment_filename", ""),
+        "original_entry_id": orig_entry_id_val,
+        "original_challan_no": orig_ch_val,
         "updated_at": now_iso(),
     }
     await db.inward_entries.update_one({"id": entry_id, "company_id": cid}, {"$set": patch})
@@ -10470,7 +10983,7 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
                         "quantity": 1.0,
                         "serial_number": sn,
                         "vendor": data.source_name or "",
-                        "purchase_date": patch["date"][:10],
+                        "purchase_date": str(patch["date"])[:10],
                         "challan_number": patch["reference_number"],
                         "client_id": None,
                         "client_name": None,
@@ -10492,7 +11005,7 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
                     "quantity": new_needed,
                     "serial_number": "",
                     "vendor": data.source_name or "",
-                    "purchase_date": patch["date"][:10],
+                    "purchase_date": str(patch["date"])[:10],
                     "challan_number": patch["reference_number"],
                     "client_id": None,
                     "client_name": None,
@@ -10597,7 +11110,7 @@ async def update_outward(entry_id: str, data: OutwardIn, user=Depends(get_curren
                 client_name_val = b2b_cust.get("name") or b2b_cust.get("full_name") or client_name_val
         project_id_val = ""
         project_name_val = ""
-    elif party_type_val in ("Supplier Return", "Vendor Return"):
+    elif party_type_val in ("Supplier Return", "Return to Supplier", "Vendor Return"):
         if client_name_val and not vendor_id_val:
             v_doc = await db.vendors.find_one({
                 "company_id": cid,
@@ -10630,8 +11143,37 @@ async def update_outward(entry_id: str, data: OutwardIn, user=Depends(get_curren
 
     b_num = (data.bill_number or existing.get("bill_number") or "").strip()
     raw_challan = (data.outward_challan_no or data.reference_number or existing.get("outward_challan_no") or "").strip()
+    orig_entry_id_val = getattr(data, "original_entry_id", None) or existing.get("original_entry_id", "") or ""
+    orig_ch_val = getattr(data, "original_challan_no", None) or existing.get("original_challan_no", "") or ""
+    remarks_val = data.remarks or ""
+    if orig_entry_id_val and f"[orig_id:" not in remarks_val:
+        remarks_val = f"{remarks_val} [orig_id:{orig_entry_id_val}]".strip()
+    if orig_ch_val and f"[orig_ch:" not in remarks_val:
+        remarks_val = f"{remarks_val} [orig_ch:{orig_ch_val}]".strip()
 
-    patch = {
+    if party_type_val in ("Supplier Return", "Return to Supplier", "Vendor Return"):
+        orig_doc = None
+        if orig_entry_id_val:
+            orig_doc = await db.inward_entries.find_one({"company_id": cid, "id": orig_entry_id_val})
+        if orig_doc:
+            orig_qty = float(orig_doc.get("quantity") or 0.0)
+            all_prev = await db.outward_entries.find({
+                "company_id": cid,
+                "status": {"$ne": "Cancelled"}
+            }).to_list(5000)
+            prev_returns = [
+                r for r in all_prev
+                if r.get("id") != entry_id and (r.get("original_entry_id") == orig_entry_id_val or f"[orig_id:{orig_entry_id_val}]" in str(r.get("remarks") or ""))
+            ]
+            already_ret = sum(float(r.get("quantity") or 0.0) for r in prev_returns)
+            avail_qty = max(0.0, orig_qty - already_ret)
+            if float(data.quantity or 0.0) > avail_qty + 1e-6:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Return quantity ({data.quantity}) exceeds remaining eligible quantity ({avail_qty}) from original supply. Maximum allowed is {avail_qty}."
+                )
+
+    patch: Dict[str, Any] = {
         "product": pn, "size": data.size or "", "quantity": data.quantity,
         "product_id": data.product_id or existing.get("product_id", ""),
         "unit": data.unit or existing.get("unit") or "Nos",
@@ -10644,10 +11186,12 @@ async def update_outward(entry_id: str, data: OutwardIn, user=Depends(get_curren
         "reference_number": raw_challan or numeric_only(data.reference_number or data.outward_challan_no),
         "reference_type": data.reference_type or existing.get("reference_type") or "Challan Number",
         "date": data.date or existing.get("date") or now_iso(),
-        "remarks": data.remarks or "",
+        "remarks": remarks_val,
         "status": data.status or existing.get("status") or "Dispatched",
         "attachment_file_id": data.attachment_file_id if data.attachment_file_id is not None else existing.get("attachment_file_id", ""),
         "attachment_filename": data.attachment_filename if data.attachment_filename is not None else existing.get("attachment_filename", ""),
+        "original_entry_id": orig_entry_id_val,
+        "original_challan_no": orig_ch_val,
         "updated_at": now_iso(),
     }
     await db.outward_entries.update_one({"id": entry_id, "company_id": cid}, {"$set": patch})
@@ -10685,7 +11229,7 @@ async def update_outward(entry_id: str, data: OutwardIn, user=Depends(get_curren
         status_val = "Installed" if data.client_id else "Installed"
         client_id_val = data.client_id or None
         client_name_val = data.client_name or None
-        outward_date_val = patch["date"][:10]
+        outward_date_val = str(patch["date"])[:10]
         challan_val = patch["reference_number"] or patch["outward_challan_no"] or ""
         
         if sns:
@@ -11183,6 +11727,37 @@ async def get_b2b_sales(user=Depends(require_active_subscription())):
             })
     return {"sales": sales}
 
+@api_router.get("/inventory/supply-entries")
+async def get_supply_entries(user=Depends(require_active_subscription())):
+    cid = user["company_id"]
+    inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).sort("date", -1).to_list(1000)
+    vendors = await db.vendors.find({"company_id": cid}, {"_id": 0}).to_list(1000)
+    vendor_ids = {v["id"] for v in vendors}
+    vendor_names = {(v.get("name") or "").strip().lower() for v in vendors}
+    
+    entries = []
+    for i in inwards:
+        st = i.get("source_type") or ""
+        sname = (i.get("source_name") or "").strip().lower()
+        vid_val = i.get("vendor_id") or ""
+        if st in ("Supplier", "Supplier Supply", "Vendor / Supplier", "Vendor", "Supply") or vid_val in vendor_ids or sname in vendor_names:
+            bill_no = i.get("bill_number") or i.get("reference_number") or i.get("challan_no") or "—"
+            entries.append({
+                "id": i.get("id"),
+                "date": str(i.get("date") or i.get("created_at") or "")[:10],
+                "bill_number": bill_no,
+                "reference_number": bill_no,
+                "vendor_id": vid_val,
+                "supplier_name": i.get("source_name") or "Supplier",
+                "product": i.get("product") or "",
+                "size": i.get("size") or "",
+                "quantity": float(i.get("quantity") or 0.0),
+                "unit": i.get("unit") or "Nos",
+                "status": "Received",
+                "remarks": i.get("remarks") or ""
+            })
+    return {"entries": entries}
+
 @api_router.get("/inventory/supply-summary")
 async def get_supply_summary(user=Depends(require_active_subscription())):
     cid = user["company_id"]
@@ -11200,11 +11775,11 @@ async def get_supply_summary(user=Depends(require_active_subscription())):
         v_inwards = [
             i for i in inwards 
             if (i.get("vendor_id") == v_id or (i.get("source_name") or "").strip().lower() == v_name)
-            and (i.get("source_type") in ("Supplier", "Vendor / Supplier", "Vendor", "Supply") or not i.get("source_type"))
+            and (i.get("source_type") in ("Supplier", "Supplier Supply", "Vendor / Supplier", "Vendor", "Supply") or not i.get("source_type"))
         ]
         v_outwards = [
             o for o in outwards
-            if (o.get("vendor_id") == v_id or ((o.get("party_type") in ("Supplier Return", "Vendor Return") or "supplier return" in str(o.get("remarks") or "").lower()) and (o.get("client_name") or "").strip().lower() == v_name))
+            if (o.get("vendor_id") == v_id or ((o.get("party_type") in ("Supplier Return", "Return to Supplier", "Vendor Return") or "supplier return" in str(o.get("remarks") or "").lower()) and (o.get("client_name") or "").strip().lower() == v_name))
         ]
         
         tot_in = sum(float(i.get("quantity") or 0.0) for i in v_inwards)
@@ -11247,11 +11822,11 @@ async def get_supplier_history(vendor_id: str, user=Depends(require_active_subsc
     v_inwards = [
         i for i in inwards 
         if (i.get("vendor_id") == vendor_id or (i.get("source_name") or "").strip().lower() == v_name)
-        and (i.get("source_type") in ("Supplier", "Vendor / Supplier", "Vendor", "Supply") or not i.get("source_type"))
+        and (i.get("source_type") in ("Supplier", "Supplier Supply", "Vendor / Supplier", "Vendor", "Supply") or not i.get("source_type"))
     ]
     v_outwards = [
         o for o in outwards
-        if (o.get("vendor_id") == vendor_id or ((o.get("party_type") in ("Supplier Return", "Vendor Return") or "supplier return" in str(o.get("remarks") or "").lower()) and (o.get("client_name") or "").strip().lower() == v_name))
+        if (o.get("vendor_id") == vendor_id or ((o.get("party_type") in ("Supplier Return", "Return to Supplier", "Vendor Return") or "supplier return" in str(o.get("remarks") or "").lower()) and (o.get("client_name") or "").strip().lower() == v_name))
     ]
     
     txs = []
@@ -11698,6 +12273,7 @@ async def inv_history(
         "date": 1,
         "created_at": 1,
         "product": 1,
+        "product_id": 1,
         "size": 1,
         "quantity": 1,
         "unit": 1,
@@ -11729,6 +12305,7 @@ async def inv_history(
         "date": 1,
         "created_at": 1,
         "product": 1,
+        "product_id": 1,
         "size": 1,
         "quantity": 1,
         "unit": 1,
@@ -11764,22 +12341,23 @@ async def inv_history(
     def _search_match(rec: Dict[str, Any]) -> bool:
         if not search or not search.strip():
             return True
-        clean_s = norm_str(search).lower().strip()
+        clean_s = search.lower().strip()
         tokens = [t for t in clean_s.split() if t]
         if not tokens:
             return True
         
-        prod = norm_product_name(rec.get("product"))
-        raw_size = rec.get("size") or ""
-        sz = norm_str(raw_size)
-        src = (rec.get("source_name") or rec.get("source") or rec.get("client_name") or "").lower()
-        proj = (rec.get("project_name") or "").lower()
-        ref = (rec.get("reference_number") or rec.get("outward_challan_no") or "").lower()
-        bill = (rec.get("bill_number") or "").lower()
-        rem = (rec.get("remarks") or "").lower()
-        by = (rec.get("created_by_name") or "").lower()
+        prod = str(rec.get("product") or "").lower()
+        prod_norm = norm_product_name(rec.get("product")).lower()
+        raw_size = str(rec.get("size") or "").lower()
+        sz = norm_str(raw_size).lower()
+        src = str(rec.get("source_name") or rec.get("source") or rec.get("client_name") or "").lower()
+        proj = str(rec.get("project_name") or "").lower()
+        ref = str(rec.get("reference_number") or rec.get("outward_challan_no") or rec.get("challan_no") or "").lower()
+        bill = str(rec.get("bill_number") or "").lower()
+        rem = str(rec.get("remarks") or "").lower()
+        by = str(rec.get("created_by_name") or "").lower()
         
-        full_text = f"{prod} {sz} {raw_size} {src} {proj} {ref} {bill} {rem} {by}".lower()
+        full_text = f"{prod} {prod_norm} {sz} {raw_size} {src} {proj} {ref} {bill} {rem} {by}"
         return all(t in full_text for t in tokens)
 
     rows: List[Dict[str, Any]] = []
@@ -11788,8 +12366,15 @@ async def inv_history(
     outward_q: Dict[str, Any] = {"company_id": cid}
 
     if st_filter:
-        inward_q["status"] = st_filter
-        outward_q["status"] = st_filter
+        st_low = st_filter.lower()
+        if st_low in ("received", "completed", "approved", "active"):
+            outward_q["status"] = st_filter
+        elif st_low in ("dispatched", "pending"):
+            inward_q["id"] = "__none__"
+            outward_q["status"] = st_filter
+        else:
+            inward_q["status"] = st_filter
+            outward_q["status"] = st_filter
 
     if from_d and to_d:
         inward_q["date"] = {"$gte": from_d, "$lte": to_d}
@@ -11823,6 +12408,8 @@ async def inv_history(
             enriched = _enrich_inward_with_assets(r)
             if not enriched:
                 continue
+            if not enriched.get("status"):
+                enriched["status"] = "Received"
 
             # Product filter
             if prod_filter and prod_filter not in (enriched.get("product") or "").lower():
@@ -11867,8 +12454,11 @@ async def inv_history(
                 continue
 
             # Status filter
-            if st_filter and (enriched.get("status") or "").lower() != st_filter.lower():
-                continue
+            if st_filter and st_filter.lower() not in ("all", "none", ""):
+                if st_filter.lower() in ("received", "completed", "active"):
+                    pass
+                elif (enriched.get("status") or "").lower() != st_filter.lower():
+                    continue
 
             # Search match
             if not _search_match(enriched):
@@ -12032,6 +12622,7 @@ async def bulk_delete_history(data: BulkDeleteIn, user=Depends(get_current_user)
         _save_local_assets(all_assets)
     total = deleted_in + deleted_out
     if total:
+        invalidate_products_cache(cid)
         await log_activity(cid, user["id"], user["name"], "Bulk Inventory Delete",
                            f"{deleted_in} inward + {deleted_out} outward")
     return {"deleted_inward": deleted_in, "deleted_outward": deleted_out, "total": total}

@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
-import { useProductList } from "@/hooks/useInventory";
 import PageHeader from "@/components/PageHeader";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,7 +9,6 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { ProductAutocompleteInput, getStandardizedUnitOptions } from "@/components/Inventory/_shared";
 import {
   Building2,
   Truck,
@@ -81,9 +79,6 @@ export default function B2BSupply() {
     }
   }, [location.pathname, location.search]);
 
-  // Product Master list for Autocomplete
-  const { data: productList = [] } = useProductList();
-
   // ==========================================
   // B2B STATE & MUTATIONS
   // ==========================================
@@ -109,39 +104,6 @@ export default function B2BSupply() {
   const [deleteCustomerDialogOpen, setDeleteCustomerDialogOpen] = useState(false);
   const [customerToDelete, setCustomerToDelete] = useState(null);
   const [isDeletingCustomer, setIsDeletingCustomer] = useState(false);
-
-  // New B2B Sale State (Outward)
-  const [newSaleOpen, setNewSaleOpen] = useState(false);
-  const [savingSale, setSavingSale] = useState(false);
-  const [saleForm, setSaleForm] = useState({
-    customer_id: "",
-    customer_name: "",
-    bill_number: "",
-    date: dayjs().format("YYYY-MM-DD"),
-    product: "",
-    product_id: "",
-    size: "",
-    quantity: "",
-    unit: "Nos",
-    remarks: "",
-  });
-
-  // B2B Return State (Inward)
-  const [b2bReturnOpen, setB2bReturnOpen] = useState(false);
-  const [savingB2bReturn, setSavingB2bReturn] = useState(false);
-  const [b2bReturnForm, setB2bReturnForm] = useState({
-    customer_id: "",
-    customer_name: "",
-    reference_number: "",
-    bill_number: "",
-    date: dayjs().format("YYYY-MM-DD"),
-    product: "",
-    product_id: "",
-    size: "",
-    quantity: "",
-    unit: "Nos",
-    remarks: "",
-  });
 
   const [selectedLedgerCustomerId, setSelectedLedgerCustomerId] = useState("");
 
@@ -228,38 +190,6 @@ export default function B2BSupply() {
   const [supplierToDelete, setSupplierToDelete] = useState(null);
   const [isDeletingSupplier, setIsDeletingSupplier] = useState(false);
 
-  // New Supply Entry (Inward)
-  const [newSupplyOpen, setNewSupplyOpen] = useState(false);
-  const [savingSupply, setSavingSupply] = useState(false);
-  const [supplyForm, setSupplyForm] = useState({
-    vendor_id: "",
-    supplier_name: "",
-    bill_number: "",
-    date: dayjs().format("YYYY-MM-DD"),
-    product: "",
-    product_id: "",
-    size: "",
-    quantity: "",
-    unit: "Nos",
-    remarks: "",
-  });
-
-  // Supplier Return (Outward)
-  const [supplierReturnOpen, setSupplierReturnOpen] = useState(false);
-  const [savingSupplierReturn, setSavingSupplierReturn] = useState(false);
-  const [supplierReturnForm, setSupplierReturnForm] = useState({
-    vendor_id: "",
-    supplier_name: "",
-    reference_number: "",
-    date: dayjs().format("YYYY-MM-DD"),
-    product: "",
-    product_id: "",
-    size: "",
-    quantity: "",
-    unit: "Nos",
-    remarks: "",
-  });
-
   const [selectedLedgerSupplierId, setSelectedLedgerSupplierId] = useState("");
 
   // 1. Fetch Suppliers Summary
@@ -292,6 +222,20 @@ export default function B2BSupply() {
     staleTime: 5000,
   });
 
+  // 3. Fetch Supply Entries (Inwards)
+  const {
+    data: supplyEntriesData,
+    isLoading: loadingSupplyEntries,
+    refetch: refetchSupplyEntries,
+  } = useQuery({
+    queryKey: ["inventory-supply-entries"],
+    queryFn: async () => {
+      const res = await api.get("/inventory/supply-entries");
+      return res.data;
+    },
+    staleTime: 5000,
+  });
+
   // Consolidated lists
   const b2bCustomers = useMemo(() => {
     return b2bSummaryData?.customers || b2bSummaryData?.clients || b2bCustomersData?.customers || [];
@@ -305,6 +249,10 @@ export default function B2BSupply() {
     return supplySummaryData?.suppliers || [];
   }, [supplySummaryData]);
 
+  const supplyEntries = useMemo(() => {
+    return supplyEntriesData?.entries || [];
+  }, [supplyEntriesData]);
+
   // Global Invalidation Helper
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"] });
@@ -313,6 +261,7 @@ export default function B2BSupply() {
     queryClient.invalidateQueries({ queryKey: ["inventory-b2b-history"] });
     queryClient.invalidateQueries({ queryKey: ["inventory-supply-summary"] });
     queryClient.invalidateQueries({ queryKey: ["inventory-supplier-history"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory-supply-entries"] });
     queryClient.invalidateQueries({ queryKey: ["inventory"] });
     queryClient.invalidateQueries({ queryKey: ["ledger"] });
   };
@@ -384,110 +333,6 @@ export default function B2BSupply() {
     }
   };
 
-  const handleSaveB2bSale = async (e) => {
-    e.preventDefault();
-    if (!saleForm.customer_name || !saleForm.product || !saleForm.quantity) {
-      toast.error("Customer, product, and quantity are required.");
-      return;
-    }
-    const qty = parseFloat(saleForm.quantity);
-    if (isNaN(qty) || qty <= 0) {
-      toast.error("Quantity must be greater than 0");
-      return;
-    }
-
-    setSavingSale(true);
-    try {
-      const payload = {
-        date: saleForm.date,
-        bill_number: saleForm.bill_number,
-        product: saleForm.product,
-        size: saleForm.size,
-        quantity: qty,
-        unit: saleForm.unit || "Nos",
-        party_type: "B2B Customer",
-        client_id: saleForm.customer_id || "",
-        client_name: saleForm.customer_name,
-        remarks: saleForm.remarks ? `B2B Sale: ${saleForm.remarks}` : "B2B Sale",
-        status: "Dispatched",
-      };
-
-      await api.post("/inventory/outward", payload);
-      toast.success(`B2B Sale outward of ${qty} ${saleForm.unit} recorded`);
-      setNewSaleOpen(false);
-      setSaleForm({
-        customer_id: "",
-        customer_name: "",
-        bill_number: "",
-        date: dayjs().format("YYYY-MM-DD"),
-        product: "",
-        product_id: "",
-        size: "",
-        quantity: "",
-        unit: "Nos",
-        remarks: "",
-      });
-      invalidateAll();
-    } catch (err) {
-      toast.error(formatApiError(err));
-    } finally {
-      setSavingSale(false);
-    }
-  };
-
-  const handleSaveB2bReturn = async (e) => {
-    e.preventDefault();
-    if (!b2bReturnForm.customer_name || !b2bReturnForm.product || !b2bReturnForm.quantity) {
-      toast.error("Customer, product, and quantity are required.");
-      return;
-    }
-    const qty = parseFloat(b2bReturnForm.quantity);
-    if (isNaN(qty) || qty <= 0) {
-      toast.error("Quantity must be greater than 0");
-      return;
-    }
-
-    setSavingB2bReturn(true);
-    try {
-      const payload = {
-        date: b2bReturnForm.date,
-        bill_number: b2bReturnForm.bill_number,
-        reference_number: b2bReturnForm.reference_number || b2bReturnForm.bill_number,
-        product: b2bReturnForm.product,
-        size: b2bReturnForm.size,
-        quantity: qty,
-        unit: b2bReturnForm.unit || "Nos",
-        source_type: "B2B Return",
-        source_name: b2bReturnForm.customer_name,
-        client_id: b2bReturnForm.customer_id || "",
-        client_name: b2bReturnForm.customer_name,
-        remarks: b2bReturnForm.remarks ? `B2B Return: ${b2bReturnForm.remarks}` : "B2B Customer Return",
-      };
-
-      await api.post("/inventory/inward", payload);
-      toast.success(`B2B Return of ${qty} ${b2bReturnForm.unit} recorded (Stock Increased)`);
-      setB2bReturnOpen(false);
-      setB2bReturnForm({
-        customer_id: "",
-        customer_name: "",
-        reference_number: "",
-        bill_number: "",
-        date: dayjs().format("YYYY-MM-DD"),
-        product: "",
-        product_id: "",
-        size: "",
-        quantity: "",
-        unit: "Nos",
-        remarks: "",
-      });
-      invalidateAll();
-    } catch (err) {
-      toast.error(formatApiError(err));
-    } finally {
-      setSavingB2bReturn(false);
-    }
-  };
-
   // ==========================================
   // SUPPLY HANDLERS
   // ==========================================
@@ -551,108 +396,6 @@ export default function B2BSupply() {
       toast.error(formatApiError(err));
     } finally {
       setIsDeletingSupplier(false);
-    }
-  };
-
-  const handleSaveSupply = async (e) => {
-    e.preventDefault();
-    if (!supplyForm.supplier_name || !supplyForm.product || !supplyForm.quantity) {
-      toast.error("Supplier, product, and quantity are required.");
-      return;
-    }
-    const qty = parseFloat(supplyForm.quantity);
-    if (isNaN(qty) || qty <= 0) {
-      toast.error("Quantity must be greater than 0");
-      return;
-    }
-
-    setSavingSupply(true);
-    try {
-      const payload = {
-        date: supplyForm.date,
-        bill_number: supplyForm.bill_number,
-        reference_number: supplyForm.bill_number,
-        product: supplyForm.product,
-        size: supplyForm.size,
-        quantity: qty,
-        unit: supplyForm.unit || "Nos",
-        source_type: "Supplier",
-        source_name: supplyForm.supplier_name,
-        vendor_id: supplyForm.vendor_id || "",
-        remarks: supplyForm.remarks ? `Supply: ${supplyForm.remarks}` : "Supplier Purchase Entry",
-      };
-
-      await api.post("/inventory/inward", payload);
-      toast.success(`Supply entry of ${qty} ${supplyForm.unit} recorded (Stock Increased)`);
-      setNewSupplyOpen(false);
-      setSupplyForm({
-        vendor_id: "",
-        supplier_name: "",
-        bill_number: "",
-        date: dayjs().format("YYYY-MM-DD"),
-        product: "",
-        product_id: "",
-        size: "",
-        quantity: "",
-        unit: "Nos",
-        remarks: "",
-      });
-      invalidateAll();
-    } catch (err) {
-      toast.error(formatApiError(err));
-    } finally {
-      setSavingSupply(false);
-    }
-  };
-
-  const handleSaveSupplierReturn = async (e) => {
-    e.preventDefault();
-    if (!supplierReturnForm.supplier_name || !supplierReturnForm.product || !supplierReturnForm.quantity) {
-      toast.error("Supplier, product, and quantity are required.");
-      return;
-    }
-    const qty = parseFloat(supplierReturnForm.quantity);
-    if (isNaN(qty) || qty <= 0) {
-      toast.error("Quantity must be greater than 0");
-      return;
-    }
-
-    setSavingSupplierReturn(true);
-    try {
-      const payload = {
-        date: supplierReturnForm.date,
-        reference_number: supplierReturnForm.reference_number,
-        product: supplierReturnForm.product,
-        size: supplierReturnForm.size,
-        quantity: qty,
-        unit: supplierReturnForm.unit || "Nos",
-        party_type: "Supplier Return",
-        vendor_id: supplierReturnForm.vendor_id || "",
-        client_name: supplierReturnForm.supplier_name,
-        remarks: supplierReturnForm.remarks ? `Supplier Return: ${supplierReturnForm.remarks}` : "Return to Supplier",
-        status: "Dispatched",
-      };
-
-      await api.post("/inventory/outward", payload);
-      toast.success(`Supplier return of ${qty} ${supplierReturnForm.unit} recorded (Stock Decreased)`);
-      setSupplierReturnOpen(false);
-      setSupplierReturnForm({
-        vendor_id: "",
-        supplier_name: "",
-        reference_number: "",
-        date: dayjs().format("YYYY-MM-DD"),
-        product: "",
-        product_id: "",
-        size: "",
-        quantity: "",
-        unit: "Nos",
-        remarks: "",
-      });
-      invalidateAll();
-    } catch (err) {
-      toast.error(formatApiError(err));
-    } finally {
-      setSavingSupplierReturn(false);
     }
   };
 
@@ -877,24 +620,9 @@ export default function B2BSupply() {
             </div>
 
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate("/inventory?tab=inward&type=B2B Return")}
-                className="h-8 text-xs border-indigo-200 bg-indigo-50/50 text-indigo-700 hover:bg-indigo-100"
-                title="Record B2B Return in Data Management"
-              >
-                <RotateCcw className="w-3.5 h-3.5 mr-1" /> + B2B Return (Inward)
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate("/inventory?tab=outward&type=B2B Sale")}
-                className="h-8 text-xs border-amber-200 bg-amber-50/50 text-amber-800 hover:bg-amber-100"
-                title="Record B2B Sale in Data Management"
-              >
-                <ArrowUpFromLine className="w-3.5 h-3.5 mr-1" /> + New B2B Sale (Outward)
-              </Button>
+              <span className="hidden md:inline-flex items-center text-[11px] text-slate-500 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-md">
+                Enter transactions in <strong className="ml-1 text-slate-700">Data Management → Inward / Outward</strong>
+              </span>
               <Button
                 size="sm"
                 onClick={() => setAddCustomerOpen(true)}
@@ -1040,7 +768,17 @@ export default function B2BSupply() {
                         <td colSpan={9} className="text-center py-12 text-slate-400">
                           <ShoppingCart className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                           <p className="font-medium text-slate-600">No B2B sales recorded yet</p>
-                          <p className="text-[11px] text-slate-400 mt-0.5">Click &quot;+ New B2B Sale (Outward)&quot; to record a material dispatch against a business customer.</p>
+                          <p className="text-[11px] text-slate-400 mt-1">
+                            Record outward dispatches via <strong className="text-slate-700">Data Management → Outward (B2B Sale)</strong>.
+                          </p>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => navigate("/inventory?tab=outward&type=b2b")}
+                            className="mt-3 text-xs h-7 border-slate-200 text-slate-700 hover:bg-slate-100"
+                          >
+                            Go to Data Management → Outward
+                          </Button>
                         </td>
                       </tr>
                     ) : (
@@ -1307,24 +1045,9 @@ export default function B2BSupply() {
             </div>
 
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate("/inventory?tab=outward&type=Supplier Return")}
-                className="h-8 text-xs border-rose-200 bg-rose-50/50 text-rose-700 hover:bg-rose-100"
-                title="Record Supplier Return in Data Management"
-              >
-                <ArrowUpFromLine className="w-3.5 h-3.5 mr-1" /> + Supplier Return (Outward)
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigate("/inventory?tab=inward&type=Supplier")}
-                className="h-8 text-xs border-emerald-200 bg-emerald-50/50 text-emerald-800 hover:bg-emerald-100"
-                title="Record Supply Entry in Data Management"
-              >
-                <ArrowDownToLine className="w-3.5 h-3.5 mr-1" /> + New Supply (Inward)
-              </Button>
+              <span className="hidden md:inline-flex items-center text-[11px] text-slate-500 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-md">
+                Enter transactions in <strong className="ml-1 text-slate-700">Data Management → Inward / Outward</strong>
+              </span>
               <Button
                 size="sm"
                 onClick={() => setAddSupplierOpen(true)}
@@ -1462,23 +1185,67 @@ export default function B2BSupply() {
           {/* TAB 2: Supply Entries (Inwards) */}
           {supplyTab === "entries" && (
             <Card className="border-slate-200 shadow-xs">
-              <div className="p-4 bg-slate-50/60 border-b border-slate-200 flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold text-slate-900 text-xs">Supplier Purchase Inwards</h3>
-                  <p className="text-[11px] text-slate-500">All inbound shipments directly linked to vendor purchase orders.</p>
-                </div>
-                <Button
-                  size="sm"
-                  onClick={() => navigate("/inventory?tab=inward&type=Supplier")}
-                  className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
-                  title="Record Supply Entry in Data Management"
-                >
-                  <Plus className="w-3.5 h-3.5 mr-1" /> + New Supply Entry
-                </Button>
-              </div>
-
-              <div className="p-6 text-center text-slate-500 text-xs">
-                <p>To view full historical supply shipments by vendor, select a vendor in the <strong>Supplier Ledger</strong> tab.</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50/75 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[10px] tracking-wider">
+                      <th className="py-3 px-4">Date</th>
+                      <th className="py-3 px-4">Bill / Ref No.</th>
+                      <th className="py-3 px-4">Supplier / Vendor</th>
+                      <th className="py-3 px-4">Product</th>
+                      <th className="py-3 px-4">Size / Spec</th>
+                      <th className="py-3 px-4 text-right">Quantity</th>
+                      <th className="py-3 px-4">Unit</th>
+                      <th className="py-3 px-4">Remarks</th>
+                      <th className="py-3 px-4 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {loadingSupplyEntries && supplyEntries.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="text-center py-10 text-slate-400">Loading supply entries...</td>
+                      </tr>
+                    ) : supplyEntries.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="text-center py-12 text-slate-400">
+                          <Truck className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                          <p className="font-medium text-slate-600">No supply entries recorded yet</p>
+                          <p className="text-[11px] text-slate-400 mt-1">
+                            Record incoming shipments via <strong className="text-slate-700">Data Management → Inward (Supplier Supply)</strong>.
+                          </p>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => navigate("/inventory?tab=inward&type=supply")}
+                            className="mt-3 text-xs h-7 border-slate-200 text-slate-700 hover:bg-slate-100"
+                          >
+                            Go to Data Management → Inward
+                          </Button>
+                        </td>
+                      </tr>
+                    ) : (
+                      supplyEntries.map((e) => (
+                        <tr key={e.id} className="hover:bg-slate-50/80 transition">
+                          <td className="py-3 px-4 font-mono text-[11px] text-slate-600">{e.date}</td>
+                          <td className="py-3 px-4 font-semibold text-slate-900 font-mono">{e.bill_number}</td>
+                          <td className="py-3 px-4 font-semibold text-emerald-700">{e.supplier_name}</td>
+                          <td className="py-3 px-4 text-slate-900 font-medium">{e.product}</td>
+                          <td className="py-3 px-4 text-slate-600">{e.size || "—"}</td>
+                          <td className="py-3 px-4 text-right font-bold text-blue-700 tabular-nums">
+                            {Number(e.quantity).toLocaleString()}
+                          </td>
+                          <td className="py-3 px-4 text-slate-500">{e.unit || "Nos"}</td>
+                          <td className="py-3 px-4 text-slate-500 text-[11px] max-w-xs truncate">{e.remarks || "—"}</td>
+                          <td className="py-3 px-4 text-center">
+                            <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
+                              {e.status || "Received"}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </Card>
           )}
@@ -1870,334 +1637,6 @@ export default function B2BSupply() {
         </DialogContent>
       </Dialog>
 
-      {/* 4. New B2B Sale Modal (Outward Dispatch) */}
-      <Dialog open={newSaleOpen} onOpenChange={setNewSaleOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ArrowUpFromLine className="w-5 h-5 text-amber-600" />
-              Record New B2B Sale (Outward Dispatch)
-            </DialogTitle>
-            <DialogDescription>
-              Dispatches material to a B2B Business Customer. Live stock balance will decrease automatically.
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleSaveB2bSale} className="space-y-3.5 py-2">
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                B2B Business Customer *
-              </label>
-              <Select
-                value={saleForm.customer_id}
-                onValueChange={(val) => {
-                  const matched = b2bCustomers.find((c) => c.id === val);
-                  setSaleForm({
-                    ...saleForm,
-                    customer_id: val,
-                    customer_name: matched ? matched.name || matched.full_name : "",
-                  });
-                }}
-              >
-                <SelectTrigger className="h-10 text-xs bg-white">
-                  <SelectValue placeholder="Select B2B Business Customer..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {b2bCustomers.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name || c.full_name} ({c.city || "B2B"})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Bill / Invoice No. *
-                </label>
-                <Input
-                  placeholder="e.g. INV-B2B-001"
-                  value={saleForm.bill_number}
-                  onChange={(e) => setSaleForm({ ...saleForm, bill_number: e.target.value })}
-                  className="text-xs h-9"
-                  required
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Dispatch Date *
-                </label>
-                <Input
-                  type="date"
-                  value={saleForm.date}
-                  onChange={(e) => setSaleForm({ ...saleForm, date: e.target.value })}
-                  className="text-xs h-9"
-                  required
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                Product Name *
-              </label>
-              <ProductAutocompleteInput
-                value={saleForm.product}
-                onChange={(prodName, matchedProd) => {
-                  setSaleForm((prev) => ({
-                    ...prev,
-                    product: prodName,
-                    product_id: matchedProd?.id || prev.product_id,
-                    size: matchedProd?.size || prev.size,
-                    unit: matchedProd?.unit || prev.unit || "Nos",
-                  }));
-                }}
-                products={productList}
-                placeholder="Type or select product..."
-                className="h-9 text-xs"
-              />
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Size / Spec
-                </label>
-                <Input
-                  placeholder="e.g. 545W, 10kW"
-                  value={saleForm.size}
-                  onChange={(e) => setSaleForm({ ...saleForm, size: e.target.value })}
-                  className="text-xs h-9"
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Quantity *
-                </label>
-                <Input
-                  type="number"
-                  step="any"
-                  placeholder="0.00"
-                  value={saleForm.quantity}
-                  onChange={(e) => setSaleForm({ ...saleForm, quantity: e.target.value })}
-                  className="text-xs h-9 font-semibold"
-                  required
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Unit
-                </label>
-                <Select
-                  value={saleForm.unit}
-                  onValueChange={(val) => setSaleForm({ ...saleForm, unit: val })}
-                >
-                  <SelectTrigger className="h-9 text-xs bg-white">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {getStandardizedUnitOptions().map((u) => (
-                      <SelectItem key={u} value={u}>{u}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                Remarks / Notes
-              </label>
-              <Input
-                placeholder="Delivery address, transporter, etc."
-                value={saleForm.remarks}
-                onChange={(e) => setSaleForm({ ...saleForm, remarks: e.target.value })}
-                className="text-xs h-9"
-              />
-            </div>
-
-            <DialogFooter className="pt-2">
-              <Button type="button" variant="outline" onClick={() => setNewSaleOpen(false)} className="text-xs h-9">
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={savingSale}
-                className="text-xs h-9 bg-amber-600 hover:bg-amber-700 text-white"
-              >
-                {savingSale ? "Recording..." : "Save B2B Sale (Outward)"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* 5. B2B Return Modal (Inward Stock Increase) */}
-      <Dialog open={b2bReturnOpen} onOpenChange={setB2bReturnOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <RotateCcw className="w-5 h-5 text-indigo-600" />
-              Record B2B Client Return (Inward)
-            </DialogTitle>
-            <DialogDescription>
-              Receive returned material back from a B2B Business Customer. Stock balance will increase automatically.
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleSaveB2bReturn} className="space-y-3.5 py-2">
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                B2B Business Customer *
-              </label>
-              <Select
-                value={b2bReturnForm.customer_id}
-                onValueChange={(val) => {
-                  const matched = b2bCustomers.find((c) => c.id === val);
-                  setB2bReturnForm({
-                    ...b2bReturnForm,
-                    customer_id: val,
-                    customer_name: matched ? matched.name || matched.full_name : "",
-                  });
-                }}
-              >
-                <SelectTrigger className="h-10 text-xs bg-white">
-                  <SelectValue placeholder="Select B2B Business Customer..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {b2bCustomers.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name || c.full_name} ({c.city || "B2B"})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Challan / Return Bill No. *
-                </label>
-                <Input
-                  placeholder="e.g. RET-001"
-                  value={b2bReturnForm.bill_number}
-                  onChange={(e) => setB2bReturnForm({ ...b2bReturnForm, bill_number: e.target.value, reference_number: e.target.value })}
-                  className="text-xs h-9"
-                  required
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Return Date *
-                </label>
-                <Input
-                  type="date"
-                  value={b2bReturnForm.date}
-                  onChange={(e) => setB2bReturnForm({ ...b2bReturnForm, date: e.target.value })}
-                  className="text-xs h-9"
-                  required
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                Product Name *
-              </label>
-              <ProductAutocompleteInput
-                value={b2bReturnForm.product}
-                onChange={(prodName, matchedProd) => {
-                  setB2bReturnForm((prev) => ({
-                    ...prev,
-                    product: prodName,
-                    product_id: matchedProd?.id || prev.product_id,
-                    size: matchedProd?.size || prev.size,
-                    unit: matchedProd?.unit || prev.unit || "Nos",
-                  }));
-                }}
-                products={productList}
-                placeholder="Type or select product..."
-                className="h-9 text-xs"
-              />
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Size / Spec
-                </label>
-                <Input
-                  placeholder="e.g. 545W, 10kW"
-                  value={b2bReturnForm.size}
-                  onChange={(e) => setB2bReturnForm({ ...b2bReturnForm, size: e.target.value })}
-                  className="text-xs h-9"
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Quantity *
-                </label>
-                <Input
-                  type="number"
-                  step="any"
-                  placeholder="0.00"
-                  value={b2bReturnForm.quantity}
-                  onChange={(e) => setB2bReturnForm({ ...b2bReturnForm, quantity: e.target.value })}
-                  className="text-xs h-9 font-semibold"
-                  required
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Unit
-                </label>
-                <Select
-                  value={b2bReturnForm.unit}
-                  onValueChange={(val) => setB2bReturnForm({ ...b2bReturnForm, unit: val })}
-                >
-                  <SelectTrigger className="h-9 text-xs bg-white">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {getStandardizedUnitOptions().map((u) => (
-                      <SelectItem key={u} value={u}>{u}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                Reason / Remarks
-              </label>
-              <Input
-                placeholder="Defective return, excess material, etc."
-                value={b2bReturnForm.remarks}
-                onChange={(e) => setB2bReturnForm({ ...b2bReturnForm, remarks: e.target.value })}
-                className="text-xs h-9"
-              />
-            </div>
-
-            <DialogFooter className="pt-2">
-              <Button type="button" variant="outline" onClick={() => setB2bReturnOpen(false)} className="text-xs h-9">
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={savingB2bReturn}
-                className="text-xs h-9 bg-indigo-600 hover:bg-indigo-700 text-white"
-              >
-                {savingB2bReturn ? "Saving..." : "Save B2B Return (Inward)"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
       {/* 6. Add Supplier Modal */}
       <Dialog open={addSupplierOpen} onOpenChange={setAddSupplierOpen}>
         <DialogContent className="max-w-lg">
@@ -2398,333 +1837,6 @@ export default function B2BSupply() {
         </DialogContent>
       </Dialog>
 
-      {/* 9. New Supply Modal (Inward Receipt) */}
-      <Dialog open={newSupplyOpen} onOpenChange={setNewSupplyOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ArrowDownToLine className="w-5 h-5 text-emerald-600" />
-              Record New Supply Entry (Inward Receipt)
-            </DialogTitle>
-            <DialogDescription>
-              Record purchased materials received from a registered Supplier. Stock balance will increase automatically.
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleSaveSupply} className="space-y-3.5 py-2">
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                Supplier *
-              </label>
-              <Select
-                value={supplyForm.vendor_id}
-                onValueChange={(val) => {
-                  const matched = suppliers.find((s) => s.id === val);
-                  setSupplyForm({
-                    ...supplyForm,
-                    vendor_id: val,
-                    supplier_name: matched ? matched.name : "",
-                  });
-                }}
-              >
-                <SelectTrigger className="h-10 text-xs bg-white">
-                  <SelectValue placeholder="Select registered supplier..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {suppliers.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.name} ({s.category || "Vendor"})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Invoice / Challan No. *
-                </label>
-                <Input
-                  placeholder="e.g. INV-SUP-9021"
-                  value={supplyForm.bill_number}
-                  onChange={(e) => setSupplyForm({ ...supplyForm, bill_number: e.target.value })}
-                  className="text-xs h-9"
-                  required
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Receipt Date *
-                </label>
-                <Input
-                  type="date"
-                  value={supplyForm.date}
-                  onChange={(e) => setSupplyForm({ ...supplyForm, date: e.target.value })}
-                  className="text-xs h-9"
-                  required
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                Product Name *
-              </label>
-              <ProductAutocompleteInput
-                value={supplyForm.product}
-                onChange={(prodName, matchedProd) => {
-                  setSupplyForm((prev) => ({
-                    ...prev,
-                    product: prodName,
-                    product_id: matchedProd?.id || prev.product_id,
-                    size: matchedProd?.size || prev.size,
-                    unit: matchedProd?.unit || prev.unit || "Nos",
-                  }));
-                }}
-                products={productList}
-                placeholder="Type or select product..."
-                className="h-9 text-xs"
-              />
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Size / Spec
-                </label>
-                <Input
-                  placeholder="e.g. 545W, 10kW"
-                  value={supplyForm.size}
-                  onChange={(e) => setSupplyForm({ ...supplyForm, size: e.target.value })}
-                  className="text-xs h-9"
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Quantity *
-                </label>
-                <Input
-                  type="number"
-                  step="any"
-                  placeholder="0.00"
-                  value={supplyForm.quantity}
-                  onChange={(e) => setSupplyForm({ ...supplyForm, quantity: e.target.value })}
-                  className="text-xs h-9 font-semibold"
-                  required
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Unit
-                </label>
-                <Select
-                  value={supplyForm.unit}
-                  onValueChange={(val) => setSupplyForm({ ...supplyForm, unit: val })}
-                >
-                  <SelectTrigger className="h-9 text-xs bg-white">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {getStandardizedUnitOptions().map((u) => (
-                      <SelectItem key={u} value={u}>{u}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                Remarks / Vehicle No.
-              </label>
-              <Input
-                placeholder="Driver, vehicle no, remarks..."
-                value={supplyForm.remarks}
-                onChange={(e) => setSupplyForm({ ...supplyForm, remarks: e.target.value })}
-                className="text-xs h-9"
-              />
-            </div>
-
-            <DialogFooter className="pt-2">
-              <Button type="button" variant="outline" onClick={() => setNewSupplyOpen(false)} className="text-xs h-9">
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={savingSupply}
-                className="text-xs h-9 bg-emerald-600 hover:bg-emerald-700 text-white"
-              >
-                {savingSupply ? "Recording..." : "Save Supply (Inward)"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* 10. Supplier Return Modal (Outward Stock Decrease) */}
-      <Dialog open={supplierReturnOpen} onOpenChange={setSupplierReturnOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ArrowUpFromLine className="w-5 h-5 text-rose-600" />
-              Record Supplier Return (Outward)
-            </DialogTitle>
-            <DialogDescription>
-              Return defective or surplus material back to a Supplier. Live stock balance will decrease automatically.
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleSaveSupplierReturn} className="space-y-3.5 py-2">
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                Supplier *
-              </label>
-              <Select
-                value={supplierReturnForm.vendor_id}
-                onValueChange={(val) => {
-                  const matched = suppliers.find((s) => s.id === val);
-                  setSupplierReturnForm({
-                    ...supplierReturnForm,
-                    vendor_id: val,
-                    supplier_name: matched ? matched.name : "",
-                  });
-                }}
-              >
-                <SelectTrigger className="h-10 text-xs bg-white">
-                  <SelectValue placeholder="Select supplier receiving return..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {suppliers.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.name} ({s.category || "Vendor"})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Return Challan / Ref No. *
-                </label>
-                <Input
-                  placeholder="e.g. RET-VND-101"
-                  value={supplierReturnForm.reference_number}
-                  onChange={(e) => setSupplierReturnForm({ ...supplierReturnForm, reference_number: e.target.value })}
-                  className="text-xs h-9"
-                  required
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Return Date *
-                </label>
-                <Input
-                  type="date"
-                  value={supplierReturnForm.date}
-                  onChange={(e) => setSupplierReturnForm({ ...supplierReturnForm, date: e.target.value })}
-                  className="text-xs h-9"
-                  required
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                Product Name *
-              </label>
-              <ProductAutocompleteInput
-                value={supplierReturnForm.product}
-                onChange={(prodName, matchedProd) => {
-                  setSupplierReturnForm((prev) => ({
-                    ...prev,
-                    product: prodName,
-                    product_id: matchedProd?.id || prev.product_id,
-                    size: matchedProd?.size || prev.size,
-                    unit: matchedProd?.unit || prev.unit || "Nos",
-                  }));
-                }}
-                products={productList}
-                placeholder="Type or select product..."
-                className="h-9 text-xs"
-              />
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Size / Spec
-                </label>
-                <Input
-                  placeholder="e.g. 545W, 10kW"
-                  value={supplierReturnForm.size}
-                  onChange={(e) => setSupplierReturnForm({ ...supplierReturnForm, size: e.target.value })}
-                  className="text-xs h-9"
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Quantity *
-                </label>
-                <Input
-                  type="number"
-                  step="any"
-                  placeholder="0.00"
-                  value={supplierReturnForm.quantity}
-                  onChange={(e) => setSupplierReturnForm({ ...supplierReturnForm, quantity: e.target.value })}
-                  className="text-xs h-9 font-semibold"
-                  required
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                  Unit
-                </label>
-                <Select
-                  value={supplierReturnForm.unit}
-                  onValueChange={(val) => setSupplierReturnForm({ ...supplierReturnForm, unit: val })}
-                >
-                  <SelectTrigger className="h-9 text-xs bg-white">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {getStandardizedUnitOptions().map((u) => (
-                      <SelectItem key={u} value={u}>{u}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-600 block mb-1">
-                Reason / Remarks
-              </label>
-              <Input
-                placeholder="Defective cells, warranty return, etc."
-                value={supplierReturnForm.remarks}
-                onChange={(e) => setSupplierReturnForm({ ...supplierReturnForm, remarks: e.target.value })}
-                className="text-xs h-9"
-              />
-            </div>
-
-            <DialogFooter className="pt-2">
-              <Button type="button" variant="outline" onClick={() => setSupplierReturnOpen(false)} className="text-xs h-9">
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={savingSupplierReturn}
-                className="text-xs h-9 bg-rose-600 hover:bg-rose-700 text-white"
-              >
-                {savingSupplierReturn ? "Recording..." : "Save Supplier Return (Outward)"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

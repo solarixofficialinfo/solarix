@@ -8,7 +8,7 @@ export function useHighValueLedger(search = "") {
       const { data } = await api.get("/inventory/high-value-ledger", { params: { search } });
       return data || { all_goods: [], available: [], dispatched: [], returned: [] };
     },
-    staleTime: 60 * 1000,
+    staleTime: 5 * 1000,
     refetchOnWindowFocus: false,
   });
 
@@ -25,7 +25,7 @@ export function useAssetList(filters = {}) {
       const { data } = await api.get("/assets", { params: filters });
       return Array.isArray(data) ? data : [];
     },
-    staleTime: 60 * 1000,
+    staleTime: 5 * 1000,
   });
 
   return {

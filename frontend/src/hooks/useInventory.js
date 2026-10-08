@@ -15,14 +15,13 @@ export function useProductList(filters = {}) {
       setCachedProducts(list);
       return list;
     },
-    initialData: () => {
+    placeholderData: () => {
       const cached = getCachedProducts();
       return (Array.isArray(cached) && cached.length > 0) ? cached : undefined;
     },
-    staleTime: 60 * 1000,
+    staleTime: 5 * 1000,
     gcTime: 30 * 60 * 1000,
     refetchOnWindowFocus: false,
-    refetchOnMount: false,
   });
 }
 
@@ -33,7 +32,7 @@ export function useInventoryStats() {
       const { data } = await api.get("/inventory/stats");
       return data;
     },
-    staleTime: STALE_TIME,
+    staleTime: 5 * 1000,
   });
 }
 
@@ -42,6 +41,7 @@ export function useInvalidateInventory() {
   return () => {
     invalidateFrontendProductCache();
     queryClient.invalidateQueries({ queryKey: queryKeys.inventory.all() });
+    queryClient.invalidateQueries({ queryKey: ["inventory"] });
     queryClient.invalidateQueries({ queryKey: ["high-value-ledger"] });
     queryClient.invalidateQueries({ queryKey: ["high-value-assets"] });
     queryClient.invalidateQueries({ queryKey: ["ledger"] });
@@ -53,6 +53,9 @@ export function useInvalidateInventory() {
     queryClient.invalidateQueries({ queryKey: ["inventory", "history"] });
     queryClient.invalidateQueries({ queryKey: ["inventory", "inward"] });
     queryClient.invalidateQueries({ queryKey: ["inventory", "outward"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory", "stats"] });
+    queryClient.invalidateQueries({ queryKey: ["serial-tracking"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory-intelligence"] });
   };
 }
 
@@ -63,8 +66,7 @@ export function useInventoryHistory(params = {}) {
       const { data } = await api.get("/inventory/history", { params });
       return data || { rows: [], total: 0, page: 1, pages: 1, page_size: 50 };
     },
-    staleTime: 60 * 1000,
-    refetchOnMount: false,
+    staleTime: 5 * 1000,
   });
 }
 

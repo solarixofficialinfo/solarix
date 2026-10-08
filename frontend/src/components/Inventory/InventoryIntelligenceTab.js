@@ -50,7 +50,7 @@ const TIME_RANGE_PRESETS = [
   { value: "this_year", label: "This Year" },
 ];
 
-export default function InventoryIntelligenceTab({ globalSearch = "" }) {
+export default function InventoryIntelligenceTab({ globalSearch = "", refreshTrigger, isActive }) {
   const { hasFeature } = useEntitlements();
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
@@ -120,6 +120,12 @@ export default function InventoryIntelligenceTab({ globalSearch = "" }) {
   useEffect(() => {
     fetchAnalytics();
   }, [fetchAnalytics]);
+
+  useEffect(() => {
+    if (isActive) {
+      fetchAnalytics();
+    }
+  }, [isActive, refreshTrigger, fetchAnalytics]);
 
   const handleClearFilters = () => {
     setTimeRange("all");

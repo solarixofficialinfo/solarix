@@ -23,7 +23,7 @@ import dayjs from "dayjs";
 import { toast } from "sonner";
 import { useEntitlements } from "@/hooks/useEntitlements";
 
-export default function SerialTrackingTab({ globalSearch = "" }) {
+export default function SerialTrackingTab({ globalSearch = "", refreshTrigger, isActive }) {
   const { hasFeature } = useEntitlements();
   const [data, setData] = useState({ rows: [], total: 0, page: 1, pages: 1, page_size: 50 });
   const [loading, setLoading] = useState(true);
@@ -62,6 +62,12 @@ export default function SerialTrackingTab({ globalSearch = "" }) {
   useEffect(() => {
     fetchSerials();
   }, [fetchSerials]);
+
+  useEffect(() => {
+    if (isActive) {
+      fetchSerials();
+    }
+  }, [isActive, refreshTrigger, fetchSerials]);
 
   const handleExportCsv = async () => {
     if (!hasFeature("export")) {

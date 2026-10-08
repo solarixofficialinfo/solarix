@@ -19,7 +19,7 @@ export {
 export const CATEGORY_OPTIONS = ["Solar Panel", "Inverter", "Battery", "BoS", "Cable", "Structure", "MC4 / Connector", "Earthing", "Net Meter", "Tools", "Other"];
 export const REF_TYPES = ["Challan Number", "Invoice Number", "Book Number", "GRN Number", "Transport Number"];
 export const OUTWARD_REF_TYPES = ["Challan Number", "Book Number", "Other"];
-export const SRC_TYPES = ["Supplier", "Vendor", "Return From Client", "Manual Entry"];
+export const SRC_TYPES = ["Supplier Supply", "Supplier", "Vendor", "Client Return", "Return From Client", "B2B Return", "Internal / Warehouse", "Repair Return", "Manual Entry", "Other"];
 
 // Strip all non-digit characters — used for Challan/Bill/Ref number inputs (Sprint 8)
 export const digitsOnly = (v) => String(v ?? "").replace(/\D+/g, "");
