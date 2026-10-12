@@ -29,13 +29,202 @@ export const DEFAULT_PANEL_SPECS = {
   length_m: 2.278,
   width_m: 1.134,
   thickness_m: 0.035,
+  thickness_mm: 35,
   weight_kg: 28.5,
   voc_v: 49.8,
   isc_a: 14.0,
   vmp_v: 41.9,
   imp_a: 13.1,
   efficiency_pct: 21.3,
+  cell_type: "Mono PERC",
 };
+
+/**
+ * Configurable Module Wattage Category Thresholds
+ */
+export const MODULE_WATTAGE_THRESHOLDS = {
+  LOW_MAX: 410,     // < 410 Wp = Low Wattage
+  MEDIUM_MAX: 549,  // 410 - 549 Wp = Medium Wattage
+  HIGH_MIN: 550,    // >= 550 Wp = High Wattage
+};
+
+export function getModuleCategory(wattage) {
+  const w = Number(wattage || 0);
+  if (w < MODULE_WATTAGE_THRESHOLDS.LOW_MAX) return "low";
+  if (w < MODULE_WATTAGE_THRESHOLDS.HIGH_MIN) return "medium";
+  return "high";
+}
+
+/**
+ * Curated Standard PV Module Catalogue Presets
+ */
+export const STANDARD_MODULE_CATALOGUE = [
+  // High Wattage (>= 550W)
+  {
+    id: "mod-jinko-585",
+    make: "Jinko Solar",
+    model: "Tiger Neo N-Type 585W",
+    wattage: 585,
+    length_m: 2.278,
+    width_m: 1.134,
+    thickness_mm: 35,
+    thickness_m: 0.035,
+    weight_kg: 28.0,
+    efficiency_pct: 22.65,
+    cell_type: "TOPCon (N-Type)",
+    category: "high",
+    voc_v: 51.5,
+    isc_a: 14.36,
+    vmp_v: 43.15,
+    imp_a: 13.56,
+  },
+  {
+    id: "mod-canadian-550",
+    make: "Canadian Solar",
+    model: "HiKu6 Mono PERC 550W",
+    wattage: 550,
+    length_m: 2.278,
+    width_m: 1.134,
+    thickness_mm: 35,
+    thickness_m: 0.035,
+    weight_kg: 28.5,
+    efficiency_pct: 21.3,
+    cell_type: "Mono PERC",
+    category: "high",
+    voc_v: 49.8,
+    isc_a: 14.0,
+    vmp_v: 41.9,
+    imp_a: 13.1,
+  },
+  {
+    id: "mod-trina-660",
+    make: "Trina Solar",
+    model: "Vertex DEG21C 660W",
+    wattage: 660,
+    length_m: 2.384,
+    width_m: 1.303,
+    thickness_mm: 35,
+    thickness_m: 0.035,
+    weight_kg: 34.0,
+    efficiency_pct: 21.2,
+    cell_type: "Bifacial Mono PERC",
+    category: "high",
+    voc_v: 46.0,
+    isc_a: 18.25,
+    vmp_v: 38.3,
+    imp_a: 17.24,
+  },
+  // Medium Wattage (410W - 545W)
+  {
+    id: "mod-longi-435",
+    make: "Longi Solar",
+    model: "Hi-MO 6 Explorer 435W",
+    wattage: 435,
+    length_m: 1.722,
+    width_m: 1.134,
+    thickness_mm: 30,
+    thickness_m: 0.030,
+    weight_kg: 20.8,
+    efficiency_pct: 22.3,
+    cell_type: "HPBC Mono",
+    category: "medium",
+    voc_v: 51.8,
+    isc_a: 10.75,
+    vmp_v: 43.6,
+    imp_a: 9.98,
+  },
+  {
+    id: "mod-trina-440",
+    make: "Trina Solar",
+    model: "Vertex S+ 440W",
+    wattage: 440,
+    length_m: 1.762,
+    width_m: 1.134,
+    thickness_mm: 30,
+    thickness_m: 0.030,
+    weight_kg: 21.0,
+    efficiency_pct: 22.0,
+    cell_type: "TOPCon (N-Type)",
+    category: "medium",
+    voc_v: 52.2,
+    isc_a: 10.67,
+    vmp_v: 44.0,
+    imp_a: 10.01,
+  },
+  {
+    id: "mod-adani-540",
+    make: "Adani Solar",
+    model: "Eternal Mono PERC 540W",
+    wattage: 540,
+    length_m: 2.256,
+    width_m: 1.133,
+    thickness_mm: 35,
+    thickness_m: 0.035,
+    weight_kg: 27.5,
+    efficiency_pct: 21.15,
+    cell_type: "Mono PERC",
+    category: "medium",
+    voc_v: 49.6,
+    isc_a: 13.85,
+    vmp_v: 41.5,
+    imp_a: 13.02,
+  },
+  // Low Wattage (< 410W)
+  {
+    id: "mod-waaree-400",
+    make: "Waaree Energies",
+    model: "Aditya Mono PERC 400W",
+    wattage: 400,
+    length_m: 2.008,
+    width_m: 1.002,
+    thickness_mm: 35,
+    thickness_m: 0.035,
+    weight_kg: 22.5,
+    efficiency_pct: 19.88,
+    cell_type: "Mono PERC",
+    category: "low",
+    voc_v: 49.1,
+    isc_a: 10.35,
+    vmp_v: 41.2,
+    imp_a: 9.71,
+  },
+  {
+    id: "mod-vikram-335",
+    make: "Vikram Solar",
+    model: "Somera Polycrystalline 335W",
+    wattage: 335,
+    length_m: 1.960,
+    width_m: 0.992,
+    thickness_mm: 35,
+    thickness_m: 0.035,
+    weight_kg: 22.0,
+    efficiency_pct: 17.26,
+    cell_type: "Polycrystalline",
+    category: "low",
+    voc_v: 46.2,
+    isc_a: 9.38,
+    vmp_v: 37.8,
+    imp_a: 8.87,
+  },
+  {
+    id: "mod-tata-330",
+    make: "Tata Power Solar",
+    model: "TP330 Poly 330W",
+    wattage: 330,
+    length_m: 1.956,
+    width_m: 0.992,
+    thickness_mm: 35,
+    thickness_m: 0.035,
+    weight_kg: 21.5,
+    efficiency_pct: 17.0,
+    cell_type: "Polycrystalline",
+    category: "low",
+    voc_v: 45.8,
+    isc_a: 9.25,
+    vmp_v: 37.2,
+    imp_a: 8.88,
+  },
+];
 
 /**
  * Common rooftop obstruction presets
@@ -399,14 +588,22 @@ export function validatePanelPlacement({
   // 2. Overlap with existing panels
   for (const p of panels) {
     if (p.hidden || (excludePanelId && p.id === excludePanelId)) continue;
+    const tolerance = isManual ? 0.008 : 0.0005;
     const pRect = {
       x: p.x,
       y: p.y,
-      width: p.width,
-      height: p.height,
+      width: Math.max(0.05, (p.width || pWidth) - tolerance),
+      height: Math.max(0.05, (p.height || pLength) - tolerance),
       rotation: p.rotation || 0,
     };
-    if (rotatedRectanglesIntersect({ x: candidate.x, y: candidate.y, width: pWidth, height: pLength, rotation: pRot }, pRect)) {
+    const candRect = {
+      x: candidate.x,
+      y: candidate.y,
+      width: Math.max(0.05, pWidth - tolerance),
+      height: Math.max(0.05, pLength - tolerance),
+      rotation: pRot,
+    };
+    if (rotatedRectanglesIntersect(candRect, pRect)) {
       return { valid: false, reason: "Panel overlaps another existing solar panel." };
     }
   }

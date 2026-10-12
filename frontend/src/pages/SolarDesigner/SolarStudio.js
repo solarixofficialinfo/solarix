@@ -55,6 +55,9 @@ import DesignSummaryPanel from "./components/DesignSummaryPanel";
 import LayoutMicroAdjuster from "./components/LayoutMicroAdjuster";
 import {
   DEFAULT_PANEL_SPECS,
+  MODULE_WATTAGE_THRESHOLDS,
+  getModuleCategory,
+  STANDARD_MODULE_CATALOGUE,
   OBSTACLE_TYPES,
   generateAutoPanelLayout,
   canFitAdditionalPanel,
@@ -314,6 +317,18 @@ export default function SolarStudio() {
     : [];
 
   const [showProductModal, setShowProductModal] = useState(false);
+  const [moduleCategoryFilter, setModuleCategoryFilter] = useState("all"); // 'all' | 'high' | 'medium' | 'low' | 'product_master' | 'custom'
+  const [customModuleForm, setCustomModuleForm] = useState({
+    make: "Custom Tier-1",
+    model: "Custom 550W Module",
+    wattage: 550,
+    length_m: 2.278,
+    width_m: 1.134,
+    thickness_mm: 35,
+    weight_kg: 28.5,
+    efficiency_pct: 21.3,
+    cell_type: "Mono PERC",
+  });
   const [showObstacleModal, setShowObstacleModal] = useState(false);
   const [newObstacleForm, setNewObstacleForm] = useState({
     name: "Water Tank",
@@ -479,10 +494,16 @@ export default function SolarStudio() {
           doc.structure_nodes = Array.isArray(doc.structure_nodes) ? doc.structure_nodes : [];
           doc.structure_members = Array.isArray(doc.structure_members) ? doc.structure_members : [];
           doc.saved_views = Array.isArray(doc.saved_views) ? doc.saved_views : [];
+          doc.deleted_member_ids = Array.isArray(doc.deleted_member_ids)
+            ? doc.deleted_member_ids
+            : (Array.isArray(doc.structure?.deleted_member_ids) ? doc.structure.deleted_member_ids : []);
 
           setDesignData(doc);
           if (doc.panels && doc.panels.length > 0) {
             setAutoLayoutBaselinePanels(doc.panels);
+            if (doc.has_manual_adjustments || doc.panels.some((p) => p.isManual)) {
+              setHasManualAdjustments(true);
+            }
           }
           if (doc.saved_views && doc.saved_views.length > 0) {
             setSavedViews(doc.saved_views);
@@ -619,7 +640,7 @@ export default function SolarStudio() {
 
     if (!splitResult || !target) {
       toast.warning("Section line must cut across the roof boundary edges. Try drawing completely across.");
-      return;
+      return false;
     }
 
     const [poly1, poly2] = splitResult;
@@ -682,6 +703,7 @@ export default function SolarStudio() {
     }));
     setSelectedSectionId(sec2.id);
     toast.success(`Split into ${sec1.name} and ${sec2.name}!`);
+    return true;
   }, [effectiveSections, designData.panels, designData.roof_polygon, designData.roof?.setback_m, designData.setback_m, designData.panel_spacing_m, designData.row_spacing_m, designData.orientation]);
 
   // Merge two adjacent sections
@@ -1986,6 +2008,8 @@ export default function SolarStudio() {
         roof_source: designData.roof?.source || (designData.roof_polygon?.length ? "satellite" : "unknown"),
         eave_height_m: designData.roof?.eave_height_m ?? designData.roof?.elevation_m ?? 3.5,
         ridge_height_m: designData.roof?.ridge_height_m ?? 5.0,
+        deleted_member_ids: designData.deleted_member_ids || [],
+        has_manual_adjustments: Boolean(hasManualAdjustments || (designData.panels || []).some((p) => p.isManual)),
         saved_views: currentViews,
         layout_snapshot_2d: snap2d,
         layout_snapshot_3d: snap3d,
@@ -2149,14 +2173,94 @@ export default function SolarStudio() {
     const match = (product.name || "").match(/(\d{3,4})\s*W/i) || (product.size || "").match(/(\d{3,4})\s*W/i);
     if (match) wattage = parseInt(match[1], 10);
 
+    const length_m = Number(product.length_m || (wattage >= 550 ? 2.278 : wattage >= 410 ? 1.762 : 1.960));
+    const width_m = Number(product.width_m || (wattage >= 550 ? 1.134 : wattage >= 410 ? 1.134 : 0.992));
+    const thickness_mm = Number(product.thickness_mm || 35);
+    const weight_kg = Number(product.weight_kg || (wattage >= 550 ? 28.5 : wattage >= 410 ? 21.0 : 22.0));
+    const efficiency_pct = Number(product.efficiency_pct || product.efficiency || 21.3);
+
     updateDesignData({
       panel_product_id: product.id,
       panel_make: product.name,
       panel_model: product.size || `${wattage}W PV Module`,
       panel_wattage: wattage,
+      panel_dimensions: {
+        length_m,
+        width_m,
+        thickness_mm,
+        thickness_m: thickness_mm / 1000,
+        weight_kg,
+        efficiency_pct,
+      },
+      panel_efficiency_pct: efficiency_pct,
+      cell_type: product.cell_type || "Mono PERC",
     });
     setShowProductModal(false);
     toast.success(`Selected module: ${product.name}`);
+  };
+
+  // Select Preset Standard Module from Catalogue
+  const handleSelectStandardModule = (mod) => {
+    updateDesignData({
+      panel_product_id: mod.id,
+      panel_make: mod.make,
+      panel_model: mod.model,
+      panel_wattage: mod.wattage,
+      panel_dimensions: {
+        length_m: mod.length_m,
+        width_m: mod.width_m,
+        thickness_mm: mod.thickness_mm || 35,
+        thickness_m: (mod.thickness_mm || 35) / 1000,
+        weight_kg: mod.weight_kg || 28.5,
+        efficiency_pct: mod.efficiency_pct || 21.3,
+      },
+      panel_efficiency_pct: mod.efficiency_pct || 21.3,
+      cell_type: mod.cell_type || "Mono PERC",
+    });
+    setShowProductModal(false);
+    toast.success(`Selected module: ${mod.make} ${mod.model} (${mod.wattage}W)`);
+  };
+
+  // Save Custom Module Configuration with positive validations
+  const handleSaveCustomModule = (customSpecs) => {
+    const wattage = Number(customSpecs.wattage || 550);
+    const length_m = Number(customSpecs.length_m || 2.278);
+    const width_m = Number(customSpecs.width_m || 1.134);
+    const thickness_mm = Number(customSpecs.thickness_mm || 35);
+    const weight_kg = Number(customSpecs.weight_kg || 28.5);
+    const efficiency_pct = Number(customSpecs.efficiency_pct || 21.3);
+
+    if (length_m <= 0 || width_m <= 0) {
+      toast.error("Module length and width must be positive values.");
+      return;
+    }
+    if (wattage <= 0) {
+      toast.error("Module wattage must be a positive number.");
+      return;
+    }
+    if (weight_kg <= 0) {
+      toast.error("Module weight must be a positive number.");
+      return;
+    }
+
+    updateDesignData({
+      panel_product_id: `custom-${Date.now()}`,
+      panel_make: customSpecs.make || "Custom Manufacturer",
+      panel_model: customSpecs.model || `${wattage}W Custom Module`,
+      panel_wattage: wattage,
+      panel_dimensions: {
+        length_m,
+        width_m,
+        thickness_mm,
+        thickness_m: thickness_mm / 1000,
+        weight_kg,
+        efficiency_pct,
+      },
+      panel_efficiency_pct: efficiency_pct,
+      cell_type: customSpecs.cell_type || "Mono PERC",
+    });
+    setShowProductModal(false);
+    toast.success(`Custom module configured: ${customSpecs.make || "Custom"} (${wattage}W)`);
   };
 
   // Add Obstacle Submit
@@ -2602,6 +2706,8 @@ export default function SolarStudio() {
                 setStructureNodes={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
                 selectedMemberId={selectedMemberId}
                 setSelectedMemberId={setSelectedMemberId}
+                deletedMemberIds={deletedMemberIds}
+                onDeletedMemberIdsChange={handleDeletedMemberIdsChange}
                 autoLayoutBaselinePanels={autoLayoutBaselinePanels}
                 hasManualAdjustments={hasManualAdjustments}
                 setHasManualAdjustments={setHasManualAdjustments}
@@ -2973,17 +3079,61 @@ export default function SolarStudio() {
               {/* SECTION 4: PV MODULE CONTROLS */}
               {openSection === "pv_module" && (
                 <div className="space-y-2.5 text-xs">
+                  {/* Select Module Button */}
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={() => setShowProductModal(true)}
-                    className="w-full h-7 text-xs font-semibold justify-between bg-slate-800 border-slate-700 text-white hover:bg-slate-700 rounded-lg"
+                    className="w-full h-8 text-xs font-semibold justify-between bg-slate-800 border-slate-700 text-white hover:bg-slate-700 rounded-lg shadow-sm"
                   >
-                    <span className="truncate">{designData.panel_wattage}W · {designData.panel_make || "Select Module"}</span>
+                    <span className="truncate flex items-center gap-1.5">
+                      <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span className="font-bold text-amber-300">{designData.panel_wattage}W</span>
+                      <span className="text-slate-400 truncate">· {designData.panel_make || "Select Module"}</span>
+                    </span>
                     <ChevronDown className="w-3.5 h-3.5 shrink-0 text-slate-400" />
                   </Button>
 
+                  {/* Manufacturer & Model Name */}
                   <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Manufacturer / Brand</Label>
+                      <Input
+                        type="text"
+                        value={designData.panel_make || ""}
+                        onChange={(e) => updateDesignData({ panel_make: e.target.value })}
+                        placeholder="e.g. Canadian Solar"
+                        className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Model Name</Label>
+                      <Input
+                        type="text"
+                        value={designData.panel_model || ""}
+                        onChange={(e) => updateDesignData({ panel_model: e.target.value })}
+                        placeholder="e.g. HiKu6 Mono"
+                        className="h-7 text-xs mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Rated Wattage & Orientation */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Rated Wattage (Wp)</Label>
+                      <Input
+                        type="number"
+                        min="100"
+                        max="800"
+                        value={designData.panel_wattage}
+                        onChange={(e) => {
+                          const w = Math.max(1, parseFloat(e.target.value) || 550);
+                          updateDesignData({ panel_wattage: w });
+                        }}
+                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
                     <div>
                       <Label className="text-[10px] font-semibold text-slate-400">Orientation</Label>
                       <Select
@@ -2999,28 +3149,144 @@ export default function SolarStudio() {
                         </SelectContent>
                       </Select>
                     </div>
+                  </div>
+
+                  {/* Physical Dimensions: Length, Width, Thickness */}
+                  <div className="grid grid-cols-3 gap-1.5">
                     <div>
-                      <Label className="text-[10px] font-semibold text-slate-400">Wattage (Wp)</Label>
+                      <Label className="text-[10px] font-semibold text-slate-400">Length (m)</Label>
                       <Input
                         type="number"
-                        value={designData.panel_wattage}
-                        onChange={(e) => updateDesignData({ panel_wattage: parseFloat(e.target.value) || 550 })}
+                        step="0.001"
+                        min="0.5"
+                        max="3.0"
+                        value={designData.panel_dimensions?.length_m || 2.278}
+                        onChange={(e) => {
+                          const val = Math.max(0.1, parseFloat(e.target.value) || 2.278);
+                          updateDesignData({
+                            panel_dimensions: { ...designData.panel_dimensions, length_m: val },
+                          });
+                        }}
+                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Width (m)</Label>
+                      <Input
+                        type="number"
+                        step="0.001"
+                        min="0.5"
+                        max="2.0"
+                        value={designData.panel_dimensions?.width_m || 1.134}
+                        onChange={(e) => {
+                          const val = Math.max(0.1, parseFloat(e.target.value) || 1.134);
+                          updateDesignData({
+                            panel_dimensions: { ...designData.panel_dimensions, width_m: val },
+                          });
+                        }}
+                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Thick. (mm)</Label>
+                      <Input
+                        type="number"
+                        step="1"
+                        min="25"
+                        max="50"
+                        value={designData.panel_dimensions?.thickness_mm || 35}
+                        onChange={(e) => {
+                          const val = Math.max(10, parseFloat(e.target.value) || 35);
+                          updateDesignData({
+                            panel_dimensions: { ...designData.panel_dimensions, thickness_mm: val, thickness_m: val / 1000 },
+                          });
+                        }}
                         className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
                       />
                     </div>
                   </div>
 
-                  <div className="bg-slate-950/80 p-2 rounded-xl border border-slate-800 text-[10px] text-slate-400 space-y-1 font-mono">
-                    <div className="flex items-center justify-between text-amber-300 font-bold">
-                      <span>{designData.panel_wattage || 550}W Module</span>
-                      <span className="capitalize text-slate-300 font-sans text-[9px] bg-slate-800 px-1.5 py-0.5 rounded">{designData.orientation || "portrait"}</span>
+                  {/* Weight, Efficiency, Cell Technology */}
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Weight (kg)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        min="5"
+                        max="50"
+                        value={designData.panel_dimensions?.weight_kg || 28.5}
+                        onChange={(e) => {
+                          const val = Math.max(1, parseFloat(e.target.value) || 28.5);
+                          updateDesignData({
+                            panel_dimensions: { ...designData.panel_dimensions, weight_kg: val },
+                          });
+                        }}
+                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Eff. (%)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        min="10"
+                        max="26"
+                        value={designData.panel_efficiency_pct ?? designData.panel_dimensions?.efficiency_pct ?? 21.3}
+                        onChange={(e) => {
+                          const val = Math.max(1, parseFloat(e.target.value) || 21.3);
+                          updateDesignData({
+                            panel_efficiency_pct: val,
+                            panel_dimensions: { ...designData.panel_dimensions, efficiency_pct: val },
+                          });
+                        }}
+                        className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] font-semibold text-slate-400">Cell Type</Label>
+                      <Select
+                        value={designData.cell_type || "Mono PERC"}
+                        onValueChange={(val) => updateDesignData({ cell_type: val })}
+                      >
+                        <SelectTrigger className="h-7 text-[10.5px] mt-0.5 bg-slate-800 border-slate-700 text-white px-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                          <SelectItem value="Mono PERC">Mono PERC</SelectItem>
+                          <SelectItem value="TOPCon (N-Type)">TOPCon</SelectItem>
+                          <SelectItem value="HJT">HJT</SelectItem>
+                          <SelectItem value="Bifacial Mono PERC">Bifacial</SelectItem>
+                          <SelectItem value="Polycrystalline">Poly</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  {/* Footprint & Mounting Compatibility Summary Card */}
+                  <div className="bg-slate-950/90 p-2.5 rounded-xl border border-slate-800/90 text-[10px] text-slate-400 space-y-1.5 font-mono">
+                    <div className="flex items-center justify-between text-amber-300 font-bold font-sans">
+                      <span className="flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                        {designData.panel_wattage || 550}W · {designData.cell_type || "Mono PERC"}
+                      </span>
+                      <span className="capitalize text-slate-300 font-sans text-[9px] bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">
+                        {designData.orientation || "portrait"}
+                      </span>
                     </div>
                     <div className="text-slate-300">
                       Footprint: {designData.orientation === "landscape"
-                        ? `${designData.panel_dimensions?.length_m || 2.278}m (W) × ${designData.panel_dimensions?.width_m || 1.134}m (H)`
-                        : `${designData.panel_dimensions?.width_m || 1.134}m (W) × ${designData.panel_dimensions?.length_m || 2.278}m (H)`}
+                        ? `${(designData.panel_dimensions?.length_m || 2.278).toFixed(3)}m (W) × ${(designData.panel_dimensions?.width_m || 1.134).toFixed(3)}m (H)`
+                        : `${(designData.panel_dimensions?.width_m || 1.134).toFixed(3)}m (W) × ${(designData.panel_dimensions?.length_m || 2.278).toFixed(3)}m (H)`}
                     </div>
-                    <div>Weight: {designData.panel_dimensions?.weight_kg || 28.5} kg</div>
+                    <div className="flex items-center justify-between text-slate-400 text-[9.5px]">
+                      <span>Area: {((designData.panel_dimensions?.length_m || 2.278) * (designData.panel_dimensions?.width_m || 1.134)).toFixed(2)} m²</span>
+                      <span>Weight: {designData.panel_dimensions?.weight_kg || 28.5} kg</span>
+                    </div>
+                    <div className="pt-1 border-t border-slate-800/70 text-[9px] text-emerald-400 font-sans flex items-center justify-between">
+                      <span>Clamp Zone: 400–500mm</span>
+                      <span>Rail: Dual Continuous 6063-T6</span>
+                    </div>
                   </div>
                 </div>
               )}
@@ -4135,6 +4401,8 @@ export default function SolarStudio() {
                     }}
                     structureNodes={designData.structure_nodes || []}
                     structureMembers={designData.structure_members || []}
+                    deletedMemberIds={designData.deleted_member_ids || []}
+                    onDeletedMemberIdsChange={(ids) => setDesignData((prev) => ({ ...prev, deleted_member_ids: ids }))}
                     onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
                     onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
                     snapEnabled={snapEnabled}
@@ -4259,6 +4527,8 @@ export default function SolarStudio() {
                       }}
                       structureNodes={designData.structure_nodes || []}
                       structureMembers={designData.structure_members || []}
+                      deletedMemberIds={designData.deleted_member_ids || []}
+                      onDeletedMemberIdsChange={(ids) => setDesignData((prev) => ({ ...prev, deleted_member_ids: ids }))}
                       onStructureNodesChange={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
                       onStructureMembersChange={(members) => setDesignData((prev) => ({ ...prev, structure_members: members }))}
                       snapEnabled={snapEnabled}
@@ -4555,48 +4825,241 @@ export default function SolarStudio() {
       </Dialog>
 
       {/* ──────────────────────────────────────────────────────────────────────────
-          7. SELECT MODULE FROM PRODUCT MASTER MODAL
+          7. SELECT PV MODULE MODAL (CATEGORIZED: LOW / MEDIUM / HIGH / MASTER / CUSTOM)
       ────────────────────────────────────────────────────────────────────────── */}
       <Dialog open={showProductModal} onOpenChange={setShowProductModal}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto bg-slate-900 border-slate-800 text-white">
+        <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto bg-slate-900 border-slate-800 text-white">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-white text-base">
-              <Sun className="w-5 h-5 text-amber-400" /> Select PV Module from Product Master
+              <Sun className="w-5 h-5 text-amber-400" /> PV Module Specifications & Catalogue
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 py-2 text-xs">
-            {solarPanelProducts.length > 0 ? (
-              <div className="space-y-1.5 max-h-60 overflow-y-auto divide-y divide-slate-800 border border-slate-800 rounded-xl bg-slate-950">
-                {solarPanelProducts.map((prod) => (
-                  <div
-                    key={prod.id}
-                    onClick={() => handleSelectProductFromMaster(prod)}
-                    className="p-2.5 hover:bg-slate-900 cursor-pointer transition flex items-center justify-between gap-2"
-                  >
-                    <div>
-                      <div className="font-semibold text-white">{prod.name}</div>
-                      <div className="text-[10.5px] text-slate-400">{prod.size || "Standard"} · Stock: {prod.stock_quantity || 0}</div>
+
+          <div className="space-y-3 py-1 text-xs">
+            {/* Category Filter Tabs */}
+            <div className="flex items-center gap-1.5 p-1 bg-slate-950 rounded-xl border border-slate-800 overflow-x-auto">
+              {[
+                { id: "all", label: "All Modules" },
+                { id: "high", label: "High (>550W)" },
+                { id: "medium", label: "Medium (410–549W)" },
+                { id: "low", label: "Low (<410W)" },
+                { id: "product_master", label: `Product Master (${solarPanelProducts.length})` },
+                { id: "custom", label: "+ Custom Module" },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setModuleCategoryFilter(tab.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition cursor-pointer ${
+                    moduleCategoryFilter === tab.id
+                      ? "bg-amber-500 text-slate-950 shadow-sm"
+                      : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* TAB CONTENT: CATALOGUE / PRODUCT MASTER */}
+            {moduleCategoryFilter !== "custom" && (
+              <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                {/* 1. Standard Presets (if matching category) */}
+                {STANDARD_MODULE_CATALOGUE
+                  .filter((m) => moduleCategoryFilter === "all" || moduleCategoryFilter === m.category)
+                  .map((mod) => (
+                    <div
+                      key={mod.id}
+                      onClick={() => handleSelectStandardModule(mod)}
+                      className={`p-3 rounded-xl border transition cursor-pointer flex items-center justify-between gap-3 ${
+                        designData.panel_wattage === mod.wattage && designData.panel_make === mod.make
+                          ? "bg-amber-950/40 border-amber-500/60 shadow-sm"
+                          : "bg-slate-950/70 border-slate-800/90 hover:bg-slate-900/90 hover:border-slate-700"
+                      }`}
+                    >
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-white text-xs truncate">{mod.make} {mod.model}</span>
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono">
+                            {mod.wattage}W
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded text-[9.5px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">
+                            {mod.cell_type}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-[10.5px] text-slate-400 font-mono">
+                          <span>Dim: {mod.length_m}m × {mod.width_m}m × {mod.thickness_mm}mm</span>
+                          <span>•</span>
+                          <span>Weight: {mod.weight_kg} kg</span>
+                          <span>•</span>
+                          <span className="text-emerald-400 font-semibold">Eff: {mod.efficiency_pct}%</span>
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs font-semibold text-amber-400 bg-slate-800 border-slate-700 hover:bg-amber-500 hover:text-slate-950 shrink-0"
+                      >
+                        Select
+                      </Button>
                     </div>
-                    <Button size="sm" variant="outline" className="h-6 text-[11px] font-semibold text-blue-400 bg-slate-800 border-slate-700">Select</Button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="p-3 text-center bg-slate-950 rounded-xl text-slate-400 text-xs border border-slate-800">
-                No solar panel products found in Product Master inventory. You can configure custom specs below:
+                  ))}
+
+                {/* 2. Product Master Items */}
+                {(moduleCategoryFilter === "all" || moduleCategoryFilter === "product_master") &&
+                  solarPanelProducts.map((prod) => {
+                    let wattage = 550;
+                    const match = (prod.name || "").match(/(\d{3,4})\s*W/i) || (prod.size || "").match(/(\d{3,4})\s*W/i);
+                    if (match) wattage = parseInt(match[1], 10);
+                    return (
+                      <div
+                        key={prod.id}
+                        onClick={() => handleSelectProductFromMaster(prod)}
+                        className="p-3 rounded-xl border bg-slate-950/70 border-slate-800/90 hover:bg-slate-900/90 hover:border-slate-700 transition cursor-pointer flex items-center justify-between gap-3"
+                      >
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-white text-xs truncate">{prod.name}</span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-blue-500/20 text-blue-300 border border-blue-500/40 font-mono">
+                              {wattage}W
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded text-[9.5px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">
+                              Product Master
+                            </span>
+                          </div>
+                          <div className="text-[10.5px] text-slate-400">
+                            Stock: {prod.stock_quantity || 0} units · {prod.size || "Standard footprint"}
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs font-semibold text-blue-400 bg-slate-800 border-slate-700 hover:bg-blue-600 hover:text-white shrink-0"
+                        >
+                          Select
+                        </Button>
+                      </div>
+                    );
+                  })}
               </div>
             )}
 
-            <div className="pt-2 border-t border-slate-800 space-y-2">
-              <Label className="text-xs font-semibold text-slate-300">Custom Module Wattage (Wp)</Label>
-              <Input
-                type="number"
-                value={designData.panel_wattage}
-                onChange={(e) => updateDesignData({ panel_wattage: parseFloat(e.target.value) || 550 })}
-                className="h-8 text-xs font-bold bg-slate-800 border-slate-700 text-white"
-              />
-            </div>
+            {/* TAB CONTENT: CUSTOM MODULE FORM */}
+            {moduleCategoryFilter === "custom" && (
+              <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold text-slate-300">Manufacturer / Make</Label>
+                    <Input
+                      value={customModuleForm.make}
+                      onChange={(e) => setCustomModuleForm({ ...customModuleForm, make: e.target.value })}
+                      placeholder="e.g. Adani Solar"
+                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold text-slate-300">Model Name</Label>
+                    <Input
+                      value={customModuleForm.model}
+                      onChange={(e) => setCustomModuleForm({ ...customModuleForm, model: e.target.value })}
+                      placeholder="e.g. Eternal 545W"
+                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold text-slate-300">Wattage (Wp)</Label>
+                    <Input
+                      type="number"
+                      value={customModuleForm.wattage}
+                      onChange={(e) => setCustomModuleForm({ ...customModuleForm, wattage: parseFloat(e.target.value) || 550 })}
+                      className="h-8 text-xs font-bold bg-slate-900 border-slate-700 text-white font-mono"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold text-slate-300">Cell Technology</Label>
+                    <Select
+                      value={customModuleForm.cell_type}
+                      onValueChange={(val) => setCustomModuleForm({ ...customModuleForm, cell_type: val })}
+                    >
+                      <SelectTrigger className="h-8 text-xs bg-slate-900 border-slate-700 text-white">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                        <SelectItem value="Mono PERC">Mono PERC</SelectItem>
+                        <SelectItem value="TOPCon (N-Type)">TOPCon</SelectItem>
+                        <SelectItem value="HJT">HJT</SelectItem>
+                        <SelectItem value="Bifacial Mono PERC">Bifacial</SelectItem>
+                        <SelectItem value="Polycrystalline">Poly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[11px] font-semibold text-slate-300">Efficiency (%)</Label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      value={customModuleForm.efficiency_pct}
+                      onChange={(e) => setCustomModuleForm({ ...customModuleForm, efficiency_pct: parseFloat(e.target.value) || 21.3 })}
+                      className="h-8 text-xs font-bold bg-slate-900 border-slate-700 text-white font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-4 gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-[10.5px] font-semibold text-slate-300">Length (m)</Label>
+                    <Input
+                      type="number"
+                      step="0.001"
+                      value={customModuleForm.length_m}
+                      onChange={(e) => setCustomModuleForm({ ...customModuleForm, length_m: parseFloat(e.target.value) || 2.278 })}
+                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white font-mono"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10.5px] font-semibold text-slate-300">Width (m)</Label>
+                    <Input
+                      type="number"
+                      step="0.001"
+                      value={customModuleForm.width_m}
+                      onChange={(e) => setCustomModuleForm({ ...customModuleForm, width_m: parseFloat(e.target.value) || 1.134 })}
+                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white font-mono"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10.5px] font-semibold text-slate-300">Thick. (mm)</Label>
+                    <Input
+                      type="number"
+                      value={customModuleForm.thickness_mm}
+                      onChange={(e) => setCustomModuleForm({ ...customModuleForm, thickness_mm: parseFloat(e.target.value) || 35 })}
+                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white font-mono"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10.5px] font-semibold text-slate-300">Weight (kg)</Label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      value={customModuleForm.weight_kg}
+                      onChange={(e) => setCustomModuleForm({ ...customModuleForm, weight_kg: parseFloat(e.target.value) || 28.5 })}
+                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white font-mono"
+                    />
+                  </div>
+                </div>
+
+                <Button
+                  onClick={() => handleSaveCustomModule(customModuleForm)}
+                  className="w-full h-8 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md mt-2"
+                >
+                  Apply Custom PV Module
+                </Button>
+              </div>
+            )}
           </div>
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowProductModal(false)} className="bg-slate-800 border-slate-700 text-white">Close</Button>
           </DialogFooter>

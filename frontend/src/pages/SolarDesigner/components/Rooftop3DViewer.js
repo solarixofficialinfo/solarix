@@ -304,6 +304,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     structureMembers = [],
     onStructureNodesChange,
     onStructureMembersChange,
+    deletedMemberIds: propDeletedMemberIds = undefined,
+    onDeletedMemberIdsChange = null,
     snapEnabled: propSnapEnabled = undefined,
     setSnapEnabled: propSetSnapEnabled = null,
     onAddManualPanel = null,
@@ -348,7 +350,33 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const selectedGroupId = propSelectedGroupId !== undefined ? propSelectedGroupId : internalSelectedGroupId;
   const setSelectedGroupId = propSetSelectedGroupId || setInternalSelectedGroupId;
 
-  const [deletedMemberIds, setDeletedMemberIds] = useState(new Set());
+  const [internalDeletedMemberIds, setInternalDeletedMemberIds] = useState(
+    () => new Set(Array.isArray(propDeletedMemberIds) ? propDeletedMemberIds : (propDeletedMemberIds instanceof Set ? Array.from(propDeletedMemberIds) : []))
+  );
+  const deletedMemberIds = useMemo(() => {
+    if (propDeletedMemberIds !== undefined) {
+      return propDeletedMemberIds instanceof Set ? propDeletedMemberIds : new Set(propDeletedMemberIds || []);
+    }
+    return internalDeletedMemberIds;
+  }, [propDeletedMemberIds, internalDeletedMemberIds]);
+  const setDeletedMemberIds = useCallback((updater) => {
+    if (typeof updater === "function") {
+      setInternalDeletedMemberIds((prev) => {
+        const next = updater(prev);
+        if (onDeletedMemberIdsChange) {
+          onDeletedMemberIdsChange(Array.from(next));
+        }
+        return next;
+      });
+    } else {
+      const next = updater instanceof Set ? updater : new Set(updater || []);
+      setInternalDeletedMemberIds(next);
+      if (onDeletedMemberIdsChange) {
+        onDeletedMemberIdsChange(Array.from(next));
+      }
+    }
+  }, [onDeletedMemberIdsChange]);
+
   const [viewMode, setViewMode] = useState("visual"); // 'visual' | 'engineering'
   const [internalSnapEnabled, setInternalSnapEnabled] = useState(true);
   const snapEnabled = propSnapEnabled !== undefined ? propSnapEnabled : internalSnapEnabled;
@@ -386,6 +414,11 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   useEffect(() => { membersRef.current = structureMembers; }, [structureMembers]);
   useEffect(() => { deletedMemberIdsRef.current = deletedMemberIds; }, [deletedMemberIds]);
   useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
+  useEffect(() => {
+    if (propDeletedMemberIds !== undefined) {
+      setInternalDeletedMemberIds(propDeletedMemberIds instanceof Set ? propDeletedMemberIds : new Set(propDeletedMemberIds || []));
+    }
+  }, [propDeletedMemberIds]);
 
   const hasRoof = roofPolygon && roofPolygon.length >= 3;
   const activePanels = (panels || []).filter((p) => !p.hidden);
@@ -399,15 +432,12 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const [internalSelectedRowIndex, setInternalSelectedRowIndex] = useState(null);
   const [stepIncrement, setStepIncrement] = useState(0.05); // 0.02, 0.05, 0.10, 0.20
 
-  // CAD Micro-Adjust Hold Progress & Contextual Popup State
-  const [holdProgress, setHoldProgress] = useState(null);
+  // Direct 3D Drag State & CAD Contextual Action Popup State
   const [contextPopup, setContextPopup] = useState(null);
-  const longPressTimerRef = useRef(null);
-  const longPressCandidateRef = useRef(null);
-  const longPressFiredRef = useRef(false);
+  const dragStateRef = useRef(null);
   const pointerStartPosRef = useRef({ x: 0, y: 0 });
   const findIntersected3DObjectRef = useRef(null);
-  const triggerLongPressActionRef = useRef(null);
+  const triggerSelectionPopupActionRef = useRef(null);
   const rowBaselinesRef = useRef(new Map());
 
   const activeSelectedPanelId = selectedPanelId !== undefined && selectedPanelId !== null ? selectedPanelId : internalSelectedPanelId;
@@ -916,6 +946,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     setSelectedGroupId,
     setSelectedMemberId,
     setSelectedNodeId,
+    setDeletedMemberIds,
     setHasManualAdjustments,
   ]);
 
@@ -984,11 +1015,9 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     return null;
   }, []);
 
-  // Long-Press CAD Action Trigger (~2000ms hold)
-  const triggerLongPressAction = useCallback((hit, clientX, clientY) => {
+  // Immediate CAD Selection & Context Action Popup Trigger (single click, 0s delay)
+  const triggerSelectionPopupAction = useCallback((hit, clientX, clientY, isShiftKey = false) => {
     if (!hit || !containerRef.current || !cameraRef.current) return;
-    longPressFiredRef.current = true;
-    setHoldProgress(null);
 
     if (controlsRef.current) {
       controlsRef.current.isDragging = false;
@@ -1021,8 +1050,21 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
       if (activeSelectionMode === "panel" || activeSelectionMode === "custom" || !activeSelectionMode) {
         resolvedMode = "panel";
-        changeSelectedPanelId(hit.id);
-        if (setSelectedPanelIds) setSelectedPanelIds([hit.id]);
+        if (setSelectedPanelIds) {
+          if (isShiftKey) {
+            setSelectedPanelIds((prev = []) => {
+              const exists = prev.includes(hit.id);
+              const next = exists ? prev.filter((id) => id !== hit.id) : [...prev, hit.id];
+              changeSelectedPanelId(next[next.length - 1] || null);
+              return next;
+            });
+          } else {
+            changeSelectedPanelId(hit.id);
+            setSelectedPanelIds([hit.id]);
+          }
+        } else {
+          changeSelectedPanelId(hit.id);
+        }
         changeSelectedRowIndex(rowIndex);
         if (setSelectedGroupId) setSelectedGroupId(grpId);
       } else if (activeSelectionMode === "row") {
@@ -1114,7 +1156,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
   // Keep callback refs updated
   useEffect(() => { findIntersected3DObjectRef.current = findIntersected3DObject; }, [findIntersected3DObject]);
-  useEffect(() => { triggerLongPressActionRef.current = triggerLongPressAction; }, [triggerLongPressAction]);
+  useEffect(() => { triggerSelectionPopupActionRef.current = triggerSelectionPopupAction; }, [triggerSelectionPopupAction]);
 
   // Arrow keys listener when panel is selected
   useEffect(() => {
@@ -1511,39 +1553,62 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
       if (e.button === 0 && structureToolRef.current === "none") {
         pointerStartPosRef.current = { x: e.clientX, y: e.clientY };
-        longPressFiredRef.current = false;
         const hit = findIntersected3DObjectRef.current?.(e.clientX, e.clientY);
-        if (hit && (hit.type === "panel" || hit.type === "structure" || hit.type === "node")) {
-          longPressCandidateRef.current = hit;
-          if (containerRef.current) {
-            const cRect = containerRef.current.getBoundingClientRect();
-            setHoldProgress({
-              x: e.clientX - cRect.left,
-              y: e.clientY - cRect.top,
-              label: hit.type === "panel" ? "Hold for Micro Adjust…" : "Hold for Structure…",
-            });
+        if (hit && hit.type === "panel" && isMicroAdjustActive && (activeSelectionMode === "panel" || activeSelectionMode === "custom")) {
+          const clickedP = (panels || []).find((p) => p.id === hit.id);
+          if (clickedP) {
+            dragStateRef.current = {
+              isCandidate: true,
+              isDragging: false,
+              panelId: hit.id,
+              startX: e.clientX,
+              startY: e.clientY,
+              initialPos: { x: clickedP.x, y: clickedP.y },
+              currentPos: null,
+            };
           }
-          if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = setTimeout(() => {
-            longPressTimerRef.current = null;
-            longPressFiredRef.current = true;
-            setHoldProgress(null);
-            triggerLongPressActionRef.current?.(hit, e.clientX, e.clientY);
-          }, 2000);
+        } else {
+          dragStateRef.current = null;
         }
       }
     };
     const onMouseMove = (e) => {
-      if (longPressTimerRef.current || longPressCandidateRef.current) {
-        const dx = e.clientX - pointerStartPosRef.current.x;
-        const dy = e.clientY - pointerStartPosRef.current.y;
-        if (Math.hypot(dx, dy) > 6) {
-          if (longPressTimerRef.current) {
-            clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = null;
+      // Direct 3D drag-and-drop placement
+      if (dragStateRef.current?.isCandidate) {
+        const dx = e.clientX - dragStateRef.current.startX;
+        const dy = e.clientY - dragStateRef.current.startY;
+        if (Math.hypot(dx, dy) > 5) {
+          dragStateRef.current.isDragging = true;
+          controlsRef.current.isDragging = false;
+          setContextPopup(null);
+
+          if (dom && cameraRef.current) {
+            const rect = dom.getBoundingClientRect();
+            mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
+            const roofElevation = Number(roof?.elevation_m || 3.0);
+            const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -roofElevation);
+            const intersection = new THREE.Vector3();
+            if (raycasterRef.current.ray.intersectPlane(plane, intersection)) {
+              let targetX = intersection.x;
+              let targetY = -intersection.z;
+              if (snapEnabledRef.current) {
+                const snapped = snapToNearest(targetX, targetY * -1, intersection.z);
+                targetX = snapped.x;
+                targetY = -snapped.z;
+              }
+              targetX = Math.round(targetX * 1000) / 1000;
+              targetY = Math.round(targetY * 1000) / 1000;
+              const mesh = panelMeshMapRef.current[dragStateRef.current.panelId];
+              if (mesh) {
+                mesh.position.x = targetX;
+                mesh.position.z = -targetY;
+              }
+              dragStateRef.current.currentPos = { x: targetX, y: targetY };
+            }
           }
-          longPressCandidateRef.current = null;
-          setHoldProgress(null);
+          return;
         }
       }
 
@@ -1571,24 +1636,51 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       updateCameraPosition();
     };
     const onMouseUp = (e) => {
-      if (longPressTimerRef.current) {
-        clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = null;
-      }
-      setHoldProgress(null);
-      longPressCandidateRef.current = null;
-
       controlsRef.current.isDragging = false;
       controlsRef.current.isPanning = false;
-      if (e && e.button === 0) {
-        if (longPressFiredRef.current) {
-          longPressFiredRef.current = false;
-          return;
+
+      if (dragStateRef.current?.isDragging) {
+        const { panelId, initialPos, currentPos } = dragStateRef.current;
+        dragStateRef.current = null;
+        if (currentPos && (currentPos.x !== initialPos.x || currentPos.y !== initialPos.y)) {
+          const pObj = (panels || []).find((p) => p.id === panelId);
+          const pSec = (roofSections || []).find((s) => s.id === pObj?.sectionId) || activeSec;
+          const targetPolygon = pSec?.polygon || roofPolygon;
+          const candidate = { ...pObj, x: currentPos.x, y: currentPos.y, isManual: true };
+          const otherPanels = (panels || []).filter((p) => p.id !== panelId);
+          const validation = validatePanelPlacement({
+            candidate,
+            roofPolygon: targetPolygon,
+            setbackMeters,
+            panels: otherPanels,
+            obstacles,
+            walkways,
+            excludePanelId: panelId,
+            isManual: true,
+          });
+
+          if (validation.valid) {
+            setPanels?.((prev) => prev.map((p) => p.id === panelId ? { ...p, x: currentPos.x, y: currentPos.y, isManual: true } : p));
+            setHasManualAdjustments?.(true);
+            toast.success("Repositioned panel");
+          } else {
+            const mesh = panelMeshMapRef.current[panelId];
+            if (mesh) {
+              mesh.position.x = initialPos.x;
+              mesh.position.z = -initialPos.y;
+            }
+            toast.warning(validation.reason || "Panel placement outside boundary");
+          }
         }
+        return;
+      }
+      dragStateRef.current = null;
+
+      if (e && e.button === 0) {
         const dx = e.clientX - (controlsRef.current.startX ?? e.clientX);
         const dy = e.clientY - (controlsRef.current.startY ?? e.clientY);
         if (Math.hypot(dx, dy) < 6) {
-          // Authoritative single click on 3D canvas
+          // Authoritative single click on 3D canvas (instant, no hold)
           handleCanvasClickRef.current?.(e);
         }
       }
@@ -1602,27 +1694,24 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         touchStartX = touch.clientX;
         touchStartY = touch.clientY;
         pointerStartPosRef.current = { x: touch.clientX, y: touch.clientY };
-        longPressFiredRef.current = false;
 
         if (structureToolRef.current === "none") {
           const hit = findIntersected3DObjectRef.current?.(touch.clientX, touch.clientY);
-          if (hit && (hit.type === "panel" || hit.type === "structure" || hit.type === "node")) {
-            longPressCandidateRef.current = hit;
-            if (containerRef.current) {
-              const cRect = containerRef.current.getBoundingClientRect();
-              setHoldProgress({
-                x: touch.clientX - cRect.left,
-                y: touch.clientY - cRect.top,
-                label: hit.type === "panel" ? "Hold for Micro Adjust…" : "Hold for Structure…",
-              });
+          if (hit && hit.type === "panel" && isMicroAdjustActive && (activeSelectionMode === "panel" || activeSelectionMode === "custom")) {
+            const clickedP = (panels || []).find((p) => p.id === hit.id);
+            if (clickedP) {
+              dragStateRef.current = {
+                isCandidate: true,
+                isDragging: false,
+                panelId: hit.id,
+                startX: touch.clientX,
+                startY: touch.clientY,
+                initialPos: { x: clickedP.x, y: clickedP.y },
+                currentPos: null,
+              };
             }
-            if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = setTimeout(() => {
-              longPressTimerRef.current = null;
-              longPressFiredRef.current = true;
-              setHoldProgress(null);
-              triggerLongPressActionRef.current?.(hit, touch.clientX, touch.clientY);
-            }, 2000);
+          } else {
+            dragStateRef.current = null;
           }
         }
       }
@@ -1630,32 +1719,89 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     const onTouchMove = (e) => {
       if (e.touches && e.touches.length === 1) {
         const touch = e.touches[0];
+        if (dragStateRef.current?.isCandidate) {
+          const dx = touch.clientX - dragStateRef.current.startX;
+          const dy = touch.clientY - dragStateRef.current.startY;
+          if (Math.hypot(dx, dy) > 8) {
+            dragStateRef.current.isDragging = true;
+            controlsRef.current.isDragging = false;
+            setContextPopup(null);
+
+            if (dom && cameraRef.current) {
+              const rect = dom.getBoundingClientRect();
+              mouseRef.current.x = ((touch.clientX - rect.left) / rect.width) * 2 - 1;
+              mouseRef.current.y = -((touch.clientY - rect.top) / rect.height) * 2 + 1;
+              raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
+              const roofElevation = Number(roof?.elevation_m || 3.0);
+              const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -roofElevation);
+              const intersection = new THREE.Vector3();
+              if (raycasterRef.current.ray.intersectPlane(plane, intersection)) {
+                let targetX = intersection.x;
+                let targetY = -intersection.z;
+                if (snapEnabledRef.current) {
+                  const snapped = snapToNearest(targetX, targetY * -1, intersection.z);
+                  targetX = snapped.x;
+                  targetY = -snapped.z;
+                }
+                targetX = Math.round(targetX * 1000) / 1000;
+                targetY = Math.round(targetY * 1000) / 1000;
+                const mesh = panelMeshMapRef.current[dragStateRef.current.panelId];
+                if (mesh) {
+                  mesh.position.x = targetX;
+                  mesh.position.z = -targetY;
+                }
+                dragStateRef.current.currentPos = { x: targetX, y: targetY };
+              }
+            }
+            return;
+          }
+        }
         const dx = touch.clientX - touchStartX;
         const dy = touch.clientY - touchStartY;
         if (Math.hypot(dx, dy) > 10) {
-          if (longPressTimerRef.current) {
-            clearTimeout(longPressTimerRef.current);
-            longPressTimerRef.current = null;
-          }
-          longPressCandidateRef.current = null;
-          setHoldProgress(null);
           setContextPopup(null);
         }
       }
     };
     const onTouchEnd = (e) => {
-      if (longPressTimerRef.current) {
-        clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = null;
+      if (dragStateRef.current?.isDragging) {
+        const { panelId, initialPos, currentPos } = dragStateRef.current;
+        dragStateRef.current = null;
+        if (currentPos && (currentPos.x !== initialPos.x || currentPos.y !== initialPos.y)) {
+          const pObj = (panels || []).find((p) => p.id === panelId);
+          const pSec = (roofSections || []).find((s) => s.id === pObj?.sectionId) || activeSec;
+          const targetPolygon = pSec?.polygon || roofPolygon;
+          const candidate = { ...pObj, x: currentPos.x, y: currentPos.y, isManual: true };
+          const otherPanels = (panels || []).filter((p) => p.id !== panelId);
+          const validation = validatePanelPlacement({
+            candidate,
+            roofPolygon: targetPolygon,
+            setbackMeters,
+            panels: otherPanels,
+            obstacles,
+            walkways,
+            excludePanelId: panelId,
+            isManual: true,
+          });
+
+          if (validation.valid) {
+            setPanels?.((prev) => prev.map((p) => p.id === panelId ? { ...p, x: currentPos.x, y: currentPos.y, isManual: true } : p));
+            setHasManualAdjustments?.(true);
+            toast.success("Repositioned panel");
+          } else {
+            const mesh = panelMeshMapRef.current[panelId];
+            if (mesh) {
+              mesh.position.x = initialPos.x;
+              mesh.position.z = -initialPos.y;
+            }
+            toast.warning(validation.reason || "Panel placement outside boundary");
+          }
+        }
+        return;
       }
-      setHoldProgress(null);
-      longPressCandidateRef.current = null;
+      dragStateRef.current = null;
 
       if (e.changedTouches && e.changedTouches.length === 1) {
-        if (longPressFiredRef.current) {
-          longPressFiredRef.current = false;
-          return;
-        }
         const touch = e.changedTouches[0];
         const dx = touch.clientX - touchStartX;
         const dy = touch.clientY - touchStartY;
@@ -1793,146 +1939,45 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
     const tool = structureToolRef.current;
     if (tool === "none") {
-      // Check if clicking an existing interactive node/member for selection
       if (!rendererRef.current || !cameraRef.current || !mountRef.current) return;
+      const hit = findIntersected3DObjectRef.current?.(e.clientX, e.clientY);
+      if (hit) {
+        triggerSelectionPopupActionRef.current?.(hit, e.clientX, e.clientY, Boolean(e.shiftKey));
+        return;
+      }
+
+      // Check if roof or section was clicked (Authoritative 1-Click Roof Selection)
       const rect = mountRef.current.getBoundingClientRect();
       mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
-      const nodeObjects = Object.values(nodeMeshMapRef.current);
-      const intersects = raycasterRef.current.intersectObjects(nodeObjects, false);
-      if (intersects.length > 0) {
-        const hit = intersects[0].object;
-        const nodeId = hit.userData?.nodeId;
-        if (nodeId) { setSelectedNodeId(nodeId); setSelectedMemberId(null); }
-      } else {
-        const memberObjects = Object.values(memberMeshMapRef.current);
-        const mIntersects = raycasterRef.current.intersectObjects(memberObjects, false);
-        if (mIntersects.length > 0) {
-          const hit = mIntersects[0].object;
-          const memberId = hit.userData?.memberId;
-          if (memberId) {
-            setSelectedMemberId(memberId);
-            setSelectedNodeId(null);
-            if (e.altKey || e.shiftKey) {
-              setSelectedGroupId(hit.userData?.groupId || null);
-            } else {
-              setSelectedGroupId(null);
-            }
-          }
-        } else {
-          // Check if a panel was clicked
-          const panelObjects = Object.values(panelMeshMapRef.current || {});
-          const pIntersects = raycasterRef.current.intersectObjects(panelObjects, false);
-          if (pIntersects.length > 0) {
-            const hit = pIntersects[0].object;
-            const pId = hit.userData?.panelId || hit.parent?.userData?.panelId;
-            if (pId) {
-              const isShift = Boolean(e.shiftKey);
-              const clickedP = panels.find((item) => item.id === pId);
-
-              if (activeSelectionMode === "panel" || activeSelectionMode === "custom") {
-                if (setSelectedPanelIds) {
-                  if (isShift) {
-                    setSelectedPanelIds((prev = []) => {
-                      const exists = prev.includes(pId);
-                      const next = exists ? prev.filter((id) => id !== pId) : [...prev, pId];
-                      changeSelectedPanelId(next[next.length - 1] || null);
-                      return next;
-                    });
-                  } else {
-                    setSelectedPanelIds([pId]);
-                    changeSelectedPanelId(pId);
-                  }
-                } else {
-                  changeSelectedPanelId(pId);
-                }
-              } else if (activeSelectionMode === "row") {
-                const secPanels = activeSec
-                  ? (panels || []).filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
-                  : (panels || []);
-                const effectiveSecPanels = secPanels.length > 0 ? secPanels : (panels || []);
-                const secRows = getPanelsByRow(effectiveSecPanels);
-                const matchedRow = secRows.find((r) => r.panels.some((rp) => rp.id === pId));
-                if (matchedRow) {
-                  changeSelectedRowIndex(matchedRow.rowIndex);
-                } else if (clickedP && clickedP.row != null) {
-                  changeSelectedRowIndex(clickedP.row);
-                }
-              } else if (activeSelectionMode === "group") {
-                const secPanels = activeSec
-                  ? (panels || []).filter((p) => p.sectionId === activeSec.id || (!p.sectionId && activeSec.polygon && isPointInsidePolygon(p.x, p.y, activeSec.polygon)))
-                  : (panels || []);
-                const effectiveSecPanels = secPanels.length > 0 ? secPanels : (panels || []);
-                const secRows = getPanelsByRow(effectiveSecPanels);
-                const matchedRow = secRows.find((r) => r.panels.some((rp) => rp.id === pId));
-                const grpId = clickedP?.groupId ?? clickedP?.tableId ?? (matchedRow ? matchedRow.rowIndex : (clickedP?.row ?? 0));
-                if (setSelectedGroupId) {
-                  setSelectedGroupId(grpId);
-                }
-              } else if (activeSelectionMode === "structure") {
-                // In structure mode, clicking a panel selects its corresponding rail
-                if (clickedP) {
-                  const railCandidates = Object.keys(memberMeshMapRef.current);
-                  const matchedRail = railCandidates.find((k) => k.includes(String(clickedP.row || 0)));
-                  if (matchedRail) {
-                    setSelectedMemberId(matchedRail);
-                  }
-                }
-              } else {
-                // Neutral mode: select panel and register row without opening drawers
-                if (setSelectedPanelIds) {
-                  if (isShift) {
-                    setSelectedPanelIds((prev = []) => {
-                      const exists = prev.includes(pId);
-                      const next = exists ? prev.filter((id) => id !== pId) : [...prev, pId];
-                      changeSelectedPanelId(next[next.length - 1] || null);
-                      return next;
-                    });
-                  } else {
-                    setSelectedPanelIds([pId]);
-                    changeSelectedPanelId(pId);
-                  }
-                } else {
-                  changeSelectedPanelId(pId);
-                }
-                if (clickedP && clickedP.row != null) {
-                  changeSelectedRowIndex(clickedP.row);
-                }
-              }
-            }
-          } else {
-            // Check if roof or section was clicked (Authoritative 1-Click Roof Selection)
-            const sectionObjects = Object.values(sectionMeshMapRef.current || {});
-            const allRoofObjects = [
-              ...sectionObjects,
-              ...(roofMeshListRef.current || []),
-            ];
-            const secIntersects = raycasterRef.current.intersectObjects(allRoofObjects, false);
-            if (secIntersects.length > 0) {
-              const hit = secIntersects[0].object;
-              const secId = hit.userData?.sectionId || roofSections?.[0]?.id || "section-1";
-              changeSelectedPanelId(null);
-              changeSelectedRowIndex(null);
-              setSelectedPanelIds?.([]);
-              setSelectedNodeId(null);
-              setSelectedMemberId(null);
-              if (setSelectedGroupId) setSelectedGroupId(null);
-              if (onSelectSection) {
-                // Authoritative Single Click: Select roof and activate Section context
-                // openSettings = false ensures Section Settings drawer NEVER auto-opens!
-                onSelectSection(secId, false);
-              }
-            } else {
-              setSelectedNodeId(null);
-              setSelectedMemberId(null);
-              if (setSelectedGroupId) setSelectedGroupId(null);
-              setSelectedPanelIds?.([]);
-              changeSelectedPanelId(null);
-              changeSelectedRowIndex(null);
-            }
-          }
+      const sectionObjects = Object.values(sectionMeshMapRef.current || {});
+      const allRoofObjects = [
+        ...sectionObjects,
+        ...(roofMeshListRef.current || []),
+      ];
+      const secIntersects = raycasterRef.current.intersectObjects(allRoofObjects, false);
+      if (secIntersects.length > 0) {
+        const hitSec = secIntersects[0].object;
+        const secId = hitSec.userData?.sectionId || roofSections?.[0]?.id || "section-1";
+        changeSelectedPanelId(null);
+        changeSelectedRowIndex(null);
+        setSelectedPanelIds?.([]);
+        setSelectedNodeId(null);
+        setSelectedMemberId(null);
+        if (setSelectedGroupId) setSelectedGroupId(null);
+        setContextPopup(null);
+        if (onSelectSection) {
+          onSelectSection(secId, false);
         }
+      } else {
+        setSelectedNodeId(null);
+        setSelectedMemberId(null);
+        if (setSelectedGroupId) setSelectedGroupId(null);
+        setSelectedPanelIds?.([]);
+        changeSelectedPanelId(null);
+        changeSelectedRowIndex(null);
+        setContextPopup(null);
       }
       return;
     }
@@ -3334,6 +3379,17 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
   const handleDeleteMember = useCallback(() => {
     if (!selectedMemberId) return;
+    const memberType = selectedMember?.type || "Structural Member";
+    const isCritical = memberType.toLowerCase().includes("post") ||
+                       memberType.toLowerCase().includes("column") ||
+                       memberType.toLowerCase().includes("rafter");
+    if (isCritical) {
+      const proceed = window.confirm(
+        `Deleting this ${memberType} may leave connected rails/braces unsupported. Are you sure you want to delete this individual member?`
+      );
+      if (!proceed) return;
+    }
+
     if (membersRef.current.some((m) => m.id === selectedMemberId)) {
       const updatedMembers = membersRef.current.filter((m) => m.id !== selectedMemberId);
       membersRef.current = updatedMembers;
@@ -3342,7 +3398,10 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     setDeletedMemberIds((prev) => new Set([...prev, selectedMemberId]));
     setSelectedMemberId(null);
     setSelectedGroupId(null);
-  }, [selectedMemberId, onStructureMembersChange, setSelectedMemberId, setSelectedGroupId]);
+    setContextPopup(null);
+    setHasManualAdjustments?.(true);
+    toast.success(`Removed ${memberType}.`);
+  }, [selectedMemberId, selectedMember, onStructureMembersChange, setSelectedMemberId, setSelectedGroupId, setDeletedMemberIds, setHasManualAdjustments]);
 
   // Keyboard navigation & deletion shortcuts (Esc = deselect, Del/Backspace = remove selected)
   useEffect(() => {
@@ -3713,50 +3772,6 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         </div>
       </div>
 
-      {/* ── 2000ms HOLD PROGRESS INDICATOR ─────────────────────────────────── */}
-      {holdProgress && (
-        <div
-          className="absolute pointer-events-none z-50 flex flex-col items-center justify-center -translate-x-1/2 -translate-y-1/2"
-          style={{ left: holdProgress.x, top: holdProgress.y }}
-        >
-          <div className="relative w-14 h-14 flex items-center justify-center">
-            <svg className="w-14 h-14 -rotate-90" viewBox="0 0 48 48">
-              <circle
-                cx="24"
-                cy="24"
-                r="20"
-                className="stroke-slate-800/80"
-                strokeWidth="4"
-                fill="none"
-              />
-              <circle
-                cx="24"
-                cy="24"
-                r="20"
-                className="stroke-cyan-400"
-                strokeWidth="4"
-                fill="none"
-                strokeDasharray="125.66"
-                strokeDashoffset="125.66"
-                strokeLinecap="round"
-                style={{
-                  animation: "holdProgressAnim 2s linear forwards",
-                }}
-              />
-            </svg>
-            <MousePointer className="w-4 h-4 text-cyan-400 absolute animate-pulse" />
-          </div>
-          <span className="mt-1 px-2.5 py-0.5 rounded-full bg-slate-900/95 text-cyan-300 text-[10px] font-bold tracking-wide border border-cyan-500/40 whitespace-nowrap shadow-xl">
-            {holdProgress.label}
-          </span>
-          <style>{`
-            @keyframes holdProgressAnim {
-              from { stroke-dashoffset: 125.66; }
-              to { stroke-dashoffset: 0; }
-            }
-          `}</style>
-        </div>
-      )}
 
       {/* ── CAD CONTEXTUAL ACTION POPUP ────────────────────────────────────── */}
       {contextPopup?.visible && (

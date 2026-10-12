@@ -642,9 +642,82 @@ export function simplifyCollinearVertices(pts, eps = 1e-4) {
 }
 
 /**
+ * Snaps a 2D point (x, y) or {lat, lng} to the nearest vertex or edge of a polygon boundary.
+ * Returns { point: { x, y, lat, lng }, edgeIndex, isVertex, vertexIndex, distance } or null if none within maxDistance
+ */
+export function snapPointToPolygonBoundary(point, polygon, maxDistance = 1.5) {
+  if (!point || !polygon || polygon.length < 3) return null;
+  const pts = ensureCartesianCoordinates(polygon);
+  const pt = ensureCartesianCoordinates([point])[0];
+  const n = pts.length;
+  let best = null;
+  let minD = Infinity;
+
+  // 1. Check vertices first with a slight bias
+  for (let i = 0; i < n; i++) {
+    const v = pts[i];
+    const d = Math.hypot(pt.x - v.x, pt.y - v.y);
+    if (d < minD && d <= maxDistance) {
+      minD = d;
+      best = {
+        point: { x: v.x, y: v.y, lat: v.lat, lng: v.lng },
+        edgeIndex: i,
+        isVertex: true,
+        vertexIndex: i,
+        distance: d,
+      };
+    }
+  }
+
+  // If vertex is close, favor vertex
+  if (best && best.distance <= maxDistance * 0.6) {
+    return best;
+  }
+
+  // 2. Check edges
+  for (let i = 0; i < n; i++) {
+    const v1 = pts[i];
+    const v2 = pts[(i + 1) % n];
+    const dx = v2.x - v1.x;
+    const dy = v2.y - v1.y;
+    const l2 = dx * dx + dy * dy;
+    if (l2 < 1e-12) continue;
+    let t = ((pt.x - v1.x) * dx + (pt.y - v1.y) * dy) / l2;
+    t = Math.max(0, Math.min(1, t));
+    const projX = v1.x + t * dx;
+    const projY = v1.y + t * dy;
+    const dist = Math.hypot(pt.x - projX, pt.y - projY);
+    if (dist < minD && dist <= maxDistance) {
+      minD = dist;
+      let lat = undefined;
+      let lng = undefined;
+      if (v1.lat != null && v2.lat != null) {
+        lat = v1.lat + t * (v2.lat - v1.lat);
+        lng = v1.lng + t * (v2.lng - v1.lng);
+      }
+      best = {
+        point: {
+          x: Math.round(projX * 1000) / 1000,
+          y: Math.round(projY * 1000) / 1000,
+          lat: lat != null ? Math.round(lat * 1e7) / 1e7 : undefined,
+          lng: lng != null ? Math.round(lng * 1e7) / 1e7 : undefined,
+        },
+        edgeIndex: i,
+        isVertex: t < 1e-3 || t > 1 - 1e-3,
+        vertexIndex: t < 1e-3 ? i : (t > 1 - 1e-3 ? (i + 1) % n : null),
+        distance: dist,
+        t,
+      };
+    }
+  }
+
+  return best;
+}
+
+/**
  * Splits a 2D closed polygon with a section cut line passing through it.
  * Returns two closed polygons [poly1, poly2] sharing the exact cut edge vertices,
- * or null if the line does not cross through the polygon.
+ * or null if the line does not cross through the polygon interior.
  */
 export function splitPolygonWithLine(polygon, lineStart, lineEnd) {
   if (!polygon || polygon.length < 3) return null;
@@ -656,33 +729,37 @@ export function splitPolygonWithLine(polygon, lineStart, lineEnd) {
   const len = Math.hypot(dx, dy);
   if (len < 1e-4) return null;
 
-  // Extend line well beyond polygon bounds
+  // Span ray along the cut direction
   const bounds = getPolygonBounds(pts);
-  const span = Math.max(bounds.width, bounds.length, 50) * 4;
+  const span = Math.max(bounds.width || 0, bounds.length || 0, 50) * 3;
   const dirX = dx / len;
   const dirY = dy / len;
-  const p1 = { x: Number(lineStart.x) - dirX * span, y: Number(lineStart.y) - dirY * span };
-  const p2 = { x: Number(lineEnd.x) + dirX * span, y: Number(lineEnd.y) + dirY * span };
+  const rayP1 = { x: Number(lineStart.x) - dirX * span, y: Number(lineStart.y) - dirY * span };
+  const rayP2 = { x: Number(lineEnd.x) + dirX * span, y: Number(lineEnd.y) + dirY * span };
 
-  function segIntersect(a1, a2, b1, b2) {
-    const x1 = a1.x, y1 = a1.y, x2 = a2.x, y2 = a2.y;
-    const x3 = b1.x, y3 = b1.y, x4 = b2.x, y4 = b2.y;
+  function segIntersect(p1, p2, v1, v2) {
+    const x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y;
+    const x3 = v1.x, y3 = v1.y, x4 = v2.x, y4 = v2.y;
     const denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
     if (Math.abs(denom) < 1e-9) return null;
     const ua = ((x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3)) / denom;
     const ub = ((x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3)) / denom;
-    if (ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1) {
-      return { x: x1 + ua * (x2 - x1), y: y1 + ua * (y2 - y1), tEdge: ub };
+    if (ub >= -1e-5 && ub <= 1 + 1e-5) {
+      return {
+        x: x3 + ub * (x4 - x3),
+        y: y3 + ub * (y4 - y3),
+        tEdge: Math.max(0, Math.min(1, ub)),
+        ua,
+      };
     }
     return null;
   }
 
-  const intersections = [];
+  const rawHits = [];
   for (let i = 0; i < n; i++) {
-    const nextIdx = (i + 1) % n;
     const v1 = pts[i];
-    const v2 = pts[nextIdx];
-    const hit = segIntersect(p1, p2, v1, v2);
+    const v2 = pts[(i + 1) % n];
+    const hit = segIntersect(rayP1, rayP2, v1, v2);
     if (hit) {
       let lat = undefined;
       let lng = undefined;
@@ -690,8 +767,10 @@ export function splitPolygonWithLine(polygon, lineStart, lineEnd) {
         lat = v1.lat + hit.tEdge * (v2.lat - v1.lat);
         lng = v1.lng + hit.tEdge * (v2.lng - v1.lng);
       }
-      intersections.push({
+      rawHits.push({
         edgeIndex: i,
+        tEdge: hit.tEdge,
+        ua: hit.ua,
         point: {
           x: Math.round(hit.x * 1000) / 1000,
           y: Math.round(hit.y * 1000) / 1000,
@@ -702,40 +781,124 @@ export function splitPolygonWithLine(polygon, lineStart, lineEnd) {
     }
   }
 
-  if (intersections.length !== 2) {
+  // Deduplicate hits at shared vertices (e.g. corner hits where adjacent edges both intersect)
+  const uniqueHits = [];
+  for (const h of rawHits) {
+    const existing = uniqueHits.find(
+      (u) => Math.hypot(u.point.x - h.point.x, u.point.y - h.point.y) < 0.05
+    );
+    if (!existing) {
+      uniqueHits.push(h);
+    }
+  }
+
+  // Sort hits along the line trajectory
+  uniqueHits.sort((a, b) => a.ua - b.ua);
+
+  let hitA = null;
+  let hitB = null;
+
+  if (uniqueHits.length === 2) {
+    hitA = uniqueHits[0];
+    hitB = uniqueHits[1];
+  } else if (uniqueHits.length > 2) {
+    // If the extended line intersects multiple edges (e.g. non-convex or L-shape),
+    // pick the pair of hits closest to user's drawn endpoints
+    let bestA = null, minDistA = Infinity;
+    let bestB = null, minDistB = Infinity;
+    for (const h of uniqueHits) {
+      const dA = Math.hypot(h.point.x - lineStart.x, h.point.y - lineStart.y);
+      const dB = Math.hypot(h.point.x - lineEnd.x, h.point.y - lineEnd.y);
+      if (dA < minDistA) { minDistA = dA; bestA = h; }
+      if (dB < minDistB) { minDistB = dB; bestB = h; }
+    }
+    if (bestA && bestB && bestA !== bestB) {
+      hitA = bestA;
+      hitB = bestB;
+    }
+  }
+
+  if (!hitA || !hitB) {
     return null;
   }
 
-  const [hitA, hitB] = intersections;
-  const idxA = hitA.edgeIndex;
-  const idxB = hitB.edgeIndex;
-  if (idxA === idxB) return null;
+  // Ensure lineStart and lineEnd span across boundary hits (reject tiny random clicks)
+  const maxDim = Math.max(bounds.width || 0, bounds.length || 0, 20);
+  const dStartA = Math.hypot(lineStart.x - hitA.point.x, lineStart.y - hitA.point.y);
+  const dStartB = Math.hypot(lineStart.x - hitB.point.x, lineStart.y - hitB.point.y);
+  const dEndA = Math.hypot(lineEnd.x - hitA.point.x, lineEnd.y - hitA.point.y);
+  const dEndB = Math.hypot(lineEnd.x - hitB.point.x, lineEnd.y - hitB.point.y);
+  const matchedEndpoints =
+    (dStartA <= 2.5 && dEndB <= 2.5) ||
+    (dStartB <= 2.5 && dEndA <= 2.5);
 
-  // Poly 1: hitA.point -> pts[idxA + 1 ... idxB] -> hitB.point
-  const poly1 = [hitA.point];
-  let curr = (idxA + 1) % n;
-  while (curr !== (idxB + 1) % n) {
-    poly1.push(pts[curr]);
+  if (!matchedEndpoints && Math.hypot(dx, dy) < maxDim * 0.2) {
+    return null;
+  }
+
+  // Order hits along the polygon perimeter
+  let posA = hitA.edgeIndex + hitA.tEdge;
+  let posB = hitB.edgeIndex + hitB.tEdge;
+  let firstHit = hitA;
+  let secondHit = hitB;
+  if (posA > posB) {
+    firstHit = hitB;
+    secondHit = hitA;
+  }
+
+  const pA = firstHit.point;
+  const pB = secondHit.point;
+
+  // The cut line interior midpoint must lie inside the polygon
+  const midX = (pA.x + pB.x) / 2;
+  const midY = (pA.y + pB.y) / 2;
+  if (!isPointInPolygon(midX, midY, pts)) {
+    return null;
+  }
+
+  // Poly 1: pA -> polygon boundary forward to pB -> pA
+  const poly1 = [pA];
+  let curr = (firstHit.edgeIndex + 1) % n;
+  const stopAt = secondHit.edgeIndex;
+  while (true) {
+    const v = pts[curr];
+    if (Math.hypot(v.x - pA.x, v.y - pA.y) > 0.05 && Math.hypot(v.x - pB.x, v.y - pB.y) > 0.05) {
+      poly1.push(v);
+    }
+    if (curr === stopAt) break;
     curr = (curr + 1) % n;
   }
-  poly1.push(hitB.point);
+  poly1.push(pB);
 
-  // Poly 2: hitB.point -> pts[idxB + 1 ... idxA] -> hitA.point
-  const poly2 = [hitB.point];
-  curr = (idxB + 1) % n;
-  while (curr !== (idxA + 1) % n) {
-    poly2.push(pts[curr]);
+  // Poly 2: pB -> polygon boundary forward around to pA -> pB
+  const poly2 = [pB];
+  curr = (secondHit.edgeIndex + 1) % n;
+  const stopAt2 = firstHit.edgeIndex;
+  while (true) {
+    const v = pts[curr];
+    if (Math.hypot(v.x - pA.x, v.y - pA.y) > 0.05 && Math.hypot(v.x - pB.x, v.y - pB.y) > 0.05) {
+      poly2.push(v);
+    }
+    if (curr === stopAt2) break;
     curr = (curr + 1) % n;
   }
-  poly2.push(hitA.point);
+  poly2.push(pA);
 
-  const area1 = getCartesianPolygonArea(poly1);
-  const area2 = getCartesianPolygonArea(poly2);
+  const clean1 = simplifyCollinearVertices(poly1);
+  const clean2 = simplifyCollinearVertices(poly2);
+
+  const area1 = getCartesianPolygonArea(clean1);
+  const area2 = getCartesianPolygonArea(clean2);
+  const totalArea = getCartesianPolygonArea(pts);
+
   if (area1 < 0.2 || area2 < 0.2) {
     return null;
   }
+  if (Math.abs((area1 + area2) - totalArea) > totalArea * 0.05 + 0.1) {
+    return null;
+  }
 
-  return [simplifyCollinearVertices(poly1), simplifyCollinearVertices(poly2)];
+  return [clean1, clean2];
 }
 
 /**

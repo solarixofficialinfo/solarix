@@ -24,6 +24,8 @@ import {
   computeSetbackPolygon,
   getRotatedRectCorners,
   isPointInPolygon,
+  snapPointToPolygonBoundary,
+  splitPolygonWithLine,
 } from "../utils/geoCalculations";
 import { validatePanelPlacement, canFitAdditionalPanel } from "../utils/layoutEngine";
 import LayoutMicroAdjuster from "./LayoutMicroAdjuster";
@@ -198,10 +200,12 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
   // Stable refs for latest prop values
   const roofPolygonRef = useRef(roofPolygon);
+  const roofSectionsRef = useRef(roofSections);
   const setRoofPolygonRef = useRef(setRoofPolygon);
   const originRef = useRef({ lat: Number(latitude) || 19.076, lng: Number(longitude) || 72.8777 });
 
   useEffect(() => { roofPolygonRef.current = roofPolygon; }, [roofPolygon]);
+  useEffect(() => { roofSectionsRef.current = roofSections; }, [roofSections]);
   useEffect(() => { setRoofPolygonRef.current = setRoofPolygon; }, [setRoofPolygon]);
 
   const [mapType, setMapType] = useState("satellite");
@@ -418,6 +422,9 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
   const sectionLineStartRef = useRef(null);
   useEffect(() => { sectionLineStartRef.current = sectionLineStart; }, [sectionLineStart]);
   const sectionCutPreviewLayerRef = useRef(null);
+  const sectionSnapMarkerRef = useRef(null);
+  const activeSnapRef = useRef(null);
+  const targetSplitSectionIdRef = useRef(null);
   const pendingMergeSectionIdRef = useRef(null);
 
   useEffect(() => {
@@ -431,8 +438,14 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
         sectionCutPreviewLayerRef.current.remove();
         sectionCutPreviewLayerRef.current = null;
       }
+      if (sectionSnapMarkerRef.current) {
+        sectionSnapMarkerRef.current.remove();
+        sectionSnapMarkerRef.current = null;
+      }
       setSectionLineStart(null);
       sectionLineStartRef.current = null;
+      activeSnapRef.current = null;
+      targetSplitSectionIdRef.current = null;
     }
     if (activeTool !== "merge_section") {
       pendingMergeSectionIdRef.current = null;
@@ -985,6 +998,50 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
       markerRef.current = centerMarker;
 
+      const updateSplitSnapMarker = (snap) => {
+        if (!mapInstanceRef.current) return;
+        if (!snap) {
+          if (sectionSnapMarkerRef.current) {
+            sectionSnapMarkerRef.current.remove();
+            sectionSnapMarkerRef.current = null;
+          }
+          return;
+        }
+        const { point, isVertex } = snap;
+        let snapLat = point.lat;
+        let snapLng = point.lng;
+        if (snapLat == null || snapLng == null) {
+          const [lLat, lLng] = cartesianToLatLng(point.x, point.y);
+          snapLat = lLat;
+          snapLng = lLng;
+        }
+
+        const iconHtml = isVertex
+          ? `<div style="width:14px;height:14px;border-radius:50%;background:#06b6d4;border:2.5px solid #ffffff;box-shadow:0 0 10px #06b6d4, 0 0 4px rgba(0,0,0,0.8);transform:translate(-50%, -50%);"></div>`
+          : `<div style="width:12px;height:12px;border-radius:50%;background:#10b981;border:2px solid #ffffff;box-shadow:0 0 8px #10b981, 0 0 4px rgba(0,0,0,0.8);transform:translate(-50%, -50%);"></div>`;
+
+        if (!sectionSnapMarkerRef.current) {
+          sectionSnapMarkerRef.current = L.marker([snapLat, snapLng], {
+            icon: L.divIcon({
+              className: "split-snap-marker",
+              html: iconHtml,
+              iconSize: [0, 0],
+            }),
+            zIndexOffset: 2500,
+            interactive: false,
+          }).addTo(mapInstanceRef.current);
+        } else {
+          sectionSnapMarkerRef.current.setLatLng([snapLat, snapLng]);
+          sectionSnapMarkerRef.current.setIcon(
+            L.divIcon({
+              className: "split-snap-marker",
+              html: iconHtml,
+              iconSize: [0, 0],
+            })
+          );
+        }
+      };
+
       map.on("mousemove", (e) => {
         if (isValidLatLng(e.latlng.lat, e.latlng.lng)) {
           cursorCoordsRef.current = { lat: e.latlng.lat, lng: e.latlng.lng };
@@ -1001,23 +1058,98 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
               rafIdRef.current = requestAnimationFrame(updateMagnifierTransform);
             }
           }
-          if (tool === "add_section_line" && sectionLineStartRef.current && mapInstanceRef.current) {
-            const start = sectionLineStartRef.current;
-            const end = e.latlng;
-            if (sectionCutPreviewLayerRef.current) {
-              sectionCutPreviewLayerRef.current.setLatLngs([
-                [start.lat, start.lng],
-                [end.lat, end.lng]
-              ]);
+          if (tool === "add_section_line" && mapInstanceRef.current) {
+            const candidateSections = (roofSectionsRef.current && roofSectionsRef.current.length > 0)
+              ? roofSectionsRef.current
+              : (roofPolygonRef.current && roofPolygonRef.current.length >= 3
+                  ? [{ id: "sec_default", name: "Roof", polygon: roofPolygonRef.current }]
+                  : []);
+
+            const { x: curX, y: curY } = latLngToCartesian(e.latlng.lat, e.latlng.lng);
+            const cursorPt = { x: curX, y: curY, lat: e.latlng.lat, lng: e.latlng.lng };
+
+            if (!sectionLineStartRef.current) {
+              // 1. Hovering to pick Point 1: snap to boundary of any candidate section
+              let bestSnap = null;
+              let bestSec = null;
+              for (const sec of candidateSections) {
+                if (!sec.polygon || sec.polygon.length < 3) continue;
+                const snap = snapPointToPolygonBoundary(cursorPt, sec.polygon, 1.5);
+                if (snap && (!bestSnap || snap.distance < bestSnap.distance)) {
+                  bestSnap = snap;
+                  bestSec = sec;
+                }
+              }
+
+              if (bestSnap) {
+                activeSnapRef.current = { ...bestSnap, sectionId: bestSec.id };
+                updateSplitSnapMarker(bestSnap);
+              } else {
+                activeSnapRef.current = null;
+                updateSplitSnapMarker(null);
+              }
+
+              if (sectionCutPreviewLayerRef.current) {
+                sectionCutPreviewLayerRef.current.remove();
+                sectionCutPreviewLayerRef.current = null;
+              }
             } else {
-              sectionCutPreviewLayerRef.current = L.polyline([
-                [start.lat, start.lng],
-                [end.lat, end.lng]
-              ], {
-                color: "#f59e0b",
-                weight: 3,
-                dashArray: "6, 6"
-              }).addTo(mapInstanceRef.current);
+              // 2. Point 1 is already set: drawing split line towards Point 2
+              const start = sectionLineStartRef.current;
+              const targetSecId = targetSplitSectionIdRef.current;
+              const targetSec = candidateSections.find((s) => s.id === targetSecId) || candidateSections[0];
+
+              let snap2 = null;
+              if (targetSec && targetSec.polygon && targetSec.polygon.length >= 3) {
+                snap2 = snapPointToPolygonBoundary(cursorPt, targetSec.polygon, 1.5);
+              }
+
+              let endPt = cursorPt;
+              if (snap2) {
+                activeSnapRef.current = { ...snap2, sectionId: targetSec?.id };
+                updateSplitSnapMarker(snap2);
+                endPt = snap2.point;
+              } else {
+                activeSnapRef.current = null;
+                updateSplitSnapMarker(null);
+              }
+
+              let endLatLng = [endPt.lat, endPt.lng];
+              if (endPt.lat == null || endPt.lng == null) {
+                endLatLng = cartesianToLatLng(endPt.x, endPt.y);
+              }
+
+              // Real-time geometric validation
+              let isValidCut = false;
+              if (targetSec && targetSec.polygon && snap2) {
+                const testRes = splitPolygonWithLine(targetSec.polygon, start, endPt);
+                isValidCut = Boolean(testRes && testRes.length === 2);
+              }
+
+              const lineColor = isValidCut ? "#10b981" : (snap2 ? "#f59e0b" : "#ef4444");
+              const lineWeight = isValidCut ? 3.5 : 2.5;
+              const lineDash = isValidCut ? undefined : "6, 6";
+
+              if (sectionCutPreviewLayerRef.current) {
+                sectionCutPreviewLayerRef.current.setLatLngs([
+                  [start.lat, start.lng],
+                  endLatLng,
+                ]);
+                sectionCutPreviewLayerRef.current.setStyle({
+                  color: lineColor,
+                  weight: lineWeight,
+                  dashArray: lineDash,
+                });
+              } else {
+                sectionCutPreviewLayerRef.current = L.polyline([
+                  [start.lat, start.lng],
+                  endLatLng,
+                ], {
+                  color: lineColor,
+                  weight: lineWeight,
+                  dashArray: lineDash,
+                }).addTo(mapInstanceRef.current);
+              }
             }
           }
         }
@@ -1107,26 +1239,47 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
           (handleMapClickRoofRef.current ?? window.__handleSolarMapClickRoof)?.(lat, lng);
         } else if (tool === "add_section_line") {
           const { x, y } = latLngToCartesian(lat, lng);
-          const clickPt = { x, y, lat, lng };
+          const rawClickPt = { x, y, lat, lng };
 
           if (!sectionLineStartRef.current) {
-            sectionLineStartRef.current = clickPt;
-            setSectionLineStart(clickPt);
-            toast.info("Point 1 set. Click across opposite roof edge to complete section cut.");
+            const pt1 = activeSnapRef.current?.point || rawClickPt;
+            const targetSecId = activeSnapRef.current?.sectionId || selectedSectionId || roofSectionsRef.current?.[0]?.id || null;
+
+            sectionLineStartRef.current = pt1;
+            setSectionLineStart(pt1);
+            targetSplitSectionIdRef.current = targetSecId;
+
+            const snapLabel = activeSnapRef.current?.isVertex ? "corner" : activeSnapRef.current ? "roof edge" : "boundary";
+            toast.info(`Point 1 set on ${snapLabel}. Move across to the opposite roof edge to complete split.`);
           } else {
             const startPt = sectionLineStartRef.current;
-            sectionLineStartRef.current = null;
-            setSectionLineStart(null);
+            const pt2 = activeSnapRef.current?.point || rawClickPt;
+            const targetSecId = targetSplitSectionIdRef.current;
+
+            if (Math.hypot(startPt.x - pt2.x, startPt.y - pt2.y) < 0.5) {
+              toast.warning("Cut line is too short. Click two distinct points across the roof.");
+              return;
+            }
+
             if (sectionCutPreviewLayerRef.current) {
               sectionCutPreviewLayerRef.current.remove();
               sectionCutPreviewLayerRef.current = null;
             }
-            if (Math.hypot(startPt.x - clickPt.x, startPt.y - clickPt.y) < 0.5) {
-              toast.warning("Cut line is too short. Click two distinct points across the roof.");
-              return;
+            if (sectionSnapMarkerRef.current) {
+              sectionSnapMarkerRef.current.remove();
+              sectionSnapMarkerRef.current = null;
             }
-            onSplitSection?.(startPt, clickPt);
-            setActiveTool?.("select");
+            sectionLineStartRef.current = null;
+            setSectionLineStart(null);
+            activeSnapRef.current = null;
+            targetSplitSectionIdRef.current = null;
+
+            const res = onSplitSection?.(startPt, pt2, targetSecId);
+            if (res !== false) {
+              setActiveTool?.("select");
+            } else {
+              toast.info("Split could not be completed. Click a starting boundary point to try again.");
+            }
           }
         } else if (tool === "add_panel") {
           (handleMapClickForAddPanelRef.current ?? window.__handleSolarMapClickAddPanel)?.(lat, lng);
@@ -3148,16 +3301,36 @@ const LiveSatelliteMapInner = forwardRef(function LiveSatelliteMapInner(
 
       {/* Add Section Line Floating Guidance */}
       {activeTool === "add_section_line" && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-amber-950/95 backdrop-blur-md px-4 py-2 rounded-xl border border-amber-500 shadow-xl text-xs text-amber-200 pointer-events-auto flex items-center gap-2 animate-in fade-in">
-          <Scissors className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10 bg-slate-950/95 backdrop-blur-md px-4 py-2 rounded-xl border border-cyan-500/80 shadow-2xl text-xs text-slate-200 pointer-events-auto flex items-center gap-2.5 animate-in fade-in">
+          <Scissors className="w-4 h-4 text-cyan-400 shrink-0 animate-pulse" />
           <span>
-            {!sectionLineStart
-              ? "Click 1st point on or across the roof edge to start the split line."
-              : "Click 2nd point on the opposite roof edge to split into sections."}
+            {!sectionLineStart ? (
+              <>
+                <strong className="text-cyan-300 font-semibold">Step 1:</strong> Move pointer to snap on roof boundary or corner, then click to start split line.
+              </>
+            ) : (
+              <>
+                <strong className="text-emerald-300 font-semibold">Step 2:</strong> Move across roof to opposite boundary or corner and click to complete split.
+              </>
+            )}
           </span>
           <button
-            onClick={() => { setActiveTool("select"); setSectionLineStart(null); }}
-            className="ml-2 px-2 py-0.5 rounded bg-amber-900/90 hover:bg-amber-800 text-[10px] text-white font-bold"
+            onClick={() => {
+              setActiveTool("select");
+              setSectionLineStart(null);
+              sectionLineStartRef.current = null;
+              activeSnapRef.current = null;
+              targetSplitSectionIdRef.current = null;
+              if (sectionCutPreviewLayerRef.current) {
+                sectionCutPreviewLayerRef.current.remove();
+                sectionCutPreviewLayerRef.current = null;
+              }
+              if (sectionSnapMarkerRef.current) {
+                sectionSnapMarkerRef.current.remove();
+                sectionSnapMarkerRef.current = null;
+              }
+            }}
+            className="ml-2 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] text-white font-medium border border-slate-600 transition"
           >
             Cancel
           </button>

@@ -114,6 +114,9 @@ export default function LayoutMicroAdjuster({
   setStructureNodes,
   selectedMemberId = null,
   setSelectedMemberId,
+  deletedMemberIds = [],
+  onDeletedMemberIdsChange = null,
+  onDeleteStructureMember = null,
   autoLayoutBaselinePanels = null,
   hasManualAdjustments = false,
   setHasManualAdjustments,
@@ -193,6 +196,75 @@ export default function LayoutMicroAdjuster({
     if (!id) return null;
     return panels.find((p) => p.id === id) || null;
   }, [panels, activeSelectedIds, selectedPanelId]);
+
+  // Inspect selected structural member details from model/viewer
+  const selectedMember = useMemo(() => {
+    if (!selectedMemberId) return null;
+    const manualMember = (structureMembers || []).find((m) => m.id === selectedMemberId);
+    if (manualMember) return manualMember;
+    if (typeof window !== "undefined" && window.__solarix_3d_viewer?.getStructuralMembers) {
+      const members = window.__solarix_3d_viewer.getStructuralMembers() || [];
+      const found = members.find((m) => m.id === selectedMemberId || m.memberId === selectedMemberId);
+      if (found) return found;
+    }
+    const typeLabel = selectedMemberId.includes("post-front")
+      ? "Front Column / Post"
+      : selectedMemberId.includes("post-rear")
+      ? "Rear Column / Post"
+      : selectedMemberId.includes("rafter")
+      ? "Rafter Beam"
+      : selectedMemberId.includes("rail")
+      ? "Purlin / Rail"
+      : selectedMemberId.includes("brace")
+      ? "Diagonal Brace"
+      : "Structural Member";
+    return {
+      id: selectedMemberId,
+      type: typeLabel,
+      material: "GI / Steel",
+    };
+  }, [selectedMemberId, structureMembers]);
+
+  const handleDeleteStructureMember = useCallback(() => {
+    if (!selectedMemberId) return;
+    const memberType = selectedMember?.type || "Structural Member";
+    const isCritical =
+      memberType.toLowerCase().includes("post") ||
+      memberType.toLowerCase().includes("column") ||
+      memberType.toLowerCase().includes("rafter");
+    if (isCritical) {
+      const proceed = window.confirm(
+        `Deleting this ${memberType} may leave connected rails/braces unsupported. Are you sure you want to delete this individual member?`
+      );
+      if (!proceed) return;
+    }
+
+    if (onDeleteStructureMember) {
+      onDeleteStructureMember(selectedMemberId);
+    } else if (typeof window !== "undefined" && window.__solarix_3d_viewer?.deleteMemberById) {
+      window.__solarix_3d_viewer.deleteMemberById(selectedMemberId);
+    }
+    if (setStructureMembers && structureMembers.length > 0) {
+      setStructureMembers((prev) => prev.filter((m) => m.id !== selectedMemberId));
+    }
+    if (onDeletedMemberIdsChange) {
+      const currentList = Array.isArray(deletedMemberIds) ? deletedMemberIds : Array.from(deletedMemberIds || []);
+      onDeletedMemberIdsChange([...new Set([...currentList, selectedMemberId])]);
+    }
+    setSelectedMemberId?.(null);
+    setHasManualAdjustments?.(true);
+    toast.success(`Removed ${memberType}`);
+  }, [
+    selectedMemberId,
+    selectedMember,
+    onDeleteStructureMember,
+    setStructureMembers,
+    structureMembers,
+    onDeletedMemberIdsChange,
+    deletedMemberIds,
+    setSelectedMemberId,
+    setHasManualAdjustments,
+  ]);
 
   // Sync initial row selection if in row mode
   useEffect(() => {
@@ -918,12 +990,12 @@ export default function LayoutMicroAdjuster({
 
         {/* STRUCTURE MODE SELECTION INFO */}
         {activeMode === "structure" && (
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <div>
                 <span className="text-[10px] text-slate-400 block">Selected Member</span>
-                <span className="font-bold text-amber-400 font-mono text-sm truncate max-w-[120px]">
-                  {selectedMemberId ? `#${selectedMemberId.slice(-6)}` : "None"}
+                <span className="font-bold text-amber-400 font-mono text-xs truncate max-w-[160px] block">
+                  {selectedMember ? selectedMember.type || "Structural Member" : "None"}
                 </span>
               </div>
               {selectedMemberId && (
@@ -936,9 +1008,37 @@ export default function LayoutMicroAdjuster({
                 </button>
               )}
             </div>
-            <p className="text-[10.5px] text-slate-400 leading-tight">
-              Click any support column/post, rail, or cross brace in the 3D scene to adjust.
-            </p>
+
+            {selectedMember ? (
+              <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800 space-y-1 text-[10px]">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">ID:</span>
+                  <span className="font-mono text-cyan-300 truncate max-w-[150px]">{selectedMember.id || selectedMemberId}</span>
+                </div>
+                {selectedMember.length && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Length:</span>
+                    <span className="font-bold text-slate-200">{selectedMember.length} m</span>
+                  </div>
+                )}
+                {selectedMember.material && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Material:</span>
+                    <span className="font-semibold text-amber-300">{selectedMember.material}</span>
+                  </div>
+                )}
+                {selectedMember.sectionId && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Section:</span>
+                    <span className="text-slate-300">{selectedMember.sectionId}</span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-[10.5px] text-slate-400 leading-tight">
+                Click any support column/post, rafter, purlin/rail, or cross brace in the 3D scene to adjust.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -1144,6 +1244,33 @@ export default function LayoutMicroAdjuster({
               >
                 <Magnet className="w-3.5 h-3.5 shrink-0" />
                 <span className="truncate">Snap {snapEnabled ? "ON" : "OFF"}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeMode === "structure" && (
+          <div className="flex flex-col gap-1.5 pt-1 border-t border-slate-800/80">
+            <div className="grid grid-cols-2 gap-1.5 min-w-0">
+              <button
+                type="button"
+                onClick={() => handleMicroMove(0.05, 0)}
+                disabled={!selectedMemberId}
+                className="py-1.5 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 hover:text-white border border-slate-700 flex items-center justify-center gap-1 font-semibold text-xs cursor-pointer min-w-0"
+              >
+                <Move className="w-3 h-3 text-cyan-400 shrink-0" />
+                <span className="truncate">Nudge +0.05m</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDeleteStructureMember}
+                disabled={!selectedMemberId}
+                className="py-1.5 px-2 rounded-xl bg-red-950/60 hover:bg-red-900 disabled:opacity-40 text-red-300 hover:text-white border border-red-800/60 flex items-center justify-center gap-1 font-semibold text-xs cursor-pointer min-w-0"
+                title="Delete selected structural member"
+              >
+                <Trash2 className="w-3 h-3 text-red-400 shrink-0" />
+                <span className="truncate">Delete Member</span>
               </button>
             </div>
           </div>

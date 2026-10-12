@@ -1,7 +1,10 @@
 from __future__ import annotations
-from dotenv import load_dotenv
+import sys
 from pathlib import Path
-ROOT_DIR = Path(__file__).parent
+ROOT_DIR = Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+from dotenv import load_dotenv
 load_dotenv(ROOT_DIR / '.env')
 
 import os
@@ -21806,6 +21809,9 @@ async def create_solar_design(
         "saved_views": payload.get("saved_views") or [],
         "structure_nodes": payload.get("structure_nodes") or [],
         "structure_members": payload.get("structure_members") or [],
+        "structure": payload.get("structure") or {},
+        "deleted_member_ids": payload.get("deleted_member_ids") or [],
+        "has_manual_adjustments": bool(payload.get("has_manual_adjustments") or False),
         "version": 1,
         "status": payload.get("status") or "Draft",
         "notes": payload.get("notes") or "",
@@ -21875,6 +21881,7 @@ async def update_solar_design(
         "panel_make", "panel_model", "panel_wattage", "panel_dimensions",
         "orientation", "tilt_angle", "azimuth_angle", "row_spacing_m", "panel_spacing_m",
         "panel_count", "system_kw", "panels", "structure_type", "mounting_height_m",
+        "structure", "deleted_member_ids", "has_manual_adjustments",
         "material_estimates", "camera_state", "layout_snapshot_2d", "layout_snapshot_3d",
         "satellite_snapshot", "saved_views", "structure_nodes", "structure_members",
         "status", "notes"
