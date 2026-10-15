@@ -22,7 +22,7 @@ import time
 import threading
 import asyncio
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any, Tuple, Union, Set
+from typing import List, Optional, Dict, Any, Tuple, Union, Set, overload, Literal
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, UploadFile, File, Form, Query
 from fastapi.responses import Response as FastAPIResponse, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -2305,7 +2305,8 @@ client = SupabaseClientAdapter()
 db = SupabaseDBAdapter()
 _company_logo_cache = {}  # Cache company logo bytes to prevent database/storage roundtrips
 
-JWT_SECRET = os.environ['JWT_SECRET']
+JWT_SECRET = os.environ.get('JWT_SECRET', '')
+JWT_FALLBACK_SECRET = os.environ.get('JWT_FALLBACK_SECRET', '')
 if (os.environ.get("ENVIRONMENT") == "production" or os.environ.get("NODE_ENV") == "production"):
     if not JWT_SECRET or JWT_SECRET in ("solrix-crm-super-secret-key-1029384756", "secret", "change-me", "123456"):
         raise RuntimeError("CRITICAL SECURITY ERROR: Production deployment requires a cryptographically random JWT_SECRET in environment variables.")
@@ -2589,7 +2590,12 @@ async def supabase_client_middleware(request: Request, call_next):
                 jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
                 is_custom = True
             except Exception:
-                pass
+                if JWT_FALLBACK_SECRET:
+                    try:
+                        jwt.decode(token, JWT_FALLBACK_SECRET, algorithms=[JWT_ALGORITHM])
+                        is_custom = True
+                    except Exception:
+                        pass
 
             if is_custom:
                 req_client = get_supabase_client(use_service_key=True)
@@ -2773,12 +2779,19 @@ async def get_current_user(request: Request) -> dict:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         user_id = payload.get("sub") or payload.get("user_id") or payload.get("id")
     except Exception:
-        try:
-            res = supabase.auth.get_user(token)
-            if res and res.user:
-                user_id = res.user.id
-        except Exception as e:
-            logger.error(f"Supabase auth validation failed: {e}")
+        if JWT_FALLBACK_SECRET:
+            try:
+                payload = jwt.decode(token, JWT_FALLBACK_SECRET, algorithms=[JWT_ALGORITHM])
+                user_id = payload.get("sub") or payload.get("user_id") or payload.get("id")
+            except Exception:
+                pass
+        if not user_id:
+            try:
+                res = supabase.auth.get_user(token)
+                if res and res.user:
+                    user_id = res.user.id
+            except Exception as e:
+                logger.error(f"Supabase auth validation failed: {e}")
 
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -7730,47 +7743,30 @@ async def create_material_request(data: MaterialRequestIn, user=Depends(require_
     return doc
 
 async def _enrich_requests_with_stock_batch(requests_list: List[Dict[str, Any]], company_id: str) -> List[Dict[str, Any]]:
-    in_sum_res = await db.inward_entries.aggregate([
-        {"$match": {"company_id": company_id}},
-        {"$group": {"_id": {"product": "$product", "size": "$size"}, "qty": {"$sum": "$quantity"}}}
-    ]).to_list(10000)
-    out_sum_res = await db.outward_entries.aggregate([
-        {"$match": {"company_id": company_id, "status": {"$nin": ["Pending", "Cancelled"]}}},
-        {"$group": {"_id": {"product": "$product", "size": "$size"}, "qty": {"$sum": "$quantity"}}}
-    ]).to_list(10000)
-    
-    prod_docs = await db.products.find({"company_id": company_id}).to_list(10000)
-    op_map = {(norm_product_name(p.get("name")), norm_str(p.get("size"))): float(p.get("opening_stock") or 0.0) for p in prod_docs}
+    if not requests_list:
+        return []
+    items, _, _, _ = await _compute_inventory_balances(company_id)
+    stock_by_pid = {}
+    stock_by_spec = {}
+    for p in items:
+        pid = p.get("id")
+        bal = float(p.get("balance", 0.0))
+        if pid:
+            stock_by_pid[pid] = bal
+        k = (norm_product_name(p.get("name")), norm_str(p.get("size")))
+        stock_by_spec[k] = stock_by_spec.get(k, 0.0) + bal
 
-    in_map = {}
-    for x in in_sum_res:
-        _id = x.get("_id") or {}
-        if isinstance(_id, dict):
-            p_k = (norm_product_name(_id.get("product")), norm_str(_id.get("size")))
-        else:
-            p_k = (norm_product_name(str(_id)), "")
-        in_map[p_k] = in_map.get(p_k, 0.0) + float(x.get("qty") or 0.0)
-
-    out_map = {}
-    for x in out_sum_res:
-        _id = x.get("_id") or {}
-        if isinstance(_id, dict):
-            p_k = (norm_product_name(_id.get("product")), norm_str(_id.get("size")))
-        else:
-            p_k = (norm_product_name(str(_id)), "")
-        out_map[p_k] = out_map.get(p_k, 0.0) + float(x.get("qty") or 0.0)
-    
     for req in requests_list:
         enriched = []
         for it in (req.get("items") or []):
-            name = norm_product_name(it.get("product"))
-            size = norm_str(it.get("size"))
-            k = (name, size)
-            op_stock = op_map.get(k, 0.0)
-            total_in = in_map.get(k, 0.0)
-            total_out = out_map.get(k, 0.0)
-            available_stock = max(0.0, op_stock + total_in - total_out)
-            enriched.append({**it, "available_stock": available_stock})
+            pid = it.get("product_id")
+            k = (norm_product_name(it.get("product") or it.get("name")), norm_str(it.get("size")))
+            if pid and pid in stock_by_pid:
+                bal = stock_by_pid[pid]
+            else:
+                bal = stock_by_spec.get(k, 0.0)
+            avail = max(0.0, bal)
+            enriched.append({**it, "available_stock": avail, "balance": bal})
         req["items"] = enriched
         
     return requests_list
@@ -8886,15 +8882,11 @@ async def inv_stats(user=Depends(get_current_user)):
     tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
 
     (
-        products_count,
         in_today,
         out_today,
         pending_req,
-        in_agg,
-        out_agg,
-        prods
+        bal_res
     ) = await asyncio.gather(
-        db.products.count_documents({"company_id": cid}),
         db.inward_entries.count_documents({
             "company_id": cid, "date": {"$gte": today, "$lt": tomorrow}
         }),
@@ -8902,62 +8894,24 @@ async def inv_stats(user=Depends(get_current_user)):
             "company_id": cid, "date": {"$gte": today, "$lt": tomorrow}
         }),
         db.material_requests.count_documents({"company_id": cid, "status": "pending"}),
-        db.inward_entries.aggregate([
-            {"$match": {"company_id": cid}},
-            {"$group": {"_id": {"product": "$product", "size": "$size"}, "qty": {"$sum": "$quantity"}}}
-        ]).to_list(5000),
-        db.outward_entries.aggregate([
-            {"$match": {"company_id": cid, "status": {"$nin": ["Pending", "Cancelled"]}}},
-            {"$group": {"_id": {"product": "$product", "size": "$size"}, "qty": {"$sum": "$quantity"}}}
-        ]).to_list(5000),
-        db.products.find({"company_id": cid}, {"_id": 0, "name": 1, "size": 1, "unit": 1, "min_stock": 1}).to_list(5000)
+        _compute_inventory_balances(cid)
     )
 
-    in_agg_list = in_agg if isinstance(in_agg, list) else []
-    out_agg_list = out_agg if isinstance(out_agg, list) else []
-    prods_list = prods if isinstance(prods, list) else []
-
-    in_map = {}
-    for x in in_agg_list:
-        _id = x.get("_id") or {}
-        if isinstance(_id, dict):
-            p_k = (norm_product_name(_id.get("product")), norm_str(_id.get("size")))
-        else:
-            p_k = (norm_product_name(str(_id)), "")
-        in_map[p_k] = in_map.get(p_k, 0.0) + float(x.get("qty") or 0.0)
-
-    out_map = {}
-    for x in out_agg_list:
-        _id = x.get("_id") or {}
-        if isinstance(_id, dict):
-            p_k = (norm_product_name(_id.get("product")), norm_str(_id.get("size")))
-        else:
-            p_k = (norm_product_name(str(_id)), "")
-        out_map[p_k] = out_map.get(p_k, 0.0) + float(x.get("qty") or 0.0)
-
-    prod_map = {}
-    for p in prods_list:
-        p_k = (norm_product_name(p["name"]), norm_str(p.get("size")))
-        prod_map[p_k] = p
-
-    all_specs = set(in_map.keys()) | set(out_map.keys()) | set(prod_map.keys())
-
-    low = 0
-    total_stock_qty = 0.0
-    for p_k in all_specs:
-        p_doc = prod_map.get(p_k) or {}
-        op_stock = float(p_doc.get("opening_stock") or 0.0)
-        bal = op_stock + in_map.get(p_k, 0.0) - out_map.get(p_k, 0.0)
-        total_stock_qty += max(bal, 0.0)
-        mn = float(p_doc.get("min_stock") or 5.0)
-        if bal <= mn:
-            low += 1
+    items, _, _, _ = bal_res
+    total_stock_qty = round(sum(p.get("balance", 0.0) for p in items), 2)
+    stock_value = round(sum(float(p.get("stock_value", 0.0) or (p.get("balance", 0.0) * float(p.get("rate") or 0.0))) for p in items), 2)
+    low_stock = sum(1 for p in items if p.get("stock_status") in ("Low Stock", "Out Of Stock") or float(p.get("balance", 0.0)) <= float(p.get("min_stock", 5.0)))
 
     return {
-        "total_products": len(all_specs), "total_stock_qty": round(total_stock_qty, 2),
-        "low_stock": low, "in_today": in_today, "out_today": out_today,
-        "pending_requests": pending_req, "stock_value": 0,
+        "total_products": len(items),
+        "total_stock_qty": total_stock_qty,
+        "low_stock": low_stock,
+        "in_today": in_today,
+        "out_today": out_today,
+        "pending_requests": pending_req,
+        "stock_value": stock_value,
     }
+
 
 _local_rates_cache = None
 def _load_local_rates() -> dict:
@@ -9103,26 +9057,68 @@ def _apply_transaction_balance_delta(
                 p["stock_status"] = "Normal"
             break
 
-async def _compute_inventory_balances(cid: str):
-    items = await db.products.find({"company_id": cid, "status": {"$ne": "Archived"}}, {"_id": 0}).sort("name", 1).to_list(10000)
-    inward_projection = {"_id": 0, "id": 1, "product": 1, "size": 1, "quantity": 1, "product_id": 1, "status": 1, "source": 1, "source_type": 1, "unit": 1, "category": 1}
-    outward_projection = {"_id": 0, "id": 1, "product": 1, "size": 1, "quantity": 1, "product_id": 1, "status": 1, "unit": 1, "category": 1}
-    inward_entries = await db.inward_entries.find({"company_id": cid}, inward_projection).to_list(100000)
-    outward_entries = await db.outward_entries.find({"company_id": cid}, outward_projection).to_list(100000)
+async def _fetch_all_docs(collection, query_filter, projection=None, max_total=50000, sort_fields=None):
+    all_rows = []
+    skip = 0
+    batch_size = 1000
+    while len(all_rows) < max_total:
+        cursor = collection.find(query_filter, projection)
+        if sort_fields:
+            cursor = cursor.sort(sort_fields)
+        batch = await cursor.skip(skip).limit(batch_size).to_list(batch_size)
+        if not batch:
+            break
+        all_rows.extend(batch)
+        if len(batch) < batch_size:
+            break
+        skip += len(batch)
+    return all_rows
+
+@overload
+async def _compute_inventory_balances(cid: str, return_raw: Literal[False] = False) -> Tuple[List[Dict[str, Any]], Dict[Tuple[str, str], float], Dict[Tuple[str, str], float], Dict[Tuple[str, str], float]]: ...
+
+@overload
+async def _compute_inventory_balances(cid: str, return_raw: Literal[True]) -> Tuple[List[Dict[str, Any]], Dict[Tuple[str, str], float], Dict[Tuple[str, str], float], Dict[Tuple[str, str], float], List[Dict[str, Any]], List[Dict[str, Any]]]: ...
+
+async def _compute_inventory_balances(cid: str, return_raw: bool = False):
+    items = await _fetch_all_docs(db.products, {"company_id": cid, "status": {"$ne": "Archived"}})
+    items.sort(key=lambda p: (norm_product_name(p.get("name")), norm_str(p.get("size"))))
+
+    inward_projection = {
+        "_id": 0, "id": 1, "product": 1, "size": 1, "quantity": 1, "product_id": 1,
+        "status": 1, "source": 1, "source_type": 1, "source_name": 1, "vendor": 1,
+        "brand": 1, "model": 1, "unit": 1, "category": 1, "date": 1, "created_at": 1,
+        "reference_number": 1, "bill_number": 1, "serial_numbers": 1,
+        "high_value_goods": 1, "high_value_asset": 1
+    }
+    outward_projection = {
+        "_id": 0, "id": 1, "product": 1, "size": 1, "quantity": 1, "product_id": 1,
+        "status": 1, "unit": 1, "category": 1, "date": 1, "created_at": 1,
+        "outward_challan_no": 1, "reference_number": 1, "bill_number": 1,
+        "client_name": 1, "client_id": 1, "project_name": 1, "project_id": 1,
+        "serial_numbers": 1, "high_value_goods": 1, "high_value_asset": 1
+    }
+    
+    inward_entries = await _fetch_all_docs(db.inward_entries, {"company_id": cid}, projection=inward_projection)
+    outward_entries = await _fetch_all_docs(db.outward_entries, {"company_id": cid}, projection=outward_projection)
 
     # Product Maps for resolution
     prod_id_map: Dict[str, Dict] = {}
-    prod_key_map: Dict[Tuple[str, str], Dict] = {}
+    spec_groups: Dict[Tuple[str, str, str], List[Dict]] = {}
+    prod_name_size_map: Dict[Tuple[str, str], List[Dict]] = {}
     prod_name_map: Dict[str, List[Dict]] = {}
 
     for p in items:
         p_name = norm_product_name(p.get("name"))
         p_size = norm_str(p.get("size"))
+        p_unit = norm_unit(p.get("unit"))
         if p.get("id"):
             prod_id_map[p["id"]] = p
         if p_name:
-            key = (p_name, p_size)
-            prod_key_map[key] = p
+            spec_k = (p_name, p_size, p_unit)
+            spec_groups.setdefault(spec_k, []).append(p)
+            ns_k = (p_name, p_size)
+            prod_name_size_map.setdefault(ns_k, []).append(p)
             prod_name_map.setdefault(p_name, []).append(p)
 
     # Auto-heal: Ensure any products present in transactions exist in Product Master
@@ -9130,23 +9126,25 @@ async def _compute_inventory_balances(cid: str):
     for ie in inward_entries:
         raw_pn = norm_product_name(ie.get("product"))
         raw_ps = norm_str(ie.get("size"))
+        raw_pu = norm_unit(ie.get("unit"))
         pid = ie.get("product_id")
-        if raw_pn and (raw_pn, raw_ps) not in prod_key_map and (not pid or pid not in prod_id_map):
+        if raw_pn and (raw_pn, raw_ps, raw_pu) not in spec_groups and (raw_pn, raw_ps) not in prod_name_size_map and (not pid or pid not in prod_id_map):
             unmatched_specs[(raw_pn, raw_ps)] = {
                 "name": raw_pn,
                 "size": raw_ps,
-                "unit": norm_unit(ie.get("unit")),
+                "unit": raw_pu,
                 "category": ie.get("category") or "Solar",
             }
     for oe in outward_entries:
         raw_pn = norm_product_name(oe.get("product"))
         raw_ps = norm_str(oe.get("size"))
+        raw_pu = norm_unit(oe.get("unit"))
         pid = oe.get("product_id")
-        if raw_pn and (raw_pn, raw_ps) not in prod_key_map and (not pid or pid not in prod_id_map):
+        if raw_pn and (raw_pn, raw_ps, raw_pu) not in spec_groups and (raw_pn, raw_ps) not in prod_name_size_map and (not pid or pid not in prod_id_map):
             unmatched_specs[(raw_pn, raw_ps)] = {
                 "name": raw_pn,
                 "size": raw_ps,
-                "unit": norm_unit(oe.get("unit")),
+                "unit": raw_pu,
                 "category": oe.get("category") or "Solar",
             }
 
@@ -9165,37 +9163,46 @@ async def _compute_inventory_balances(cid: str):
                     if p_id and p_id not in prod_id_map:
                         items.append(new_p)
                         prod_id_map[p_id] = new_p
-                        prod_key_map[(upn, ups)] = new_p
+                        upu = norm_unit(new_p.get("unit") or uinfo.get("unit", "Nos"))
+                        spec_groups.setdefault((upn, ups, upu), []).append(new_p)
+                        prod_name_size_map.setdefault((upn, ups), []).append(new_p)
                         prod_name_map.setdefault(upn, []).append(new_p)
             except Exception:
                 pass
 
-    in_map: Dict[Tuple[str, str], float] = {}
-    out_map: Dict[Tuple[str, str], float] = {}
-    ret_map: Dict[Tuple[str, str], float] = {}
+    pid_in: Dict[str, float] = {}
+    pid_out: Dict[str, float] = {}
+    pid_ret: Dict[str, float] = {}
+    unassigned_in: Dict[Tuple[str, str, str], float] = {}
+    unassigned_out: Dict[Tuple[str, str, str], float] = {}
+    unassigned_ret: Dict[Tuple[str, str, str], float] = {}
 
-    def _resolve_product(entry: Dict[str, Any]) -> Tuple[str, str]:
-        # Priority 1: Match by product_id
+    spec_tot_in: Dict[Tuple[str, str], float] = {}
+    spec_tot_out: Dict[Tuple[str, str], float] = {}
+    spec_tot_ret: Dict[Tuple[str, str], float] = {}
+
+    def _resolve_spec_key(entry: Dict[str, Any]) -> Tuple[str, str, str]:
         pid = entry.get("product_id")
         if pid and pid in prod_id_map:
             target = prod_id_map[pid]
-            return (norm_product_name(target.get("name")), norm_str(target.get("size")))
+            return (norm_product_name(target.get("name")), norm_str(target.get("size")), norm_unit(target.get("unit")))
         
-        raw_pn = entry.get("product") or ""
-        raw_ps = entry.get("size") or ""
-        pn_n = norm_product_name(raw_pn)
-        ps_n = norm_str(raw_ps)
-        
-        # Priority 2: Match by exact normalized (name, size)
-        if (pn_n, ps_n) in prod_key_map:
-            return (pn_n, ps_n)
-            
-        # Priority 3: Match by product name if single product match in master
-        if pn_n in prod_name_map and len(prod_name_map[pn_n]) == 1:
-            target = prod_name_map[pn_n][0]
-            return (pn_n, norm_str(target.get("size")))
+        raw_pn = norm_product_name(entry.get("product"))
+        raw_ps = norm_str(entry.get("size"))
+        raw_pu = norm_unit(entry.get("unit"))
 
-        return (pn_n, ps_n)
+        if (raw_pn, raw_ps, raw_pu) in spec_groups:
+            return (raw_pn, raw_ps, raw_pu)
+        
+        if (raw_pn, raw_ps) in prod_name_size_map:
+            target = prod_name_size_map[(raw_pn, raw_ps)][0]
+            return (raw_pn, raw_ps, norm_unit(target.get("unit")))
+        
+        if raw_pn in prod_name_map and len(prod_name_map[raw_pn]) == 1:
+            target = prod_name_map[raw_pn][0]
+            return (raw_pn, norm_str(target.get("size")), norm_unit(target.get("unit")))
+
+        return (raw_pn, raw_ps, raw_pu)
 
     # Process Inward Entries
     for ie in inward_entries:
@@ -9204,14 +9211,25 @@ async def _compute_inventory_balances(cid: str):
             continue
             
         qty = float(ie.get("quantity") or 0.0)
-        pk = _resolve_product(ie)
-        in_map[pk] = in_map.get(pk, 0.0) + qty
+        pid = ie.get("product_id")
+        spec_k = _resolve_spec_key(ie)
+        ns_k = (spec_k[0], spec_k[1])
+        spec_tot_in[ns_k] = spec_tot_in.get(ns_k, 0.0) + qty
+
+        if pid and pid in prod_id_map:
+            pid_in[pid] = pid_in.get(pid, 0.0) + qty
+        else:
+            unassigned_in[spec_k] = unassigned_in.get(spec_k, 0.0) + qty
 
         # Check for client return (excluding repair returns)
         src_t = str(ie.get("source_type") or "").lower()
         src = str(ie.get("source") or "").lower()
         if ("return" in src_t or "client-return" in src) and not ("repair" in src_t or "repair" in src):
-            ret_map[pk] = ret_map.get(pk, 0.0) + qty
+            spec_tot_ret[ns_k] = spec_tot_ret.get(ns_k, 0.0) + qty
+            if pid and pid in prod_id_map:
+                pid_ret[pid] = pid_ret.get(pid, 0.0) + qty
+            else:
+                unassigned_ret[spec_k] = unassigned_ret.get(spec_k, 0.0) + qty
 
     # Process Outward Entries
     for oe in outward_entries:
@@ -9220,45 +9238,74 @@ async def _compute_inventory_balances(cid: str):
             continue
             
         qty = float(oe.get("quantity") or 0.0)
-        pk = _resolve_product(oe)
-        out_map[pk] = out_map.get(pk, 0.0) + qty
+        pid = oe.get("product_id")
+        spec_k = _resolve_spec_key(oe)
+        ns_k = (spec_k[0], spec_k[1])
+        spec_tot_out[ns_k] = spec_tot_out.get(ns_k, 0.0) + qty
+
+        if pid and pid in prod_id_map:
+            pid_out[pid] = pid_out.get(pid, 0.0) + qty
+        else:
+            unassigned_out[spec_k] = unassigned_out.get(spec_k, 0.0) + qty
 
     local_rates = _load_local_rates()
     local_high_values = _load_local_high_value_products()
 
-    for p in items:
-        p_name = norm_product_name(p["name"])
-        p_size = norm_str(p.get("size"))
-        k = (p_name, p_size)
+    # Assign balances exactly once per canonical product specification
+    for spec_k, prods in spec_groups.items():
+        primary = prods[0]
+        for candidate in prods:
+            c_id = candidate.get("id")
+            if c_id and (c_id in pid_in or c_id in pid_out):
+                primary = candidate
+                break
 
-        op_stock = float(p.get("opening_stock") or 0.0)
-        tot_in = round(in_map.get(k, 0.0), 2)
-        tot_out = round(out_map.get(k, 0.0), 2)
-        bal = round(op_stock + tot_in - tot_out, 2)
+        for p in prods:
+            pid = str(p.get("id") or "")
+            p_in = pid_in.get(pid, 0.0) if pid else 0.0
+            p_out = pid_out.get(pid, 0.0) if pid else 0.0
+            p_ret = pid_ret.get(pid, 0.0) if pid else 0.0
 
-        p["opening_stock"] = op_stock
-        p["total_in"] = tot_in
-        p["total_out"] = tot_out
-        p["returned"] = round(ret_map.get(k, 0.0), 2)
-        p["balance"] = bal
+            if p is primary:
+                p_in += unassigned_in.get(spec_k, 0.0)
+                p_out += unassigned_out.get(spec_k, 0.0)
+                p_ret += unassigned_ret.get(spec_k, 0.0)
 
-        p["rate"] = local_rates.get(p_name, float(p.get("rate") or 0.0))
-        if p_name in local_high_values:
-            p["high_value_goods"] = bool(local_high_values[p_name])
-        else:
-            p["high_value_goods"] = bool(p.get("high_value_goods") or p.get("high_value_asset"))
-            if p["high_value_goods"]:
-                _save_local_high_value_product(p_name, True)
+            op_stock = float(p.get("opening_stock") or 0.0)
+            tot_in = round(p_in, 2)
+            tot_out = round(p_out, 2)
+            tot_ret = round(p_ret, 2)
+            bal = round(op_stock + tot_in - tot_out, 2)
 
-        mn = float(p.get("min_stock") or 0.0)
-        if bal <= 0:
-            p["stock_status"] = "Out Of Stock"
-        elif bal <= mn:
-            p["stock_status"] = "Low Stock"
-        else:
-            p["stock_status"] = "Normal"
+            p["opening_stock"] = op_stock
+            p["total_in"] = tot_in
+            p["total_out"] = tot_out
+            p["returned"] = tot_ret
+            p["balance"] = bal
+            p["available_stock"] = max(0.0, bal)
 
-    return items, in_map, out_map, ret_map
+            p_name = spec_k[0]
+            p["rate"] = local_rates.get(p_name, float(p.get("rate") or 0.0))
+            if p_name in local_high_values:
+                p["high_value_goods"] = bool(local_high_values[p_name])
+            else:
+                p["high_value_goods"] = bool(p.get("high_value_goods") or p.get("high_value_asset"))
+                if p["high_value_goods"]:
+                    _save_local_high_value_product(p_name, True)
+
+            mn = float(p.get("min_stock") or 0.0)
+            if bal <= 0:
+                p["stock_status"] = "Out Of Stock"
+            elif bal <= mn:
+                p["stock_status"] = "Low Stock"
+            else:
+                p["stock_status"] = "Normal"
+
+    if return_raw:
+        inward_entries.sort(key=lambda x: (x.get("date") or "", x.get("created_at") or ""), reverse=True)
+        outward_entries.sort(key=lambda x: (x.get("date") or "", x.get("created_at") or ""), reverse=True)
+        return items, spec_tot_in, spec_tot_out, spec_tot_ret, inward_entries, outward_entries
+    return items, spec_tot_in, spec_tot_out, spec_tot_ret
 
 @api_router.get("/inventory/products")
 async def list_products(user=Depends(get_current_user)):
@@ -9297,7 +9344,7 @@ async def get_high_value_ledger(search: Optional[str] = None, user=Depends(requi
     cid = user["company_id"]
     search_term = (search or "").strip().lower()
     
-    items, in_map, out_map, ret_map = await _compute_inventory_balances(cid)
+    items, in_map, out_map, ret_map, all_inward_records, all_outward_records = await _compute_inventory_balances(cid, return_raw=True)
     local_hv = _load_local_high_value_products()
     
     # Product Maps for resolution
@@ -9339,9 +9386,6 @@ async def get_high_value_ledger(search: Optional[str] = None, user=Depends(requi
     hv_keys = set()
     hv_names = set()
     hv_ids = set()
-    
-    all_inward_records = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).sort("date", -1).to_list(10000)
-    all_outward_records = await db.outward_entries.find({"company_id": cid}, {"_id": 0}).sort("date", -1).to_list(10000)
 
     hv_inward_product_names = set()
     for ie in all_inward_records:
@@ -10143,6 +10187,7 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
             "created_by": user_id,
             "created_by_name": user_name,
             "created_at": now_iso(),
+            "status": getattr(data, "status", None) or "Received",
             "product_id": resolved_pid,
             "original_entry_id": orig_entry_id_val,
             "original_challan_no": orig_ch_val,
@@ -11661,35 +11706,107 @@ async def get_b2b_summary(user=Depends(require_active_subscription())):
     return {"customers": customers_data, "clients": customers_data}
 
 @api_router.get("/inventory/b2b-client-history/{client_id}")
-async def get_b2b_client_history(client_id: str, user=Depends(require_active_subscription())):
+async def get_b2b_client_history(
+    client_id: str,
+    search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    product: Optional[str] = None,
+    flow_type: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    user=Depends(require_active_subscription())
+):
     cid = user["company_id"]
-    customer = await db.b2b_customers.find_one({"company_id": cid, "id": client_id}, {"_id": 0})
-    if not customer:
-        customer = await db.b2b_customers.find_one({"company_id": cid, "sol_id": client_id}, {"_id": 0})
-    if not customer:
-        raise HTTPException(status_code=404, detail="B2B Business Customer not found")
-    c_name = (customer.get("name") or customer.get("full_name") or "").strip()
     
-    outwards = await db.outward_entries.find({
+    # Fetch B2B customer(s)
+    b2b_custs = await _fetch_all_docs(db.b2b_customers, {
         "company_id": cid,
-        "$or": [
-            {"client_id": client_id},
-            {"client_name": {"$regex": f"^{re.escape(c_name)}$", "$options": "i"}}
-        ]
-    }, {"_id": 0}).to_list(5000)
-    inwards_raw = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(10000)
-    inwards = []
-    for inv in inwards_raw:
-        parsed = parse_inward_client_info(inv)
-        if parsed.get("client_id") == client_id or (
-            parsed.get("source_type") in ("Return From Client", "B2B Return", "Client / Customer", "Client Return")
-            and (parsed.get("client_name") or parsed.get("source_name") or "").strip().lower() == c_name.lower()
-        ):
-            inwards.append(parsed)
-            
+        "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
+    })
+    b2b_cust_ids = {str(c["id"]).strip() for c in b2b_custs if c.get("id")}
+    b2b_name_to_customer = {}
+    for c in b2b_custs:
+        cn = str(c.get("name") or c.get("full_name") or "").strip()
+        if cn:
+            b2b_name_to_customer[cn.lower()] = c
+        if c.get("id"):
+            b2b_name_to_customer[str(c["id"]).strip()] = c
+    
+    target_customer = None
+    if client_id != "all":
+        target_customer = await db.b2b_customers.find_one({"company_id": cid, "id": client_id}, {"_id": 0})
+        if not target_customer:
+            target_customer = await db.b2b_customers.find_one({"company_id": cid, "sol_id": client_id}, {"_id": 0})
+        if not target_customer:
+            target_customer = b2b_name_to_customer.get(client_id.strip().lower())
+        if not target_customer:
+            raise HTTPException(status_code=404, detail="B2B Business Customer not found")
+        c_name = (target_customer.get("name") or target_customer.get("full_name") or "").strip()
+        
+        outwards_raw = await _fetch_all_docs(db.outward_entries, {
+            "company_id": cid,
+            "$or": [
+                {"client_id": client_id},
+                {"client_name": {"$regex": f"^{re.escape(c_name)}$", "$options": "i"}}
+            ]
+        })
+        inwards_raw = await _fetch_all_docs(db.inward_entries, {"company_id": cid})
+        inwards = []
+        for inv in inwards_raw:
+            parsed = parse_inward_client_info(inv)
+            if parsed.get("client_id") == client_id or (
+                parsed.get("source_type") in ("Return From Client", "B2B Return", "Client / Customer", "Client Return")
+                and (parsed.get("client_name") or parsed.get("source_name") or "").strip().lower() == c_name.lower()
+            ):
+                inwards.append(parsed)
+        outwards = outwards_raw
+    else:
+        # Fetch all B2B outwards
+        outwards_raw = await _fetch_all_docs(db.outward_entries, {"company_id": cid, "status": "Dispatched"})
+        outwards = []
+        for o in outwards_raw:
+            pt = (o.get("party_type") or "").strip()
+            o_cid = str(o.get("client_id") or "").strip()
+            o_cname = str(o.get("client_name") or "").strip().lower()
+            is_b2b = False
+            if pt in ("B2B Customer", "B2B Client", "B2B Sale"):
+                is_b2b = True
+            elif o_cid and o_cid in b2b_cust_ids:
+                is_b2b = True
+            elif o_cname and o_cname in b2b_name_to_customer and not o.get("project_id") and not o.get("material_request_id"):
+                is_b2b = True
+            if is_b2b:
+                outwards.append(o)
+        
+        # Fetch all B2B returns
+        inwards_raw = await _fetch_all_docs(db.inward_entries, {"company_id": cid})
+        inwards = []
+        for inv in inwards_raw:
+            parsed = parse_inward_client_info(inv)
+            p_cid = str(parsed.get("client_id") or "").strip()
+            p_cname = str(parsed.get("client_name") or parsed.get("source_name") or "").strip().lower()
+            st = parsed.get("source_type") or ""
+            is_b2b_ret = False
+            if st in ("Return From Client", "B2B Return", "Client / Customer", "Client Return") or "b2b return" in st.lower():
+                if p_cid and p_cid in b2b_cust_ids:
+                    is_b2b_ret = True
+                elif p_cname and p_cname in b2b_name_to_customer:
+                    is_b2b_ret = True
+                elif "b2b" in st.lower():
+                    is_b2b_ret = True
+            elif p_cid and p_cid in b2b_cust_ids:
+                is_b2b_ret = True
+            if is_b2b_ret:
+                inwards.append(parsed)
+
     txs = []
     for o in outwards:
         bill_no = o.get("bill_number") or o.get("outward_challan_no") or o.get("reference_number") or "—"
+        o_cid = str(o.get("client_id") or "").strip()
+        o_cname = str(o.get("client_name") or "").strip()
+        matched = b2b_name_to_customer.get(o_cid) or b2b_name_to_customer.get(o_cname.lower()) or (target_customer if target_customer else None)
+        cust_display_name = (matched.get("name") if matched else None) or o_cname or (target_customer.get("name") if target_customer else "B2B Customer")
+        cust_id_val = (matched.get("id") if matched else None) or o_cid or (target_customer.get("id") if target_customer else "")
         txs.append({
             "id": o.get("id"),
             "type": "OUTWARD",
@@ -11697,6 +11814,10 @@ async def get_b2b_client_history(client_id: str, user=Depends(require_active_sub
             "date": (o.get("date") or o.get("created_at") or "")[:10],
             "bill_number": bill_no,
             "reference_number": bill_no,
+            "customer_id": cust_id_val,
+            "client_id": cust_id_val,
+            "customer_name": cust_display_name,
+            "client_name": cust_display_name,
             "product": o.get("product") or "",
             "size": o.get("size") or "",
             "quantity": float(o.get("quantity") or 0.0),
@@ -11707,6 +11828,11 @@ async def get_b2b_client_history(client_id: str, user=Depends(require_active_sub
         })
     for i in inwards:
         bill_no = i.get("bill_number") or i.get("reference_number") or i.get("challan_no") or "—"
+        p_cid = str(i.get("client_id") or "").strip()
+        p_cname = str(i.get("client_name") or i.get("source_name") or "").strip()
+        matched = b2b_name_to_customer.get(p_cid) or b2b_name_to_customer.get(p_cname.lower()) or (target_customer if target_customer else None)
+        cust_display_name = (matched.get("name") if matched else None) or p_cname or (target_customer.get("name") if target_customer else "B2B Customer")
+        cust_id_val = (matched.get("id") if matched else None) or p_cid or (target_customer.get("id") if target_customer else "")
         txs.append({
             "id": i.get("id"),
             "type": "INWARD_RETURN",
@@ -11714,6 +11840,10 @@ async def get_b2b_client_history(client_id: str, user=Depends(require_active_sub
             "date": (i.get("date") or i.get("created_at") or "")[:10],
             "bill_number": bill_no,
             "reference_number": bill_no,
+            "customer_id": cust_id_val,
+            "client_id": cust_id_val,
+            "customer_name": cust_display_name,
+            "client_name": cust_display_name,
             "product": i.get("product") or "",
             "size": i.get("size") or "",
             "quantity": float(i.get("quantity") or 0.0),
@@ -11722,8 +11852,37 @@ async def get_b2b_client_history(client_id: str, user=Depends(require_active_sub
             "status": "Received",
             "remarks": i.get("remarks") or ""
         })
+
     txs.sort(key=lambda x: x["date"], reverse=True)
-    return {"customer": customer, "client": customer, "transactions": txs}
+
+    filtered_txs = txs
+    if customer_id and customer_id != "all":
+        filtered_txs = [t for t in filtered_txs if t.get("customer_id") == customer_id or t.get("client_id") == customer_id or t.get("customer_name", "").lower() == customer_id.lower()]
+    if product and product != "all":
+        prod_lower = product.strip().lower()
+        filtered_txs = [t for t in filtered_txs if (t.get("product") or "").strip().lower() == prod_lower]
+    if flow_type and flow_type != "all":
+        filtered_txs = [t for t in filtered_txs if t.get("type") == flow_type]
+    if start_date:
+        filtered_txs = [t for t in filtered_txs if (t.get("date") or "") >= start_date]
+    if end_date:
+        filtered_txs = [t for t in filtered_txs if (t.get("date") or "") <= end_date]
+    if search and search.strip():
+        q = search.strip().lower()
+        filtered_txs = [t for t in filtered_txs if (
+            q in (t.get("customer_name") or "").lower() or
+            q in (t.get("product") or "").lower() or
+            q in (t.get("bill_number") or "").lower() or
+            q in (t.get("reference_number") or "").lower() or
+            q in (t.get("remarks") or "").lower()
+        )]
+
+    return {
+        "customer": target_customer,
+        "client": target_customer,
+        "transactions": filtered_txs,
+        "all_transactions": txs
+    }
 
 @api_router.get("/inventory/b2b-sales")
 async def get_b2b_sales(user=Depends(require_active_subscription())):
@@ -11776,19 +11935,26 @@ async def get_b2b_sales(user=Depends(require_active_subscription())):
     return {"sales": sales}
 
 @api_router.get("/inventory/supply-entries")
-async def get_supply_entries(user=Depends(require_active_subscription())):
+async def get_supply_entries(
+    search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    supplier: Optional[str] = None,
+    product: Optional[str] = None,
+    user=Depends(require_active_subscription())
+):
     cid = user["company_id"]
-    inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).sort("date", -1).to_list(1000)
-    vendors = await db.vendors.find({"company_id": cid}, {"_id": 0}).to_list(1000)
-    vendor_ids = {v["id"] for v in vendors}
-    vendor_names = {(v.get("name") or "").strip().lower() for v in vendors}
+    inwards = await _fetch_all_docs(db.inward_entries, {"company_id": cid})
+    vendors = await db.vendors.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+    vendor_ids = {str(v["id"]).strip() for v in vendors if v.get("id")}
+    vendor_names = {(v.get("name") or "").strip().lower() for v in vendors if v.get("name")}
     
     entries = []
     for i in inwards:
-        st = i.get("source_type") or ""
-        sname = (i.get("source_name") or "").strip().lower()
-        vid_val = i.get("vendor_id") or ""
-        if st in ("Supplier", "Supplier Supply", "Vendor / Supplier", "Vendor", "Supply") or vid_val in vendor_ids or sname in vendor_names:
+        st = (i.get("source_type") or "").strip()
+        sname = (i.get("source_name") or "").strip()
+        vid_val = str(i.get("vendor_id") or "").strip()
+        if st in ("Supplier", "Supplier Supply", "Vendor / Supplier", "Vendor", "Supply") or vid_val in vendor_ids or sname.lower() in vendor_names:
             bill_no = i.get("bill_number") or i.get("reference_number") or i.get("challan_no") or "—"
             entries.append({
                 "id": i.get("id"),
@@ -11796,7 +11962,7 @@ async def get_supply_entries(user=Depends(require_active_subscription())):
                 "bill_number": bill_no,
                 "reference_number": bill_no,
                 "vendor_id": vid_val,
-                "supplier_name": i.get("source_name") or "Supplier",
+                "supplier_name": sname or "Supplier",
                 "product": i.get("product") or "",
                 "size": i.get("size") or "",
                 "quantity": float(i.get("quantity") or 0.0),
@@ -11804,7 +11970,32 @@ async def get_supply_entries(user=Depends(require_active_subscription())):
                 "status": "Received",
                 "remarks": i.get("remarks") or ""
             })
-    return {"entries": entries}
+    
+    entries.sort(key=lambda x: x["date"], reverse=True)
+    all_entries = list(entries)
+
+    # Optional filtering
+    if supplier and supplier != "all":
+        supp_lower = supplier.strip().lower()
+        entries = [e for e in entries if e.get("vendor_id") == supplier or (e.get("supplier_name") or "").strip().lower() == supp_lower]
+    if product and product != "all":
+        prod_lower = product.strip().lower()
+        entries = [e for e in entries if (e.get("product") or "").strip().lower() == prod_lower]
+    if start_date:
+        entries = [e for e in entries if (e.get("date") or "") >= start_date]
+    if end_date:
+        entries = [e for e in entries if (e.get("date") or "") <= end_date]
+    if search and search.strip():
+        q = search.strip().lower()
+        entries = [e for e in entries if (
+            q in (e.get("supplier_name") or "").lower() or
+            q in (e.get("product") or "").lower() or
+            q in (e.get("bill_number") or "").lower() or
+            q in (e.get("reference_number") or "").lower() or
+            q in (e.get("remarks") or "").lower()
+        )]
+
+    return {"entries": entries, "all_entries": all_entries}
 
 @api_router.get("/inventory/supply-summary")
 async def get_supply_summary(user=Depends(require_active_subscription())):
@@ -12380,9 +12571,9 @@ async def inv_history(
 
     def _date_match(rec: Dict[str, Any]) -> bool:
         d = (rec.get("date") or rec.get("created_at") or "")[:10]
-        if from_d and d < from_d:
+        if from_d and d < from_d[:10]:
             return False
-        if to_d and d > to_d:
+        if to_d and d > to_d[:10]:
             return False
         return True
 
@@ -12424,15 +12615,16 @@ async def inv_history(
             inward_q["status"] = st_filter
             outward_q["status"] = st_filter
 
+    to_bound = f"{to_d}T23:59:59.999Z" if len(to_d) == 10 else to_d
     if from_d and to_d:
-        inward_q["date"] = {"$gte": from_d, "$lte": to_d}
-        outward_q["date"] = {"$gte": from_d, "$lte": to_d}
+        inward_q["date"] = {"$gte": from_d, "$lte": to_bound}
+        outward_q["date"] = {"$gte": from_d, "$lte": to_bound}
     elif from_d:
         inward_q["date"] = {"$gte": from_d}
         outward_q["date"] = {"$gte": from_d}
     elif to_d:
-        inward_q["date"] = {"$lte": to_d}
-        outward_q["date"] = {"$lte": to_d}
+        inward_q["date"] = {"$lte": to_bound}
+        outward_q["date"] = {"$lte": to_bound}
 
     if prod_filter:
         inward_q["product"] = {"$regex": re.escape(prod_filter), "$options": "i"}
@@ -12442,15 +12634,9 @@ async def inv_history(
         inward_q["created_by"] = user_filter
         outward_q["created_by"] = user_filter
 
-    has_in_memory_filters = bool(search or vendor_filter or client_filter or challan_filter or bill_filter or size_filter)
-    if has_in_memory_filters:
-        fetch_limit = min(max(page * page_size * 2, 500), 5000)
-    else:
-        fetch_limit = min(page * page_size + 100, 2000)
-
     # Inward entries
     if not txn_type or txn_type == "inward":
-        inward_rows = await db.inward_entries.find(inward_q, inward_projection).sort([("date", -1), ("created_at", -1)]).to_list(fetch_limit)
+        inward_rows = await _fetch_all_docs(db.inward_entries, inward_q, projection=inward_projection, sort_fields=[("date", -1), ("created_at", -1)])
         for raw_r in inward_rows:
             r = parse_inward_client_info(raw_r)
             enriched = _enrich_inward_with_assets(r)
@@ -12516,7 +12702,7 @@ async def inv_history(
 
     # Outward entries
     if not txn_type or txn_type == "outward":
-        outward_rows = await db.outward_entries.find(outward_q, outward_projection).sort([("date", -1), ("created_at", -1)]).to_list(fetch_limit)
+        outward_rows = await _fetch_all_docs(db.outward_entries, outward_q, projection=outward_projection, sort_fields=[("date", -1), ("created_at", -1)])
         for raw_r in outward_rows:
             enriched = _enrich_outward_with_assets(raw_r)
             if not enriched:
@@ -12573,16 +12759,7 @@ async def inv_history(
             rows.append({**enriched, "type": "Outward"})
 
     rows.sort(key=lambda x: (x.get("date") or x.get("created_at") or ""), reverse=True)
-    if not has_in_memory_filters:
-        try:
-            total_inward = await db.inward_entries.count_documents(inward_q) if (not txn_type or txn_type == "inward") else 0
-            total_outward = await db.outward_entries.count_documents(outward_q) if (not txn_type or txn_type == "outward") else 0
-            total = total_inward + total_outward
-        except Exception:
-            total = len(rows)
-    else:
-        total = len(rows)
-
+    total = len(rows)
     pages = max(1, math.ceil(total / page_size)) if page_size > 0 else 1
     start = (page - 1) * page_size
     paged = rows[start:start + page_size]
@@ -12681,6 +12858,7 @@ async def list_serial_tracking(
     request: Request = None,  # type: ignore
     user=Depends(require_feature_entitlement("serial_tracking")),
     type: Optional[str] = None,  # all | inward | outward
+    status: Optional[str] = None,  # all | in_stock | out
     product: Optional[str] = None,
     vendor: Optional[str] = None,
     client: Optional[str] = None,
@@ -12706,7 +12884,7 @@ async def list_serial_tracking(
             if out_id:
                 outward_asset_map.setdefault(out_id, []).append(str(a["serial_number"]).strip())
 
-    outwards_all = await db.outward_entries.find({"company_id": cid}, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(10000)
+    outwards_all = await _fetch_all_docs(db.outward_entries, {"company_id": cid}, sort_fields=[("date", -1), ("created_at", -1)])
     outwarded_sn_set = {str(sn).strip().upper() for entry in outwards_all for sn in (entry.get("serial_numbers") or outward_asset_map.get(entry.get("id"), [])) if str(sn).strip()}
     for a in local_assets:
         if a.get("company_id") == cid and a.get("status") == "Installed" and a.get("serial_number"):
@@ -12714,7 +12892,7 @@ async def list_serial_tracking(
 
     # Map serial number to vendor from inward
     sn_to_vendor = {}
-    inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(10000)
+    inwards = await _fetch_all_docs(db.inward_entries, {"company_id": cid}, sort_fields=[("date", -1), ("created_at", -1)])
     for entry in inwards:
         v_name = entry.get("source_name") or ""
         entry_sns = entry.get("serial_numbers") or inward_asset_map.get(entry.get("id"), [])
@@ -12826,6 +13004,17 @@ async def list_serial_tracking(
             continue
         if client and client.lower() not in r["client_name"].lower():
             continue
+        if status and status.strip():
+            st_clean = status.strip().lower()
+            if st_clean not in ("all", "none", ""):
+                if st_clean in ("in_stock", "in stock", "instock", "in-stock"):
+                    if "IN STOCK" not in r["status"]:
+                        continue
+                elif st_clean in ("out", "out_issued", "out / issued", "issued"):
+                    if "OUT" not in r["status"]:
+                        continue
+                elif st_clean not in r["status"].lower():
+                    continue
         if search and search.strip():
             s_low = search.lower().strip()
             sns_text = " ".join(r["serial_numbers"]).lower()
@@ -12857,6 +13046,7 @@ async def export_serial_tracking_csv(
     request: Request = None,  # type: ignore
     user=Depends(get_current_user),
     type: Optional[str] = None,
+    status: Optional[str] = None,
     product: Optional[str] = None,
     vendor: Optional[str] = None,
     client: Optional[str] = None,
@@ -12876,6 +13066,7 @@ async def export_serial_tracking_csv(
         request=request,
         user=user,
         type=type,
+        status=status,
         product=product,
         vendor=vendor,
         client=client,
@@ -13036,9 +13227,7 @@ async def _compute_inventory_intelligence(
         end_date = to_date
 
     # 1. Fetch single source of truth from authoritative balance compute engine
-    items, in_map, out_map, ret_map = await _compute_inventory_balances(cid)
-    all_inward = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).sort("date", -1).to_list(50000)
-    all_outward = await db.outward_entries.find({"company_id": cid}, {"_id": 0}).sort("date", -1).to_list(50000)
+    items, in_map, out_map, ret_map, all_inward, all_outward = await _compute_inventory_balances(cid, return_raw=True)
     local_assets = [a for a in _load_local_assets() if a.get("company_id") == cid]
 
     # Build Product ID / Name maps
@@ -20177,6 +20366,30 @@ async def _process_po_payload(payload: Dict[str, Any], cid: str, user: Dict[str,
     round_off = float(payload.get("round_off") if payload.get("round_off") is not None else round(round(calc_total_before_round) - calc_total_before_round, 2))
     grand_total = round(calc_total_before_round + round_off, 2)
 
+    from po_document_parser import parse_date_value
+
+    raw_delivery_date = (
+        str(payload.get("delivery_date")).strip()
+        if payload.get("delivery_date") is not None
+        else ((existing_po.get("delivery_date") or "") if existing_po else "")
+    )
+    if raw_delivery_date:
+        parsed_d, ok_d = parse_date_value(raw_delivery_date)
+        resolved_delivery_date = parsed_d if ok_d else raw_delivery_date
+    else:
+        resolved_delivery_date = ""
+
+    raw_dispatch_date = (
+        str(payload.get("expected_dispatch_date")).strip()
+        if payload.get("expected_dispatch_date") is not None
+        else ((existing_po.get("expected_dispatch_date") or "") if existing_po else "")
+    )
+    if raw_dispatch_date:
+        parsed_ed, ok_ed = parse_date_value(raw_dispatch_date)
+        resolved_dispatch_date = parsed_ed if ok_ed else raw_dispatch_date
+    else:
+        resolved_dispatch_date = ""
+
     po_doc: Dict[str, Any] = {
         "id": po_id,
         "company_id": cid,
@@ -20218,14 +20431,34 @@ async def _process_po_payload(payload: Dict[str, Any], cid: str, user: Dict[str,
         "site_pincode": site_pincode,
         "consumer_number": consumer_number,
 
-        # Shipping & Delivery
-        "ship_via": payload.get("ship_via") or "FOR",
-        "shipping_method": payload.get("shipping_method") or "PAID",
-        "shipping_term": payload.get("shipping_term") or "DOOR DELIVERY",
-        "delivery_date": payload.get("delivery_date") or "",
-        "transporter_name": (payload.get("transporter_name") or "").strip(),
-        "expected_dispatch_date": (payload.get("expected_dispatch_date") or "").strip(),
-        "delivery_instructions": (payload.get("delivery_instructions") or "").strip(),
+        # Shipping & Delivery (fully editable and reloadable without forced defaults)
+        "ship_via": (
+            str(payload.get("ship_via")).strip()
+            if payload.get("ship_via") is not None
+            else ((existing_po.get("ship_via") if existing_po and existing_po.get("ship_via") is not None else "FOR"))
+        ),
+        "shipping_method": (
+            str(payload.get("shipping_method")).strip()
+            if payload.get("shipping_method") is not None
+            else ((existing_po.get("shipping_method") if existing_po and existing_po.get("shipping_method") is not None else "PAID"))
+        ),
+        "shipping_term": (
+            str(payload.get("shipping_term")).strip()
+            if payload.get("shipping_term") is not None
+            else ((existing_po.get("shipping_term") if existing_po and existing_po.get("shipping_term") is not None else "DOOR DELIVERY"))
+        ),
+        "delivery_date": resolved_delivery_date,
+        "transporter_name": (
+            str(payload.get("transporter_name")).strip()
+            if payload.get("transporter_name") is not None
+            else ((existing_po.get("transporter_name") or "") if existing_po else "")
+        ),
+        "expected_dispatch_date": resolved_dispatch_date,
+        "delivery_instructions": (
+            str(payload.get("delivery_instructions")).strip()
+            if payload.get("delivery_instructions") is not None
+            else ((existing_po.get("delivery_instructions") or "") if existing_po else "")
+        ),
 
         # Commercial & Payment
         "quotation_number": (payload.get("quotation_number") or "").strip(),
@@ -20346,6 +20579,30 @@ async def delete_purchase_order(po_id: str, user=Depends(require_perm("purchase_
         raise HTTPException(status_code=404, detail="Purchase Order not found")
     await log_activity(cid, user["id"], user["name"], "Deleted Purchase Order", f"PO ID: {po_id}")
     return {"message": "Purchase Order deleted successfully"}
+
+@api_router.post("/purchase-orders/parse-document")
+async def parse_purchase_order_document(
+    file: UploadFile = File(...),
+    user=Depends(require_perm("purchase_orders", "view"))
+):
+    """
+    Parses an uploaded PDF, DOCX, or DOC document to extract and map shipping
+    and logistics details for Purchase Orders.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is missing")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    from po_document_parser import extract_shipping_from_document
+    result = extract_shipping_from_document(file_bytes, file.filename)
+
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Failed to parse document"))
+
+    return result
 
 @api_router.get("/vendors/{vendor_id}")
 async def get_vendor_detail(vendor_id: str, user=Depends(get_current_user)):
@@ -20586,7 +20843,8 @@ async def create_material_inward(bill_id: str, data: MaterialInwardPayload, user
                 "warehouse_id": item.destination or data.warehouse_id or "Main Warehouse",
                 "project_id": item.project_id or data.project_id or "",
                 "created_by": user["name"],
-                "created_at": now_iso()
+                "created_at": now_iso(),
+                "status": "Received"
             }
             await db.inward_entries.insert_one(inw_entry_doc)
 

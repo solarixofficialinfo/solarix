@@ -34,7 +34,10 @@ import {
   RotateCcw,
   Boxes,
   Activity,
-  ArrowLeftRight
+  ArrowLeftRight,
+  FileSpreadsheet,
+  Download,
+  Filter
 } from "lucide-react";
 import { toast } from "sonner";
 import dayjs from "dayjs";
@@ -105,7 +108,24 @@ export default function B2BSupply() {
   const [customerToDelete, setCustomerToDelete] = useState(null);
   const [isDeletingCustomer, setIsDeletingCustomer] = useState(false);
 
-  const [selectedLedgerCustomerId, setSelectedLedgerCustomerId] = useState("");
+  const [selectedLedgerCustomerId, setSelectedLedgerCustomerId] = useState("all");
+
+  // B2B Ledger filter states
+  const [b2bLedgerSearch, setB2bLedgerSearch] = useState("");
+  const [b2bLedgerDateFrom, setB2bLedgerDateFrom] = useState("");
+  const [b2bLedgerDateTo, setB2bLedgerDateTo] = useState("");
+  const [b2bLedgerProduct, setB2bLedgerProduct] = useState("all");
+  const [b2bLedgerFlow, setB2bLedgerFlow] = useState("all");
+
+  // Supply Entries filter states
+  const [supplySearch, setSupplySearch] = useState("");
+  const [supplyDateFrom, setSupplyDateFrom] = useState("");
+  const [supplyDateTo, setSupplyDateTo] = useState("");
+  const [supplySupplier, setSupplySupplier] = useState("all");
+  const [supplyProduct, setSupplyProduct] = useState("all");
+
+  // Export in-progress state
+  const [isExporting, setIsExporting] = useState(false);
 
   // 1. Fetch B2B Summary (Customers + transaction stats)
   const {
@@ -149,19 +169,18 @@ export default function B2BSupply() {
     staleTime: 5000,
   });
 
-  // 4. Fetch Ledger for Selected B2B Customer
+  // 4. Fetch Ledger for Selected B2B Customer (or "all")
   const {
     data: b2bLedgerData,
     isLoading: loadingB2bLedger,
     refetch: refetchB2bLedger,
   } = useQuery({
-    queryKey: ["inventory-b2b-history", selectedLedgerCustomerId],
+    queryKey: ["inventory-b2b-history", selectedLedgerCustomerId || "all"],
     queryFn: async () => {
-      if (!selectedLedgerCustomerId) return null;
-      const res = await api.get(`/inventory/b2b-client-history/${selectedLedgerCustomerId}`);
+      const targetId = selectedLedgerCustomerId || "all";
+      const res = await api.get(`/inventory/b2b-client-history/${targetId}`);
       return res.data;
     },
-    enabled: Boolean(selectedLedgerCustomerId),
     staleTime: 5000,
   });
 
@@ -437,6 +456,240 @@ export default function B2BSupply() {
       (s.category || "").toLowerCase().includes(q)
     );
   }, [suppliers, search]);
+
+  // B2B Ledger Derived Products & Filtering
+  const b2bLedgerProducts = useMemo(() => {
+    const set = new Set();
+    const txs = b2bLedgerData?.all_transactions || b2bLedgerData?.transactions || [];
+    txs.forEach((t) => {
+      if (t.product) set.add(t.product);
+    });
+    return Array.from(set).sort();
+  }, [b2bLedgerData]);
+
+  const filteredB2bLedgerTransactions = useMemo(() => {
+    let list = b2bLedgerData?.transactions || [];
+
+    if (b2bLedgerSearch.trim()) {
+      const q = b2bLedgerSearch.toLowerCase();
+      list = list.filter((t) =>
+        (t.customer_name || t.client_name || "").toLowerCase().includes(q) ||
+        (t.product || "").toLowerCase().includes(q) ||
+        (t.bill_number || "").toLowerCase().includes(q) ||
+        (t.reference_number || "").toLowerCase().includes(q) ||
+        (t.remarks || "").toLowerCase().includes(q) ||
+        (t.size || "").toLowerCase().includes(q)
+      );
+    }
+
+    if (b2bLedgerDateFrom) {
+      list = list.filter((t) => (t.date || "") >= b2bLedgerDateFrom);
+    }
+
+    if (b2bLedgerDateTo) {
+      list = list.filter((t) => (t.date || "") <= b2bLedgerDateTo);
+    }
+
+    if (b2bLedgerProduct && b2bLedgerProduct !== "all") {
+      list = list.filter((t) => (t.product || "").toLowerCase() === b2bLedgerProduct.toLowerCase());
+    }
+
+    if (b2bLedgerFlow && b2bLedgerFlow !== "all") {
+      list = list.filter((t) => t.type === b2bLedgerFlow);
+    }
+
+    return list;
+  }, [b2bLedgerData?.transactions, b2bLedgerSearch, b2bLedgerDateFrom, b2bLedgerDateTo, b2bLedgerProduct, b2bLedgerFlow]);
+
+  const isB2bLedgerFiltered = Boolean(
+    b2bLedgerSearch.trim() ||
+    b2bLedgerDateFrom ||
+    b2bLedgerDateTo ||
+    (b2bLedgerProduct && b2bLedgerProduct !== "all") ||
+    (b2bLedgerFlow && b2bLedgerFlow !== "all")
+  );
+
+  const handleClearB2bLedgerFilters = () => {
+    setB2bLedgerSearch("");
+    setB2bLedgerDateFrom("");
+    setB2bLedgerDateTo("");
+    setB2bLedgerProduct("all");
+    setB2bLedgerFlow("all");
+  };
+
+  // Supply Entries Derived Lists & Filtering
+  const supplySuppliersList = useMemo(() => {
+    const map = new Map();
+    suppliers.forEach((s) => {
+      if (s.name) map.set(s.name.toLowerCase(), s.name);
+    });
+    supplyEntries.forEach((e) => {
+      if (e.supplier_name) map.set(e.supplier_name.toLowerCase(), e.supplier_name);
+    });
+    return Array.from(map.values()).sort();
+  }, [suppliers, supplyEntries]);
+
+  const supplyProductsList = useMemo(() => {
+    const set = new Set();
+    supplyEntries.forEach((e) => {
+      if (e.product) set.add(e.product);
+    });
+    return Array.from(set).sort();
+  }, [supplyEntries]);
+
+  const filteredSupplyEntries = useMemo(() => {
+    let list = supplyEntries;
+
+    if (supplySearch.trim()) {
+      const q = supplySearch.toLowerCase();
+      list = list.filter((e) =>
+        (e.supplier_name || "").toLowerCase().includes(q) ||
+        (e.product || "").toLowerCase().includes(q) ||
+        (e.bill_number || "").toLowerCase().includes(q) ||
+        (e.reference_number || "").toLowerCase().includes(q) ||
+        (e.remarks || "").toLowerCase().includes(q) ||
+        (e.size || "").toLowerCase().includes(q)
+      );
+    }
+
+    if (supplyDateFrom) {
+      list = list.filter((e) => (e.date || "") >= supplyDateFrom);
+    }
+
+    if (supplyDateTo) {
+      list = list.filter((e) => (e.date || "") <= supplyDateTo);
+    }
+
+    if (supplySupplier && supplySupplier !== "all") {
+      const suppLower = supplySupplier.toLowerCase();
+      list = list.filter((e) =>
+        (e.supplier_name || "").toLowerCase() === suppLower ||
+        e.vendor_id === supplySupplier
+      );
+    }
+
+    if (supplyProduct && supplyProduct !== "all") {
+      const prodLower = supplyProduct.toLowerCase();
+      list = list.filter((e) => (e.product || "").toLowerCase() === prodLower);
+    }
+
+    return list;
+  }, [supplyEntries, supplySearch, supplyDateFrom, supplyDateTo, supplySupplier, supplyProduct]);
+
+  const isSupplyFiltered = Boolean(
+    supplySearch.trim() ||
+    supplyDateFrom ||
+    supplyDateTo ||
+    (supplySupplier && supplySupplier !== "all") ||
+    (supplyProduct && supplyProduct !== "all")
+  );
+
+  const handleClearSupplyFilters = () => {
+    setSupplySearch("");
+    setSupplyDateFrom("");
+    setSupplyDateTo("");
+    setSupplySupplier("all");
+    setSupplyProduct("all");
+  };
+
+  // Excel Export Handlers
+  const handleExportB2bLedger = async (filteredOnly = false) => {
+    if (isExporting) return;
+    const targetData = filteredOnly ? filteredB2bLedgerTransactions : (b2bLedgerData?.all_transactions || b2bLedgerData?.transactions || []);
+    if (!targetData || targetData.length === 0) {
+      toast.info(filteredOnly ? "No matching filtered records to export" : "No records to export");
+      return;
+    }
+    setIsExporting(true);
+    const toastId = toast.loading(filteredOnly ? "Generating Filtered B2B Ledger Excel..." : "Generating Full B2B Ledger Excel...");
+    try {
+      const XLSX = await import("xlsx");
+      const rows = targetData.map((t) => ({
+        "Date": t.date || "—",
+        "Bill / Reference No": t.bill_number || t.reference_number || "—",
+        "Business Customer": t.customer_name || t.client_name || "B2B Customer",
+        "Transaction Flow": t.type === "OUTWARD" ? "B2B Sale (Outward)" : "B2B Return (Inward)",
+        "Product": t.product || "—",
+        "Size / Spec": t.size || "—",
+        "Quantity": Number(t.quantity || 0),
+        "Unit": t.unit || "Nos",
+        "Status": t.status || (t.type === "OUTWARD" ? "Dispatched" : "Received"),
+        "Remarks": t.remarks || "—"
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const headers = Object.keys(rows[0] || {});
+      ws["!cols"] = headers.map((key) => {
+        const maxLen = Math.max(key.length, ...rows.map((r) => String(r[key] ?? "").length));
+        return { wch: Math.min(Math.max(maxLen + 2, 10), 45) };
+      });
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "B2B Ledger");
+      const dateStr = dayjs().format("YYYY-MM-DD");
+      const custLabel = selectedLedgerCustomerId && selectedLedgerCustomerId !== "all"
+        ? (b2bCustomers.find((c) => c.id === selectedLedgerCustomerId)?.name || "Customer").replace(/[^a-zA-Z0-9_-]/g, "_")
+        : "All";
+      const filename = filteredOnly
+        ? `B2B_Ledger_Filtered_${dateStr}.xlsx`
+        : `B2B_Ledger_${custLabel}_${dateStr}.xlsx`;
+
+      XLSX.writeFile(wb, filename);
+      toast.success(`Exported ${rows.length} records (${filename})`, { id: toastId });
+    } catch (err) {
+      console.error("Export error:", err);
+      toast.error("Failed to export Excel file", { id: toastId });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleExportSupplyEntries = async (filteredOnly = false) => {
+    if (isExporting) return;
+    const targetData = filteredOnly ? filteredSupplyEntries : supplyEntries;
+    if (!targetData || targetData.length === 0) {
+      toast.info(filteredOnly ? "No matching filtered supply entries to export" : "No supply entries to export");
+      return;
+    }
+    setIsExporting(true);
+    const toastId = toast.loading(filteredOnly ? "Generating Filtered Supply Entries Excel..." : "Generating Full Supply Entries Excel...");
+    try {
+      const XLSX = await import("xlsx");
+      const rows = targetData.map((e) => ({
+        "Date": e.date || "—",
+        "Bill / Ref No": e.bill_number || e.reference_number || "—",
+        "Supplier / Vendor": e.supplier_name || "Supplier",
+        "Product": e.product || "—",
+        "Size / Spec": e.size || "—",
+        "Quantity": Number(e.quantity || 0),
+        "Unit": e.unit || "Nos",
+        "Status": e.status || "Received",
+        "Remarks": e.remarks || "—"
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const headers = Object.keys(rows[0] || {});
+      ws["!cols"] = headers.map((key) => {
+        const maxLen = Math.max(key.length, ...rows.map((r) => String(r[key] ?? "").length));
+        return { wch: Math.min(Math.max(maxLen + 2, 10), 45) };
+      });
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Supply Entries");
+      const dateStr = dayjs().format("YYYY-MM-DD");
+      const filename = filteredOnly
+        ? `Supply_Entries_Filtered_${dateStr}.xlsx`
+        : `Supply_Entries_All_${dateStr}.xlsx`;
+
+      XLSX.writeFile(wb, filename);
+      toast.success(`Exported ${rows.length} supply entries (${filename})`, { id: toastId });
+    } catch (err) {
+      console.error("Export error:", err);
+      toast.error("Failed to export Excel file", { id: toastId });
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   // Aggregate stats
   const b2bTotalOutward = useMemo(() => {
@@ -813,20 +1066,23 @@ export default function B2BSupply() {
           {/* TAB 3: B2B Customer Ledger */}
           {b2bTab === "ledger" && (
             <div className="space-y-4">
-              <Card className="border-slate-200 p-4 bg-slate-50/60">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <Card className="border-slate-200 p-4 bg-slate-50/60 shadow-xs">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                   <div className="flex-1 max-w-md">
-                    <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 block mb-1">
+                    <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 block mb-1.5">
                       Select B2B Business Customer
                     </label>
                     <Select
                       value={selectedLedgerCustomerId}
                       onValueChange={setSelectedLedgerCustomerId}
                     >
-                      <SelectTrigger className="h-10 text-xs bg-white border-slate-200">
+                      <SelectTrigger className="h-10 text-xs bg-white border-slate-200 shadow-xs">
                         <SelectValue placeholder="Choose B2B Business Customer for statement..." />
                       </SelectTrigger>
                       <SelectContent>
+                        <SelectItem value="all">
+                          <span className="font-semibold text-blue-700">All Business Customers</span> ({b2bCustomers.length} registered)
+                        </SelectItem>
                         {b2bCustomers.map((c) => (
                           <SelectItem key={c.id} value={c.id}>
                             {c.name || c.full_name} ({c.city || "B2B"})
@@ -836,31 +1092,33 @@ export default function B2BSupply() {
                     </Select>
                   </div>
 
-                  {b2bLedgerData?.customer && (
-                    <div className="flex items-center gap-4 bg-white p-3 rounded-lg border border-slate-200 shadow-xs">
+                  {b2bLedgerData && (
+                    <div className="flex items-center gap-4 bg-white p-3 rounded-lg border border-slate-200 shadow-xs flex-wrap sm:flex-nowrap">
                       <div>
                         <div className="text-[10px] uppercase font-semibold text-slate-400">Total Outward</div>
-                        <div className="text-sm font-bold text-amber-700 tabular-nums">
+                        <div className="text-base font-bold text-amber-700 tabular-nums">
                           {(b2bLedgerData.transactions || [])
                             .filter((t) => t.type === "OUTWARD")
                             .reduce((acc, t) => acc + (t.quantity || 0), 0)
                             .toLocaleString()}
                         </div>
+                        <div className="text-[10px] text-slate-400">Sales (Stock -)</div>
                       </div>
-                      <div className="h-8 w-px bg-slate-200" />
+                      <div className="h-8 w-px bg-slate-200 hidden sm:block" />
                       <div>
                         <div className="text-[10px] uppercase font-semibold text-slate-400">Total Return</div>
-                        <div className="text-sm font-bold text-indigo-700 tabular-nums">
+                        <div className="text-base font-bold text-indigo-700 tabular-nums">
                           {(b2bLedgerData.transactions || [])
                             .filter((t) => t.type === "INWARD_RETURN")
                             .reduce((acc, t) => acc + (t.quantity || 0), 0)
                             .toLocaleString()}
                         </div>
+                        <div className="text-[10px] text-slate-400">Returns (Stock +)</div>
                       </div>
-                      <div className="h-8 w-px bg-slate-200" />
+                      <div className="h-8 w-px bg-slate-200 hidden sm:block" />
                       <div>
                         <div className="text-[10px] uppercase font-semibold text-slate-400">Net Balance</div>
-                        <div className="text-sm font-bold text-slate-900 tabular-nums">
+                        <div className="text-base font-bold text-slate-900 tabular-nums">
                           {(
                             (b2bLedgerData.transactions || [])
                               .filter((t) => t.type === "OUTWARD")
@@ -870,9 +1128,127 @@ export default function B2BSupply() {
                               .reduce((acc, t) => acc + (t.quantity || 0), 0)
                           ).toLocaleString()}
                         </div>
+                        <div className="text-[10px] text-slate-400">Net Outward Volume</div>
                       </div>
                     </div>
                   )}
+                </div>
+              </Card>
+
+              {/* B2B Ledger Responsive Filter Toolbar & Export Bar */}
+              <Card className="border-slate-200 bg-white shadow-xs p-3.5 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Filter className="w-4 h-4 text-slate-500" />
+                    <span className="text-xs font-semibold text-slate-700">Filter Ledger Statement</span>
+                    <Badge variant="secondary" className="text-[10px] font-mono px-2 py-0.5 bg-slate-100 text-slate-700">
+                      Showing {filteredB2bLedgerTransactions.length} of {(b2bLedgerData?.transactions || []).length} records
+                    </Badge>
+                  </div>
+
+                  {/* Download Excel Buttons */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={isExporting || (b2bLedgerData?.all_transactions || b2bLedgerData?.transactions || []).length === 0}
+                      onClick={() => handleExportB2bLedger(false)}
+                      className="h-8 text-xs bg-white text-slate-700 border-slate-200 hover:bg-slate-50 shadow-xs"
+                      title="Export all ledger transactions irrespective of active filters"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
+                      Download All Excel
+                    </Button>
+
+                    <Button
+                      size="sm"
+                      disabled={isExporting || filteredB2bLedgerTransactions.length === 0}
+                      onClick={() => handleExportB2bLedger(true)}
+                      className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                      title="Export only records currently matching the active filters"
+                    >
+                      <Download className="w-3.5 h-3.5 mr-1.5" />
+                      Download Filtered Excel
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Filter controls row */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-2 border-t border-slate-100">
+                  {/* Search */}
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <Input
+                      placeholder="Search customer, product, ref..."
+                      className="pl-8 h-8 text-xs bg-slate-50/50 border-slate-200"
+                      value={b2bLedgerSearch}
+                      onChange={(e) => setB2bLedgerSearch(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Date From & Date To */}
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      type="date"
+                      title="Date From"
+                      className="h-8 text-xs bg-slate-50/50 border-slate-200 px-2"
+                      value={b2bLedgerDateFrom}
+                      onChange={(e) => setB2bLedgerDateFrom(e.target.value)}
+                    />
+                    <span className="text-[11px] text-slate-400">to</span>
+                    <Input
+                      type="date"
+                      title="Date To"
+                      className="h-8 text-xs bg-slate-50/50 border-slate-200 px-2"
+                      value={b2bLedgerDateTo}
+                      onChange={(e) => setB2bLedgerDateTo(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Product Select */}
+                  <div>
+                    <Select value={b2bLedgerProduct} onValueChange={setB2bLedgerProduct}>
+                      <SelectTrigger className="h-8 text-xs bg-slate-50/50 border-slate-200">
+                        <SelectValue placeholder="All Products" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Products</SelectItem>
+                        {b2bLedgerProducts.map((p) => (
+                          <SelectItem key={p} value={p}>
+                            {p}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Transaction Flow Select */}
+                  <div>
+                    <Select value={b2bLedgerFlow} onValueChange={setB2bLedgerFlow}>
+                      <SelectTrigger className="h-8 text-xs bg-slate-50/50 border-slate-200">
+                        <SelectValue placeholder="Transaction Flow" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Flows</SelectItem>
+                        <SelectItem value="OUTWARD">B2B Sale (Outward)</SelectItem>
+                        <SelectItem value="INWARD_RETURN">B2B Return (Inward)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Clear Filters Button */}
+                  <div className="flex items-center">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleClearB2bLedgerFilters}
+                      disabled={!isB2bLedgerFiltered}
+                      className="h-8 px-2.5 text-xs text-slate-500 hover:text-slate-800 hover:bg-slate-100 w-full sm:w-auto"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                      Clear Filters
+                    </Button>
+                  </div>
                 </div>
               </Card>
 
@@ -884,40 +1260,54 @@ export default function B2BSupply() {
                       <tr className="bg-slate-50/75 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[10px] tracking-wider">
                         <th className="py-3 px-4">Date</th>
                         <th className="py-3 px-4">Bill / Reference No.</th>
+                        <th className="py-3 px-4">Business Customer</th>
                         <th className="py-3 px-4">Transaction Flow</th>
                         <th className="py-3 px-4">Product</th>
                         <th className="py-3 px-4">Size / Spec</th>
                         <th className="py-3 px-4 text-right">Quantity</th>
                         <th className="py-3 px-4">Unit</th>
                         <th className="py-3 px-4">Remarks</th>
+                        <th className="py-3 px-4 text-center">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {!selectedLedgerCustomerId ? (
+                      {loadingB2bLedger ? (
                         <tr>
-                          <td colSpan={8} className="text-center py-12 text-slate-400">
-                            <BookOpen className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                            <p className="font-medium text-slate-600">Select a B2B Business Customer above</p>
-                            <p className="text-[11px] text-slate-400 mt-0.5">View combined chronological timeline of Sales and Returns.</p>
-                          </td>
-                        </tr>
-                      ) : loadingB2bLedger ? (
-                        <tr>
-                          <td colSpan={8} className="text-center py-10 text-slate-400">Loading ledger timeline...</td>
+                          <td colSpan={10} className="text-center py-10 text-slate-400">Loading ledger timeline...</td>
                         </tr>
                       ) : (b2bLedgerData?.transactions || []).length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="text-center py-10 text-slate-400">
-                            No transactions recorded for this business customer.
+                          <td colSpan={10} className="text-center py-12 text-slate-400">
+                            <BookOpen className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                            <p className="font-medium text-slate-600">No B2B ledger transactions recorded</p>
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              Record B2B dispatches in <strong className="text-slate-600">Data Management → Outward (B2B Sale)</strong> or client returns in <strong className="text-slate-600">Inward</strong>.
+                            </p>
+                          </td>
+                        </tr>
+                      ) : filteredB2bLedgerTransactions.length === 0 ? (
+                        <tr>
+                          <td colSpan={10} className="text-center py-10 text-slate-400">
+                            <Filter className="w-6 h-6 text-slate-300 mx-auto mb-1.5" />
+                            <p className="font-medium text-slate-600">No transactions match the selected filters</p>
+                            <Button
+                              variant="link"
+                              size="sm"
+                              onClick={handleClearB2bLedgerFilters}
+                              className="text-xs text-blue-600 h-7"
+                            >
+                              Reset filters
+                            </Button>
                           </td>
                         </tr>
                       ) : (
-                        b2bLedgerData.transactions.map((t) => {
+                        filteredB2bLedgerTransactions.map((t) => {
                           const isSale = t.type === "OUTWARD";
                           return (
                             <tr key={t.id} className="hover:bg-slate-50/80 transition">
                               <td className="py-3 px-4 font-mono text-[11px] text-slate-600">{t.date}</td>
                               <td className="py-3 px-4 font-semibold text-slate-900 font-mono">{t.bill_number}</td>
+                              <td className="py-3 px-4 font-semibold text-blue-700">{t.customer_name || t.client_name || "—"}</td>
                               <td className="py-3 px-4">
                                 {isSale ? (
                                   <Badge className="bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-50">
@@ -936,6 +1326,11 @@ export default function B2BSupply() {
                               </td>
                               <td className="py-3 px-4 text-slate-500">{t.unit || "Nos"}</td>
                               <td className="py-3 px-4 text-slate-500 text-[11px] max-w-xs truncate">{t.remarks || "—"}</td>
+                              <td className="py-3 px-4 text-center">
+                                <Badge variant="outline" className={`text-[10px] ${isSale ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}`}>
+                                  {t.status || (isSale ? "Dispatched" : "Received")}
+                                </Badge>
+                              </td>
                             </tr>
                           );
                         })
@@ -1186,70 +1581,208 @@ export default function B2BSupply() {
 
           {/* TAB 2: Supply Entries (Inwards) */}
           {supplyTab === "entries" && (
-            <Card className="border-slate-200 shadow-xs">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50/75 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[10px] tracking-wider">
-                      <th className="py-3 px-4">Date</th>
-                      <th className="py-3 px-4">Bill / Ref No.</th>
-                      <th className="py-3 px-4">Supplier / Vendor</th>
-                      <th className="py-3 px-4">Product</th>
-                      <th className="py-3 px-4">Size / Spec</th>
-                      <th className="py-3 px-4 text-right">Quantity</th>
-                      <th className="py-3 px-4">Unit</th>
-                      <th className="py-3 px-4">Remarks</th>
-                      <th className="py-3 px-4 text-center">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {loadingSupplyEntries && supplyEntries.length === 0 ? (
-                      <tr>
-                        <td colSpan={9} className="text-center py-10 text-slate-400">Loading supply entries...</td>
+            <div className="space-y-4">
+              {/* Supply Entries Responsive Filter Toolbar & Export Bar */}
+              <Card className="border-slate-200 bg-white shadow-xs p-3.5 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Filter className="w-4 h-4 text-emerald-600" />
+                    <span className="text-xs font-semibold text-slate-700">Filter Supply Receipts</span>
+                    <Badge variant="secondary" className="text-[10px] font-mono px-2 py-0.5 bg-emerald-50 text-emerald-700 border-emerald-200">
+                      Showing {filteredSupplyEntries.length} of {supplyEntries.length} entries
+                    </Badge>
+                  </div>
+
+                  {/* Download Excel Buttons */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={isExporting || supplyEntries.length === 0}
+                      onClick={() => handleExportSupplyEntries(false)}
+                      className="h-8 text-xs bg-white text-slate-700 border-slate-200 hover:bg-slate-50 shadow-xs"
+                      title="Export all supply entries irrespective of active filters"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
+                      Download All Excel
+                    </Button>
+
+                    <Button
+                      size="sm"
+                      disabled={isExporting || filteredSupplyEntries.length === 0}
+                      onClick={() => handleExportSupplyEntries(true)}
+                      className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                      title="Export only records currently matching the active filters"
+                    >
+                      <Download className="w-3.5 h-3.5 mr-1.5" />
+                      Download Filtered Excel
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Filter controls row */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-2 border-t border-slate-100">
+                  {/* Search */}
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <Input
+                      placeholder="Search supplier, product, ref..."
+                      className="pl-8 h-8 text-xs bg-slate-50/50 border-slate-200"
+                      value={supplySearch}
+                      onChange={(e) => setSupplySearch(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Date From & Date To */}
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      type="date"
+                      title="Date From"
+                      className="h-8 text-xs bg-slate-50/50 border-slate-200 px-2"
+                      value={supplyDateFrom}
+                      onChange={(e) => setSupplyDateFrom(e.target.value)}
+                    />
+                    <span className="text-[11px] text-slate-400">to</span>
+                    <Input
+                      type="date"
+                      title="Date To"
+                      className="h-8 text-xs bg-slate-50/50 border-slate-200 px-2"
+                      value={supplyDateTo}
+                      onChange={(e) => setSupplyDateTo(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Supplier Select */}
+                  <div>
+                    <Select value={supplySupplier} onValueChange={setSupplySupplier}>
+                      <SelectTrigger className="h-8 text-xs bg-slate-50/50 border-slate-200">
+                        <SelectValue placeholder="All Suppliers" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Suppliers</SelectItem>
+                        {supplySuppliersList.map((s) => (
+                          <SelectItem key={s} value={s}>
+                            {s}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Product Select */}
+                  <div>
+                    <Select value={supplyProduct} onValueChange={setSupplyProduct}>
+                      <SelectTrigger className="h-8 text-xs bg-slate-50/50 border-slate-200">
+                        <SelectValue placeholder="All Products" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Products</SelectItem>
+                        {supplyProductsList.map((p) => (
+                          <SelectItem key={p} value={p}>
+                            {p}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Clear Filters Button */}
+                  <div className="flex items-center">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleClearSupplyFilters}
+                      disabled={!isSupplyFiltered}
+                      className="h-8 px-2.5 text-xs text-slate-500 hover:text-slate-800 hover:bg-slate-100 w-full sm:w-auto"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                      Clear Filters
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Supply Entries Table */}
+              <Card className="border-slate-200 shadow-xs">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50/75 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[10px] tracking-wider">
+                        <th className="py-3 px-4">Date</th>
+                        <th className="py-3 px-4">Bill / Ref No.</th>
+                        <th className="py-3 px-4">Supplier / Vendor</th>
+                        <th className="py-3 px-4">Product</th>
+                        <th className="py-3 px-4">Size / Spec</th>
+                        <th className="py-3 px-4 text-right">Quantity</th>
+                        <th className="py-3 px-4">Unit</th>
+                        <th className="py-3 px-4">Remarks</th>
+                        <th className="py-3 px-4 text-center">Status</th>
                       </tr>
-                    ) : supplyEntries.length === 0 ? (
-                      <tr>
-                        <td colSpan={9} className="text-center py-12 text-slate-400">
-                          <Truck className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                          <p className="font-medium text-slate-600">No supply entries recorded yet</p>
-                          <p className="text-[11px] text-slate-400 mt-1">
-                            Record incoming shipments via <strong className="text-slate-700">Data Management → Inward (Supplier Supply)</strong>.
-                          </p>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => navigate("/inventory?tab=inward&type=supply")}
-                            className="mt-3 text-xs h-7 border-slate-200 text-slate-700 hover:bg-slate-100"
-                          >
-                            Go to Data Management → Inward
-                          </Button>
-                        </td>
-                      </tr>
-                    ) : (
-                      supplyEntries.map((e) => (
-                        <tr key={e.id} className="hover:bg-slate-50/80 transition">
-                          <td className="py-3 px-4 font-mono text-[11px] text-slate-600">{e.date}</td>
-                          <td className="py-3 px-4 font-semibold text-slate-900 font-mono">{e.bill_number}</td>
-                          <td className="py-3 px-4 font-semibold text-emerald-700">{e.supplier_name}</td>
-                          <td className="py-3 px-4 text-slate-900 font-medium">{e.product}</td>
-                          <td className="py-3 px-4 text-slate-600">{e.size || "—"}</td>
-                          <td className="py-3 px-4 text-right font-bold text-blue-700 tabular-nums">
-                            {Number(e.quantity).toLocaleString()}
-                          </td>
-                          <td className="py-3 px-4 text-slate-500">{e.unit || "Nos"}</td>
-                          <td className="py-3 px-4 text-slate-500 text-[11px] max-w-xs truncate">{e.remarks || "—"}</td>
-                          <td className="py-3 px-4 text-center">
-                            <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
-                              {e.status || "Received"}
-                            </Badge>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {loadingSupplyEntries && supplyEntries.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="text-center py-10 text-slate-400">Loading supply entries...</td>
+                        </tr>
+                      ) : supplyEntries.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="text-center py-12 text-slate-400">
+                            <Truck className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                            <p className="font-medium text-slate-600">No supply entries recorded yet</p>
+                            <p className="text-[11px] text-slate-400 mt-1">
+                              Record incoming shipments via <strong className="text-slate-700">Data Management → Inward (Supplier Supply)</strong>.
+                            </p>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => navigate("/inventory?tab=inward&type=supply")}
+                              className="mt-3 text-xs h-7 border-slate-200 text-slate-700 hover:bg-slate-100"
+                            >
+                              Go to Data Management → Inward
+                            </Button>
                           </td>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
+                      ) : filteredSupplyEntries.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="text-center py-10 text-slate-400">
+                            <Filter className="w-6 h-6 text-slate-300 mx-auto mb-1.5" />
+                            <p className="font-medium text-slate-600">No supply entries match the selected filters</p>
+                            <Button
+                              variant="link"
+                              size="sm"
+                              onClick={handleClearSupplyFilters}
+                              className="text-xs text-emerald-600 h-7"
+                            >
+                              Reset filters
+                            </Button>
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredSupplyEntries.map((e) => (
+                          <tr key={e.id} className="hover:bg-slate-50/80 transition">
+                            <td className="py-3 px-4 font-mono text-[11px] text-slate-600">{e.date}</td>
+                            <td className="py-3 px-4 font-semibold text-slate-900 font-mono">{e.bill_number}</td>
+                            <td className="py-3 px-4 font-semibold text-emerald-700">{e.supplier_name}</td>
+                            <td className="py-3 px-4 text-slate-900 font-medium">{e.product}</td>
+                            <td className="py-3 px-4 text-slate-600">{e.size || "—"}</td>
+                            <td className="py-3 px-4 text-right font-bold text-blue-700 tabular-nums">
+                              {Number(e.quantity).toLocaleString()}
+                            </td>
+                            <td className="py-3 px-4 text-slate-500">{e.unit || "Nos"}</td>
+                            <td className="py-3 px-4 text-slate-500 text-[11px] max-w-xs truncate">{e.remarks || "—"}</td>
+                            <td className="py-3 px-4 text-center">
+                              <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
+                                {e.status || "Received"}
+                              </Badge>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
           )}
 
           {/* TAB 3: Supplier Ledger */}

@@ -2800,7 +2800,7 @@ export function MaterialRequest({ clientId, onDone, editRequest = null }) {
       <CardContent className="p-4 space-y-3">
         {items.map((it, i) => {
           const matchedProduct = products.find((p) => (p.name || "").toUpperCase() === (it.product || "").toUpperCase());
-          const availStock = matchedProduct?.available_stock ?? it.available_stock;
+          const availStock = matchedProduct?.available_stock ?? matchedProduct?.balance ?? it.available_stock;
           const isLowStock = availStock !== undefined && Number(it.quantity) > Number(availStock);
 
           return (

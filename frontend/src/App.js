@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import useEntitlements from "@/hooks/useEntitlements";
 import LockedPageCard from "@/components/LockedPageCard";
+import { ENABLE_WHATSAPP } from "@/constants/features";
 import { Toaster } from "sonner";
 // Eager load Login for instant auth rendering
 import Login from "@/pages/Login";
@@ -159,7 +160,10 @@ function PermissionRoute({ page, children }) {
     if ((p === "b2b_supply" || p === "b2b" || p === "supply") && (user?.permissions?.["data_management"]?.view === true || user?.permissions?.["inventory"]?.view === true)) return true;
     return false;
   };
-  const hasPerm = isSuperOrAdmin || page === "complaints" || page === "whatsapp" || checkPerm(page);
+  const hasPerm =
+    (page === "whatsapp" && !ENABLE_WHATSAPP)
+      ? false
+      : (isSuperOrAdmin || page === "complaints" || page === "whatsapp" || checkPerm(page));
 
   if (!hasPerm) {
     const pages = [
@@ -169,7 +173,7 @@ function PermissionRoute({ page, children }) {
       { key: "clients", path: "/clients" },
       { key: "project_execution", path: "/projects" },
       { key: "task_portal", path: "/tasks" },
-      { key: "whatsapp", path: "/whatsapp" },
+      ...(ENABLE_WHATSAPP ? [{ key: "whatsapp", path: "/whatsapp" }] : []),
       { key: "b2b_supply", path: "/b2b-supply" },
       { key: "b2b", path: "/b2b-supply" },
       { key: "supply", path: "/b2b-supply" },
@@ -190,7 +194,7 @@ function PermissionRoute({ page, children }) {
     const allowed = pages.find(
       (p) =>
         (isSuperAdmin || isPageAllowed(p.key)) &&
-        (p.key === "complaints" || p.key === "whatsapp" || isSuperOrAdmin || checkPerm(p.key))
+        (p.key === "complaints" || (ENABLE_WHATSAPP && p.key === "whatsapp") || isSuperOrAdmin || checkPerm(p.key))
     );
     return <Navigate to={allowed ? allowed.path : "/login"} replace />;
   }
@@ -305,19 +309,27 @@ function App() {
             <Route path="/s/:token" element={<PublicSalesPortal />} />
             <Route path="/sales/:token" element={<PublicSalesPortal />} />
 
-            {/* Public WhatsApp Marketing Landing Page */}
-            <Route path="/whatsapp-marketing" element={<WhatsAppMarketingPublic />} />
-
-            {/* WhatsApp Marketing Module Routes */}
-            <Route path="/whatsapp" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppDashboard /></WhatsAppLayout></PermissionRoute></Protected>} />
-            <Route path="/whatsapp/dashboard" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppDashboard /></WhatsAppLayout></PermissionRoute></Protected>} />
-            <Route path="/whatsapp/campaigns" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppCampaigns /></WhatsAppLayout></PermissionRoute></Protected>} />
-            <Route path="/whatsapp/contacts" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppContacts /></WhatsAppLayout></PermissionRoute></Protected>} />
-            <Route path="/whatsapp/templates" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppTemplates /></WhatsAppLayout></PermissionRoute></Protected>} />
-            <Route path="/whatsapp/inbox" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppInbox /></WhatsAppLayout></PermissionRoute></Protected>} />
-            <Route path="/whatsapp/automation" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppAutomation /></WhatsAppLayout></PermissionRoute></Protected>} />
-            <Route path="/whatsapp/activity" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppActivityLog /></WhatsAppLayout></PermissionRoute></Protected>} />
-            <Route path="/whatsapp/settings" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppSettings /></WhatsAppLayout></PermissionRoute></Protected>} />
+            {/* WhatsApp Marketing & Automation Routes (Gated by ENABLE_WHATSAPP flag) */}
+            {ENABLE_WHATSAPP ? (
+              <>
+                <Route path="/whatsapp-marketing" element={<WhatsAppMarketingPublic />} />
+                <Route path="/whatsapp" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppDashboard /></WhatsAppLayout></PermissionRoute></Protected>} />
+                <Route path="/whatsapp/dashboard" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppDashboard /></WhatsAppLayout></PermissionRoute></Protected>} />
+                <Route path="/whatsapp/campaigns" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppCampaigns /></WhatsAppLayout></PermissionRoute></Protected>} />
+                <Route path="/whatsapp/contacts" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppContacts /></WhatsAppLayout></PermissionRoute></Protected>} />
+                <Route path="/whatsapp/templates" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppTemplates /></WhatsAppLayout></PermissionRoute></Protected>} />
+                <Route path="/whatsapp/inbox" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppInbox /></WhatsAppLayout></PermissionRoute></Protected>} />
+                <Route path="/whatsapp/automation" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppAutomation /></WhatsAppLayout></PermissionRoute></Protected>} />
+                <Route path="/whatsapp/activity" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppActivityLog /></WhatsAppLayout></PermissionRoute></Protected>} />
+                <Route path="/whatsapp/settings" element={<Protected><PermissionRoute page="whatsapp"><WhatsAppLayout><WhatsAppSettings /></WhatsAppLayout></PermissionRoute></Protected>} />
+              </>
+            ) : (
+              <>
+                <Route path="/whatsapp-marketing" element={<Navigate to="/" replace />} />
+                <Route path="/whatsapp" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/whatsapp/*" element={<Navigate to="/dashboard" replace />} />
+              </>
+            )}
 
             <Route path="/dashboard" element={<Protected><PermissionRoute page="dashboard"><MainTabShell activeTab="dashboard" /></PermissionRoute></Protected>} />
             <Route path="/solar-designer" element={<Protected><PermissionRoute page="solar_designer"><SolarDesigner /></PermissionRoute></Protected>} />

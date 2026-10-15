@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import PlanBadge from "@/components/PlanBadge";
 import useEntitlements from "@/hooks/useEntitlements";
+import { ENABLE_WHATSAPP } from "@/constants/features";
 
 function GlobalSearch() {
   const [open, setOpen] = useState(false);
@@ -179,7 +180,9 @@ export default function Layout({ children }) {
     if ((page === "b2b_supply" || page === "b2b" || page === "supply") && (user?.permissions?.["data_management"]?.view === true || user?.permissions?.["inventory"]?.view === true)) return true;
     return false;
   };
-  const ALWAYS_VISIBLE = new Set(["complaints", "whatsapp"]);
+  const ALWAYS_VISIBLE = new Set(
+    ENABLE_WHATSAPP ? ["complaints", "whatsapp"] : ["complaints"]
+  );
 
   const navSections = [
     {
@@ -193,18 +196,22 @@ export default function Layout({ children }) {
         { to: "/tasks", label: "Task Portal", icon: ClipboardList, key: "task_portal" },
       ],
     },
-    {
-      title: "WHATSAPP",
-      items: [
-        { to: "/whatsapp/dashboard", label: "Dashboard", icon: LayoutDashboard, key: "whatsapp" },
-        { to: "/whatsapp/campaigns", label: "Campaigns", icon: Send, key: "whatsapp" },
-        { to: "/whatsapp/contacts", label: "Contacts", icon: Users, key: "whatsapp" },
-        { to: "/whatsapp/templates", label: "Templates", icon: FileText, key: "whatsapp" },
-        { to: "/whatsapp/inbox", label: "Inbox", icon: MessageSquare, key: "whatsapp" },
-        { to: "/whatsapp/automation", label: "Automation", icon: Zap, key: "whatsapp" },
-        { to: "/whatsapp/settings", label: "Settings", icon: SettingsIcon, key: "whatsapp" },
-      ],
-    },
+    ...(ENABLE_WHATSAPP
+      ? [
+          {
+            title: "WHATSAPP",
+            items: [
+              { to: "/whatsapp/dashboard", label: "Dashboard", icon: LayoutDashboard, key: "whatsapp" },
+              { to: "/whatsapp/campaigns", label: "Campaigns", icon: Send, key: "whatsapp" },
+              { to: "/whatsapp/contacts", label: "Contacts", icon: Users, key: "whatsapp" },
+              { to: "/whatsapp/templates", label: "Templates", icon: FileText, key: "whatsapp" },
+              { to: "/whatsapp/inbox", label: "Inbox", icon: MessageSquare, key: "whatsapp" },
+              { to: "/whatsapp/automation", label: "Automation", icon: Zap, key: "whatsapp" },
+              { to: "/whatsapp/settings", label: "Settings", icon: SettingsIcon, key: "whatsapp" },
+            ],
+          },
+        ]
+      : []),
     {
       title: "OPERATIONS",
       items: [

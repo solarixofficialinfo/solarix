@@ -6,7 +6,7 @@ import { ProductAutocompleteInput, UNIT_OPTIONS } from "../components/Inventory/
 import {
   FileText, Plus, Search, ArrowLeft, Download, Trash2, Pencil, Save,
   Truck, Building2, Package, Eye, UserPlus, Edit3, Check, X, ShieldAlert,
-  CreditCard, Calendar, MapPin, Hash, DollarSign
+  CreditCard, Calendar, MapPin, Hash, DollarSign, FileUp, Upload, AlertTriangle
 } from "lucide-react";
 import { Card, CardContent } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -76,6 +76,14 @@ export default function PurchaseOrders() {
     email: "",
     notes: ""
   });
+
+  // Document Import & Auto-Mapping State
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState(null);
+  const [importResult, setImportResult] = useState(null);
+  const [selectedImportFields, setSelectedImportFields] = useState({});
+  const [editableImportValues, setEditableImportValues] = useState({});
 
   // Form State
   const [saveVendorMaster, setSaveVendorMaster] = useState(false);
@@ -848,11 +856,11 @@ export default function PurchaseOrders() {
       site_state: po.site_state || company.state || "Maharashtra",
       site_pincode: po.site_pincode || "",
 
-      // Shipping & Delivery
-      ship_via: po.ship_via || "FOR",
-      shipping_method: po.shipping_method || "PAID",
-      shipping_term: po.shipping_term || "DOOR DELIVERY",
-      delivery_date: po.delivery_date || dayjs().add(14, "day").format("YYYY-MM-DD"),
+      // Shipping & Delivery (strictly preserve persisted values without forced defaults)
+      ship_via: po.ship_via !== undefined && po.ship_via !== null ? po.ship_via : "FOR",
+      shipping_method: po.shipping_method !== undefined && po.shipping_method !== null ? po.shipping_method : "PAID",
+      shipping_term: po.shipping_term !== undefined && po.shipping_term !== null ? po.shipping_term : "DOOR DELIVERY",
+      delivery_date: po.delivery_date !== undefined && po.delivery_date !== null ? po.delivery_date : "",
       transporter_name: po.transporter_name || "",
       expected_dispatch_date: po.expected_dispatch_date || "",
       delivery_instructions: po.delivery_instructions || "",
@@ -880,6 +888,57 @@ export default function PurchaseOrders() {
     });
     setSaveVendorMaster(false);
     setViewMode("form");
+  };
+
+  const handleFileUpload = async (file) => {
+    if (!file) return;
+    setImportLoading(true);
+    setImportError(null);
+    setImportResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await api.post("/purchase-orders/parse-document", formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      const data = res.data;
+      setImportResult(data);
+      setEditableImportValues(data.extracted_fields || {});
+      const selection = {};
+      Object.keys(data.extracted_fields || {}).forEach((k) => {
+        selection[k] = true;
+      });
+      setSelectedImportFields(selection);
+    } catch (err) {
+      setImportError(formatApiError(err) || "Failed to parse document. Please check the file format.");
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const handleApplyExtractedFields = () => {
+    if (!importResult) return;
+    const updates = {};
+    let appliedCount = 0;
+    Object.keys(selectedImportFields).forEach((key) => {
+      if (selectedImportFields[key] && editableImportValues[key] !== undefined) {
+        updates[key] = editableImportValues[key];
+        appliedCount++;
+      }
+    });
+
+    if (appliedCount === 0) {
+      toast.warning("No fields selected for import");
+      return;
+    }
+
+    setPoForm((prev) => ({
+      ...prev,
+      ...updates
+    }));
+
+    toast.success(`Mapped ${appliedCount} shipping field(s) into Purchase Order form`);
+    setImportModalOpen(false);
   };
 
   const handleDeletePo = async (poId) => {
@@ -1125,7 +1184,7 @@ export default function PurchaseOrders() {
                       {[viewModalPo.site_city, viewModalPo.site_district, viewModalPo.site_state, viewModalPo.site_pincode].filter(Boolean).join(", ")}
                     </div>
                     <div className="pt-1 text-[11px] text-slate-500">
-                      Via: <strong>{viewModalPo.ship_via || "FOR"}</strong> | Term: <strong>{viewModalPo.shipping_term || "DOOR DELIVERY"}</strong> | Delivery: <strong>{viewModalPo.delivery_date || "—"}</strong>
+                      Via: <strong>{viewModalPo.ship_via || "—"}</strong> | Method: <strong>{viewModalPo.shipping_method || "—"}</strong> | Term: <strong>{viewModalPo.shipping_term || "—"}</strong> | Delivery: <strong>{viewModalPo.delivery_date || "—"}</strong>
                     </div>
                   </div>
                 </div>
@@ -1691,31 +1750,82 @@ export default function PurchaseOrders() {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
             {/* Shipping Details */}
             <div className="lg:col-span-7 bg-slate-100 p-3.5 rounded-xl border border-slate-200 space-y-3">
-              <Label className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5 text-indigo-900">
-                <Truck className="w-4 h-4 text-indigo-600" /> 6. Shipping & Logistics
-              </Label>
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 text-indigo-900">
+                  <Truck className="w-4 h-4 text-indigo-600" /> 6. Shipping & Logistics
+                </Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setImportError(null);
+                    setImportResult(null);
+                    setImportModalOpen(true);
+                  }}
+                  className="h-7 text-xs px-2.5 py-0 border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-50 hover:text-indigo-800 shadow-sm flex items-center gap-1.5 font-medium"
+                >
+                  <FileUp className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Import from PDF / DOCX</span>
+                </Button>
+              </div>
+
+              {/* Datalists for suggestions without locking input */}
+              <datalist id="po-ship-via-options">
+                <option value="FOR" />
+                <option value="By Road" />
+                <option value="Transport" />
+                <option value="Courier" />
+                <option value="Air Freight" />
+                <option value="Train" />
+                <option value="Ex-Works" />
+                <option value="Self Pickup" />
+              </datalist>
+
+              <datalist id="po-shipping-method-options">
+                <option value="PAID" />
+                <option value="TO PAY" />
+                <option value="Prepaid" />
+                <option value="Collect" />
+                <option value="Customer Scope" />
+                <option value="Vendor Scope" />
+              </datalist>
+
+              <datalist id="po-shipping-term-options">
+                <option value="DOOR DELIVERY" />
+                <option value="Ex-Works" />
+                <option value="FOR Site" />
+                <option value="Godown Delivery" />
+                <option value="CIF" />
+                <option value="FOB" />
+                <option value="Door to Door" />
+              </datalist>
+
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                 <div>
-                  <Label className="text-[10px] font-semibold uppercase">SHIP VIA</Label>
+                  <Label className="text-[10px] font-semibold uppercase text-slate-700">SHIP VIA</Label>
                   <Input
+                    list="po-ship-via-options"
                     value={poForm.ship_via}
                     onChange={(e) => setPoForm({ ...poForm, ship_via: e.target.value })}
-                    placeholder="FOR"
+                    placeholder="FOR / By Road"
                     className="h-8 text-xs bg-white mt-1"
                   />
                 </div>
                 <div>
-                  <Label className="text-[10px] font-semibold uppercase">SHIPPING METHOD</Label>
+                  <Label className="text-[10px] font-semibold uppercase text-slate-700">SHIPPING METHOD</Label>
                   <Input
+                    list="po-shipping-method-options"
                     value={poForm.shipping_method}
                     onChange={(e) => setPoForm({ ...poForm, shipping_method: e.target.value })}
-                    placeholder="PAID"
+                    placeholder="PAID / TO PAY"
                     className="h-8 text-xs bg-white mt-1"
                   />
                 </div>
                 <div>
-                  <Label className="text-[10px] font-semibold uppercase">SHIPPING TERM</Label>
+                  <Label className="text-[10px] font-semibold uppercase text-slate-700">SHIPPING TERM</Label>
                   <Input
+                    list="po-shipping-term-options"
                     value={poForm.shipping_term}
                     onChange={(e) => setPoForm({ ...poForm, shipping_term: e.target.value })}
                     placeholder="DOOR DELIVERY"
@@ -1723,7 +1833,7 @@ export default function PurchaseOrders() {
                   />
                 </div>
                 <div>
-                  <Label className="text-[10px] font-semibold uppercase">DELIVERY DATE</Label>
+                  <Label className="text-[10px] font-semibold uppercase text-slate-700">DELIVERY DATE</Label>
                   <Input
                     type="date"
                     value={poForm.delivery_date}
@@ -2083,6 +2193,192 @@ export default function PurchaseOrders() {
           </div>
         </CardContent>
       </Card>
+
+      {/* ─── DOCUMENT IMPORT & AUTO-MAPPING MODAL ───────────────────────── */}
+      <Dialog open={importModalOpen} onOpenChange={setImportModalOpen}>
+        <DialogContent className="max-w-2xl rounded-xl p-5 font-sans max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-base">
+              <FileUp className="w-5 h-5 text-indigo-600" /> Auto-Map Shipping Fields from Document
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Upload a Vendor PO, Quotation, or Dispatch Advice (PDF, DOCX, DOC) to extract and map shipping and delivery details.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 my-2">
+            {/* File Upload Zone */}
+            <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/40 rounded-xl p-4 text-center hover:bg-indigo-50 transition-colors">
+              <input
+                type="file"
+                id="po-doc-upload"
+                className="hidden"
+                accept=".pdf,.docx,.doc"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleFileUpload(f);
+                }}
+              />
+              <label htmlFor="po-doc-upload" className="cursor-pointer flex flex-col items-center justify-center gap-2">
+                <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600">
+                  <Upload className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-xs font-semibold text-indigo-700 hover:underline">Click to browse</span>
+                  <span className="text-xs text-slate-500"> or drag and drop</span>
+                </div>
+                <p className="text-[11px] text-slate-400">Supported formats: PDF (text-based), DOCX, DOC</p>
+              </label>
+            </div>
+
+            {/* Loading Indicator */}
+            {importLoading && (
+              <div className="flex items-center justify-center gap-2 py-4 text-xs font-medium text-indigo-700">
+                <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                Parsing document and extracting shipping metadata...
+              </div>
+            )}
+
+            {/* Error Message */}
+            {importError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-start gap-2">
+                <ShieldAlert className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-semibold">Extraction Failed</div>
+                  <div className="mt-0.5">{importError}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Extracted Fields Table */}
+            {importResult && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs bg-slate-100 p-2.5 rounded-lg border border-slate-200">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-slate-600" />
+                    <span className="font-semibold text-slate-800">{importResult.filename}</span>
+                    <Badge variant="outline" className="text-[10px] uppercase font-mono">
+                      {importResult.format}
+                    </Badge>
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {Object.keys(importResult.extracted_fields || {}).length} field(s) detected
+                  </div>
+                </div>
+
+                {Object.keys(importResult.extracted_fields || {}).length === 0 ? (
+                  <div className="text-center py-4 text-xs text-slate-500 bg-slate-50 rounded-lg border border-slate-200">
+                    No recognized shipping or logistics fields found in this document. You can still fill them in manually.
+                  </div>
+                ) : (
+                  <div className="border border-slate-200 rounded-lg overflow-hidden">
+                    <div className="bg-slate-50 px-3 py-2 border-b border-slate-200 text-[11px] font-semibold text-slate-700 grid grid-cols-12 gap-2">
+                      <div className="col-span-1 text-center">Import</div>
+                      <div className="col-span-3">Form Field</div>
+                      <div className="col-span-5">Extracted / Formatted Value</div>
+                      <div className="col-span-3 text-right">Status</div>
+                    </div>
+                    <div className="divide-y divide-slate-100 max-h-60 overflow-y-auto">
+                      {[
+                        { key: "ship_via", label: "Ship Via" },
+                        { key: "shipping_method", label: "Shipping Method" },
+                        { key: "shipping_term", label: "Shipping Term" },
+                        { key: "delivery_date", label: "Delivery Date" },
+                        { key: "transporter_name", label: "Transporter Name" },
+                        { key: "expected_dispatch_date", label: "Expected Dispatch Date" },
+                        { key: "delivery_instructions", label: "Delivery Instructions" }
+                      ]
+                        .filter((f) => importResult.extracted_fields?.[f.key] !== undefined)
+                        .map((f) => {
+                          const isConf = importResult.confidence?.[f.key] === "high";
+                          const rawVal = importResult.raw_values?.[f.key];
+                          const curPoVal = poForm[f.key];
+                          const willOverwrite = curPoVal && curPoVal.trim() !== "" && curPoVal !== editableImportValues[f.key];
+
+                          return (
+                            <div key={f.key} className="px-3 py-2 text-xs grid grid-cols-12 gap-2 items-center hover:bg-slate-50">
+                              <div className="col-span-1 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={!!selectedImportFields[f.key]}
+                                  onChange={(e) =>
+                                    setSelectedImportFields({
+                                      ...selectedImportFields,
+                                      [f.key]: e.target.checked
+                                    })
+                                  }
+                                  className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
+                                />
+                              </div>
+                              <div className="col-span-3 font-medium text-slate-800">
+                                {f.label}
+                                {rawVal && rawVal !== editableImportValues[f.key] && (
+                                  <div className="text-[10px] text-slate-400 truncate" title={`Original text: ${rawVal}`}>
+                                    Raw: {rawVal}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="col-span-5">
+                                <Input
+                                  value={editableImportValues[f.key] || ""}
+                                  onChange={(e) =>
+                                    setEditableImportValues({
+                                      ...editableImportValues,
+                                      [f.key]: e.target.value
+                                    })
+                                  }
+                                  className="h-7 text-xs bg-white font-mono"
+                                />
+                                {willOverwrite && (
+                                  <div className="text-[10px] text-amber-700 mt-0.5">
+                                    Current value: <strong>{curPoVal}</strong>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="col-span-3 text-right">
+                                {isConf ? (
+                                  <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">
+                                    <Check className="w-3 h-3 mr-1" /> Confident
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-[10px]" title={importResult.review_reasons?.[f.key] || "Please verify"}>
+                                    <AlertTriangle className="w-3 h-3 mr-1 text-amber-600" /> Review
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setImportModalOpen(false)}
+              className="text-xs"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={!importResult || Object.keys(importResult.extracted_fields || {}).length === 0}
+              onClick={handleApplyExtractedFields}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold gap-1.5"
+            >
+              <Check className="w-3.5 h-3.5" />
+              Apply to Purchase Order
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ─── NEW VENDOR MODAL ─────────────────────────────────────────────── */}
       {newVendorModalOpen && (
