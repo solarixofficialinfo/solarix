@@ -117,8 +117,8 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         text_chunks = []
         for page in doc:
-            t = page.get_text()
-            if t and t.strip():
+            t = page.get_text("text")
+            if isinstance(t, str) and t.strip():
                 text_chunks.append(t)
         return "\n".join(text_chunks)
     except Exception:
