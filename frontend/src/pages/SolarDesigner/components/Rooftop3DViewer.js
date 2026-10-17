@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo, useImperativeHandle, forwardRef } from "react";
 import * as THREE from "three";
 import { toast } from "sonner";
 import {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import api, { formatApiError } from "@/lib/api";
 import {
   CreditCard,
@@ -24,7 +24,13 @@ import {
   CheckCircle2,
   Sliders,
   AlertCircle,
-  UserPlus
+  UserPlus,
+  Search,
+  Layers,
+  Bell,
+  Truck,
+  X,
+  Filter
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -71,6 +77,17 @@ const REAL_APP_PAGE_DEFINITIONS = [
         ]
       },
       {
+        key: "solar_designer",
+        name: "3D Solar Designer",
+        route: "/solar-designer",
+        icon: Layers,
+        desc: "3D solar layout, rooftop raycasting, azimuth/tilt simulation, and automated BOM generator.",
+        features: [
+          { key: "solar_designer", label: "3D Studio & Simulation Engine", desc: "Interactive 3D rooftop designer, irradiance modeling & CAD layout" }
+        ],
+        limits: []
+      },
+      {
         key: "project_execution",
         name: "Project Execution",
         route: "/projects",
@@ -93,11 +110,38 @@ const REAL_APP_PAGE_DEFINITIONS = [
           { key: "task_portal", label: "My Tasks & Execution", desc: "View assigned tasks and checklist progress" }
         ],
         limits: []
+      },
+      {
+        key: "notifications",
+        name: "Notifications",
+        route: "/notifications",
+        icon: Bell,
+        desc: "System alerts, company broadcast notifications, task updates, and reminder logs.",
+        features: [],
+        limits: []
       }
     ]
   },
   {
-    section: "OPERATIONS",
+    section: "B2B & SUPPLY",
+    pages: [
+      {
+        key: "b2b_supply",
+        name: "B2B & Supply",
+        route: "/b2b-supply",
+        icon: Building2,
+        desc: "B2B commercial sales, tax invoices, supplier procurement bills, and corporate client directory.",
+        features: [
+          { key: "b2b_sales", label: "B2B Sales & Invoicing", desc: "Generate B2B commercial tax invoices and track outstanding receivables" },
+          { key: "b2b_procurement", label: "Supplier Procurement & Bills", desc: "Record inward purchase bills from suppliers with purchase tax ledgers" },
+          { key: "b2b_customers", label: "B2B Customer Directory", desc: "Manage corporate clients, contacts, GSTIN, and credit limits" }
+        ],
+        limits: []
+      }
+    ]
+  },
+  {
+    section: "OPERATIONS & INVENTORY",
     pages: [
       {
         key: "receivables",
@@ -128,7 +172,7 @@ const REAL_APP_PAGE_DEFINITIONS = [
           { key: "high_value_goods", label: "High Value Goods & Challans", desc: "Track solar panels, inverters, and battery serials" },
           { key: "serial_tracking", label: "Serial Number Tracking", desc: "Scan and trace equipment by serial numbers" },
           { key: "inventory_intelligence", label: "Inventory Intelligence", desc: "Pro-only advanced material utilization, serial tracking analytics & site consumption reports" },
-          { key: "manual_import", label: "Manual Import", desc: "Bulk Excel/CSV inward and outward stock import" },
+          { key: "manual_import", label: "Manual Bulk Import", desc: "Bulk Excel/CSV inward and outward stock import" },
           { key: "export", label: "Export", desc: "Excel, CSV, and PDF inventory reports export" }
         ],
         limits: [
@@ -224,6 +268,15 @@ const REAL_APP_PAGE_DEFINITIONS = [
           { key: "vendor_master", label: "Vendor Master Directory", desc: "Maintain supplier contacts, GSTIN, and payment terms" }
         ],
         limits: []
+      },
+      {
+        key: "vendors",
+        name: "Vendor Master Directory",
+        route: "/vendors",
+        icon: Truck,
+        desc: "Supplier directory, bank details, GSTIN compliance, and manufacturer procurement terms.",
+        features: [],
+        limits: []
       }
     ]
   },
@@ -271,7 +324,12 @@ const REAL_APP_PAGE_DEFINITIONS = [
         desc: "Immutable audit trail of employee actions, data changes, and security events.",
         features: [],
         limits: []
-      },
+      }
+    ]
+  },
+  {
+    section: "BILLING & SUBSCRIPTION",
+    pages: [
       {
         key: "billing",
         name: "Billing & Subscription",
@@ -290,7 +348,10 @@ export default function PlansEntitlements() {
   const [activePlan, setActivePlan] = useState("starter");
   const [loading, setLoading] = useState(true);
   const [savingPlan, setSavingPlan] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedSection, setSelectedSection] = useState("ALL");
   const [expandedPages, setExpandedPages] = useState({
+    b2b_supply: true,
     receivables: true,
     data_management: true,
     documents: true,
@@ -323,6 +384,61 @@ export default function PlansEntitlements() {
       [key]: !prev[key]
     }));
   };
+
+  const toggleExpandAll = () => {
+    const isAnyCollapsed = REAL_APP_PAGE_DEFINITIONS.some((grp) =>
+      grp.pages.some((p) => (p.features.length > 0 || p.limits.length > 0) && !expandedPages[p.key])
+    );
+    const nextState = {};
+    REAL_APP_PAGE_DEFINITIONS.forEach((grp) => {
+      grp.pages.forEach((p) => {
+        nextState[p.key] = isAnyCollapsed;
+      });
+    });
+    setExpandedPages(nextState);
+  };
+
+  const filteredGroups = useMemo(() => {
+    return REAL_APP_PAGE_DEFINITIONS.map((group) => {
+      if (selectedSection !== "ALL" && group.section !== selectedSection) {
+        return null;
+      }
+      const q = searchQuery.trim().toLowerCase();
+      if (!q) return group;
+      const matchingPages = group.pages.filter((page) => {
+        if (
+          page.name.toLowerCase().includes(q) ||
+          page.route.toLowerCase().includes(q) ||
+          page.desc.toLowerCase().includes(q)
+        ) {
+          return true;
+        }
+        if (
+          page.features?.some(
+            (f) =>
+              f.label.toLowerCase().includes(q) ||
+              f.key.toLowerCase().includes(q) ||
+              f.desc.toLowerCase().includes(q)
+          )
+        ) {
+          return true;
+        }
+        if (
+          page.limits?.some(
+            (l) =>
+              l.label.toLowerCase().includes(q) ||
+              l.key.toLowerCase().includes(q) ||
+              l.desc.toLowerCase().includes(q)
+          )
+        ) {
+          return true;
+        }
+        return false;
+      });
+      if (matchingPages.length === 0) return null;
+      return { ...group, pages: matchingPages };
+    }).filter(Boolean);
+  }, [searchQuery, selectedSection]);
 
   const handlePriceChange = (pid, field, val) => {
     const num = Math.max(0, Number(val) || 0);
@@ -574,179 +690,251 @@ export default function PlansEntitlements() {
             </CardContent>
           </Card>
 
+          {/* SEARCH, FILTER & EXPAND CONTROLS */}
+          <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 space-y-3">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              {/* Search input */}
+              <div className="relative flex-1 max-w-md">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Input
+                  type="text"
+                  placeholder="Filter pages, routes, features, or limits..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="bg-slate-900 border-slate-800 text-white pl-9 pr-8 text-xs h-9 focus-visible:ring-blue-500"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Section Filters & Expand All */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-1 bg-slate-900/80 p-1 rounded-lg border border-slate-800 text-xs flex-wrap">
+                  {[
+                    { id: "ALL", label: "All Modules" },
+                    { id: "WORKSPACE", label: "Workspace" },
+                    { id: "OPERATIONS & INVENTORY", label: "Operations & Inventory" },
+                    { id: "B2B & SUPPLY", label: "B2B & Supply" },
+                    { id: "DOCUMENTS", label: "Documents" },
+                    { id: "ADMINISTRATION", label: "Administration" },
+                    { id: "BILLING & SUBSCRIPTION", label: "Billing" }
+                  ].map((sec) => (
+                    <button
+                      key={sec.id}
+                      onClick={() => setSelectedSection(sec.id)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${
+                        selectedSection === sec.id
+                          ? "bg-blue-600 text-white shadow-xs"
+                          : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+                      }`}
+                    >
+                      {sec.label}
+                    </button>
+                  ))}
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={toggleExpandAll}
+                  className="border-slate-800 text-slate-300 hover:bg-slate-900 text-xs h-8 px-3"
+                >
+                  Expand / Collapse All
+                </Button>
+              </div>
+            </div>
+          </div>
+
           {/* APPLICATION PAGES MATRIX */}
           <div className="space-y-6">
-            {REAL_APP_PAGE_DEFINITIONS.map((group) => (
-              <div key={group.section} className="space-y-3">
-                <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                    {group.section} MODULES
-                  </span>
-                  <Badge variant="outline" className="text-[10px] bg-slate-900 border-slate-800 text-slate-400">
-                    {group.pages.length} Real Pages
-                  </Badge>
-                </div>
+            {filteredGroups.length === 0 ? (
+              <div className="p-12 text-center bg-slate-950/40 rounded-xl border border-slate-800 text-slate-400 text-xs">
+                No application pages or features found matching "{searchQuery}".
+              </div>
+            ) : (
+              filteredGroups.map((group) => (
+                <div key={group.section} className="space-y-3">
+                  <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                      {group.section} MODULES
+                    </span>
+                    <Badge variant="outline" className="text-[10px] bg-slate-900 border-slate-800 text-slate-400">
+                      {group.pages.length} Real Pages
+                    </Badge>
+                  </div>
 
-                <div className="space-y-3">
-                  {group.pages.map((page) => {
-                    const PageIcon = page.icon;
-                    const isPageEnabled = currentPages[page.key] !== false; // default true
-                    const isExpanded = expandedPages[page.key];
+                  <div className="space-y-3">
+                    {group.pages.map((page) => {
+                      const PageIcon = page.icon;
+                      const isPageEnabled = currentPages[page.key] !== false; // default true
+                      const isExpanded = expandedPages[page.key];
 
-                    return (
-                      <Card
-                        key={page.key}
-                        className={`border transition-colors ${
-                          isPageEnabled
-                            ? "bg-slate-950/60 border-slate-800"
-                            : "bg-slate-950/30 border-rose-900/40 opacity-80"
-                        }`}
-                      >
-                        {/* PAGE HEADER ROW WITH PAGE ACCESS TOGGLE */}
-                        <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                          <div className="flex items-start gap-3">
-                            <div
-                              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
-                                isPageEnabled
-                                  ? "bg-blue-600/10 text-blue-400 border border-blue-500/20"
-                                  : "bg-rose-600/10 text-rose-400 border border-rose-500/20"
-                              }`}
-                            >
-                              <PageIcon className="w-5 h-5" />
-                            </div>
-
-                            <div>
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-bold text-white text-sm">{page.name}</span>
-                                <Badge variant="outline" className="bg-slate-900 border-slate-700 text-slate-400 text-[10px] font-mono">
-                                  {page.route}
-                                </Badge>
-                                {!isPageEnabled && (
-                                  <Badge className="bg-rose-950/80 text-rose-300 border-rose-800 text-[10px] gap-1">
-                                    <Lock className="w-3 h-3" /> Page Blocked
-                                  </Badge>
-                                )}
-                              </div>
-                              <p className="text-xs text-slate-400 mt-0.5">{page.desc}</p>
-                            </div>
-                          </div>
-
-                          {/* MASTER PAGE ACCESS SWITCH & EXPAND BUTTON */}
-                          <div className="flex items-center gap-4 self-end sm:self-center shrink-0">
-                            <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-800 px-3 py-1.5 rounded-lg">
-                              <span className="text-[11px] font-semibold text-slate-300">PAGE ACCESS</span>
-                              <Switch
-                                checked={isPageEnabled}
-                                onCheckedChange={() => togglePageAccess(activePlan, page.key)}
-                                className="data-[state=checked]:bg-emerald-600 data-[state=unchecked]:bg-slate-700"
-                              />
-                              <span
-                                className={`text-[10px] font-bold font-mono ${
-                                  isPageEnabled ? "text-emerald-400" : "text-rose-400"
+                      return (
+                        <Card
+                          key={page.key}
+                          className={`border transition-colors ${
+                            isPageEnabled
+                              ? "bg-slate-950/60 border-slate-800"
+                              : "bg-slate-950/30 border-rose-900/40 opacity-80"
+                          }`}
+                        >
+                          {/* PAGE HEADER ROW WITH PAGE ACCESS TOGGLE */}
+                          <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div className="flex items-start gap-3">
+                              <div
+                                className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+                                  isPageEnabled
+                                    ? "bg-blue-600/10 text-blue-400 border border-blue-500/20"
+                                    : "bg-rose-600/10 text-rose-400 border border-rose-500/20"
                                 }`}
                               >
-                                {isPageEnabled ? "ON" : "OFF"}
-                              </span>
+                                <PageIcon className="w-5 h-5" />
+                              </div>
+
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-white text-sm">{page.name}</span>
+                                  <Badge variant="outline" className="bg-slate-900 border-slate-700 text-slate-400 text-[10px] font-mono">
+                                    {page.route}
+                                  </Badge>
+                                  {!isPageEnabled && (
+                                    <Badge className="bg-rose-950/80 text-rose-300 border-rose-800 text-[10px] gap-1">
+                                      <Lock className="w-3 h-3" /> Page Blocked
+                                    </Badge>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-400 mt-0.5">{page.desc}</p>
+                              </div>
                             </div>
 
-                            {(page.features.length > 0 || page.limits.length > 0) && (
-                              <Button
-                                variant="outline"
-                                size="xs"
-                                onClick={() => togglePageAccordion(page.key)}
-                                className="border-slate-800 text-slate-300 hover:bg-slate-900 text-xs h-8 gap-1"
-                              >
-                                <span>{isExpanded ? "Collapse" : "Features & Limits"}</span>
-                                {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                              </Button>
-                            )}
+                            {/* MASTER PAGE ACCESS SWITCH & EXPAND BUTTON */}
+                            <div className="flex items-center gap-4 self-end sm:self-center shrink-0">
+                              <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-800 px-3 py-1.5 rounded-lg">
+                                <span className="text-[11px] font-semibold text-slate-300">PAGE ACCESS</span>
+                                <Switch
+                                  checked={isPageEnabled}
+                                  onCheckedChange={() => togglePageAccess(activePlan, page.key)}
+                                  className="data-[state=checked]:bg-emerald-600 data-[state=unchecked]:bg-slate-700"
+                                />
+                                <span
+                                  className={`text-[10px] font-bold font-mono ${
+                                    isPageEnabled ? "text-emerald-400" : "text-rose-400"
+                                  }`}
+                                >
+                                  {isPageEnabled ? "ON" : "OFF"}
+                                </span>
+                              </div>
+
+                              {(page.features.length > 0 || page.limits.length > 0) && (
+                                <Button
+                                  variant="outline"
+                                  size="xs"
+                                  onClick={() => togglePageAccordion(page.key)}
+                                  className="border-slate-800 text-slate-300 hover:bg-slate-900 text-xs h-8 gap-1"
+                                >
+                                  <span>{isExpanded ? "Collapse" : "Features & Limits"}</span>
+                                  {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                                </Button>
+                              )}
+                            </div>
                           </div>
-                        </div>
 
-                        {/* ACCORDION CONTENT: FEATURES INSIDE PAGE + MEASURABLE LIMITS */}
-                        {isExpanded && (page.features.length > 0 || page.limits.length > 0) && (
-                          <div className="border-t border-slate-800/80 bg-slate-900/40 p-4 space-y-5 text-xs">
-                            {/* PAGE FEATURES TOGGLES */}
-                            {page.features.length > 0 && (
-                              <div className="space-y-3">
-                                <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1.5">
-                                  <Sliders className="w-3 h-3 text-blue-400" /> Features inside {page.name}
-                                </div>
+                          {/* ACCORDION CONTENT: FEATURES INSIDE PAGE + MEASURABLE LIMITS */}
+                          {isExpanded && (page.features.length > 0 || page.limits.length > 0) && (
+                            <div className="border-t border-slate-800/80 bg-slate-900/40 p-4 space-y-5 text-xs">
+                              {/* PAGE FEATURES TOGGLES */}
+                              {page.features.length > 0 && (
+                                <div className="space-y-3">
+                                  <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1.5">
+                                    <Sliders className="w-3 h-3 text-blue-400" /> Features inside {page.name}
+                                  </div>
 
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                  {page.features.map((feat) => {
-                                    const featEnabled = currentFeatures[feat.key] ?? true;
-                                    return (
-                                      <div
-                                        key={feat.key}
-                                        className={`p-3 rounded-xl border transition ${
-                                          featEnabled
-                                            ? "bg-slate-900 border-slate-800 text-slate-200"
-                                            : "bg-slate-950/60 border-slate-800/60 text-slate-500"
-                                        }`}
-                                      >
-                                        <div className="flex items-center justify-between gap-2 mb-1">
-                                          <span className="font-semibold text-xs text-white">{feat.label}</span>
-                                          <Switch
-                                            checked={Boolean(featEnabled)}
-                                            onCheckedChange={() => toggleFeature(activePlan, feat.key)}
-                                            disabled={!isPageEnabled}
-                                            className="data-[state=checked]:bg-blue-600 data-[state=unchecked]:bg-slate-700"
-                                          />
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    {page.features.map((feat) => {
+                                      const featEnabled = currentFeatures[feat.key] ?? true;
+                                      return (
+                                        <div
+                                          key={feat.key}
+                                          className={`p-3 rounded-xl border transition ${
+                                            featEnabled
+                                              ? "bg-slate-900 border-slate-800 text-slate-200"
+                                              : "bg-slate-950/60 border-slate-800/60 text-slate-500"
+                                          }`}
+                                        >
+                                          <div className="flex items-center justify-between gap-2 mb-1">
+                                            <span className="font-semibold text-xs text-white">{feat.label}</span>
+                                            <Switch
+                                              checked={Boolean(featEnabled)}
+                                              onCheckedChange={() => toggleFeature(activePlan, feat.key)}
+                                              disabled={!isPageEnabled}
+                                              className="data-[state=checked]:bg-blue-600 data-[state=unchecked]:bg-slate-700"
+                                            />
+                                          </div>
+                                          <p className="text-[11px] text-slate-400 leading-snug">{feat.desc}</p>
+                                          {!isPageEnabled && (
+                                            <span className="text-[10px] text-amber-400 mt-1 block">
+                                              (Disabled because page is OFF)
+                                            </span>
+                                          )}
                                         </div>
-                                        <p className="text-[11px] text-slate-400 leading-snug">{feat.desc}</p>
-                                        {!isPageEnabled && (
-                                          <span className="text-[10px] text-amber-400 mt-1 block">
-                                            (Disabled because page is OFF)
-                                          </span>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
+                                      );
+                                    })}
+                                  </div>
                                 </div>
-                              </div>
-                            )}
+                              )}
 
-                            {/* MEASURABLE RESOURCE LIMITS */}
-                            {page.limits.length > 0 && (
-                              <div className="space-y-3 pt-2 border-t border-slate-800/60">
-                                <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1.5">
-                                  <AlertCircle className="w-3 h-3 text-amber-400" /> Real Measurable Quotas Enforced on {page.name}
-                                </div>
+                              {/* MEASURABLE RESOURCE LIMITS */}
+                              {page.limits.length > 0 && (
+                                <div className="space-y-3 pt-2 border-t border-slate-800/60">
+                                  <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center gap-1.5">
+                                    <AlertCircle className="w-3 h-3 text-amber-400" /> Real Measurable Quotas Enforced on {page.name}
+                                  </div>
 
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                  {page.limits.map((lim) => (
-                                    <div
-                                      key={lim.key}
-                                      className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-1.5"
-                                    >
-                                      <div className="flex items-center justify-between">
-                                        <span className="font-semibold text-xs text-white">{lim.label}</span>
-                                        <Badge variant="outline" className="text-[10px] font-mono text-slate-400 bg-slate-950">
-                                          {lim.unit}
-                                        </Badge>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    {page.limits.map((lim) => (
+                                      <div
+                                        key={lim.key}
+                                        className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-1.5"
+                                      >
+                                        <div className="flex items-center justify-between">
+                                          <span className="font-semibold text-xs text-white">{lim.label}</span>
+                                          <div className="flex items-center gap-1.5">
+                                            <Badge variant="outline" className="text-[10px] font-mono text-emerald-400 border-emerald-500/30 bg-emerald-500/10 gap-1">
+                                              <CheckCircle2 className="w-2.5 h-2.5" /> Backend Enforced
+                                            </Badge>
+                                            <Badge variant="outline" className="text-[10px] font-mono text-slate-400 bg-slate-950">
+                                              {lim.unit}
+                                            </Badge>
+                                          </div>
+                                        </div>
+                                        <Input
+                                          type="number"
+                                          min="0"
+                                          value={currentPlan[lim.key] ?? ""}
+                                          onChange={(e) => handleLimitChange(activePlan, lim.key, e.target.value)}
+                                          className="bg-slate-950 border-slate-700 text-white font-mono text-xs h-9"
+                                        />
+                                        <p className="text-[10px] text-slate-400">{lim.desc}</p>
                                       </div>
-                                      <Input
-                                        type="number"
-                                        min="0"
-                                        value={currentPlan[lim.key] ?? ""}
-                                        onChange={(e) => handleLimitChange(activePlan, lim.key, e.target.value)}
-                                        className="bg-slate-950 border-slate-700 text-white font-mono text-xs h-9"
-                                      />
-                                      <p className="text-[10px] text-slate-400">{lim.desc}</p>
-                                    </div>
-                                  ))}
+                                    ))}
+                                  </div>
                                 </div>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </Card>
-                    );
-                  })}
+                              )}
+                            </div>
+                          )}
+                        </Card>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
 
           {/* BOTTOM FLOATING SAVE BAR */}
