@@ -31,8 +31,21 @@ const MODE_CONFIG = {
   },
 };
 
-const REF_TYPES = ["Challan Number", "Invoice Number", "Book Number", "GRN Number", "Transport Number"];
-const SRC_TYPES = ["Supplier", "Vendor", "Client Return", "Other"];
+const INWARD_REF_TYPES = ["Challan Number", "Purchase Invoice", "Delivery Note", "Stock Transfer"];
+const OUTWARD_REF_TYPES = ["Challan Number", "Book Number", "Other"];
+const INWARD_SRC_TYPES = [
+  "Supplier Supply",
+  "Client Return",
+  "B2B Return",
+  "Internal / Warehouse",
+  "Repair Return",
+  "Other",
+];
+const OUTWARD_TYPES = [
+  "Client Sale",
+  "B2B Sale",
+  "Return to Supplier",
+];
 const STATUS_OPTIONS = ["Dispatched", "Pending", "Cancelled"];
 
 const isNumeric = (value) => {
@@ -66,13 +79,15 @@ const parseCsvLine = (line) => {
 };
 
 const detectDelimiter = (lines) => {
-  if (lines.every((line) => line.includes("\t"))) return "\t";
+  const tabLines = lines.filter((line) => line.includes("\t")).length;
+  if (tabLines > 0 && tabLines >= lines.length / 2) return "\t";
+  if (lines.some((line) => line.includes("\t"))) return "\t";
   if (lines.every((line) => line.includes("|"))) return "|";
   if (lines.every((line) => line.includes(";"))) return ";";
   const commaCount = lines[0].split(",").length;
   if (commaCount > 1 && lines.every((line) => line.split(",").length === commaCount)) return ",";
-  if (/\s{2,}/.test(lines[0])) return /\s{2,}/;
-  return /\s+/;
+  if (lines.some((line) => /\s{2,}/.test(line))) return /\s{2,}/;
+  return "\t";
 };
 
 const splitLine = (line, delimiter) => {
@@ -157,6 +172,43 @@ const findClient = (identifier, clientsList = []) => {
   return null;
 };
 
+const findVendor = (identifier, vendorsList = []) => {
+  if (!identifier) return null;
+  const clean = String(identifier).trim().toLowerCase();
+  let matched = vendorsList.find(v => String(v.name || "").trim().toLowerCase() === clean);
+  if (matched) return matched;
+  matched = vendorsList.find(v => String(v.id || "").trim().toLowerCase() === clean);
+  if (matched) return matched;
+  matched = vendorsList.find(v => String(v.name || "").trim().toLowerCase().includes(clean));
+  if (matched) return matched;
+  return null;
+};
+
+const findB2bCustomer = (identifier, b2bList = []) => {
+  if (!identifier) return null;
+  const clean = String(identifier).trim().toLowerCase();
+  let matched = b2bList.find(b => String(b.name || b.full_name || "").trim().toLowerCase() === clean);
+  if (matched) return matched;
+  matched = b2bList.find(b => String(b.id || "").trim().toLowerCase() === clean);
+  if (matched) return matched;
+  matched = b2bList.find(b => String(b.name || b.full_name || "").trim().toLowerCase().includes(clean));
+  if (matched) return matched;
+  return null;
+};
+
+const getAvailableStock = (prodName, prodSize, productsList = []) => {
+  if (!prodName) return 0;
+  const cleanName = String(prodName).toUpperCase().trim();
+  const cleanSize = normalizeSizeForMatching(prodSize);
+  const matched = (productsList || []).find(
+    (p) => (p.name || "").toUpperCase().trim() === cleanName && normalizeSizeForMatching(p.size) === cleanSize
+  );
+  if (matched) {
+    return Number(matched.available_stock != null ? matched.available_stock : (matched.balance || 0));
+  }
+  return 0;
+};
+
 const autofillFromProductMaster = (row, productsList) => {
   if (!row || !row.product) return row;
   const cleanName = String(row.product).toUpperCase().trim();
@@ -222,20 +274,24 @@ const parseArraysToRows = (arrays, mode = "inward", clients = [], productsList =
       size: rawSize,
       quantity: rawQty !== "" ? (Number(rawQty.replace(/,/g, "")) || 0) : "",
       unit: unitVal,
-      source_type: mode === "inward" ? "Supplier" : "",
+      source_type: mode === "inward" ? "Supplier Supply" : "",
       source_name: mode === "inward" ? (rawSupplier || clientSupplierVal) : "",
+      vendor_id: "",
+      party_type: mode === "outward" ? "Client Sale" : "",
+      outward_type: mode === "outward" ? "Client Sale" : "",
       reference_number: rawChallan,
       challan_number: rawChallan,
       outward_challan_no: rawChallan,
       reference_type: "Challan Number",
       bill_number: get("bill_number") || "",
-      client_id: matchedClient ? matchedClient.id : "",
-      client_name: matchedClient ? matchedClient.full_name : (mode === "outward" ? clientSupplierVal : (rawClient || "")),
-      project_name: get("project_name") || (matchedClient ? (matchedClient.project_name || matchedClient.full_name) : ""),
-      project_id: matchedClient ? matchedClient.id : "",
+      client_id: mode === "outward" && matchedClient ? matchedClient.id : "",
+      client_name: mode === "outward" ? (matchedClient ? matchedClient.full_name : (rawClient || clientSupplierVal)) : "",
+      project_name: mode === "outward" ? (get("project_name") || (matchedClient ? (matchedClient.project_name || matchedClient.full_name) : "")) : "",
+      project_id: mode === "outward" && matchedClient ? matchedClient.id : "",
       status: get("status") || (mode === "outward" ? "Dispatched" : ""),
       remarks: get("remarks") || "",
       date: get("date") || "",
+      high_value_goods: false,
     };
 
     if (productsList && productsList.length > 0) {
@@ -258,14 +314,17 @@ const buildCsvArrays = (text) => {
 };
 
 const getBlankRow = (mode) => ({
-  _id: Date.now(),
+  _id: Date.now() + Math.random(),
   _selected: true,
   product: "",
   size: "",
   quantity: 1,
   unit: "Nos",
-  source_type: "Supplier",
+  source_type: mode === "inward" ? "Supplier Supply" : "",
   source_name: "",
+  vendor_id: "",
+  party_type: mode === "outward" ? "Client Sale" : "",
+  outward_type: mode === "outward" ? "Client Sale" : "",
   reference_number: "",
   reference_type: "Challan Number",
   challan_number: "",
@@ -273,6 +332,7 @@ const getBlankRow = (mode) => ({
   client_id: "",
   client_name: "",
   project_name: "",
+  project_id: "",
   outward_challan_no: "",
   status: "Dispatched",
   remarks: "",
@@ -290,20 +350,27 @@ const getRefHeaderLabel = (refType) => {
   return refType;
 };
 
-const getRowValidationErrors = (row, mode) => {
+const getRowValidationErrors = (row, mode, productsList = []) => {
   const errs = [];
   if (!row.product?.trim()) errs.push("Product required");
   if (!row.unit?.trim()) errs.push("Unit required");
-  if (row.quantity === "" || row.quantity === null || Number(row.quantity) <= 0 || isNaN(Number(row.quantity))) {
+  const qty = Number(row.quantity);
+  if (row.quantity === "" || row.quantity === null || qty <= 0 || isNaN(qty)) {
     errs.push("Invalid quantity");
   }
-  if (mode === "outward" && !row.client_name?.trim() && !row.client_id) {
-    errs.push("Client required");
+  if (mode === "outward") {
+    if (!row.client_name?.trim() && !row.client_id && !row.source_name?.trim()) {
+      errs.push("Party required");
+    }
+    const avail = getAvailableStock(row.product, row.size, productsList);
+    if (qty > avail) {
+      errs.push(`Max stock: ${avail}`);
+    }
   }
   return errs;
 };
 
-const isRowValid = (row, mode) => getRowValidationErrors(row, mode).length === 0;
+const isRowValid = (row, mode, productsList = []) => getRowValidationErrors(row, mode, productsList).length === 0;
 
 const EMPTY_PRODUCTS = [];
 
@@ -343,13 +410,18 @@ export default function ManualBulkImport({
   const [cancelImport, setCancelImport] = useState(false);
   const cancelImportRef = useRef(false);
   const [clients, setClients] = useState([]);
+  const [vendors, setVendors] = useState([]);
+  const [b2bCustomers, setB2bCustomers] = useState([]);
   const [productsList, setProductsList] = useState(products || []);
   const [globalDefaults, setGlobalDefaults] = useState({
     date: new Date().toISOString().split("T")[0],
     reference_type: "Challan Number",
     reference_number: "",
-    source_type: "Supplier",
+    source_type: "Supplier Supply",
     source_name: "",
+    vendor_id: "",
+    party_type: "Client Sale",
+    outward_type: "Client Sale",
     client_id: "",
     client_name: "",
     project_id: "",
@@ -379,8 +451,11 @@ export default function ManualBulkImport({
       date: new Date().toISOString().split("T")[0],
       reference_type: "Challan Number",
       reference_number: "",
-      source_type: "Supplier",
+      source_type: "Supplier Supply",
       source_name: "",
+      vendor_id: "",
+      party_type: "Client Sale",
+      outward_type: "Client Sale",
       client_id: "",
       client_name: "",
       project_id: "",
@@ -398,7 +473,16 @@ export default function ManualBulkImport({
     }
     resetState();
 
-    api.get("/clients").then((r) => setClients(r.data || [])).catch(() => {});
+    Promise.allSettled([
+      api.get("/clients"),
+      api.get("/vendors"),
+      api.get("/inventory/b2b-customers"),
+    ]).then(([resClients, resVendors, resB2b]) => {
+      if (resClients.status === "fulfilled") setClients(resClients.value?.data || []);
+      if (resVendors.status === "fulfilled") setVendors(resVendors.value?.data || []);
+      if (resB2b.status === "fulfilled") setB2bCustomers(resB2b.value?.data || []);
+    });
+
     if (!products || products.length === 0) {
       const cached = getCachedProducts();
       if (cached && cached.length > 0) {
@@ -488,23 +572,44 @@ export default function ManualBulkImport({
         row.reference_number = cleanVal;
         row.challan_number = cleanVal;
         row.outward_challan_no = cleanVal;
-        if (row.reference_type === "Bill Number" || globalDefaults.reference_type === "Bill Number") {
+        if (row.reference_type === "Bill Number" || globalDefaults.reference_type === "Bill Number" || row.reference_type === "Purchase Invoice") {
           row.bill_number = cleanVal;
         }
       } else if (field === "client_supplier") {
         if (mode === "inward") {
           row.source_name = value;
-          const matched = findClient(value, clients);
-          if (matched) {
-            row.client_name = matched.full_name;
-            row.client_id = matched.id;
+          if (row.source_type === "Client Return") {
+            const matched = findClient(value, clients);
+            row.client_name = matched ? matched.full_name : value;
+            row.client_id = matched ? matched.id : "";
+          } else if (row.source_type === "B2B Return") {
+            const matched = findB2bCustomer(value, b2bCustomers);
+            row.client_name = matched ? (matched.name || matched.full_name) : value;
+            row.client_id = matched ? matched.id : "";
+          } else {
+            const matched = findVendor(value, vendors);
+            row.vendor_id = matched ? matched.id : "";
           }
         } else {
-          const matched = findClient(value, clients);
-          row.client_name = matched ? matched.full_name : value;
-          row.client_id = matched ? matched.id : "";
-          row.project_name = matched ? (matched.project_name || matched.full_name) : (row.project_name || value);
-          row.project_id = matched ? matched.id : "";
+          // Outward
+          if (row.party_type === "Return to Supplier") {
+            const matched = findVendor(value, vendors);
+            row.client_name = matched ? matched.name : value;
+            row.vendor_id = matched ? matched.id : "";
+            row.client_id = "";
+          } else if (row.party_type === "B2B Sale") {
+            const matched = findB2bCustomer(value, b2bCustomers);
+            row.client_name = matched ? (matched.name || matched.full_name) : value;
+            row.client_id = matched ? matched.id : "";
+            row.vendor_id = "";
+          } else {
+            const matched = findClient(value, clients);
+            row.client_name = matched ? matched.full_name : value;
+            row.client_id = matched ? matched.id : "";
+            row.project_name = matched ? (matched.project_name || matched.full_name) : (row.project_name || value);
+            row.project_id = matched ? matched.id : "";
+            row.vendor_id = "";
+          }
         }
       } else if (field === "client_name") {
         const matched = findClient(value, clients);
@@ -514,11 +619,25 @@ export default function ManualBulkImport({
         row.project_id = matched ? matched.id : "";
       } else if (field === "source_name") {
         row.source_name = value;
-        const matched = findClient(value, clients);
-        if (matched) {
-          row.client_name = matched.full_name;
-          row.client_id = matched.id;
+        if (row.source_type === "Client Return") {
+          const matched = findClient(value, clients);
+          row.client_name = matched ? matched.full_name : value;
+          row.client_id = matched ? matched.id : "";
+        } else if (row.source_type === "B2B Return") {
+          const matched = findB2bCustomer(value, b2bCustomers);
+          row.client_name = matched ? (matched.name || matched.full_name) : value;
+          row.client_id = matched ? matched.id : "";
+        } else {
+          const matched = findVendor(value, vendors);
+          row.vendor_id = matched ? matched.id : "";
         }
+      } else if (field === "source_type") {
+        row.source_type = value;
+      } else if (field === "party_type") {
+        row.party_type = value;
+        row.outward_type = value;
+      } else if (field === "reference_type") {
+        row.reference_type = value;
       } else if (field === "unit") {
         row.unit = formatUnit(value);
       } else if (field === "product") {
@@ -594,40 +713,98 @@ export default function ManualBulkImport({
 
         const resolvedStatus = row.status || globalDefaults.status || "Dispatched";
         const resolvedHighValue = row.high_value_goods != null ? row.high_value_goods : Boolean(globalDefaults.high_value_goods);
+        const resolvedRefType = row.reference_type || globalDefaults.reference_type || "Challan Number";
 
         let client_name = (row.client_name || "").trim();
         let client_id = row.client_id || "";
         let source_name = (row.source_name || "").trim();
-        let source_type = row.source_type || globalDefaults.source_type || "Supplier";
+        let source_type = row.source_type || globalDefaults.source_type || (mode === "inward" ? "Supplier Supply" : "");
+        let party_type = row.party_type || globalDefaults.party_type || (mode === "outward" ? "Client Sale" : "");
+        let outward_type = row.outward_type || globalDefaults.outward_type || party_type;
+        let vendor_id = row.vendor_id || globalDefaults.vendor_id || "";
+        let project_name = (row.project_name || "").trim();
+        let project_id = row.project_id || "";
 
         if (mode === "inward") {
           if (!source_name) {
             source_name = (globalDefaults.source_name || "").trim();
           }
-          if (!client_name && globalDefaults.client_name) {
-            client_name = globalDefaults.client_name;
-            client_id = globalDefaults.client_id;
+          if (source_type === "Supplier Supply") {
+            if (!vendor_id && source_name) {
+              const matched = findVendor(source_name, vendors);
+              if (matched) vendor_id = matched.id;
+            }
+          } else if (source_type === "Client Return") {
+            if (!client_name) client_name = source_name || globalDefaults.client_name;
+            if (!client_id && client_name) {
+              const matched = findClient(client_name, clients);
+              if (matched) {
+                client_id = matched.id;
+                client_name = matched.full_name;
+              }
+            }
+          } else if (source_type === "B2B Return") {
+            if (!client_name) client_name = source_name || globalDefaults.client_name;
+            if (!client_id && client_name) {
+              const matched = findB2bCustomer(client_name, b2bCustomers);
+              if (matched) {
+                client_id = matched.id;
+                client_name = matched.name || matched.full_name;
+              }
+            }
           }
         } else {
+          // Outward
           if (!client_name) {
             client_name = (globalDefaults.client_name || "").trim();
-            client_id = globalDefaults.client_id || "";
+          }
+          if (party_type === "Return to Supplier") {
+            if (!vendor_id && client_name) {
+              const matched = findVendor(client_name, vendors);
+              if (matched) {
+                vendor_id = matched.id;
+                client_name = matched.name;
+              }
+            }
+          } else if (party_type === "B2B Sale") {
+            if (!client_id && client_name) {
+              const matched = findB2bCustomer(client_name, b2bCustomers);
+              if (matched) {
+                client_id = matched.id;
+                client_name = matched.name || matched.full_name;
+              }
+            }
+          } else {
+            // Client Sale
+            if (!client_id && client_name) {
+              const matched = findClient(client_name, clients);
+              if (matched) {
+                client_id = matched.id;
+                client_name = matched.full_name;
+                if (!project_name) project_name = matched.sol_id || matched.full_name;
+                if (!project_id) project_id = matched.id;
+              }
+            }
           }
         }
 
         return {
           ...row,
           date: resolvedDate,
+          reference_type: resolvedRefType,
           reference_number: resolvedChallan,
           challan_number: resolvedChallan,
           outward_challan_no: resolvedChallan,
-          bill_number: row.bill_number || (globalDefaults.reference_type === "Bill Number" ? resolvedChallan : ""),
+          bill_number: row.bill_number || (resolvedRefType === "Bill Number" || resolvedRefType === "Purchase Invoice" ? resolvedChallan : ""),
           source_name,
           source_type,
+          party_type,
+          outward_type,
+          vendor_id,
           client_name,
           client_id,
-          project_name: row.project_name || globalDefaults.project_name || (client_name ? client_name : ""),
-          project_id: row.project_id || globalDefaults.project_id || client_id || "",
+          project_name: project_name || globalDefaults.project_name || "",
+          project_id: project_id || globalDefaults.project_id || "",
           remarks: resolvedRemarks,
           status: resolvedStatus,
           high_value_goods: resolvedHighValue,
@@ -691,10 +868,10 @@ export default function ManualBulkImport({
   };
 
   const selectedRows = rows.filter((row) => row._selected);
-  const invalidRowsCount = selectedRows.filter((row) => !isRowValid(row, mode)).length;
+  const invalidRowsCount = selectedRows.filter((row) => !isRowValid(row, mode, productsList)).length;
 
   const handleFinalImport = async () => {
-    const validRows = selectedRows.filter((r) => isRowValid(r, mode));
+    const validRows = selectedRows.filter((r) => isRowValid(r, mode, productsList));
     if (!validRows.length) {
       toast.error("Select at least one valid row to import.");
       return;
@@ -789,6 +966,8 @@ export default function ManualBulkImport({
 
   const productOptions = productsList.map((item) => item.name).filter(Boolean);
   const clientOptions = clients.map((client) => client.full_name).filter(Boolean);
+  const vendorOptions = vendors.map((v) => v.name).filter(Boolean);
+  const b2bOptions = b2bCustomers.map((b) => b.name || b.full_name).filter(Boolean);
 
   const uniqueChallans = Array.from(new Set(
     rows.map((r) => (r.reference_number || r.outward_challan_no || r.challan_number || r.bill_number || "").trim()).filter(Boolean)
@@ -936,7 +1115,7 @@ export default function ManualBulkImport({
                       {rows.length} rows imported
                     </Badge>
                     <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold text-xs px-2.5 py-1">
-                      {selectedRows.filter((r) => isRowValid(r, mode)).length} valid
+                      {selectedRows.filter((r) => isRowValid(r, mode, productsList)).length} valid
                     </Badge>
                     {invalidRowsCount > 0 && (
                       <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 font-semibold text-xs px-2.5 py-1">
@@ -982,12 +1161,24 @@ export default function ManualBulkImport({
                         <th className="px-3 py-2.5 w-8">☑</th>
                         <th className="px-3 py-2.5">Product</th>
                         <th className="px-3 py-2.5">Size</th>
+                        {mode === "outward" && <th className="px-3 py-2.5">Stock</th>}
                         <th className="px-3 py-2.5">Qty</th>
                         <th className="px-3 py-2.5">Unit</th>
-                        <th className="px-3 py-2.5">{mode === "inward" ? "Client / Supplier" : "Client"}</th>
-                        <th className="px-3 py-2.5">Challan Number</th>
+                        {mode === "inward" ? (
+                          <>
+                            <th className="px-3 py-2.5">Source Type</th>
+                            <th className="px-3 py-2.5">Supplier / Vendor</th>
+                          </>
+                        ) : (
+                          <>
+                            <th className="px-3 py-2.5">Dispatch Type</th>
+                            <th className="px-3 py-2.5">Party Name</th>
+                            <th className="px-3 py-2.5">Project</th>
+                          </>
+                        )}
+                        <th className="px-3 py-2.5">Challan / Ref No</th>
                         <th className="px-3 py-2.5">Remarks</th>
-                        <th className="px-3 py-2.5">Status</th>
+                        <th className="px-3 py-2.5">{mode === "inward" ? "High Value" : "Status"}</th>
                         <th className="px-3 py-2.5 text-center">Action</th>
                       </tr>
                     </thead>
@@ -996,7 +1187,8 @@ export default function ManualBulkImport({
                         const originalIndex = rows.findIndex((r) => r._id === row._id);
                         if (originalIndex === -1) return null;
                         const status = matchProduct(row.product, row.size);
-                        const rowErrors = getRowValidationErrors(row, mode);
+                        const rowErrors = getRowValidationErrors(row, mode, productsList);
+                        const availStock = getAvailableStock(row.product, row.size, productsList);
 
                         return (
                           <tr key={row._id} className={`${!row._selected ? "opacity-60" : ""} border-t border-slate-100 hover:bg-slate-50/50`}>
@@ -1016,7 +1208,6 @@ export default function ManualBulkImport({
                                 className="text-xs bg-white border border-slate-200 rounded p-1 w-full text-slate-800"
                                 list="manual-product-list"
                               />
-                              <datalist id="manual-product-list">{productOptions.map((name) => <option key={name} value={name} />)}</datalist>
                               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
                                 <span className={`font-semibold ${status === "matched" ? "text-emerald-600" : status === "fuzzy" ? "text-amber-600" : "text-blue-600"}`}>
                                   {status === "matched" ? "Matched" : status === "fuzzy" ? "Partial" : "New"}
@@ -1030,9 +1221,16 @@ export default function ManualBulkImport({
                               <Input
                                 value={row.size || ""}
                                 onChange={(e) => updateCell(originalIndex, "size", e.target.value)}
-                                className="text-xs h-8 bg-white border-slate-200"
+                                className="text-xs h-8 bg-white border-slate-200 w-24"
                               />
                             </td>
+                            {mode === "outward" && (
+                              <td className="px-3 py-2.5 align-top">
+                                <span className={`inline-flex items-center px-2 py-1 rounded text-[11px] font-semibold mt-1 ${Number(row.quantity) > availStock ? "bg-red-50 text-red-700 border border-red-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
+                                  {availStock}
+                                </span>
+                              </td>
+                            )}
                             <td className="px-3 py-2.5 align-top">
                               <Input
                                 type="number"
@@ -1056,42 +1254,132 @@ export default function ManualBulkImport({
                                 </SelectContent>
                               </Select>
                             </td>
-                            <td className="px-3 py-2.5 align-top">
-                              <Input
-                                list="manual-client-list"
-                                value={mode === "inward" ? (row.source_name || row.client_name || "") : (row.client_name || "")}
-                                onChange={(e) => updateCell(originalIndex, "client_supplier", e.target.value)}
-                                className="text-xs h-8 bg-white border-slate-200"
-                                placeholder={mode === "inward" ? "Supplier / Vendor" : "Client name"}
-                              />
-                            </td>
+                            {mode === "inward" ? (
+                              <>
+                                <td className="px-3 py-2.5 align-top">
+                                  <Select
+                                    value={row.source_type || "Supplier Supply"}
+                                    onValueChange={(val) => updateCell(originalIndex, "source_type", val)}
+                                  >
+                                    <SelectTrigger className="h-8 text-xs bg-white border-slate-200 min-w-[130px]">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {INWARD_SRC_TYPES.map((st) => (
+                                        <SelectItem key={st} value={st}>{st}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </td>
+                                <td className="px-3 py-2.5 align-top">
+                                  <Input
+                                    list={
+                                      row.source_type === "Client Return"
+                                        ? "manual-client-list"
+                                        : row.source_type === "B2B Return"
+                                        ? "manual-b2b-list"
+                                        : "manual-vendor-list"
+                                    }
+                                    value={row.source_name || row.client_name || ""}
+                                    onChange={(e) => updateCell(originalIndex, "client_supplier", e.target.value)}
+                                    className="text-xs h-8 bg-white border-slate-200 min-w-[140px]"
+                                    placeholder={
+                                      row.source_type === "Client Return"
+                                        ? "Select client"
+                                        : row.source_type === "B2B Return"
+                                        ? "Select B2B customer"
+                                        : "Supplier / Vendor"
+                                    }
+                                  />
+                                </td>
+                              </>
+                            ) : (
+                              <>
+                                <td className="px-3 py-2.5 align-top">
+                                  <Select
+                                    value={row.party_type || row.outward_type || "Client Sale"}
+                                    onValueChange={(val) => updateCell(originalIndex, "party_type", val)}
+                                  >
+                                    <SelectTrigger className="h-8 text-xs bg-white border-slate-200 min-w-[130px]">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {OUTWARD_TYPES.map((ot) => (
+                                        <SelectItem key={ot} value={ot}>{ot}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </td>
+                                <td className="px-3 py-2.5 align-top">
+                                  <Input
+                                    list={
+                                      row.party_type === "Return to Supplier"
+                                        ? "manual-vendor-list"
+                                        : row.party_type === "B2B Sale"
+                                        ? "manual-b2b-list"
+                                        : "manual-client-list"
+                                    }
+                                    value={row.client_name || row.source_name || ""}
+                                    onChange={(e) => updateCell(originalIndex, "client_supplier", e.target.value)}
+                                    className="text-xs h-8 bg-white border-slate-200 min-w-[140px]"
+                                    placeholder={
+                                      row.party_type === "Return to Supplier"
+                                        ? "Select vendor"
+                                        : row.party_type === "B2B Sale"
+                                        ? "Select B2B customer"
+                                        : "Select client"
+                                    }
+                                  />
+                                </td>
+                                <td className="px-3 py-2.5 align-top">
+                                  <Input
+                                    value={row.project_name || ""}
+                                    onChange={(e) => updateCell(originalIndex, "project_name", e.target.value)}
+                                    className="text-xs h-8 bg-white border-slate-200 min-w-[110px]"
+                                    placeholder="Project"
+                                  />
+                                </td>
+                              </>
+                            )}
                             <td className="px-3 py-2.5 align-top">
                               <Input
                                 value={row.reference_number || row.challan_number || row.outward_challan_no || ""}
                                 onChange={(e) => updateCell(originalIndex, "reference_value", e.target.value)}
-                                className="text-xs h-8 bg-white border-slate-200 font-mono"
-                                placeholder="e.g. IN-1045"
+                                className="text-xs h-8 bg-white border-slate-200 font-mono w-28"
+                                placeholder="Challan No"
                               />
                             </td>
                             <td className="px-3 py-2.5 align-top">
                               <Input
                                 value={row.remarks || ""}
                                 onChange={(e) => updateCell(originalIndex, "remarks", e.target.value)}
-                                className="text-xs h-8 bg-white border-slate-200"
+                                className="text-xs h-8 bg-white border-slate-200 min-w-[100px]"
                               />
                             </td>
                             <td className="px-3 py-2.5 align-top">
-                              <Select
-                                value={row.status || "Dispatched"}
-                                onValueChange={(value) => updateCell(originalIndex, "status", value)}
-                              >
-                                <SelectTrigger className="h-8 text-xs bg-white border-slate-200">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {STATUS_OPTIONS.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
-                                </SelectContent>
-                              </Select>
+                              {mode === "inward" ? (
+                                <label className="flex items-center gap-1.5 text-[11px] text-slate-700 font-medium cursor-pointer mt-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(row.high_value_goods)}
+                                    onChange={(e) => updateCell(originalIndex, "high_value_goods", e.target.checked)}
+                                    className="w-3.5 h-3.5 rounded border-slate-300 text-slate-900"
+                                  />
+                                  High Value
+                                </label>
+                              ) : (
+                                <Select
+                                  value={row.status || "Dispatched"}
+                                  onValueChange={(value) => updateCell(originalIndex, "status", value)}
+                                >
+                                  <SelectTrigger className="h-8 text-xs bg-white border-slate-200 min-w-[95px]">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {STATUS_OPTIONS.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+                                  </SelectContent>
+                                </Select>
+                              )}
                             </td>
                             <td className="px-3 py-2.5 align-top text-center">
                               <button
@@ -1165,105 +1453,240 @@ export default function ManualBulkImport({
                     >
                       <SelectTrigger><SelectValue placeholder="Select reference type" /></SelectTrigger>
                       <SelectContent>
-                        {REF_TYPES.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}
+                        {(mode === "inward" ? INWARD_REF_TYPES : OUTWARD_REF_TYPES).map((type) => (
+                          <SelectItem key={type} value={type}>{type}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
 
-                  {mode === "inward" && (
-                    <div className="space-y-1.5">
-                      <Label>Source Type</Label>
-                      <Select
-                        value={globalDefaults.source_type}
-                        onValueChange={(value) => {
-                          const nextDefaults = { ...globalDefaults, source_type: value };
-                          if (value === "Return From Client") {
-                            nextDefaults.source_name = "";
-                          }
-                          setGlobalDefaults(nextDefaults);
-                        }}
-                      >
-                        <SelectTrigger><SelectValue placeholder="Select source type" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="Supplier">Supplier</SelectItem>
-                          <SelectItem value="Vendor">Vendor</SelectItem>
-                          <SelectItem value="Return From Client">Client Return</SelectItem>
-                          <SelectItem value="Other">Other</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
+                  {mode === "inward" ? (
+                    <>
+                      <div className="space-y-1.5">
+                        <Label>Source Type</Label>
+                        <Select
+                          value={globalDefaults.source_type}
+                          onValueChange={(value) => {
+                            setGlobalDefaults({
+                              ...globalDefaults,
+                              source_type: value,
+                              source_name: "",
+                              client_name: "",
+                              client_id: "",
+                              vendor_id: "",
+                            });
+                          }}
+                        >
+                          <SelectTrigger><SelectValue placeholder="Select source type" /></SelectTrigger>
+                          <SelectContent>
+                            {INWARD_SRC_TYPES.map((st) => (
+                              <SelectItem key={st} value={st}>{st}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
 
-                  {mode === "inward" && globalDefaults.source_type !== "Return From Client" && (
-                    <div className="space-y-1.5">
-                      <Label>Vendor / Source Name</Label>
-                      <Input
-                        value={globalDefaults.source_name}
-                        onChange={(e) => setGlobalDefaults({ ...globalDefaults, source_name: e.target.value })}
-                        placeholder="Supplier or vendor name"
-                      />
-                      {hasMultipleClients && (
-                        <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 mt-1 font-medium flex items-center gap-1.5">
-                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span>Multiple supplier values detected (row-level values will be preserved)</span>
+                      <div className="space-y-1.5">
+                        <Label>
+                          {globalDefaults.source_type === "Client Return"
+                            ? "Client Name"
+                            : globalDefaults.source_type === "B2B Return"
+                            ? "B2B Customer Name"
+                            : globalDefaults.source_type === "Supplier Supply"
+                            ? "Vendor / Supplier Name"
+                            : "Source / Location Name"}
+                        </Label>
+                        <Input
+                          list={
+                            globalDefaults.source_type === "Client Return"
+                              ? "manual-client-list"
+                              : globalDefaults.source_type === "B2B Return"
+                              ? "manual-b2b-list"
+                              : globalDefaults.source_type === "Supplier Supply"
+                              ? "manual-vendor-list"
+                              : undefined
+                          }
+                          value={
+                            globalDefaults.source_type === "Client Return" || globalDefaults.source_type === "B2B Return"
+                              ? globalDefaults.client_name
+                              : globalDefaults.source_name
+                          }
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (globalDefaults.source_type === "Client Return") {
+                              const matched = findClient(val, clients);
+                              setGlobalDefaults({
+                                ...globalDefaults,
+                                client_name: matched ? matched.full_name : val,
+                                client_id: matched ? matched.id : "",
+                                project_name: matched ? (matched.sol_id || matched.full_name) : globalDefaults.project_name,
+                                project_id: matched ? matched.id : "",
+                              });
+                            } else if (globalDefaults.source_type === "B2B Return") {
+                              const matched = findB2bCustomer(val, b2bCustomers);
+                              setGlobalDefaults({
+                                ...globalDefaults,
+                                client_name: matched ? (matched.name || matched.full_name) : val,
+                                client_id: matched ? matched.id : "",
+                              });
+                            } else if (globalDefaults.source_type === "Supplier Supply") {
+                              const matched = findVendor(val, vendors);
+                              setGlobalDefaults({
+                                ...globalDefaults,
+                                source_name: matched ? matched.name : val,
+                                vendor_id: matched ? matched.id : "",
+                              });
+                            } else {
+                              setGlobalDefaults({
+                                ...globalDefaults,
+                                source_name: val,
+                              });
+                            }
+                          }}
+                          placeholder={
+                            globalDefaults.source_type === "Client Return"
+                              ? "Search and select client"
+                              : globalDefaults.source_type === "B2B Return"
+                              ? "Search and select B2B customer"
+                              : globalDefaults.source_type === "Supplier Supply"
+                              ? "Search and select supplier / vendor"
+                              : "e.g. Main Warehouse"
+                          }
+                        />
+                        {hasMultipleClients && (
+                          <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 mt-1 font-medium flex items-center gap-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span>Multiple supplier / client values detected (row-level values will be preserved)</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {globalDefaults.source_type === "Client Return" && (
+                        <div className="space-y-1.5">
+                          <Label>Project / Site Name</Label>
+                          <Input
+                            value={globalDefaults.project_name}
+                            onChange={(e) => setGlobalDefaults({ ...globalDefaults, project_name: e.target.value })}
+                            placeholder="Project name"
+                          />
                         </div>
                       )}
-                    </div>
-                  )}
-
-                  <div className="space-y-1.5">
-                    <Label>Client Name</Label>
-                    <Input
-                      list="manual-client-list"
-                      value={globalDefaults.client_name}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        const matched = findClient(val, clients);
-                        setGlobalDefaults({
-                          ...globalDefaults,
-                          client_name: matched ? matched.full_name : val,
-                          client_id: matched ? matched.id : "",
-                          project_name: matched ? (matched.sol_id || matched.full_name) : globalDefaults.project_name,
-                          project_id: matched ? matched.id : ""
-                        });
-                      }}
-                      placeholder="Search and select client"
-                    />
-                    {mode === "outward" && hasMultipleClients && (
-                      <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 mt-1 font-medium flex items-center gap-1.5">
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                        <span>Multiple client values detected (row-level values will be preserved)</span>
+                    </>
+                  ) : (
+                    <>
+                      <div className="space-y-1.5">
+                        <Label>Dispatch Type</Label>
+                        <Select
+                          value={globalDefaults.party_type || globalDefaults.outward_type || "Client Sale"}
+                          onValueChange={(value) => {
+                            setGlobalDefaults({
+                              ...globalDefaults,
+                              party_type: value,
+                              outward_type: value,
+                              client_name: "",
+                              client_id: "",
+                              vendor_id: "",
+                            });
+                          }}
+                        >
+                          <SelectTrigger><SelectValue placeholder="Select dispatch type" /></SelectTrigger>
+                          <SelectContent>
+                            {OUTWARD_TYPES.map((ot) => (
+                              <SelectItem key={ot} value={ot}>{ot}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
-                    )}
-                  </div>
 
-                  {(mode === "outward" || globalDefaults.source_type === "Return From Client") && (
-                    <div className="space-y-1.5">
-                      <Label>Project / Site Name</Label>
-                      <Input
-                        value={globalDefaults.project_name}
-                        onChange={(e) => setGlobalDefaults({ ...globalDefaults, project_name: e.target.value })}
-                        placeholder="Project name"
-                      />
-                    </div>
+                      <div className="space-y-1.5">
+                        <Label>
+                          {globalDefaults.party_type === "Return to Supplier"
+                            ? "Supplier / Vendor Name"
+                            : globalDefaults.party_type === "B2B Sale"
+                            ? "B2B Customer Name"
+                            : "Client Name"}
+                        </Label>
+                        <Input
+                          list={
+                            globalDefaults.party_type === "Return to Supplier"
+                              ? "manual-vendor-list"
+                              : globalDefaults.party_type === "B2B Sale"
+                              ? "manual-b2b-list"
+                              : "manual-client-list"
+                          }
+                          value={globalDefaults.client_name}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (globalDefaults.party_type === "Return to Supplier") {
+                              const matched = findVendor(val, vendors);
+                              setGlobalDefaults({
+                                ...globalDefaults,
+                                client_name: matched ? matched.name : val,
+                                source_name: matched ? matched.name : val,
+                                vendor_id: matched ? matched.id : "",
+                                client_id: "",
+                              });
+                            } else if (globalDefaults.party_type === "B2B Sale") {
+                              const matched = findB2bCustomer(val, b2bCustomers);
+                              setGlobalDefaults({
+                                ...globalDefaults,
+                                client_name: matched ? (matched.name || matched.full_name) : val,
+                                client_id: matched ? matched.id : "",
+                                vendor_id: "",
+                              });
+                            } else {
+                              const matched = findClient(val, clients);
+                              setGlobalDefaults({
+                                ...globalDefaults,
+                                client_name: matched ? matched.full_name : val,
+                                client_id: matched ? matched.id : "",
+                                project_name: matched ? (matched.sol_id || matched.full_name) : globalDefaults.project_name,
+                                project_id: matched ? matched.id : "",
+                                vendor_id: "",
+                              });
+                            }
+                          }}
+                          placeholder={
+                            globalDefaults.party_type === "Return to Supplier"
+                              ? "Search and select vendor"
+                              : globalDefaults.party_type === "B2B Sale"
+                              ? "Search and select B2B customer"
+                              : "Search and select client"
+                          }
+                        />
+                        {hasMultipleClients && (
+                          <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 mt-1 font-medium flex items-center gap-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span>Multiple party values detected (row-level values will be preserved)</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {(!globalDefaults.party_type || globalDefaults.party_type === "Client Sale") && (
+                        <div className="space-y-1.5">
+                          <Label>Project / Site Name</Label>
+                          <Input
+                            value={globalDefaults.project_name}
+                            onChange={(e) => setGlobalDefaults({ ...globalDefaults, project_name: e.target.value })}
+                            placeholder="Project name"
+                          />
+                        </div>
+                      )}
+
+                      <div className="space-y-1.5">
+                        <Label>Status</Label>
+                        <Select
+                          value={globalDefaults.status}
+                          onValueChange={(value) => setGlobalDefaults({ ...globalDefaults, status: value })}
+                        >
+                          <SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger>
+                          <SelectContent>
+                            {STATUS_OPTIONS.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </>
                   )}
-
-                  {mode === "outward" && (
-                    <div className="space-y-1.5">
-                      <Label>Status</Label>
-                      <Select
-                        value={globalDefaults.status}
-                        onValueChange={(value) => setGlobalDefaults({ ...globalDefaults, status: value })}
-                      >
-                        <SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger>
-                        <SelectContent>
-                          {STATUS_OPTIONS.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-
-                  <datalist id="manual-client-list">{clientOptions.map((name) => <option key={name} value={name} />)}</datalist>
 
                   {mode === "inward" && (
                     <div className="col-span-1 lg:col-span-2 space-y-1.5 flex items-center pt-2">
@@ -1292,6 +1715,12 @@ export default function ManualBulkImport({
               </div>
             </div>
           )}
+
+          {/* Datalists for Autocomplete */}
+          <datalist id="manual-product-list">{productOptions.map((name) => <option key={name} value={name} />)}</datalist>
+          <datalist id="manual-client-list">{clientOptions.map((name) => <option key={name} value={name} />)}</datalist>
+          <datalist id="manual-vendor-list">{vendorOptions.map((name) => <option key={name} value={name} />)}</datalist>
+          <datalist id="manual-b2b-list">{b2bOptions.map((name) => <option key={name} value={name} />)}</datalist>
 
           {step === "review" && (() => {
             const itemsPerPage = 50;
@@ -1362,7 +1791,7 @@ export default function ManualBulkImport({
                       Rows: {rows.length}
                     </Badge>
                     <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold text-xs px-2.5 py-1">
-                      Valid: {selectedRows.filter((r) => isRowValid(r, mode)).length}
+                      Valid: {selectedRows.filter((r) => isRowValid(r, mode, productsList)).length}
                     </Badge>
                     {invalidRowsCount > 0 && (
                       <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 font-semibold text-xs px-2.5 py-1">
@@ -1404,32 +1833,38 @@ export default function ManualBulkImport({
                         <th className="px-3 py-2.5 w-8">☑</th>
                         <th className="px-3 py-2.5">Product</th>
                         <th className="px-3 py-2.5">Size</th>
+                        {mode === "outward" && <th className="px-3 py-2.5">Stock</th>}
                         <th className="px-3 py-2.5">Qty</th>
                         <th className="px-3 py-2.5">Unit</th>
-                        <th className="px-3 py-2.5">
-                          {mode === "inward"
-                            ? (globalDefaults.source_type === "Return From Client" ? "Client" : "Client / Supplier")
-                            : "Client"}
-                        </th>
-                        {(mode === "outward" || (mode === "inward" && globalDefaults.source_type === "Return From Client")) && (
-                          <th className="px-3 py-2.5">Project</th>
+                        {mode === "inward" ? (
+                          <>
+                            <th className="px-3 py-2.5">Source Type</th>
+                            <th className="px-3 py-2.5">Vendor / Source</th>
+                          </>
+                        ) : (
+                          <>
+                            <th className="px-3 py-2.5">Dispatch Type</th>
+                            <th className="px-3 py-2.5">Party Name</th>
+                            <th className="px-3 py-2.5">Project</th>
+                          </>
                         )}
                         <th className="px-3 py-2.5">{getRefHeaderLabel(globalDefaults.reference_type)}</th>
                         <th className="px-3 py-2.5">Date</th>
                         <th className="px-3 py-2.5">Remarks</th>
-                        <th className="px-3 py-2.5">{mode === "inward" ? "Status / High Value" : "Status"}</th>
+                        <th className="px-3 py-2.5">{mode === "inward" ? "High Value" : "Status"}</th>
                         <th className="px-3 py-2.5 text-center">Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {rows.length === 0 ? (
-                        <tr><td colSpan={12} className="px-3 py-10 text-center text-slate-500">No rows to review yet.</td></tr>
+                        <tr><td colSpan={13} className="px-3 py-10 text-center text-slate-500">No rows to review yet.</td></tr>
                       ) : (
                         visibleRows.map((row) => {
                           const originalIndex = rows.findIndex((r) => r._id === row._id);
                           if (originalIndex === -1) return null;
                           const status = matchProduct(row.product, row.size);
-                          const rowErrors = getRowValidationErrors(row, mode);
+                          const rowErrors = getRowValidationErrors(row, mode, productsList);
+                          const availStock = getAvailableStock(row.product, row.size, productsList);
 
                           return (
                             <tr key={row._id} className={`${!row._selected ? "opacity-60" : ""} border-t border-slate-100 hover:bg-slate-50/50`}>
@@ -1462,9 +1897,16 @@ export default function ManualBulkImport({
                                 <Input
                                   value={row.size || ""}
                                   onChange={(e) => updateCell(originalIndex, "size", e.target.value)}
-                                  className="text-xs h-8 bg-white border-slate-200"
+                                  className="text-xs h-8 bg-white border-slate-200 w-24"
                                 />
                               </td>
+                              {mode === "outward" && (
+                                <td className="px-3 py-2.5 align-top">
+                                  <span className={`inline-flex items-center px-2 py-1 rounded text-[11px] font-semibold mt-1 ${Number(row.quantity) > availStock ? "bg-red-50 text-red-700 border border-red-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
+                                    {availStock}
+                                  </span>
+                                </td>
+                              )}
                               <td className="px-3 py-2.5 align-top">
                                 <Input
                                   type="number"
@@ -1488,29 +1930,97 @@ export default function ManualBulkImport({
                                   </SelectContent>
                                 </Select>
                               </td>
-                              <td className="px-3 py-2.5 align-top">
-                                <Input
-                                  list="manual-client-list"
-                                  value={mode === "inward" ? (row.source_name || row.client_name || "") : (row.client_name || "")}
-                                  onChange={(e) => updateCell(originalIndex, "client_supplier", e.target.value)}
-                                  className="text-xs h-8 bg-white border-slate-200"
-                                  placeholder={mode === "inward" ? "Supplier name" : "Client name"}
-                                />
-                              </td>
-                              {(mode === "outward" || (mode === "inward" && globalDefaults.source_type === "Return From Client")) && (
-                                <td className="px-3 py-2.5 align-top">
-                                  <Input
-                                    value={row.project_name || ""}
-                                    onChange={(e) => updateCell(originalIndex, "project_name", e.target.value)}
-                                    className="text-xs h-8 bg-white border-slate-200"
-                                  />
-                                </td>
+                              {mode === "inward" ? (
+                                <>
+                                  <td className="px-3 py-2.5 align-top">
+                                    <Select
+                                      value={row.source_type || "Supplier Supply"}
+                                      onValueChange={(val) => updateCell(originalIndex, "source_type", val)}
+                                    >
+                                      <SelectTrigger className="h-8 text-xs bg-white border-slate-200 min-w-[130px]">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {INWARD_SRC_TYPES.map((st) => (
+                                          <SelectItem key={st} value={st}>{st}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </td>
+                                  <td className="px-3 py-2.5 align-top">
+                                    <Input
+                                      list={
+                                        row.source_type === "Client Return"
+                                          ? "manual-client-list"
+                                          : row.source_type === "B2B Return"
+                                          ? "manual-b2b-list"
+                                          : "manual-vendor-list"
+                                      }
+                                      value={row.source_name || row.client_name || ""}
+                                      onChange={(e) => updateCell(originalIndex, "client_supplier", e.target.value)}
+                                      className="text-xs h-8 bg-white border-slate-200 min-w-[140px]"
+                                      placeholder={
+                                        row.source_type === "Client Return"
+                                          ? "Select client"
+                                          : row.source_type === "B2B Return"
+                                          ? "Select B2B customer"
+                                          : "Supplier / Vendor"
+                                      }
+                                    />
+                                  </td>
+                                </>
+                              ) : (
+                                <>
+                                  <td className="px-3 py-2.5 align-top">
+                                    <Select
+                                      value={row.party_type || row.outward_type || "Client Sale"}
+                                      onValueChange={(val) => updateCell(originalIndex, "party_type", val)}
+                                    >
+                                      <SelectTrigger className="h-8 text-xs bg-white border-slate-200 min-w-[130px]">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {OUTWARD_TYPES.map((ot) => (
+                                          <SelectItem key={ot} value={ot}>{ot}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </td>
+                                  <td className="px-3 py-2.5 align-top">
+                                    <Input
+                                      list={
+                                        row.party_type === "Return to Supplier"
+                                          ? "manual-vendor-list"
+                                          : row.party_type === "B2B Sale"
+                                          ? "manual-b2b-list"
+                                          : "manual-client-list"
+                                      }
+                                      value={row.client_name || row.source_name || ""}
+                                      onChange={(e) => updateCell(originalIndex, "client_supplier", e.target.value)}
+                                      className="text-xs h-8 bg-white border-slate-200 min-w-[140px]"
+                                      placeholder={
+                                        row.party_type === "Return to Supplier"
+                                          ? "Select vendor"
+                                          : row.party_type === "B2B Sale"
+                                          ? "Select B2B customer"
+                                          : "Select client"
+                                      }
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2.5 align-top">
+                                    <Input
+                                      value={row.project_name || ""}
+                                      onChange={(e) => updateCell(originalIndex, "project_name", e.target.value)}
+                                      className="text-xs h-8 bg-white border-slate-200 min-w-[110px]"
+                                    />
+                                  </td>
+                                </>
                               )}
                               <td className="px-3 py-2.5 align-top">
                                 <Input
                                   value={row.reference_number || row.challan_number || row.outward_challan_no || ""}
                                   onChange={(e) => updateCell(originalIndex, "reference_value", e.target.value)}
-                                  className="text-xs h-8 bg-white border-slate-200 font-mono"
+                                  className="text-xs h-8 bg-white border-slate-200 font-mono w-28"
                                   placeholder="Challan"
                                 />
                               </td>
@@ -1526,34 +2036,33 @@ export default function ManualBulkImport({
                                 <Input
                                   value={row.remarks || ""}
                                   onChange={(e) => updateCell(originalIndex, "remarks", e.target.value)}
-                                  className="text-xs h-8 bg-white border-slate-200"
+                                  className="text-xs h-8 bg-white border-slate-200 min-w-[100px]"
                                 />
                               </td>
                               <td className="px-3 py-2.5 align-top">
-                                <div className="space-y-1">
+                                {mode === "inward" ? (
+                                  <label className="flex items-center gap-1.5 text-[11px] text-slate-700 font-medium cursor-pointer mt-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(row.high_value_goods)}
+                                      onChange={(e) => updateCell(originalIndex, "high_value_goods", e.target.checked)}
+                                      className="w-3.5 h-3.5 rounded border-slate-300 text-slate-900"
+                                    />
+                                    High Value
+                                  </label>
+                                ) : (
                                   <Select
                                     value={row.status || "Dispatched"}
                                     onValueChange={(value) => updateCell(originalIndex, "status", value)}
                                   >
-                                    <SelectTrigger className="h-7 text-[11px] bg-white border-slate-200">
+                                    <SelectTrigger className="h-7 text-[11px] bg-white border-slate-200 min-w-[95px]">
                                       <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
                                       {STATUS_OPTIONS.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
                                     </SelectContent>
                                   </Select>
-                                  {mode === "inward" && (
-                                    <label className="flex items-center gap-1.5 text-[10px] text-slate-600 font-medium cursor-pointer">
-                                      <input
-                                        type="checkbox"
-                                        checked={Boolean(row.high_value_goods)}
-                                        onChange={(e) => updateCell(originalIndex, "high_value_goods", e.target.checked)}
-                                        className="w-3.5 h-3.5 rounded border-slate-300 text-slate-900"
-                                      />
-                                      High Value
-                                    </label>
-                                  )}
-                                </div>
+                                )}
                               </td>
                               <td className="px-3 py-2.5 align-top text-center">
                                 <button

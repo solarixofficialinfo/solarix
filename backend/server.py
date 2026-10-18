@@ -14230,9 +14230,11 @@ class BulkRow(BaseModel):
     date: Optional[str] = ""
     reference_number: Optional[str] = ""
     reference_type: Optional[str] = "Challan Number"
-    source_type: Optional[str] = "Supplier"
+    source_type: Optional[str] = "Supplier Supply"
     source_name: Optional[str] = ""
     vendor: Optional[str] = ""
+    vendor_id: Optional[str] = ""
+    party_type: Optional[str] = ""
     client_id: Optional[str] = ""
     client_name: Optional[str] = ""
     bill_number: Optional[str] = ""
@@ -14283,10 +14285,12 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
     all_assets = _load_local_assets()
     hv_products = _load_local_high_value_products()
     
-    # 1. Pre-fetch existing products and clients for company in bulk
-    existing_prods, existing_clients = await asyncio.gather(
+    # 1. Pre-fetch existing products, clients, vendors, and B2B customers in bulk
+    existing_prods, existing_clients, existing_vendors, existing_b2b = await asyncio.gather(
         db.products.find({"company_id": cid}).to_list(10000),
-        db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "full_name": 1}).to_list(10000)
+        db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "full_name": 1}).to_list(10000),
+        db.vendors.find({"company_id": cid}, {"_id": 0, "id": 1, "name": 1}).to_list(5000),
+        db.b2b_customers.find({"company_id": cid}, {"_id": 0, "id": 1, "name": 1, "full_name": 1}).to_list(5000)
     )
     for p in (existing_prods or []):
         pn_n = norm_product_name(p.get("name"))
@@ -14298,6 +14302,17 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
     for c in (existing_clients or []):
         if c.get("full_name"):
             client_map[c["full_name"].strip().lower()] = c
+
+    vendor_map = {}
+    for v in (existing_vendors or []):
+        if v.get("name"):
+            vendor_map[v["name"].strip().lower()] = v
+
+    b2b_map = {}
+    for b in (existing_b2b or []):
+        b_name = (b.get("name") or b.get("full_name") or "").strip()
+        if b_name:
+            b2b_map[b_name.lower()] = b
 
     # 2. Pre-pass: Resolve & bulk-insert missing products in 1 batch query
     new_prods_to_insert = []
@@ -14340,24 +14355,62 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
             qty = 0.0
             
         remarks_val = r.remarks or gd.get("remarks", "")
-        source_type_val = r.source_type or gd.get("source_type", "Supplier")
+        raw_src_type = (r.source_type or gd.get("source_type") or "Supplier Supply").strip()
+        
+        # Standardize source_type
+        if raw_src_type in ("Supplier", "Vendor", "Supply", "Supplier Supply"):
+            source_type_val = "Supplier Supply"
+        elif raw_src_type in ("Return From Client", "Client / Customer", "Client Return"):
+            source_type_val = "Client Return"
+        elif raw_src_type in ("B2B Return", "B2B Customer"):
+            source_type_val = "B2B Return"
+        elif raw_src_type in ("Internal / Warehouse", "Internal", "Warehouse"):
+            source_type_val = "Internal / Warehouse"
+        elif raw_src_type in ("Repair Return", "Repair"):
+            source_type_val = "Repair Return"
+        else:
+            source_type_val = raw_src_type or "Other"
+
         client_id_val = r.client_id or gd.get("client_id", "")
         client_name_val = r.client_name or gd.get("client_name", "")
-        source_name_val = r.source_name or gd.get("source_name", "")
+        source_name_val = (r.source_name or gd.get("source_name", "")).strip()
+        vendor_id_val = getattr(r, "vendor_id", "") or gd.get("vendor_id", "")
         ps = r.size or ""
         pu = r.unit or gd.get("unit") or "Nos"
         
-        # Client ID resolution from name case-insensitively for Return From Client
-        if source_type_val in ("Return From Client", "B2B Return", "Client / Customer", "Client Return"):
-            if client_name_val and not client_id_val:
-                matched_c = client_map.get(client_name_val.strip().lower())
+        # Entity resolution based on standardized source_type
+        if source_type_val == "Supplier Supply":
+            if not vendor_id_val and source_name_val:
+                matched_v = vendor_map.get(source_name_val.lower())
+                if matched_v:
+                    vendor_id_val = matched_v["id"]
+                    source_name_val = matched_v["name"]
+            client_id_val = ""
+            client_name_val = ""
+        elif source_type_val == "Client Return":
+            party_str = client_name_val or source_name_val
+            if party_str and not client_id_val:
+                matched_c = client_map.get(party_str.lower())
                 if matched_c:
                     client_id_val = matched_c["id"]
                     client_name_val = matched_c["full_name"]
-            if client_name_val:
-                source_name_val = client_name_val
+            if not client_name_val and party_str:
+                client_name_val = party_str
+            source_name_val = client_name_val
             if client_id_val:
                 remarks_val = f"{remarks_val} [client_id:{client_id_val}]".strip()
+        elif source_type_val == "B2B Return":
+            party_str = source_name_val or client_name_val
+            if party_str and not client_id_val:
+                matched_b = b2b_map.get(party_str.lower())
+                if matched_b:
+                    client_id_val = matched_b["id"]
+                    client_name_val = matched_b.get("name") or matched_b.get("full_name") or party_str
+            if not client_name_val and party_str:
+                client_name_val = party_str
+            source_name_val = client_name_val
+            if client_id_val:
+                remarks_val = f"{remarks_val} [b2b_id:{client_id_val}]".strip()
 
         matched_p = prod_cache.get((cid, norm_product_name(pn), norm_str(ps))) or {}
         entry_id = str(uuid.uuid4())
@@ -14366,6 +14419,59 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
         date_val = r.date or gd.get("date", "") or now_iso()
         clean_ref = str(ref_num or "").strip()
         clean_bill = str(bill_num or "").strip()
+
+        # Vendor Purchase Bill Flow: Upsert purchase bill in db.purchase_bills if Supplier Supply
+        if source_type_val == "Supplier Supply" and (vendor_id_val or source_name_val):
+            try:
+                existing_pbill = None
+                if clean_bill:
+                    existing_pbill = await db.purchase_bills.find_one({
+                        "company_id": cid,
+                        "bill_number": clean_bill
+                    })
+                if not existing_pbill and clean_ref and vendor_id_val:
+                    existing_pbill = await db.purchase_bills.find_one({
+                        "company_id": cid,
+                        "vendor_id": vendor_id_val,
+                        "challan_number": clean_ref
+                    })
+
+                if existing_pbill:
+                    if clean_ref:
+                        await db.purchase_bills.update_one(
+                            {"id": existing_pbill["id"], "company_id": cid},
+                            {"$set": {
+                                "challan_number": clean_ref,
+                                "challan_no": clean_ref,
+                                "reference_number": clean_ref,
+                                "updated_at": now_iso()
+                            }}
+                        )
+                elif clean_bill or clean_ref:
+                    pbill_id = f"pbill_{uuid.uuid4().hex[:12]}"
+                    pbill_doc = {
+                        "id": pbill_id,
+                        "company_id": cid,
+                        "vendor_id": vendor_id_val,
+                        "vendor_name": source_name_val or "Unknown Vendor",
+                        "bill_number": clean_bill or (f"BILL-{clean_ref}" if clean_ref else f"INV-{uuid.uuid4().hex[:6]}"),
+                        "challan_number": clean_ref,
+                        "challan_no": clean_ref,
+                        "reference_number": clean_ref,
+                        "bill_date": date_val[:10],
+                        "due_date": "",
+                        "items": [],
+                        "subtotal": 0.0,
+                        "tax_total": 0.0,
+                        "total_amount": 0.0,
+                        "status": "Received",
+                        "payment_status": "Unpaid",
+                        "created_at": now_iso(),
+                        "updated_at": now_iso()
+                    }
+                    await db.purchase_bills.insert_one(pbill_doc)
+            except Exception as pbill_err:
+                logger.warning(f"Error linking purchase bill in bulk inward: {pbill_err}")
 
         att_id = r.attachment_file_id or gd.get("attachment_file_id", "") or data.attachment_file_id or (data.attachment_file_ids[0] if getattr(data, "attachment_file_ids", None) else "")
         att_name = r.attachment_filename or gd.get("attachment_filename", "") or data.attachment_filename or ""
@@ -14386,6 +14492,7 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
             "bill_number": clean_bill,
             "source_type": source_type_val,
             "source_name": source_name_val,
+            "vendor_id": vendor_id_val,
             "client_id": client_id_val,
             "client_name": client_name_val,
             "date": date_val,
@@ -14670,6 +14777,9 @@ class BulkOutwardRow(BaseModel):
     challan_no: Optional[str] = ""
     reference_number: Optional[str] = ""
     reference_type: Optional[str] = "Challan Number"
+    party_type: Optional[str] = "Client Sale"
+    outward_type: Optional[str] = ""
+    vendor_id: Optional[str] = ""
     client_id: Optional[str] = ""
     client_name: Optional[str] = ""
     project_id: Optional[str] = ""
@@ -14703,7 +14813,7 @@ class BulkOutwardIn(BaseModel):
 async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
     if not has_perm(user, "data_management", "create"):
         raise HTTPException(status_code=403, detail="Missing permission: data_management.create")
-    """Insert validated outward rows in bulk batch mode. Auto-creates products. Returns count + ids."""
+    """Insert validated outward rows in bulk batch mode with live stock validation. Returns count + ids."""
     if not data.rows:
         raise HTTPException(status_code=400, detail="No rows provided")
     cid = user["company_id"]
@@ -14720,11 +14830,17 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
     prod_cache: Dict[Tuple[str, str, str], Any] = {}
     docs_to_insert = []
 
-    # 1. Pre-fetch existing products and clients for company in bulk
-    existing_prods, existing_clients = await asyncio.gather(
-        db.products.find({"company_id": cid}).to_list(10000),
-        db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "full_name": 1}).to_list(10000)
+    # 1. Pre-fetch existing products, clients, vendors, B2B customers, and live stock balances
+    (existing_prods, existing_clients, existing_vendors, existing_b2b), (bal_items, _, _, _) = await asyncio.gather(
+        asyncio.gather(
+            db.products.find({"company_id": cid}).to_list(10000),
+            db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "full_name": 1}).to_list(10000),
+            db.vendors.find({"company_id": cid}, {"_id": 0, "id": 1, "name": 1}).to_list(5000),
+            db.b2b_customers.find({"company_id": cid}, {"_id": 0, "id": 1, "name": 1, "full_name": 1}).to_list(5000)
+        ),
+        _compute_inventory_balances(cid)
     )
+
     for p in (existing_prods or []):
         pn_n = norm_product_name(p.get("name"))
         ps_n = norm_str(p.get("size"))
@@ -14735,6 +14851,52 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
     for c in (existing_clients or []):
         if c.get("full_name"):
             client_map[c["full_name"].strip().lower()] = c
+
+    vendor_map = {}
+    for v in (existing_vendors or []):
+        if v.get("name"):
+            vendor_map[v["name"].strip().lower()] = v
+
+    b2b_map = {}
+    for b in (existing_b2b or []):
+        b_name = (b.get("name") or b.get("full_name") or "").strip()
+        if b_name:
+            b2b_map[b_name.lower()] = b
+
+    # Live stock map for balance validation
+    avail_stock_map: Dict[Tuple[str, str], float] = {}
+    for p in bal_items:
+        k = (norm_product_name(p.get("name")), norm_str(p.get("size")))
+        avail_stock_map[k] = float(p.get("available_stock", p.get("balance", 0.0)))
+
+    # Stock balance check across the incoming batch
+    requested_totals: Dict[Tuple[str, str], float] = {}
+    for r in data.rows:
+        pn = (r.product or "").strip().upper()
+        try:
+            qty = float(r.quantity) if r.quantity not in (None, "") else 0.0
+        except (ValueError, TypeError):
+            qty = 0.0
+        if not pn or qty <= 0:
+            continue
+        status_val = r.status or gd.get("status", "Dispatched")
+        if status_val == "Cancelled":
+            continue
+        k = (norm_product_name(pn), norm_str(r.size or ""))
+        requested_totals[k] = requested_totals.get(k, 0.0) + qty
+
+    insufficient_items = []
+    for k, req_qty in requested_totals.items():
+        avail = avail_stock_map.get(k, 0.0)
+        if req_qty > avail:
+            display_size = f" ({k[1]})" if k[1] else ""
+            insufficient_items.append(f"'{k[0]}{display_size}' (Available: {avail}, Requested: {req_qty})")
+
+    if insufficient_items:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot dispatch: Insufficient stock for {'; '.join(insufficient_items)}"
+        )
 
     # 2. Pre-pass: Resolve & bulk-insert missing products in 1 batch query
     new_prods_to_insert = []
@@ -14780,22 +14942,51 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
         if not pn or qty <= 0:
             continue
 
-        client_id_val = r.client_id or g_client_id
-        client_name_val = r.client_name or g_client_name
+        raw_party_type = (r.party_type or r.outward_type or gd.get("party_type") or gd.get("outward_type") or "Client Sale").strip()
+        if raw_party_type in ("Return to Supplier", "Supplier Return", "Vendor Return"):
+            party_type_val = "Return to Supplier"
+        elif raw_party_type in ("B2B Sale", "B2B Customer"):
+            party_type_val = "B2B Sale"
+        else:
+            party_type_val = "Client Sale"
+
+        party_name_input = (r.client_name or r.source_name or g_client_name or gd.get("source_name") or "").strip()
+        client_id_val = r.client_id or g_client_id or ""
+        client_name_val = party_name_input
+        vendor_id_val = getattr(r, "vendor_id", "") or gd.get("vendor_id", "")
         project_id_val = r.project_id or gd.get("project_id", "")
-        project_name_val = r.project_name or gd.get("project_name", "") or client_name_val
+        project_name_val = r.project_name or gd.get("project_name", "")
 
-        if client_name_val and not client_id_val:
-            matched_c = client_map.get(client_name_val.strip().lower())
-            if matched_c:
-                client_id_val = matched_c["id"]
-                client_name_val = matched_c["full_name"]
-
-        if client_id_val:
-            if not project_id_val:
-                project_id_val = client_id_val
-            if not project_name_val:
-                project_name_val = client_name_val
+        if party_type_val == "Return to Supplier":
+            if party_name_input and not vendor_id_val:
+                matched_v = vendor_map.get(party_name_input.lower())
+                if matched_v:
+                    vendor_id_val = matched_v["id"]
+                    client_name_val = matched_v["name"]
+            client_id_val = ""
+            project_id_val = ""
+            project_name_val = ""
+        elif party_type_val == "B2B Sale":
+            if party_name_input and not client_id_val:
+                matched_b = b2b_map.get(party_name_input.lower())
+                if matched_b:
+                    client_id_val = matched_b["id"]
+                    client_name_val = matched_b.get("name") or matched_b.get("full_name") or party_name_input
+            vendor_id_val = ""
+            project_id_val = ""
+            project_name_val = ""
+        else:
+            if party_name_input and not client_id_val:
+                matched_c = client_map.get(party_name_input.lower())
+                if matched_c:
+                    client_id_val = matched_c["id"]
+                    client_name_val = matched_c["full_name"]
+            vendor_id_val = ""
+            if client_id_val:
+                if not project_id_val:
+                    project_id_val = client_id_val
+                if not project_name_val:
+                    project_name_val = client_name_val
 
         status_val = r.status or gd.get("status", "Dispatched")
         if status_val not in ["Pending", "Dispatched", "Cancelled"]:
@@ -14806,6 +14997,7 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
         ref_num = r.reference_number or r.outward_challan_no or r.challan_number or getattr(r, 'challan_no', None) or gd.get("reference_number") or gd.get("outward_challan_no", "")
         challan_no = r.outward_challan_no or r.challan_number or getattr(r, 'challan_no', None) or ref_num
         clean_ch = str(challan_no or "").strip()
+        clean_ref = str(ref_num or "").strip()
         date_val = r.date or gd.get("date", "") or now_iso()
 
         att_id = r.attachment_file_id or gd.get("attachment_file_id", "") or data.attachment_file_id or (data.attachment_file_ids[0] if getattr(data, "attachment_file_ids", None) else "")
@@ -14820,19 +15012,23 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
             "product_id": matched_p.get("id") or "",
             "quantity": qty,
             "unit": r.unit or gd.get("unit") or "Nos",
+            "party_type": party_type_val,
+            "outward_type": party_type_val,
+            "vendor_id": vendor_id_val,
             "client_id": client_id_val,
             "client_name": client_name_val,
             "project_id": project_id_val,
             "project_name": project_name_val,
-            "outward_challan_no": numeric_only(challan_no),
-            "reference_number": numeric_only(ref_num),
+            "outward_challan_no": clean_ch,
+            "reference_number": clean_ref or clean_ch,
             "reference_type": r.reference_type or gd.get("reference_type", "Challan Number"),
             "date": date_val,
             "remarks": r.remarks or gd.get("remarks", ""),
             "status": status_val,
-            "attachment_file_id": "",
-            "attachment_filename": "",
-            "source": "ai-bulk-import",
+            "attachment_file_id": att_id,
+            "attachment_filename": att_name,
+            "attachment_file_ids": att_ids,
+            "source": "manual-bulk-import",
             "created_by": user["id"],
             "created_by_name": user["name"],
             "created_at": now_iso()
