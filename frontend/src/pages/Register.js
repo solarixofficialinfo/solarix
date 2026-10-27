@@ -336,10 +336,20 @@ export default function Register() {
                       value={form.confirm_password}
                       onChange={set("confirm_password")}
                       placeholder="Re-enter password to verify"
-                      className="mt-1 text-xs h-9 bg-white border-slate-200 font-medium focus:border-blue-600"
+                      className={`mt-1 text-xs h-9 bg-white font-medium ${
+                        form.confirm_password && form.password !== form.confirm_password
+                          ? "border-red-500 focus:border-red-600"
+                          : "border-slate-200 focus:border-blue-600"
+                      }`}
                       required
                       minLength={6}
+                      data-testid="reg-confirm-password"
                     />
+                    {form.confirm_password && form.password !== form.confirm_password && (
+                      <p className="mt-1 text-[11px] font-semibold text-red-600">
+                        Passwords do not match.
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -352,12 +362,14 @@ export default function Register() {
 
                 <div className="space-y-3 text-xs">
                   <div>
-                    <Label className="text-xs font-semibold text-slate-700">Street Address / Landmark</Label>
+                    <Label className="text-xs font-semibold text-slate-700">Street Address / Landmark *</Label>
                     <Input
                       value={form.address}
                       onChange={set("address")}
                       placeholder="Building, street, area, landmark"
                       className="mt-1 text-xs h-9 bg-white border-slate-200 focus:border-blue-600"
+                      required
+                      data-testid="reg-address"
                     />
                   </div>
 
@@ -366,6 +378,7 @@ export default function Register() {
                     district={form.district}
                     state={form.state}
                     pincode={form.pincode}
+                    required={true}
                     onChange={({ city, state, pincode, district }) =>
                       setForm((prev) => ({ ...prev, city, state, pincode, district: district || prev.district || "" }))
                     }
@@ -384,8 +397,8 @@ export default function Register() {
 
                 <Button
                   type="submit"
-                  disabled={loading || !isFormValid}
-                  className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white font-bold text-xs px-6 h-10 shadow-sm rounded-xl transition-all"
+                  disabled={loading}
+                  className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs px-6 h-10 shadow-sm rounded-xl transition-all"
                   data-testid="vendor-submit-btn"
                 >
                   {loading ? "Creating your workspace..." : "Create Vendor Account"}

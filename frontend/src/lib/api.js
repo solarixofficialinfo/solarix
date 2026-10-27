@@ -63,7 +63,13 @@ const AUTH_ROUTES = [
 export const isPublicRoute = (pathname = "") =>
   pathname === "/login" ||
   pathname === "/register" ||
+  pathname === "/signup" ||
+  pathname === "/sign-up" ||
+  pathname === "/vendor/register" ||
+  pathname === "/vendor/signup" ||
+  pathname === "/vendor/login" ||
   pathname === "/forgot-password" ||
+  pathname === "/reset-password" ||
   pathname === "/whatsapp-marketing" ||
   pathname.startsWith("/s/") ||
   pathname.startsWith("/sales/");

@@ -3773,8 +3773,21 @@ async def register_company(data: RegisterCompanyIn, response: Response):
                 is_resumed = True
                 auth_user_id = user_id
             else:
-                logger.error(f"create_auth_user failed: {e}")
-                raise HTTPException(status_code=400, detail="Registration could not be completed. Please try again.")
+                logger.warning(f"create_auth_user RPC failed: {e}")
+                if service_supabase is not None:
+                    try:
+                        admin_res = service_supabase.auth.admin.create_user({
+                            "email": email,
+                            "password": data.password,
+                            "email_confirm": True,
+                        })
+                        if admin_res and admin_res.user:
+                            auth_user_id = admin_res.user.id
+                            logger.info(f"Created Auth user via service_supabase admin with ID: {auth_user_id}")
+                    except Exception as admin_err:
+                        logger.warning(f"service_supabase admin create_user failed: {admin_err}")
+                if not auth_user_id:
+                    auth_user_id = user_id
 
     # Create or update Company document (Idempotent)
     company_id: str = str(existing_company.get("id") if (existing_company and existing_company.get("id")) else (existing_user.get("company_id") if (existing_user and existing_user.get("company_id")) else uuid.uuid4()))
@@ -3824,6 +3837,7 @@ async def register_company(data: RegisterCompanyIn, response: Response):
         "name": data.owner_name,
         "email": email,
         "mobile": mobile,
+        "password_hash": hash_password(data.password),
         "role": "Admin",
         "user_type": "owner",
         "status": "Active",
@@ -3856,6 +3870,23 @@ async def register_company(data: RegisterCompanyIn, response: Response):
                 refresh_token = sign_in_res.session.refresh_token
         except Exception as e:
             logger.warning(f"Auto sign-in after registration completion: {e}")
+
+    # Fallback to backend signed JWT token if Supabase session is not immediately available
+    if not token:
+        try:
+            token_payload = {
+                "sub": user_id,
+                "id": user_id,
+                "user_id": user_id,
+                "email": email,
+                "company_id": company_id,
+                "role": "Admin",
+                "exp": datetime.now(timezone.utc) + timedelta(days=7)
+            }
+            token = jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+            refresh_token = token
+        except Exception as token_err:
+            logger.error(f"JWT fallback token encoding failed during registration: {token_err}")
 
     if token:
         response.set_cookie("access_token", token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")

@@ -302,7 +302,10 @@ function App() {
             <Route path="/auth/callback" element={<PublicOnly><Login /></PublicOnly>} />
             <Route path="/vendor/login" element={<PublicOnly><Login /></PublicOnly>} />
             <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
+            <Route path="/signup" element={<PublicOnly><Register /></PublicOnly>} />
+            <Route path="/sign-up" element={<PublicOnly><Register /></PublicOnly>} />
             <Route path="/vendor/register" element={<PublicOnly><Register /></PublicOnly>} />
+            <Route path="/vendor/signup" element={<PublicOnly><Register /></PublicOnly>} />
             <Route path="/forgot-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
             <Route path="/reset-password" element={<PublicOnly><ForgotPassword /></PublicOnly>} />
             {/* Public Company-Branded Sales / Lead Capture Portal */}
