@@ -34,6 +34,10 @@ export default function Receivables() {
   // New Project Dialog State
   const [newProjectOpen, setNewProjectOpen] = useState(false);
 
+  // Edit Project Cost Modal State
+  const [editCostOpen, setEditCostOpen] = useState(false);
+  const [editingCostData, setEditingCostData] = useState(null);
+
   // Add/Edit Payment Modal State
   const [addPaymentOpen, setAddPaymentOpen] = useState(false);
   const [editingPayment, setEditingPayment] = useState(null);
@@ -227,6 +231,34 @@ export default function Receivables() {
     },
     onError: (err) => toast.error(formatApiError(err))
   });
+
+  const updateProjectCostMutation = useMutation({
+    mutationFn: async ({ projectId, payload }) => {
+      const res = await api.put(`/finance/projects/${projectId}/cost`, payload);
+      return res.data;
+    },
+    onSuccess: (data) => {
+      toast.success(data?.message || "Project contract value updated successfully");
+      queryClient.invalidateQueries({ queryKey: ["finance", "receivables"] });
+      if (activeProjectId) {
+        queryClient.invalidateQueries({ queryKey: ["finance", "projects", activeProjectId] });
+      }
+      queryClient.invalidateQueries({ queryKey: ["client"] });
+      setEditCostOpen(false);
+      setEditingCostData(null);
+    },
+    onError: (err) => toast.error(formatApiError(err))
+  });
+
+  const handleOpenEditCost = (projectId, projectName, currentCost, clientName) => {
+    setEditingCostData({
+      projectId,
+      projectName: projectName || "Solar Project",
+      clientName: clientName || "Client",
+      currentCost: currentCost !== undefined && currentCost !== null ? Number(currentCost) : 0
+    });
+    setEditCostOpen(true);
+  };
 
   const recordPaymentMutation = useMutation({
     mutationFn: async ({ projectId, payload }) => {
@@ -1083,9 +1115,22 @@ export default function Receivables() {
 
                 {/* Financial Summary Breakdown Table */}
                 <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2 rounded-lg text-xs border border-slate-100 font-mono">
-                  <div>
-                    <div className="text-[10px] text-slate-400 font-sans">Contract Value</div>
-                    <div className="font-bold text-slate-900">₹{proj.project_value.toLocaleString("en-IN")}</div>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="text-[10px] text-slate-400 font-sans">Contract Value</div>
+                      <div className="font-bold text-slate-900">₹{proj.project_value.toLocaleString("en-IN")}</div>
+                    </div>
+                    <button
+                      type="button"
+                      title="Edit Project Cost"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenEditCost(proj.id, proj.project_name, proj.project_value, item.full_name);
+                      }}
+                      className="p-1 hover:bg-slate-200 text-slate-400 hover:text-slate-800 rounded transition-colors"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                    </button>
                   </div>
                   <div>
                     <div className="text-[10px] text-emerald-600 font-sans">Actual Received</div>
@@ -1103,6 +1148,14 @@ export default function Receivables() {
 
                 {/* Footer Action Buttons */}
                 <div className="flex items-center justify-end gap-2 pt-1.5 border-t border-slate-100">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => handleOpenEditCost(proj.id, proj.project_name, proj.project_value, item.full_name)}
+                    className="h-7 text-[11px] text-slate-700 hover:bg-slate-100 font-medium gap-1 rounded-md px-2.5 border-slate-200"
+                  >
+                    <Edit3 className="w-3 h-3 text-slate-500" /> Edit Cost
+                  </Button>
                   <Button
                     size="xs"
                     onClick={() => handleOpenAddPayment(proj.id)}
@@ -1152,6 +1205,19 @@ export default function Receivables() {
                 <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto">
                   <Button
                     size="sm"
+                    variant="outline"
+                    onClick={() => handleOpenEditCost(
+                      activeProjectId,
+                      projectWorkspace?.project?.project_name,
+                      projectWorkspace?.summary?.project_value,
+                      projectWorkspace?.client?.full_name
+                    )}
+                    className="flex-1 sm:flex-initial h-8 text-xs border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold gap-1.5 rounded-lg shadow-2xs whitespace-nowrap"
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-blue-600" /> Edit Project Cost
+                  </Button>
+                  <Button
+                    size="sm"
                     onClick={() => handleOpenCreateInvoice(activeProjectId)}
                     className="flex-1 sm:flex-initial h-8 text-xs bg-blue-600 hover:bg-blue-700 text-white font-semibold gap-1 rounded-lg shadow-2xs whitespace-nowrap"
                   >
@@ -1192,7 +1258,22 @@ export default function Receivables() {
                     {/* Top Financial Breakdown Bar (6 Cards) */}
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs">
                       <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                        <div className="text-[10px] text-slate-400 font-medium">Contract Value</div>
+                        <div className="flex items-center justify-between">
+                          <div className="text-[10px] text-slate-400 font-medium">Contract Value</div>
+                          <button
+                            type="button"
+                            title="Edit Project Cost"
+                            onClick={() => handleOpenEditCost(
+                              activeProjectId,
+                              projectWorkspace?.project?.project_name,
+                              projectWorkspace?.summary?.project_value,
+                              projectWorkspace?.client?.full_name
+                            )}
+                            className="p-0.5 hover:bg-slate-200 text-slate-400 hover:text-slate-800 rounded transition-colors"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                        </div>
                         <div className="text-sm font-bold text-slate-900 mt-0.5 font-mono">
                           ₹{(projectWorkspace?.summary?.project_value || 0).toLocaleString("en-IN")}
                         </div>
@@ -1236,8 +1317,23 @@ export default function Receivables() {
                           Client Financial Reconciliation
                         </h4>
                         <div className="space-y-1.5 text-xs font-mono">
-                          <div className="flex justify-between py-1 border-b border-slate-50">
-                            <span className="text-slate-600 font-sans">Contract Value</span>
+                          <div className="flex justify-between items-center py-1 border-b border-slate-50">
+                            <span className="text-slate-600 font-sans flex items-center gap-1.5">
+                              Contract Value
+                              <button
+                                type="button"
+                                title="Edit Project Cost"
+                                onClick={() => handleOpenEditCost(
+                                  activeProjectId,
+                                  projectWorkspace?.project?.project_name,
+                                  projectWorkspace?.summary?.project_value,
+                                  projectWorkspace?.client?.full_name
+                                )}
+                                className="text-blue-600 hover:text-blue-800 hover:underline text-[11px] font-sans inline-flex items-center gap-0.5"
+                              >
+                                <Edit3 className="w-2.5 h-2.5" /> Edit
+                              </button>
+                            </span>
                             <span className="font-bold text-slate-900">
                               ₹{(projectWorkspace?.summary?.project_value || 0).toLocaleString("en-IN")}
                             </span>
@@ -3619,7 +3715,169 @@ export default function Receivables() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ─── MODAL: EDIT PROJECT COST ───────────────────────────────────── */}
+      {editCostOpen && (
+        <EditProjectCostDialog
+          open={editCostOpen}
+          onClose={() => {
+            setEditCostOpen(false);
+            setEditingCostData(null);
+          }}
+          data={editingCostData}
+          onSave={({ project_value, notes }) => {
+            updateProjectCostMutation.mutate({
+              projectId: editingCostData.projectId,
+              payload: { project_value, notes }
+            });
+          }}
+          isSaving={updateProjectCostMutation.isPending}
+        />
+      )}
     </div>
+  );
+}
+
+function EditProjectCostDialog({ open, onClose, data, onSave, isSaving }) {
+  const [costInput, setCostInput] = useState("");
+  const [notes, setNotes] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (data && open) {
+      setCostInput(data.currentCost !== undefined && data.currentCost !== null ? String(data.currentCost) : "0");
+      setNotes("");
+      setError("");
+    }
+  }, [data, open]);
+
+  const numValue = Number(costInput);
+  const isValidNumber = costInput.trim() !== "" && !isNaN(numValue) && numValue >= 0;
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const trimmed = costInput.trim();
+    if (trimmed === "") {
+      setError("Please enter a contract value or project cost.");
+      return;
+    }
+    const val = Number(trimmed);
+    if (isNaN(val) || val < 0) {
+      setError("Project cost must be a valid non-negative number (₹0 or greater).");
+      return;
+    }
+    setError("");
+    onSave({
+      project_value: val,
+      notes: notes.trim()
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && !isSaving && onClose()}>
+      <DialogContent className="max-w-md rounded-2xl p-5 w-[94vw] sm:w-full">
+        <DialogHeader className="border-b border-slate-100 pb-3">
+          <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-base">
+            <Edit3 className="w-5 h-5 text-blue-600" /> Edit Project Cost
+          </DialogTitle>
+          <DialogDescription className="text-xs text-slate-500 mt-1">
+            Project: <strong className="text-slate-800">{data?.projectName || "Solar Project"}</strong>
+            {data?.clientName ? (
+              <> · Client: <strong className="text-slate-800">{data.clientName}</strong></>
+            ) : null}
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="py-2 space-y-4 text-xs">
+          {error && (
+            <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <Label className="text-xs font-semibold text-slate-700 flex items-center justify-between">
+              <span>Contract Value / Project Cost (₹) *</span>
+              {isValidNumber && (
+                <span className="text-[11px] font-mono text-emerald-600 font-bold">
+                  ₹{numValue.toLocaleString("en-IN")}
+                </span>
+              )}
+            </Label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">
+                ₹
+              </span>
+              <Input
+                type="number"
+                step="any"
+                min="0"
+                value={costInput}
+                onChange={(e) => {
+                  setCostInput(e.target.value);
+                  if (error) setError("");
+                }}
+                placeholder="0"
+                className="pl-8 h-10 text-sm font-mono font-semibold bg-white border-slate-300 focus:border-blue-500"
+                autoFocus
+                disabled={isSaving}
+                required
+              />
+            </div>
+            <p className="text-[11px] text-slate-500">
+              Enter ₹0 if this is an exploratory or zero-cost project.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs font-semibold text-slate-700">
+              Revision Notes / Remarks (Optional)
+            </Label>
+            <Input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="e.g. Revised quote, discount agreed"
+              className="h-8 text-xs bg-white border-slate-300"
+              disabled={isSaving}
+            />
+          </div>
+
+          <div className="p-2.5 rounded-lg bg-blue-50/70 border border-blue-100 text-[11px] text-blue-800 leading-relaxed">
+            <strong>Authoritative Sync:</strong> Updating this project cost recalculates Contract Value, Invoice Outstanding, Uninvoiced Value, and Project Outstanding across Receivables &amp; Collection.
+          </div>
+
+          <DialogFooter className="pt-2 border-t border-slate-100 gap-2 flex justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onClose}
+              disabled={isSaving}
+              className="text-xs"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={isSaving}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs gap-1.5 min-w-[120px]"
+            >
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...
+                </>
+              ) : (
+                <>
+                  <Check className="w-3.5 h-3.5" /> Save Project Cost
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

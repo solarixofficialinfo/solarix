@@ -27,7 +27,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Respons
 from fastapi.responses import Response as FastAPIResponse, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, Field
 import pdf_generator
 from email_service import send_email, render_otp_email, render_password_changed_email
 import httpx
@@ -18484,6 +18484,10 @@ class ProjectCreatePayload(BaseModel):
     notes: Optional[str] = ""
     payment_plan: Optional[List[PaymentPlanItem]] = []
 
+class ProjectCostUpdatePayload(BaseModel):
+    project_value: float = Field(..., ge=0, description="Commercial contract/project value in INR")
+    notes: Optional[str] = ""
+
 class PaymentRecordPayload(BaseModel):
     project_id: Optional[str] = ""
     client_id: Optional[str] = ""
@@ -19361,6 +19365,122 @@ async def get_project_financial_details(project_id: str, user=Depends(get_curren
         "loans": processed_loans,
         "expenses": expenses,
         "ledger": ledger
+    }
+
+@api_router.put("/finance/projects/{project_id}/cost")
+@api_router.patch("/finance/projects/{project_id}/cost")
+async def update_project_cost(
+    project_id: str,
+    data: ProjectCostUpdatePayload,
+    user=Depends(require_perm("receivables", "edit"))
+):
+    if not project_id or not project_id.strip():
+        raise HTTPException(status_code=400, detail="Invalid project ID")
+    cid = user["company_id"]
+    target_pid = project_id.strip()
+    new_val = float(data.project_value)
+
+    # 1. Locate the project and linked client
+    project = await db.projects.find_one({"id": target_pid, "company_id": cid})
+    client = None
+
+    if project:
+        c_id = project.get("client_id")
+        client = await db.clients.find_one({
+            "$or": [{"id": c_id}, {"sol_id": c_id}],
+            "company_id": cid
+        })
+    else:
+        # Check synthesized project ID pattern (e.g. proj_{client_id} or raw client_id)
+        client_id_candidate = target_pid.replace("proj_", "") if target_pid.startswith("proj_") else target_pid
+        client = await db.clients.find_one({
+            "$or": [
+                {"id": client_id_candidate},
+                {"sol_id": client_id_candidate},
+                {"id": target_pid},
+                {"sol_id": target_pid}
+            ],
+            "company_id": cid
+        })
+
+    if not client and not project:
+        raise HTTPException(status_code=404, detail="Project or client not found in this company workspace")
+
+    # 2. Update or persist project in db.projects and local storage
+    now_str = now_iso()
+    proj_id_to_use = project.get("id") if project else (target_pid if target_pid.startswith("proj_") else f"proj_{client.get('id')}")
+    client_id_to_use = str(client.get("id") if client else project.get("client_id"))
+    sys_kw = float((client.get("system_kw") if client else None) or (project.get("capacity_kw") if project else None) or 0)
+    proj_name = (project.get("project_name") if project else None) or (f"{sys_kw} kW Solar System" if sys_kw > 0 else "Rooftop Solar Project")
+    client_name = client.get("full_name") if client else (project.get("client_name") or "Client")
+
+    proj_updates: Dict[str, Any] = {
+        "project_value": new_val,
+        "updated_at": now_str
+    }
+    if data.notes:
+        proj_updates["notes"] = data.notes.strip()
+
+    if project:
+        await db.projects.update_one(
+            {"id": project["id"], "company_id": cid},
+            {"$set": proj_updates}
+        )
+    else:
+        new_proj_doc = {
+            "id": proj_id_to_use,
+            "company_id": cid,
+            "client_id": client_id_to_use,
+            "project_name": proj_name,
+            "project_type": (client.get("project_type") if client else None) or "Rooftop Solar",
+            "capacity_kw": sys_kw,
+            "project_value": new_val,
+            "project_date": (client.get("created_at") if client else now_str)[:10],
+            "payment_plan": [],
+            "notes": data.notes.strip() if data.notes else "",
+            "status": "Pending",
+            "created_by": user["name"],
+            "created_at": now_str,
+            "updated_at": now_str,
+            "is_default": True
+        }
+        await db.projects.insert_one(dict(new_proj_doc))
+
+    # 3. Synchronize client financial fields so that client detail and receivables reflect the authoritative value
+    if client:
+        val_str = "0" if new_val == 0 else str(new_val)
+        stages = dict(client.get("stages") or {})
+        ob = dict(stages.get("onboarding_data") or {})
+        ob["contract_value"] = val_str
+        ob["quotation_value"] = val_str
+        ob["net_project_value"] = val_str
+        stages["onboarding_data"] = ob
+
+        await db.clients.update_one(
+            {"id": client["id"], "company_id": cid},
+            {"$set": {
+                "stages": stages,
+                "contract_value": val_str,
+                "quotation_value": val_str,
+                "net_project_value": val_str,
+                "updated_at": now_str
+            }}
+        )
+
+    await log_activity(
+        cid,
+        user["id"],
+        user["name"],
+        "Updated Project Cost",
+        f"Updated contract value for Project: {proj_name} (Client: {client_name}) to ₹{new_val:,.2f}"
+    )
+
+    return {
+        "ok": True,
+        "message": f"Project contract value updated to ₹{new_val:,.2f} successfully",
+        "project_id": proj_id_to_use,
+        "client_id": client_id_to_use,
+        "project_value": new_val
     }
 
 @api_router.post("/finance/projects/{project_id}/payments")
