@@ -51,6 +51,26 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
   // Queries
   const { data: clientList = [] } = useClientList();
   const { data: productList = [] } = useProductList();
+  const { data: b2bCustomersList = [] } = useQuery({
+    queryKey: ["inventory-b2b-customers"],
+    queryFn: async () => {
+      const res = await api.get("/inventory/b2b-customers");
+      return res.data?.customers || [];
+    },
+    staleTime: 1000 * 30,
+  });
+
+  const allAvailableClients = useMemo(() => {
+    const list = [...(b2bCustomersList || [])];
+    const seenIds = new Set(list.map((c) => c.id));
+    for (const c of clientList || []) {
+      if (!seenIds.has(c.id)) {
+        list.push(c);
+        seenIds.add(c.id);
+      }
+    }
+    return list;
+  }, [b2bCustomersList, clientList]);
 
   const { data: salesData, isLoading, refetch, isFetching } = useQuery({
     queryKey: ["inventory-b2b-sales"],
@@ -197,19 +217,19 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
     }
     setSavingQuickClient(true);
     try {
-      const res = await api.post("/clients", {
+      const res = await api.post("/inventory/b2b-customers", {
+        name: quickClientForm.full_name.trim(),
         full_name: quickClientForm.full_name.trim(),
         mobile: quickClientForm.mobile.trim(),
         city: quickClientForm.city?.trim() || "",
         state: quickClientForm.state?.trim() || "",
         address: quickClientForm.address?.trim() || "",
-        phase_type: "Three Phase",
-        subsidy_eligible: false,
-        status: "Active"
       });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-customers"] });
       invalidateAllClientQueries(queryClient);
-      const createdClient = res.data;
-      const createdId = createdClient?.id || createdClient?.client?.id;
+      const createdClient = res.data?.customer || res.data?.client || res.data;
+      const createdId = createdClient?.id;
       const createdName = quickClientForm.full_name.trim();
 
       setSaleForm((prev) => ({
@@ -507,9 +527,9 @@ export default function B2BSalesView({ globalSearch = "", onChanged }) {
                     <SelectValue placeholder="Select existing B2B client..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {(clientList || []).map((c) => (
+                    {(allAvailableClients || []).map((c) => (
                       <SelectItem key={c.id} value={c.id}>
-                        {c.full_name} {c.city ? `(${c.city})` : ""}
+                        {c.full_name || c.name} {c.city && c.city !== "—" ? `(${c.city})` : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>

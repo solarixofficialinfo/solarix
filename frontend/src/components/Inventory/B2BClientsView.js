@@ -139,17 +139,20 @@ export default function B2BClientsView({ globalSearch = "", onChanged }) {
     }
     setSavingClient(true);
     try {
-      await api.post("/clients", {
+      const payload = {
+        name: newClient.full_name.trim(),
         full_name: newClient.full_name.trim(),
+        contact_person: newClient.contact_person?.trim() || newClient.full_name.trim(),
         mobile: newClient.mobile.trim(),
         alt_mobile: newClient.alt_mobile?.trim() || "",
         city: newClient.city?.trim() || "",
         state: newClient.state?.trim() || "",
         address: newClient.address?.trim() || "",
-        phase_type: "Three Phase",
-        subsidy_eligible: false,
-        status: "Active"
-      });
+        notes: newClient.notes?.trim() || ""
+      };
+      await api.post("/inventory/b2b-customers", payload);
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-customers"] });
       invalidateAllClientQueries(queryClient);
       await refetch();
       setAddClientOpen(false);
@@ -184,14 +187,22 @@ export default function B2BClientsView({ globalSearch = "", onChanged }) {
     }
     setUpdatingClient(true);
     try {
-      await api.put(`/clients/${editingClient.id}`, {
+      const payload = {
+        name: editFormData.full_name.trim(),
         full_name: editFormData.full_name.trim(),
         mobile: editFormData.mobile.trim(),
         alt_mobile: editFormData.alt_mobile?.trim() || "",
         city: editFormData.city?.trim() || "",
         state: editFormData.state?.trim() || "",
         address: editFormData.address?.trim() || "",
-      });
+      };
+      if (editingClient.id?.startsWith("b2b_cust_")) {
+        await api.put(`/inventory/b2b-customers/${editingClient.id}`, payload);
+      } else {
+        await api.put(`/clients/${editingClient.id}`, payload);
+      }
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-customers"] });
       invalidateAllClientQueries(queryClient);
       await refetch();
       setEditClientOpen(false);
@@ -214,7 +225,14 @@ export default function B2BClientsView({ globalSearch = "", onChanged }) {
     if (!clientToDelete) return;
     setIsDeleting(true);
     try {
-      const res = await api.delete(`/clients/${clientToDelete.id}`);
+      let res;
+      if (clientToDelete.id?.startsWith("b2b_cust_")) {
+        res = await api.delete(`/inventory/b2b-customers/${clientToDelete.id}`);
+      } else {
+        res = await api.delete(`/clients/${clientToDelete.id}`);
+      }
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-b2b-customers"] });
       invalidateAllClientQueries(queryClient, clientToDelete.id);
       await refetch();
       setDeleteDialogOpen(false);

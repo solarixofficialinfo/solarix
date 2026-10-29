@@ -257,6 +257,9 @@ export default function B2BSupply() {
 
   // Consolidated lists
   const b2bCustomers = useMemo(() => {
+    if (b2bSummaryData?.customers?.length) return b2bSummaryData.customers;
+    if (b2bSummaryData?.clients?.length) return b2bSummaryData.clients;
+    if (b2bCustomersData?.customers?.length) return b2bCustomersData.customers;
     return b2bSummaryData?.customers || b2bSummaryData?.clients || b2bCustomersData?.customers || [];
   }, [b2bSummaryData, b2bCustomersData]);
 
@@ -282,7 +285,9 @@ export default function B2BSupply() {
     queryClient.invalidateQueries({ queryKey: ["inventory-supplier-history"] });
     queryClient.invalidateQueries({ queryKey: ["inventory-supply-entries"] });
     queryClient.invalidateQueries({ queryKey: ["inventory"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory-summary"] });
     queryClient.invalidateQueries({ queryKey: ["vendors"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory-vendors"] });
     queryClient.invalidateQueries({ queryKey: ["clients"] });
     queryClient.invalidateQueries({ queryKey: ["ledger"] });
   };

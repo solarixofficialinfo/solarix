@@ -135,9 +135,9 @@ def get_supabase_client(token: Optional[str] = None, use_service_key: bool = Fal
     key = (supabase_service_key if (use_service_key and supabase_service_key) else supabase_key) or supabase_key
     opts = ClientOptions(
         httpx_client=httpx_client,
-        postgrest_client_timeout=8.0,
-        storage_client_timeout=8,
-        function_client_timeout=8,
+        postgrest_client_timeout=15.0,
+        storage_client_timeout=15,
+        function_client_timeout=15,
         headers=headers
     )
     client = supabase_create_client(supabase_url, key or "", options=opts)
@@ -480,6 +480,107 @@ class CursorAdapter:
         return self
 
     async def to_list(self, length=None):
+        # Dedicated persistent synchronization for b2b_customers and vendors via Supabase documents table
+        if self.collection.table_name in ("b2b_customers", "vendors"):
+            entity_type = self.collection.table_name
+            data = []
+            cid = None
+            filter_id = None
+            if isinstance(self.filter, dict):
+                cid = self.filter.get("company_id")
+                filter_id = self.filter.get("id")
+            try:
+                builder = supabase.table("documents").select("*").eq("details->>_entity_type", entity_type)
+                if cid:
+                    builder = builder.eq("company_id", str(cid).strip())
+                if isinstance(filter_id, str) and filter_id:
+                    builder = builder.eq("id", filter_id.strip())
+                res = await asyncio.to_thread(builder.execute)
+                raw_rows = res.data or []
+                for r in raw_rows:
+                    det = r.get("details")
+                    if not isinstance(det, dict):
+                        continue
+                    item = dict(det)
+                    item["id"] = r.get("id") or item.get("id")
+                    item["company_id"] = r.get("company_id") or item.get("company_id")
+                    if r.get("created_at") and not item.get("created_at"):
+                        item["created_at"] = r["created_at"]
+                    if r.get("updated_at") and not item.get("updated_at"):
+                        item["updated_at"] = r["updated_at"]
+                    data.append(item)
+            except Exception as e_supa:
+                logger.warning(f"Supabase documents query for {entity_type} failed: {e_supa}")
+
+            # Also check companies.documents if data is empty and cid is known
+            if not data and cid:
+                try:
+                    c_res = await asyncio.to_thread(lambda: supabase.table("companies").select("documents").eq("id", str(cid).strip()).limit(1).execute())
+                    if c_res.data:
+                        c_docs = dict(c_res.data[0].get("documents") or {})
+                        saved_list = list(c_docs.get(entity_type) or [])
+                        if saved_list:
+                            data = [dict(d) for d in saved_list if isinstance(d, dict)]
+                except Exception:
+                    pass
+
+            # Merge with local records
+            try:
+                local_records = await LocalFileCollection(entity_type).find({}).to_list(10000)
+                if local_records:
+                    supa_ids = {str(d.get("id")) for d in data if isinstance(d, dict) and d.get("id")}
+                    for lr in local_records:
+                        if isinstance(lr, dict) and str(lr.get("id")) not in supa_ids:
+                            data.append(lr)
+            except Exception:
+                pass
+
+            # Update LocalFileCollection with authoritative Supabase data
+            if data:
+                try:
+                    LocalFileCollection(entity_type)._write_data(data)
+                except Exception:
+                    pass
+
+            # Apply in-memory match filter
+            local_coll = LocalFileCollection(entity_type)
+            filtered = [d for d in data if local_coll._match(d, self.filter)]
+
+            # Apply sorting
+            if self.sort_fields and filtered:
+                for k, dir in reversed(self.sort_fields):
+                    desc = (dir == -1)
+                    def _safe_sort_key(x):
+                        val = x.get(k) if isinstance(x, dict) else None
+                        if val is None:
+                            return (0, 0, "")
+                        if isinstance(val, (int, float)):
+                            return (1, val, "")
+                        if isinstance(val, str):
+                            return (2, 0, val.lower())
+                        return (3, 0, str(val))
+                    filtered.sort(key=_safe_sort_key, reverse=desc)
+
+            # Apply projection if specified
+            if self.projection and isinstance(self.projection, dict):
+                inclusions = [pk for pk, pv in self.projection.items() if (pv == 1 or pv is True) and pk != "_id"]
+                exclusions = [pk for pk, pv in self.projection.items() if (pv == 0 or pv is False)]
+                if inclusions:
+                    filtered = [{k: doc[k] for k in inclusions if k in doc} for doc in filtered]
+                elif exclusions:
+                    for doc in filtered:
+                        for pk in exclusions:
+                            doc.pop(pk, None)
+
+            # Apply skip and limit
+            skip = self.skip_val or 0
+            limit = length if length is not None else self.limit_val
+            if skip:
+                filtered = filtered[skip:]
+            if limit is not None:
+                filtered = filtered[:limit]
+            return filtered
+
         supa_table = getattr(self.collection, "_supabase_table_name", self.collection.table_name)
         builder = supabase.table(supa_table).select("*")
         
@@ -1128,10 +1229,43 @@ async def _sync_client_financial_record(cid: str, client_id: str, record_type: s
     except Exception as e:
         logger.warning(f"Error in _sync_client_financial_record ({record_type}, {action}): {e}")
 
+async def _sync_company_documents_record(cid: str, record_type: str, record: dict, action: str = "upsert"):
+    """
+    Synchronizes b2b_customers or vendors into the company's documents JSONB field in Supabase PostgreSQL
+    as an additional persistent tenant-level backup.
+    """
+    if not cid or not record or not record.get("id"):
+        return
+    try:
+        supa = get_supabase_client(use_service_key=True)
+        res = supa.table("companies").select("documents").eq("id", cid).limit(1).execute()
+        if not res.data:
+            return
+        company_row = res.data[0]
+        docs = dict(company_row.get("documents") or {})
+        rec_list = list(docs.get(record_type) or [])
+        rec_id = str(record.get("id"))
+
+        if action == "delete":
+            rec_list = [r for r in rec_list if isinstance(r, dict) and str(r.get("id")) != rec_id]
+        else:
+            updated = False
+            for idx, r in enumerate(rec_list):
+                if isinstance(r, dict) and str(r.get("id")) == rec_id:
+                    rec_list[idx] = {**r, **record}
+                    updated = True
+                    break
+            if not updated:
+                rec_list.append(record)
+        docs[record_type] = rec_list
+        supa.table("companies").update({"documents": docs}).eq("id", cid).execute()
+    except Exception as e:
+        logger.debug(f"Error in _sync_company_documents_record ({record_type}, {action}): {e}")
+
 async def recover_and_sync_financial_data():
     """
     Recovers and synchronizes all existing local invoices (including drafts),
-    expenses, payments, and loans into Supabase PostgreSQL.
+    expenses, payments, loans, and B2B customers / vendors into Supabase PostgreSQL.
     """
     try:
         supa = get_supabase_client(use_service_key=True)
@@ -1183,8 +1317,52 @@ async def recover_and_sync_financial_data():
             comp_id = loan.get("company_id")
             if c_id and comp_id:
                 await _sync_client_financial_record(comp_id, c_id, "loans", loan, "upsert")
+
+        # 5. Recover and sync B2B Customers into Supabase documents table
+        local_b2b = await LocalFileCollection("b2b_customers").find({}).to_list(10000)
+        logger.info(f"[B2B/SUPPLY RECOVERY] Found {len(local_b2b)} local b2b_customers to verify/sync to Supabase")
+        for cust in local_b2b:
+            c_id = cust.get("id")
+            comp_id = cust.get("company_id")
+            if c_id and comp_id:
+                cust_copy = dict(cust)
+                cust_copy["_entity_type"] = "b2b_customers"
+                supa_doc = {
+                    "id": c_id,
+                    "company_id": comp_id,
+                    "details": cust_copy,
+                    "created_at": cust.get("created_at") or now_iso(),
+                    "updated_at": cust.get("updated_at") or now_iso()
+                }
+                try:
+                    supa.table("documents").upsert(supa_doc).execute()
+                except Exception as e:
+                    logger.debug(f"[B2B/SUPPLY RECOVERY] b2b_customers upsert {c_id}: {e}")
+                await _sync_company_documents_record(comp_id, "b2b_customers", cust, "upsert")
+
+        # 6. Recover and sync Vendors into Supabase documents table
+        local_vendors = await LocalFileCollection("vendors").find({}).to_list(10000)
+        logger.info(f"[B2B/SUPPLY RECOVERY] Found {len(local_vendors)} local vendors to verify/sync to Supabase")
+        for ven in local_vendors:
+            v_id = ven.get("id")
+            comp_id = ven.get("company_id")
+            if v_id and comp_id:
+                ven_copy = dict(ven)
+                ven_copy["_entity_type"] = "vendors"
+                supa_doc = {
+                    "id": v_id,
+                    "company_id": comp_id,
+                    "details": ven_copy,
+                    "created_at": ven.get("created_at") or now_iso(),
+                    "updated_at": ven.get("updated_at") or now_iso()
+                }
+                try:
+                    supa.table("documents").upsert(supa_doc).execute()
+                except Exception as e:
+                    logger.debug(f"[B2B/SUPPLY RECOVERY] vendors upsert {v_id}: {e}")
+                await _sync_company_documents_record(comp_id, "vendors", ven, "upsert")
                 
-        logger.info("[FINANCIAL RECOVERY] Complete: Invoices, Expenses, Payments, Loans synced with database.")
+        logger.info("[FINANCIAL RECOVERY] Complete: Invoices, Expenses, Payments, Loans, B2B Customers, and Vendors synced with database.")
     except Exception as e:
         logger.warning(f"[FINANCIAL RECOVERY] Error in recover_and_sync_financial_data: {e}")
 
@@ -1410,6 +1588,13 @@ class CollectionAdapter:
         return doc
 
     async def find_one(self, filter=None, projection=None, sort=None, **kwargs):
+        if self.table_name in ("b2b_customers", "vendors"):
+            cursor = self.find(filter, projection)
+            if sort:
+                cursor = cursor.sort(sort)
+            docs = await cursor.to_list(length=1)
+            return docs[0] if docs else None
+
         if self.table_name == "files":
             extracted_filters, cleaned_filter = self._extract_and_remove_unsupported_filters(filter)
             if extracted_filters:
@@ -1521,6 +1706,33 @@ class CollectionAdapter:
                 await _sync_client_financial_record(document["company_id"], document["client_id"], self.table_name, document, "upsert")
             return InsertOneResult(rec_id)
 
+        # Dedicated persistent synchronization for b2b_customers and vendors via Supabase documents table
+        if self.table_name in ("b2b_customers", "vendors"):
+            rec_id = str(document.get("id") or (f"b2b_cust_{uuid.uuid4().hex[:12]}" if self.table_name == "b2b_customers" else f"ven_{uuid.uuid4().hex[:12]}"))
+            document["id"] = rec_id
+            cid = document.get("company_id")
+            if "name" in document and "full_name" not in document:
+                document["full_name"] = document["name"]
+            elif "full_name" in document and "name" not in document:
+                document["name"] = document["full_name"]
+            doc_to_save = dict(document)
+            doc_to_save["_entity_type"] = self.table_name
+            supa_doc = {
+                "id": rec_id,
+                "company_id": cid,
+                "details": doc_to_save,
+                "created_at": document.get("created_at") or now_iso(),
+                "updated_at": document.get("updated_at") or now_iso()
+            }
+            try:
+                supabase.table("documents").upsert(supa_doc).execute()
+            except Exception as e_supa:
+                logger.warning(f"Supabase documents upsert failed for {self.table_name}: {e_supa}")
+            await LocalFileCollection(self.table_name).insert_one(document)
+            if cid:
+                await _sync_company_documents_record(cid, self.table_name, document, "upsert")
+            return InsertOneResult(rec_id)
+
         # Serialize metadata for files
         if self.table_name == "files" and "doc_type" in document:
             doc_type = document.pop("doc_type", None)
@@ -1586,6 +1798,13 @@ class CollectionAdapter:
                 raise e
 
     async def insert_many(self, documents):
+        if self.table_name in ("b2b_customers", "vendors"):
+            ids = []
+            for doc in documents:
+                res = await self.insert_one(doc)
+                ids.append(res.inserted_id)
+            return InsertManyResult(ids)
+
         global _PRODUCTS_HAS_RATE
         for doc in documents:
             if "id" not in doc and self.table_name not in ["counters", "inventory_defaults", "password_reset_tokens"]:
@@ -1689,6 +1908,53 @@ class CollectionAdapter:
             await LocalFileCollection(self.table_name).update_one(filter, update, upsert=upsert)
             if merged_rec.get("client_id") and merged_rec.get("company_id"):
                 await _sync_client_financial_record(merged_rec["company_id"], merged_rec["client_id"], self.table_name, merged_rec, "upsert")
+            return UpdateResult(1, 1)
+
+        # Dedicated persistent synchronization for b2b_customers and vendors via Supabase documents table
+        if self.table_name in ("b2b_customers", "vendors"):
+            existing = await self.find_one(filter)
+            if not existing:
+                if upsert:
+                    new_doc = {}
+                    for k, v in filter.items():
+                        if not k.startswith("$") and not isinstance(v, dict):
+                            new_doc[k] = v
+                    if "$set" in update:
+                        new_doc.update(update["$set"])
+                    return await self.insert_one(new_doc)
+                return UpdateResult(0, 0)
+
+            merged = dict(existing)
+            if "$set" in update:
+                merged.update(update["$set"])
+            for k, v in update.items():
+                if not k.startswith("$"):
+                    merged[k] = v
+            if "name" in merged and ("full_name" not in update.get("$set", {}) and "full_name" not in update):
+                merged["full_name"] = merged["name"]
+            elif "full_name" in merged and ("name" not in update.get("$set", {}) and "name" not in update):
+                merged["name"] = merged["full_name"]
+            if "$unset" in update:
+                for uk in update["$unset"]:
+                    merged.pop(uk, None)
+            merged["updated_at"] = now_iso()
+            merged["_entity_type"] = self.table_name
+            rec_id = str(merged.get("id"))
+            cid = merged.get("company_id")
+            try:
+                upd_res = supabase.table("documents").update({"details": merged, "updated_at": merged["updated_at"]}).eq("id", rec_id).execute()
+                if not upd_res.data:
+                    supabase.table("documents").upsert({
+                        "id": rec_id,
+                        "company_id": cid,
+                        "details": merged,
+                        "updated_at": merged["updated_at"]
+                    }).execute()
+            except Exception as e_supa:
+                logger.warning(f"Supabase documents update failed for {self.table_name}: {e_supa}")
+            await LocalFileCollection(self.table_name).update_one(filter, update, upsert=upsert)
+            if cid:
+                await _sync_company_documents_record(cid, self.table_name, merged, "upsert")
             return UpdateResult(1, 1)
         
         # Need existing document for $inc, $pull, $addToSet, $push
@@ -1920,6 +2186,21 @@ class CollectionAdapter:
             await LocalFileCollection(self.table_name).delete_one(filter)
             return DeleteResult(1)
 
+        # Dedicated persistent synchronization for b2b_customers and vendors via Supabase documents table
+        if self.table_name in ("b2b_customers", "vendors"):
+            rec_to_del = await self.find_one(filter)
+            if rec_to_del and rec_to_del.get("id"):
+                rec_id = str(rec_to_del["id"])
+                cid = rec_to_del.get("company_id")
+                try:
+                    supabase.table("documents").delete().eq("id", rec_id).execute()
+                except Exception as e_supa:
+                    logger.warning(f"Supabase documents delete failed for {self.table_name}: {e_supa}")
+                await LocalFileCollection(self.table_name).delete_one(filter)
+                if cid:
+                    await _sync_company_documents_record(cid, self.table_name, rec_to_del, "delete")
+            return DeleteResult(1)
+
         try:
             builder = supabase.table(self._supabase_table_name).delete()
             builder = self._apply_filters(builder, filter)
@@ -1955,6 +2236,22 @@ class CollectionAdapter:
             await LocalFileCollection(self.table_name).delete_many(filter)
             return DeleteResult(len(recs_to_del))
 
+        # Dedicated persistent synchronization for b2b_customers and vendors via Supabase documents table
+        if self.table_name in ("b2b_customers", "vendors"):
+            recs_to_del = await self.find(filter).to_list(10000)
+            for rec_to_del in recs_to_del:
+                if rec_to_del.get("id"):
+                    rec_id = str(rec_to_del["id"])
+                    cid = rec_to_del.get("company_id")
+                    try:
+                        supabase.table("documents").delete().eq("id", rec_id).execute()
+                    except Exception:
+                        pass
+                    if cid:
+                        await _sync_company_documents_record(cid, self.table_name, rec_to_del, "delete")
+            await LocalFileCollection(self.table_name).delete_many(filter)
+            return DeleteResult(len(recs_to_del))
+
         try:
             builder = supabase.table(self._supabase_table_name).delete()
             builder = self._apply_filters(builder, filter)
@@ -1969,6 +2266,9 @@ class CollectionAdapter:
         return DeleteResult(1)
 
     async def count_documents(self, filter=None):
+        if self.table_name in ("b2b_customers", "vendors"):
+            docs = await self.find(filter).to_list(100000)
+            return len(docs)
         if self.table_name in _known_missing_supabase_tables:
             return await LocalFileCollection(self.table_name).count_documents(filter)
         builder = supabase.table(self._supabase_table_name).select("id", count="exact")
@@ -1984,6 +2284,10 @@ class CollectionAdapter:
             raise e
 
     async def distinct(self, field, filter=None):
+        if self.table_name in ("b2b_customers", "vendors"):
+            docs = await self.find(filter).to_list(100000)
+            vals = {d.get(field) for d in docs if d.get(field) is not None}
+            return list(vals)
         builder = supabase.table(self._supabase_table_name).select(field)
         builder = self._apply_filters(builder, filter)
         res = builder.execute()
@@ -2076,6 +2380,18 @@ class LocalFileCollection:
                         return False
                 elif op == "$ne":
                     if doc_val == val:
+                        return False
+                elif op == "$gte":
+                    if doc_val is None or doc_val < val:
+                        return False
+                elif op == "$lte":
+                    if doc_val is None or doc_val > val:
+                        return False
+                elif op == "$gt":
+                    if doc_val is None or doc_val <= val:
+                        return False
+                elif op == "$lt":
+                    if doc_val is None or doc_val >= val:
                         return False
             return True
         return doc_val == filter_val

@@ -94,6 +94,7 @@ export default function Vendors() {
     onSuccess: () => {
       toast.success("Vendor created successfully");
       queryClient.invalidateQueries(["vendors"]);
+      queryClient.invalidateQueries(["inventory-supply-summary"]);
       setVendorDialogOpen(false);
       setVendorForm({ name: "", contact_person: "", phone: "", email: "", gstin: "", address: "", category: "Modules / Panels", products_supplied: "", payment_terms: "Net 30", notes: "" });
     },
@@ -108,6 +109,7 @@ export default function Vendors() {
     onSuccess: () => {
       toast.success("Vendor status updated");
       queryClient.invalidateQueries(["vendors"]);
+      queryClient.invalidateQueries(["inventory-supply-summary"]);
       if (selectedVendorId) queryClient.invalidateQueries(["vendors", selectedVendorId]);
     },
     onError: (err) => toast.error(formatApiError(err))
