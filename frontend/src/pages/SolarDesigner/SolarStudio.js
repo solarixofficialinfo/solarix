@@ -2706,8 +2706,8 @@ export default function SolarStudio() {
                 setStructureNodes={(nodes) => setDesignData((prev) => ({ ...prev, structure_nodes: nodes }))}
                 selectedMemberId={selectedMemberId}
                 setSelectedMemberId={setSelectedMemberId}
-                deletedMemberIds={deletedMemberIds}
-                onDeletedMemberIdsChange={handleDeletedMemberIdsChange}
+                deletedMemberIds={designData.deleted_member_ids || []}
+                onDeletedMemberIdsChange={(ids) => setDesignData((prev) => ({ ...prev, deleted_member_ids: ids }))}
                 autoLayoutBaselinePanels={autoLayoutBaselinePanels}
                 hasManualAdjustments={hasManualAdjustments}
                 setHasManualAdjustments={setHasManualAdjustments}
