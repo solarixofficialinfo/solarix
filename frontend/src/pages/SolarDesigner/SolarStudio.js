@@ -132,6 +132,71 @@ export const recalculateRoofMetrics = (roofPolygon, roofSections, setbackM = 0.5
   };
 };
 
+/**
+ * Smooth, non-jumping controlled numeric input for clearance and tilt.
+ * Allows entering decimals like 0.5, 1.25, 2.4 without premature reset or snapping back to 1.8 mid-keystroke.
+ */
+function ControlledNumericInput({
+  value,
+  onChange,
+  min = 0.05,
+  max = 6.0,
+  step = "0.05",
+  defaultValue = 1.8,
+  className = "",
+  placeholder = "1.8",
+}) {
+  const [localVal, setLocalVal] = useState(value != null ? String(value) : String(defaultValue));
+  const isFocusedRef = React.useRef(false);
+
+  useEffect(() => {
+    if (!isFocusedRef.current && value != null) {
+      setLocalVal(String(value));
+    }
+  }, [value]);
+
+  const handleChange = (e) => {
+    const raw = e.target.value;
+    setLocalVal(raw);
+    const parsed = parseFloat(raw);
+    if (!isNaN(parsed) && parsed >= min && parsed <= max) {
+      onChange(parsed);
+    }
+  };
+
+  const handleBlur = () => {
+    isFocusedRef.current = false;
+    const parsed = parseFloat(localVal);
+    if (isNaN(parsed) || parsed < min) {
+      const fallback = Math.max(min, isNaN(parsed) ? defaultValue : parsed);
+      setLocalVal(String(fallback));
+      onChange(fallback);
+    } else if (parsed > max) {
+      setLocalVal(String(max));
+      onChange(max);
+    } else {
+      setLocalVal(String(parsed));
+      onChange(parsed);
+    }
+  };
+
+  return (
+    <Input
+      type="number"
+      step={step}
+      min={min}
+      max={max}
+      value={localVal}
+      onFocus={() => {
+        isFocusedRef.current = true;
+      }}
+      onChange={handleChange}
+      onBlur={handleBlur}
+      placeholder={placeholder}
+      className={className}
+    />
+  );
+}
 
 class Viewer3DErrorBoundary extends React.Component {
   constructor(props) {
@@ -1951,26 +2016,55 @@ export default function SolarStudio() {
     }
   }, []);
 
-  // Generate Multi-View Snapshots from 3D Scene
-  const handleGenerateViews = async () => {
-    if (!viewer3dRef.current?.generateAllViews) {
-      toast.info("Please switch to 3D View to generate multi-angle design captures.");
+  // Generate Multi-View Snapshots from 3D Scene (supports 1, 2, or 4 distinct non-duplicate views)
+  const handleGenerateViews = async (count = 4) => {
+    if (activeTab !== "3d") {
       setActiveTab("3d");
+      toast.info("Switched to 3D View for perspective capture...");
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    if (!viewer3dRef.current?.generateAllViews) {
+      toast.info("Please allow 3D View to initialize, then retry.");
       return;
     }
     setGeneratingViews(true);
     try {
-      const views = await viewer3dRef.current.generateAllViews();
+      const views = await viewer3dRef.current.generateAllViews(count);
       if (views && views.length > 0) {
         setSavedViews(views);
         setDesignData((prev) => ({ ...prev, saved_views: views }));
-        toast.success(`Generated ${views.length} engineering views`);
+        toast.success(`Generated ${views.length} distinct engineering view${views.length > 1 ? "s" : ""}`);
       }
     } catch (e) {
       toast.error("Failed to capture views: " + e.message);
     } finally {
       setGeneratingViews(false);
     }
+  };
+
+  // Direct edit and synchronization of design information parameters
+  const handleUpdateDesignInfo = (updates) => {
+    setDesignData((prev) => {
+      const next = { ...prev, ...updates };
+      // Ensure structure nested object is synchronized with top-level fields
+      if (
+        updates.structure_type != null ||
+        updates.tilt_angle != null ||
+        updates.azimuth_angle != null ||
+        updates.mounting_height_m != null
+      ) {
+        next.structure = {
+          ...prev.structure,
+          type: updates.structure_type ?? prev.structure?.type ?? prev.structure_type,
+          tilt_deg: updates.tilt_angle ?? prev.structure?.tilt_deg ?? prev.tilt_angle,
+          azimuth: updates.azimuth_angle ?? prev.structure?.azimuth ?? prev.azimuth_angle,
+          height_m: updates.mounting_height_m ?? prev.structure?.height_m ?? prev.mounting_height_m,
+        };
+      }
+      return next;
+    });
+    toast.success("Design parameters updated successfully");
   };
 
   // Save Design with multi-views and validation
@@ -3300,15 +3394,23 @@ export default function SolarStudio() {
                       <Select
                         value={designData.structure?.type || designData.structure_type || "elevated"}
                         onValueChange={(val) => {
-                          const isFlush = val === "flush";
+                          const defaultHeight =
+                            val === "monorail" ? 0.06 :
+                            val === "flush" ? 0.12 :
+                            val === "tile_hook_rail" ? 0.14 :
+                            val === "ballasted" ? 0.35 :
+                            val === "fixed_tilt" ? 0.45 :
+                            val === "east_west" ? 0.40 :
+                            val === "ground_mount" ? 0.80 : 1.8;
+
                           setDesignData((prev) => ({
                             ...prev,
                             structure_type: val,
-                            mounting_height_m: isFlush ? 0.12 : prev.mounting_height_m || 1.8,
+                            mounting_height_m: defaultHeight,
                             structure: {
                               ...prev.structure,
                               type: val,
-                              height_m: isFlush ? 0.12 : prev.structure?.height_m || 1.8,
+                              height_m: defaultHeight,
                             },
                           }));
                         }}
@@ -3317,23 +3419,26 @@ export default function SolarStudio() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-slate-900 border-slate-800 text-white">
-                          <SelectItem value="elevated">Elevated Tilt</SelectItem>
-                          <SelectItem value="flush">Flush Mount</SelectItem>
-                          <SelectItem value="fixed_tilt">Fixed Tilt</SelectItem>
+                          <SelectItem value="elevated">Elevated Frame / Super Structure</SelectItem>
+                          <SelectItem value="monorail">Mono Rail / Short Rail</SelectItem>
+                          <SelectItem value="flush">Flush to Roof (Continuous Rail)</SelectItem>
+                          <SelectItem value="tile_hook_rail">Tile Hook & Rail</SelectItem>
+                          <SelectItem value="fixed_tilt">Fixed Tilt (Triangular Legs)</SelectItem>
+                          <SelectItem value="ballasted">Ballasted (Non-Penetrating)</SelectItem>
                           <SelectItem value="east_west">East-West (Dual Tilt)</SelectItem>
-                          <SelectItem value="ballasted">Ballasted</SelectItem>
+                          <SelectItem value="ground_mount">Ground Mount</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                     <div>
                       <Label className="text-[10px] font-semibold text-slate-400">Tilt Angle (°)</Label>
-                      <Input
-                        type="number"
-                        min="0"
-                        max="45"
+                      <ControlledNumericInput
+                        min={0}
+                        max={60}
+                        step="1"
+                        defaultValue={15}
                         value={designData.structure?.tilt_deg ?? designData.tilt_angle ?? 15}
-                        onChange={(e) => {
-                          const t = parseFloat(e.target.value) || 15;
+                        onChange={(t) => {
                           setDesignData((prev) => ({ ...prev, tilt_angle: t, structure: { ...prev.structure, tilt_deg: t } }));
                         }}
                         className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
@@ -3371,14 +3476,13 @@ export default function SolarStudio() {
                     </div>
                     <div>
                       <Label className="text-[10px] font-semibold text-slate-400">Clearance (m)</Label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        min="0.1"
-                        max="6.0"
+                      <ControlledNumericInput
+                        step="0.05"
+                        min={0.05}
+                        max={6.0}
+                        defaultValue={1.8}
                         value={designData.structure?.height_m ?? designData.mounting_height_m ?? 1.8}
-                        onChange={(e) => {
-                          const h = parseFloat(e.target.value) || 1.8;
+                        onChange={(h) => {
                           setDesignData((prev) => ({ ...prev, mounting_height_m: h, structure: { ...prev.structure, height_m: h } }));
                         }}
                         className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
@@ -4100,16 +4204,33 @@ export default function SolarStudio() {
                       <Label className="text-[10px] font-semibold text-slate-400">Mounting Type</Label>
                       <Select
                         value={activeSection.mountingType || designData.structure?.type || "elevated"}
-                        onValueChange={(val) => handleUpdateSection(activeSection.id, { mountingType: val })}
+                        onValueChange={(val) => {
+                          const defaultHeight =
+                            val === "monorail" ? 0.06 :
+                            val === "flush" ? 0.12 :
+                            val === "tile_hook_rail" ? 0.14 :
+                            val === "ballasted" ? 0.35 :
+                            val === "fixed_tilt" ? 0.45 :
+                            val === "east_west" ? 0.40 :
+                            val === "ground_mount" ? 0.80 : 1.8;
+
+                          handleUpdateSection(activeSection.id, {
+                            mountingType: val,
+                            structure_height_m: defaultHeight,
+                          });
+                        }}
                       >
                         <SelectTrigger className="h-7 text-xs bg-slate-800 border-slate-700 text-white mt-0.5">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-slate-900 border-slate-800 text-white">
-                          <SelectItem value="elevated">Elevated Frame</SelectItem>
-                          <SelectItem value="flush">Flush to Roof</SelectItem>
+                          <SelectItem value="elevated">Elevated Frame / Super Structure</SelectItem>
+                          <SelectItem value="monorail">Mono Rail / Short Rail</SelectItem>
+                          <SelectItem value="flush">Flush to Roof (Continuous Rail)</SelectItem>
                           <SelectItem value="tile_hook_rail">Tile Hook & Rail</SelectItem>
-                          <SelectItem value="ballasted">Ballasted</SelectItem>
+                          <SelectItem value="fixed_tilt">Fixed Tilt (Triangular Legs)</SelectItem>
+                          <SelectItem value="ballasted">Ballasted (Non-Penetrating)</SelectItem>
+                          <SelectItem value="east_west">East-West (Dual Tilt)</SelectItem>
                           <SelectItem value="ground_mount">Ground Mount</SelectItem>
                         </SelectContent>
                       </Select>
@@ -4117,14 +4238,13 @@ export default function SolarStudio() {
 
                     <div>
                       <Label className="text-[10px] font-semibold text-slate-400">Clearance (m)</Label>
-                      <Input
-                        type="number"
+                      <ControlledNumericInput
                         step="0.05"
-                        min="0.05"
-                        max="4.0"
+                        min={0.05}
+                        max={4.0}
+                        defaultValue={1.8}
                         value={activeSection.structure_height_m ?? designData.structure?.height_m ?? 1.8}
-                        onChange={(e) => {
-                          const val = Math.max(0.05, parseFloat(e.target.value) || 1.8);
+                        onChange={(val) => {
                           handleUpdateSection(activeSection.id, { structure_height_m: val });
                         }}
                         className="h-7 text-xs font-bold mt-0.5 bg-slate-800 border-slate-700 text-white"
@@ -4564,6 +4684,7 @@ export default function SolarStudio() {
                 }}
                 onOpenGallery={() => setShowGalleryModal(true)}
                 onGenerateViews={handleGenerateViews}
+                onUpdateDesign={handleUpdateDesignInfo}
                 onSave={() => handleSaveDesign(false)}
                 onSaveNewVersion={() => handleSaveDesign(true)}
                 onExportPdf={handleExportPdf}

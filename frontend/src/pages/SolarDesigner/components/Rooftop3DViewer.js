@@ -1215,7 +1215,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       rendererRef.current.render(sceneRef.current, cameraRef.current);
       return rendererRef.current.domElement.toDataURL("image/png");
     },
-    generateAllViews: () => {
+    generateAllViews: (requestedCount = 4, customAngleIds = null) => {
       if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return [];
       const renderer = rendererRef.current;
       const scene = sceneRef.current;
@@ -1237,13 +1237,27 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         }
       }
 
-      const viewsToRender = [
-        { id: "top", name: "Top View", phi: 0.05, theta: 0 },
-        { id: "3d", name: "3D View", phi: Math.PI / 3.2, theta: Math.PI / 4 },
-        { id: "left", name: "Left View", phi: Math.PI / 2.15, theta: Math.PI / 2 },
-        { id: "right", name: "Right View", phi: Math.PI / 2.15, theta: -Math.PI / 2 },
-        { id: "front", name: "Front View", phi: Math.PI / 2.15, theta: 0 },
+      // Canonical 4 distinct engineering perspectives (each separated by distinct viewing angle)
+      const allPerspectives = [
+        { id: "3d", name: "3D Isometric View", phi: Math.PI / 3.2, theta: Math.PI / 4, desc: "Perspective layout with tilt & elevation" },
+        { id: "top", name: "Top Plan View", phi: 0.05, theta: 0, desc: "True overhead array placement & setbacks" },
+        { id: "front", name: "Front Elevation View", phi: Math.PI / 2.15, theta: 0, desc: "Southern exposure & ground/roof clearance" },
+        { id: "side", name: "Side Profile View", phi: Math.PI / 2.15, theta: Math.PI / 2, desc: "Lateral rake profile & structural bracing" },
       ];
+
+      let viewsToRender = allPerspectives;
+      if (Array.isArray(customAngleIds) && customAngleIds.length > 0) {
+        viewsToRender = allPerspectives.filter((p) => customAngleIds.includes(p.id));
+      } else if (requestedCount === 1) {
+        // Single primary perspective: high-quality 3D Isometric View
+        viewsToRender = [allPerspectives[0]];
+      } else if (requestedCount === 2) {
+        // Exactly TWO DISTINCT non-duplicate perspectives: 3D Isometric + Top Plan View
+        // (One shows 3D depth, structural posts, and module tilt; the other shows clean 2D layout, setbacks, and spacing)
+        viewsToRender = [allPerspectives[0], allPerspectives[1]];
+      } else if (requestedCount === 3) {
+        viewsToRender = [allPerspectives[0], allPerspectives[1], allPerspectives[2]];
+      }
 
       const capturedViews = [];
       const nowIso = new Date().toISOString();
@@ -1257,6 +1271,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
         capturedViews.push({
           id: v.id,
           name: v.name,
+          desc: v.desc,
           thumbnail: dataUrl,
           dataUrl: dataUrl,
           timestamp: nowIso,
@@ -2563,14 +2578,33 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
     // ── 2. Solar PV Modules + Row-Based Mounting Structure ────────────────────
     if (activePanels.length > 0) {
       const structType = (structure?.type || "elevated").toLowerCase();
-      const isFlush = structType === "flush";
+      const isMonoRail = structType === "monorail" || structType === "mono_rail";
+      const isFlush = structType === "flush" || isMonoRail;
       const isElevated = structType === "elevated";
       const isFixedTilt = structType === "fixed_tilt";
       const isEastWest = structType === "east_west";
       const isBallasted = structType === "ballasted";
+      const isTileHook = structType === "tile_hook_rail";
+      const isGroundMount = structType === "ground_mount";
       const structMaterial = structure?.material || "GI";
 
-      const baseClearance = isFlush ? 0.12 : Number(structure?.height_m || 1.8);
+      const defaultGlobalHeight = isMonoRail
+        ? 0.06
+        : structType === "flush"
+        ? 0.12
+        : isTileHook
+        ? 0.14
+        : isBallasted
+        ? 0.35
+        : isFixedTilt
+        ? 0.45
+        : isEastWest
+        ? 0.40
+        : isGroundMount
+        ? 0.80
+        : 1.8;
+
+      const baseClearance = Number(structure?.height_m ?? defaultGlobalHeight);
       const panelTiltDeg = isFlush ? roofPitchDeg : Number(structure?.tilt_deg || 15);
       const structAzimuth = Number(structure?.azimuth ?? 180);
 
@@ -2609,6 +2643,8 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       const boltMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.2, metalness: 0.95 });
       const braceMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: structRoughness, metalness: structMetalness });
       const ballastMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.95, metalness: 0.05 });
+      const epdmRubberMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.95, metalness: 0.05 });
+      const deflectorMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.35, metalness: 0.85, side: THREE.DoubleSide });
       const clampMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.25, metalness: 0.85 });
 
       // Engineering Mode materials (high-contrast functional color-coding)
@@ -2663,21 +2699,41 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
           const panelAzimuth = Number(p.azimuth ?? pSec?.azimuth ?? structAzimuth);
           const panelPitch = pSec ? Number(pSec.pitch ?? 0) : panelTiltDeg;
-          const secMType = (pSec?.mountingType || "").toLowerCase();
-          const isSectionFlush = secMType === "flush" || secMType === "tile_hook_rail"
-            ? true
-            : (secMType === "elevated" || secMType === "fixed_tilt" || secMType === "ballasted" || secMType === "ground_mount")
-            ? false
-            : (pSec?.roofType === "Tile" || pSec?.roofType === "Metal" || isFlush);
+          const secMType = (pSec?.mountingType || structure?.type || "elevated").toLowerCase();
+          const isSecMonoRail = secMType === "monorail" || secMType === "mono_rail";
+          const isSecContinuousFlush = secMType === "flush";
+          const isSecTileHook = secMType === "tile_hook_rail";
+          const isSecFixedTilt = secMType === "fixed_tilt";
+          const isSecBallasted = secMType === "ballasted";
+          const isSecEastWest = secMType === "east_west";
+          const isSecGroundMount = secMType === "ground_mount";
+          const isSecFlushType = isSecMonoRail || isSecContinuousFlush || isSecTileHook;
+
           const secTiltAngle = Number(pSec?.tilt_deg ?? p.tilt ?? structure?.tilt_deg ?? 15);
-          const effectiveTiltDeg = isSectionFlush ? panelPitch : secTiltAngle;
+          const effectiveTiltDeg = isSecFlushType ? panelPitch : secTiltAngle;
 
           // Panel elevation on section
           const sectionRoofElevation = pSec
             ? calculateSectionRoofElevationAtPoint(p.x, p.y, pSec, fullRoof)
             : calculateRoofElevationAtPoint(p.x, p.y, fullRoof);
 
-          const structClearance = isSectionFlush ? 0.12 : Number(pSec?.structure_height_m ?? baseClearance);
+          const defaultSecClearance = isSecMonoRail
+            ? 0.06
+            : isSecContinuousFlush
+            ? 0.12
+            : isSecTileHook
+            ? 0.14
+            : isSecBallasted
+            ? 0.35
+            : isSecFixedTilt
+            ? 0.45
+            : isSecEastWest
+            ? 0.40
+            : isSecGroundMount
+            ? 0.80
+            : 1.8;
+
+          const structClearance = Number(pSec?.structure_height_m ?? structure?.height_m ?? defaultSecClearance);
           const tiltRad = toRad(effectiveTiltDeg);
           const verticalOffset = (pl / 2) * Math.sin(tiltRad);
           const yawRad = toRad(panelAzimuth - 180);
@@ -2771,23 +2827,43 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           if (secPanels.length === 0) return;
 
           // Determine section-specific structure parameters
-          const secMountType = (sec.mountingType || "").toLowerCase();
-          const isSecTile = sec.roofType === "Tile";
-          const isSecMetal = sec.roofType === "Metal";
-          const isSecFlush = secMountType === "flush"
-            ? true
-            : (secMountType === "elevated" || secMountType === "ballasted")
-            ? false
-            : (isSecTile || isSecMetal || isFlush);
-          const isSecElevated = !isSecFlush;
+          const secMountType = (sec.mountingType || structure?.type || "elevated").toLowerCase();
+          const isSecMonoRail = secMountType === "monorail" || secMountType === "mono_rail";
+          const isSecContinuousFlush = secMountType === "flush";
+          const isSecTileHook = secMountType === "tile_hook_rail";
+          const isSecFixedTilt = secMountType === "fixed_tilt";
+          const isSecBallasted = secMountType === "ballasted";
+          const isSecEastWest = secMountType === "east_west";
+          const isSecGroundMount = secMountType === "ground_mount";
+          const isSecElevated = !isSecMonoRail && !isSecContinuousFlush && !isSecTileHook && !isSecFixedTilt && !isSecBallasted && !isSecEastWest && !isSecGroundMount;
+
+          const isSecFlushType = isSecMonoRail || isSecContinuousFlush || isSecTileHook;
+          const isSecTile = sec.roofType === "Tile" || isSecTileHook;
 
           const secAzimuth = Number(sec.azimuth ?? structAzimuth ?? 180);
-          const secPitchDeg = isSecFlush ? Number(sec.pitch ?? 0) : Number(sec.tilt_deg ?? structure?.tilt_deg ?? 15);
+          const secPitchDeg = isSecFlushType ? Number(sec.pitch ?? 0) : Number(sec.tilt_deg ?? structure?.tilt_deg ?? 15);
           const secTiltRad = toRad(secPitchDeg);
           const secAzRad = toRad(secAzimuth - 180);
           const secCosAz = Math.cos(secAzRad);
           const secSinAz = Math.sin(secAzRad);
-          const secClearance = isSecFlush ? 0.12 : Number(sec.structure_height_m ?? structure?.height_m ?? baseClearance);
+
+          const defaultSecClearance = isSecMonoRail
+            ? 0.06
+            : isSecContinuousFlush
+            ? 0.12
+            : isSecTileHook
+            ? 0.14
+            : isSecBallasted
+            ? 0.35
+            : isSecFixedTilt
+            ? 0.45
+            : isSecEastWest
+            ? 0.40
+            : isSecGroundMount
+            ? 0.80
+            : 1.8;
+
+          const secClearance = Number(sec.structure_height_m ?? structure?.height_m ?? defaultSecClearance);
 
           // Cluster panels of THIS section into rows using THIS section's azimuth
           const rows = clusterPanelsIntoRows(secPanels, secAzimuth);
@@ -2802,8 +2878,78 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
             const rowRoofY = calculateSectionRoofElevationAtPoint(row.centerX, row.centerY, sec, fullRoof);
             const frameCenterY = rowRoofY + secClearance + (row.pl / 2) * Math.sin(tiltRad);
 
-            // ── FLUSH MOUNT: Mini Rails directly on roof surface ───────────────
-            if (isSecFlush) {
+            // ── A. MONO RAIL / SHORT RAIL MOUNT ────────────────────────────────
+            if (isSecMonoRail) {
+              const effectiveRowTiltRad = toRad(Number(sec.pitch ?? 0));
+              const shortRailLen = 0.38; // 380mm standard mini rail length
+              const shortRailGeom = new THREE.BoxGeometry(shortRailLen, 0.035, 0.045);
+              const epdmGeom = new THREE.BoxGeometry(shortRailLen, 0.006, 0.045);
+              const clampGeom = new THREE.BoxGeometry(0.035, 0.018, 0.045);
+
+              [-row.pl * 0.28, row.pl * 0.28].forEach((vOff, railIdx) => {
+                const railZ = vOff * Math.cos(effectiveRowTiltRad);
+                (row.items || []).forEach((it, itIdx) => {
+                  const uPos = it.u - row.centerU;
+                  const wx = row.centerX + uPos * cosAz - railZ * sinAz;
+                  const wy = row.centerY + uPos * sinAz + railZ * cosAz;
+                  const wRoofY = calculateSectionRoofElevationAtPoint(wx, wy, sec, fullRoof);
+                  const finalY = wRoofY + secClearance;
+
+                  const railId = `member-sec${sec.id}-row${rIdx}-p${it.id || itIdx}-monorail-${railIdx}`;
+                  if (deletedMemberIdsRef.current.has(railId)) return;
+
+                  const isSel = selectedMemberId === railId;
+                  const isGrpSel = selectedGroupId === groupId;
+                  const rMat = isSel ? selectedMat : isGrpSel ? groupSelectedMat : viewMode === "engineering" ? engRailMat : railMat;
+
+                  // EPDM Waterproof Base Pad
+                  const epdmMesh = new THREE.Mesh(epdmGeom, epdmRubberMat);
+                  epdmMesh.position.set(wx, finalY - 0.018, -wy);
+                  epdmMesh.rotation.y = azRad;
+                  epdmMesh.rotation.x = -effectiveRowTiltRad;
+                  rootGroup.add(epdmMesh);
+
+                  // Short Rail Segment (380mm)
+                  const shortRailMesh = new THREE.Mesh(shortRailGeom, rMat);
+                  shortRailMesh.position.set(wx, finalY, -wy);
+                  shortRailMesh.rotation.y = azRad;
+                  shortRailMesh.rotation.x = -effectiveRowTiltRad;
+                  shortRailMesh.userData = {
+                    memberId: railId,
+                    groupId,
+                    sectionId: sec.id,
+                    type: "Mono Rail / Short Rail",
+                    material: structMaterial,
+                    length: shortRailLen,
+                  };
+                  shortRailMesh.castShadow = true;
+                  rootGroup.add(shortRailMesh);
+                  memberMeshMapRef.current[railId] = shortRailMesh;
+
+                  // Mid and End Clamps on the short rail
+                  const isFirst = itIdx === 0;
+                  const clampOffsets = [];
+                  if (isFirst) clampOffsets.push(-it.pw / 2 + 0.02);
+                  clampOffsets.push(it.pw / 2 - 0.02);
+
+                  clampOffsets.forEach((uCl) => {
+                    const clampMesh = new THREE.Mesh(clampGeom, clampMat);
+                    clampMesh.position.set(
+                      wx + uCl * cosAz,
+                      finalY + 0.024,
+                      -(wy + uCl * sinAz)
+                    );
+                    clampMesh.rotation.y = azRad;
+                    clampMesh.rotation.x = -effectiveRowTiltRad;
+                    rootGroup.add(clampMesh);
+                  });
+                });
+              });
+              return;
+            }
+
+            // ── B. CONTINUOUS FLUSH MOUNT & TILE HOOK ───────────────────────────
+            if (isSecContinuousFlush || isSecTileHook) {
               const effectiveRowTiltRad = toRad(Number(sec.pitch ?? 0));
               const railLength = row.totalRowLength + 0.12;
               const railGeom = new THREE.BoxGeometry(railLength, 0.035, 0.045);
@@ -2815,7 +2961,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                 const wx = row.centerX - railZ * sinAz;
                 const wy = row.centerY + railZ * cosAz;
                 const wRoofY = calculateSectionRoofElevationAtPoint(wx, wy, sec, fullRoof);
-                const finalY = wRoofY + (isSecTile ? 0.08 : 0.04);
+                const finalY = wRoofY + secClearance;
 
                 const isSel = selectedMemberId === railId;
                 const isGrpSel = selectedGroupId === groupId;
@@ -2837,40 +2983,57 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                 rootGroup.add(railMesh);
                 memberMeshMapRef.current[railId] = railMesh;
 
-                // IF TILE ROOF: Add Tile Roof Hooks under the rail
-                if (isSecTile && row.items && row.items.length > 0) {
-                  const hookMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.35, metalness: 0.85 });
-                  row.items.forEach((it) => {
-                    const uPos = it.u - row.centerU;
-                    const hx = wx + uPos * cosAz;
-                    const hy = wy + uPos * sinAz;
-                    const hRoofY = calculateSectionRoofElevationAtPoint(hx, hy, sec, fullRoof);
+                // Tile Hooks vs L-Feet:
+                if (isSecTileHook || isSecTile) {
+                  if (row.items && row.items.length > 0) {
+                    const hookMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.35, metalness: 0.85 });
+                    row.items.forEach((it) => {
+                      const uPos = it.u - row.centerU;
+                      const hx = wx + uPos * cosAz;
+                      const hy = wy + uPos * sinAz;
+                      const hRoofY = calculateSectionRoofElevationAtPoint(hx, hy, sec, fullRoof);
 
-                    const hookGroup = new THREE.Group();
-                    hookGroup.position.set(hx, hRoofY, -hy);
-                    hookGroup.rotation.y = azRad;
-                    hookGroup.rotation.x = -effectiveRowTiltRad;
+                      const hookGroup = new THREE.Group();
+                      hookGroup.position.set(hx, hRoofY, -hy);
+                      hookGroup.rotation.y = azRad;
+                      hookGroup.rotation.x = -effectiveRowTiltRad;
 
-                    // Hook Foot (bolted under tile)
-                    const footMesh = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.008, 0.12), hookMat);
-                    footMesh.position.set(0, 0.004, -0.04);
-                    hookGroup.add(footMesh);
+                      // Hook Foot
+                      const footMesh = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.008, 0.12), hookMat);
+                      footMesh.position.set(0, 0.004, -0.04);
+                      hookGroup.add(footMesh);
 
-                    // Hook Arm (riser coming up through tile gap)
-                    const armMesh = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.075, 0.03), hookMat);
-                    armMesh.position.set(0, 0.04, 0);
-                    hookGroup.add(armMesh);
+                      // Hook Arm
+                      const armMesh = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.075, 0.03), hookMat);
+                      armMesh.position.set(0, 0.04, 0);
+                      hookGroup.add(armMesh);
 
-                    // Hook Top (bracket clamping rail)
-                    const topMesh = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.012, 0.05), hookMat);
-                    topMesh.position.set(0, 0.075, 0);
-                    hookGroup.add(topMesh);
+                      // Hook Top
+                      const topMesh = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.012, 0.05), hookMat);
+                      topMesh.position.set(0, 0.075, 0);
+                      hookGroup.add(topMesh);
 
-                    rootGroup.add(hookGroup);
+                      rootGroup.add(hookGroup);
+                    });
+                  }
+                } else {
+                  // L-feet brackets for continuous flush on metal / flat roofs
+                  const lFootGeom = new THREE.BoxGeometry(0.04, 0.06, 0.05);
+                  const lFootMat = new THREE.MeshStandardMaterial({ color: 0xd1d5db, roughness: 0.3, metalness: 0.9 });
+                  row.rafterUOffsets.forEach((uOffset) => {
+                    const uRel = uOffset - row.centerU;
+                    const lx = wx + uRel * cosAz;
+                    const ly = wy + uRel * sinAz;
+                    const lRoofY = calculateSectionRoofElevationAtPoint(lx, ly, sec, fullRoof);
+
+                    const lFootMesh = new THREE.Mesh(lFootGeom, lFootMat);
+                    lFootMesh.position.set(lx, (lRoofY + finalY) / 2, -ly);
+                    lFootMesh.rotation.y = azRad;
+                    rootGroup.add(lFootMesh);
                   });
                 }
 
-                // Mid and End Clamps on top of flush rail
+                // Mid and End Clamps
                 if (row.items && row.items.length > 0) {
                   const clampGeom = new THREE.BoxGeometry(0.035, 0.018, 0.045);
                   row.items.forEach((it, itIdx) => {
@@ -2893,7 +3056,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
               return;
             }
 
-            // ── TILTED / ELEVATED / FIXED TILT / BALLASTED MOUNT ───────────────
+            // ── C. TILTED / ELEVATED / FIXED TILT / BALLASTED MOUNT ─────────────
             const rowMountGroup = new THREE.Group();
             rowMountGroup.position.set(row.centerX, frameCenterY, -row.centerY);
             rowMountGroup.rotation.y = azRad;
@@ -2954,16 +3117,20 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
               });
             }
 
-            // 3. STRUCTURAL FRAMES: Rafters, Posts, Base Plates, and Cross Braces
+            // 3. STRUCTURAL FRAMES: Rafters, Posts, Base Plates, Ballast Blocks, or Piles
             const rafterLength = row.pl * 0.88;
             const rafterGeom = new THREE.BoxGeometry(0.06, 0.08, rafterLength);
             const basePlateGeom = new THREE.BoxGeometry(0.20, 0.022, 0.20);
             const boltGeom = new THREE.CylinderGeometry(0.008, 0.008, 0.035, 8);
+            const ballastGeom = new THREE.BoxGeometry(0.32, 0.16, 0.24);
 
             const rafterLocalY = -0.104;
             const rafterBottomLocalY = -0.144;
             const frontVRel = +row.pl * 0.28;
             const rearVRel = -row.pl * 0.28;
+
+            let maxRearTopY = frameCenterY;
+            let minRoofRearY = rowRoofY;
 
             row.rafterUOffsets.forEach((uOffset, idx) => {
               const uRel = uOffset - row.centerU;
@@ -3007,10 +3174,148 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
 
               const frontPostTopY = frameCenterY + nodeFrontInMount.y;
               const rearPostTopY = frameCenterY + nodeRearInMount.y;
+              maxRearTopY = Math.max(maxRearTopY, rearPostTopY);
+              minRoofRearY = Math.min(minRoofRearY, roofRearY);
 
-              const frontPostH = Math.max(0.15, frontPostTopY - roofFrontY);
+              const frontPostH = Math.max(0.12, frontPostTopY - roofFrontY);
               const rearPostH = Math.max(0.15, rearPostTopY - roofRearY);
 
+              // ── CASE 1: BALLASTED MOUNTING (Non-penetrating concrete blocks, NO roof anchor bolts) ──
+              if (isSecBallasted) {
+                const ballastFrontId = `member-sec${sec.id}-row${rIdx}-ballast-front-${idx}`;
+                if (!deletedMemberIdsRef.current.has(ballastFrontId)) {
+                  const bFrontMesh = new THREE.Mesh(ballastGeom, ballastMat);
+                  bFrontMesh.position.set(nodeFrontInMount.x, roofFrontY - frameCenterY + 0.08, nodeFrontInMount.z);
+                  bFrontMesh.userData = {
+                    memberId: ballastFrontId,
+                    groupId,
+                    sectionId: sec.id,
+                    type: "Ballast Block",
+                    material: "Precast Concrete",
+                  };
+                  bFrontMesh.castShadow = true;
+                  rowMountGroup.add(bFrontMesh);
+                  memberMeshMapRef.current[ballastFrontId] = bFrontMesh;
+
+                  // Bracket connecting ballast to rafter
+                  const bBracket = new THREE.Mesh(new THREE.BoxGeometry(0.05, Math.max(0.05, frontPostTopY - roofFrontY - 0.08), 0.05), railMat);
+                  bBracket.position.set(nodeFrontInMount.x, (frontPostTopY + roofFrontY + 0.08) / 2 - frameCenterY, nodeFrontInMount.z);
+                  rowMountGroup.add(bBracket);
+                }
+
+                const ballastRearId = `member-sec${sec.id}-row${rIdx}-ballast-rear-${idx}`;
+                if (!deletedMemberIdsRef.current.has(ballastRearId)) {
+                  const bRearMesh = new THREE.Mesh(ballastGeom, ballastMat);
+                  bRearMesh.position.set(nodeRearInMount.x, roofRearY - frameCenterY + 0.08, nodeRearInMount.z);
+                  bRearMesh.userData = {
+                    memberId: ballastRearId,
+                    groupId,
+                    sectionId: sec.id,
+                    type: "Ballast Block",
+                    material: "Precast Concrete",
+                  };
+                  bRearMesh.castShadow = true;
+                  rowMountGroup.add(bRearMesh);
+                  memberMeshMapRef.current[ballastRearId] = bRearMesh;
+
+                  // Bracket connecting ballast to rafter
+                  const bRearBracket = new THREE.Mesh(new THREE.BoxGeometry(0.05, Math.max(0.05, rearPostTopY - roofRearY - 0.08), 0.05), railMat);
+                  bRearBracket.position.set(nodeRearInMount.x, (rearPostTopY + roofRearY + 0.08) / 2 - frameCenterY, nodeRearInMount.z);
+                  rowMountGroup.add(bRearBracket);
+                }
+                return; // Done for this ballast frame node
+              }
+
+              // ── CASE 2: FIXED TILT (Low-profile triangular legs & angle foot brackets) ──
+              if (isSecFixedTilt) {
+                const ftFrontId = `member-sec${sec.id}-row${rIdx}-post-front-${idx}`;
+                if (!deletedMemberIdsRef.current.has(ftFrontId)) {
+                  const ftFrontMesh = new THREE.Mesh(new THREE.BoxGeometry(0.05, frontPostH, 0.05), postMat);
+                  ftFrontMesh.position.set(nodeFrontInMount.x, (frontPostTopY + roofFrontY) / 2 - frameCenterY, nodeFrontInMount.z);
+                  ftFrontMesh.userData = {
+                    memberId: ftFrontId,
+                    groupId,
+                    sectionId: sec.id,
+                    type: "Front Column / Post",
+                    material: structMaterial,
+                    length: Number(frontPostH.toFixed(2)),
+                  };
+                  ftFrontMesh.castShadow = true;
+                  rowMountGroup.add(ftFrontMesh);
+                  memberMeshMapRef.current[ftFrontId] = ftFrontMesh;
+
+                  // Compact base angle foot
+                  const footMesh = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.015, 0.09), basePlateMat);
+                  footMesh.position.set(nodeFrontInMount.x, roofFrontY - frameCenterY + 0.008, nodeFrontInMount.z);
+                  rowMountGroup.add(footMesh);
+                }
+
+                const ftRearId = `member-sec${sec.id}-row${rIdx}-post-rear-${idx}`;
+                if (!deletedMemberIdsRef.current.has(ftRearId)) {
+                  const ftRearMesh = new THREE.Mesh(new THREE.BoxGeometry(0.05, rearPostH, 0.05), postMat);
+                  ftRearMesh.position.set(nodeRearInMount.x, (rearPostTopY + roofRearY) / 2 - frameCenterY, nodeRearInMount.z);
+                  ftRearMesh.userData = {
+                    memberId: ftRearId,
+                    groupId,
+                    sectionId: sec.id,
+                    type: "Rear Column / Post",
+                    material: structMaterial,
+                    length: Number(rearPostH.toFixed(2)),
+                  };
+                  ftRearMesh.castShadow = true;
+                  rowMountGroup.add(ftRearMesh);
+                  memberMeshMapRef.current[ftRearId] = ftRearMesh;
+
+                  // Compact base angle foot
+                  const footRearMesh = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.015, 0.09), basePlateMat);
+                  footRearMesh.position.set(nodeRearInMount.x, roofRearY - frameCenterY + 0.008, nodeRearInMount.z);
+                  rowMountGroup.add(footRearMesh);
+                }
+                return; // Done for fixed tilt node
+              }
+
+              // ── CASE 3: GROUND MOUNT (Driven ground piles embedded in terrain) ──
+              if (isSecGroundMount) {
+                const gmFrontId = `member-sec${sec.id}-row${rIdx}-post-front-${idx}`;
+                const pileDepth = 0.5;
+                if (!deletedMemberIdsRef.current.has(gmFrontId)) {
+                  const pileGeom = new THREE.BoxGeometry(0.08, frontPostH + pileDepth, 0.08);
+                  const pileMesh = new THREE.Mesh(pileGeom, postMat);
+                  pileMesh.position.set(nodeFrontInMount.x, (frontPostTopY + roofFrontY - pileDepth) / 2 - frameCenterY, nodeFrontInMount.z);
+                  pileMesh.userData = {
+                    memberId: gmFrontId,
+                    groupId,
+                    sectionId: sec.id,
+                    type: "Ground Pile Column",
+                    material: structMaterial,
+                    length: Number((frontPostH + pileDepth).toFixed(2)),
+                  };
+                  pileMesh.castShadow = true;
+                  rowMountGroup.add(pileMesh);
+                  memberMeshMapRef.current[gmFrontId] = pileMesh;
+                }
+
+                const gmRearId = `member-sec${sec.id}-row${rIdx}-post-rear-${idx}`;
+                if (!deletedMemberIdsRef.current.has(gmRearId)) {
+                  const pileRearGeom = new THREE.BoxGeometry(0.08, rearPostH + pileDepth, 0.08);
+                  const pileRearMesh = new THREE.Mesh(pileRearGeom, postMat);
+                  pileRearMesh.position.set(nodeRearInMount.x, (rearPostTopY + roofRearY - pileDepth) / 2 - frameCenterY, nodeRearInMount.z);
+                  pileRearMesh.userData = {
+                    memberId: gmRearId,
+                    groupId,
+                    sectionId: sec.id,
+                    type: "Ground Pile Column",
+                    material: structMaterial,
+                    length: Number((rearPostH + pileDepth).toFixed(2)),
+                  };
+                  pileRearMesh.castShadow = true;
+                  rowMountGroup.add(pileRearMesh);
+                  memberMeshMapRef.current[gmRearId] = pileRearMesh;
+                }
+                return;
+              }
+
+              // ── CASE 4: ELEVATED FRAME / SUPER STRUCTURE (PRESERVED FULL EXISTING IMPLEMENTATION) ──
               // B. FRONT POST
               const postFrontId = `member-sec${sec.id}-row${rIdx}-post-front-${idx}`;
               if (!deletedMemberIdsRef.current.has(postFrontId)) {
@@ -3141,6 +3446,17 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
                 rowMountGroup.add(n4);
               }
             });
+
+            // 4. AERODYNAMIC WIND DEFLECTOR SPOILER FOR BALLASTED MOUNT
+            if (isSecBallasted) {
+              const deflectorH = Math.max(0.20, Math.min(0.65, (maxRearTopY - minRoofRearY) * 0.95));
+              const deflectorGeom = new THREE.BoxGeometry(row.totalRowLength + 0.10, deflectorH, 0.003);
+              const deflectorMesh = new THREE.Mesh(deflectorGeom, deflectorMat);
+              deflectorMesh.position.set(0, (maxRearTopY + minRoofRearY) / 2 - frameCenterY, -row.pl * 0.32);
+              deflectorMesh.rotation.x = tiltRad * 0.4;
+              deflectorMesh.castShadow = true;
+              rowMountGroup.add(deflectorMesh);
+            }
 
             rootGroup.add(rowMountGroup);
           });

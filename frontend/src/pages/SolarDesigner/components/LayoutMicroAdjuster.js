@@ -213,6 +213,10 @@ export default function LayoutMicroAdjuster({
       ? "Rear Column / Post"
       : selectedMemberId.includes("rafter")
       ? "Rafter Beam"
+      : selectedMemberId.includes("monorail")
+      ? "Mono Rail / Short Rail"
+      : selectedMemberId.includes("ballast")
+      ? "Ballast Block"
       : selectedMemberId.includes("rail")
       ? "Purlin / Rail"
       : selectedMemberId.includes("brace")
