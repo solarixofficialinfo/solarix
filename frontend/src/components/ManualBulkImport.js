@@ -160,38 +160,41 @@ const inferFieldMap = (headerRow, mode) => {
 
 const findClient = (identifier, clientsList = []) => {
   if (!identifier) return null;
+  const list = Array.isArray(clientsList) ? clientsList : (clientsList?.clients || clientsList?.items || []);
   const clean = String(identifier).trim().toLowerCase();
-  let matched = clientsList.find(c => String(c.full_name || "").trim().toLowerCase() === clean);
+  let matched = list.find(c => String(c.full_name || "").trim().toLowerCase() === clean);
   if (matched) return matched;
-  matched = clientsList.find(c => String(c.sol_id || "").trim().toLowerCase() === clean);
+  matched = list.find(c => String(c.sol_id || "").trim().toLowerCase() === clean);
   if (matched) return matched;
-  matched = clientsList.find(c => String(c.id || "").trim().toLowerCase() === clean);
+  matched = list.find(c => String(c.id || "").trim().toLowerCase() === clean);
   if (matched) return matched;
-  matched = clientsList.find(c => String(c.full_name || "").trim().toLowerCase().includes(clean));
+  matched = list.find(c => String(c.full_name || "").trim().toLowerCase().includes(clean));
   if (matched) return matched;
   return null;
 };
 
 const findVendor = (identifier, vendorsList = []) => {
   if (!identifier) return null;
+  const list = Array.isArray(vendorsList) ? vendorsList : (vendorsList?.vendors || vendorsList?.items || []);
   const clean = String(identifier).trim().toLowerCase();
-  let matched = vendorsList.find(v => String(v.name || "").trim().toLowerCase() === clean);
+  let matched = list.find(v => String(v.name || "").trim().toLowerCase() === clean);
   if (matched) return matched;
-  matched = vendorsList.find(v => String(v.id || "").trim().toLowerCase() === clean);
+  matched = list.find(v => String(v.id || "").trim().toLowerCase() === clean);
   if (matched) return matched;
-  matched = vendorsList.find(v => String(v.name || "").trim().toLowerCase().includes(clean));
+  matched = list.find(v => String(v.name || "").trim().toLowerCase().includes(clean));
   if (matched) return matched;
   return null;
 };
 
 const findB2bCustomer = (identifier, b2bList = []) => {
   if (!identifier) return null;
+  const list = Array.isArray(b2bList) ? b2bList : (b2bList?.customers || b2bList?.b2b_customers || b2bList?.items || []);
   const clean = String(identifier).trim().toLowerCase();
-  let matched = b2bList.find(b => String(b.name || b.full_name || "").trim().toLowerCase() === clean);
+  let matched = list.find(b => String(b.name || b.full_name || "").trim().toLowerCase() === clean);
   if (matched) return matched;
-  matched = b2bList.find(b => String(b.id || "").trim().toLowerCase() === clean);
+  matched = list.find(b => String(b.id || "").trim().toLowerCase() === clean);
   if (matched) return matched;
-  matched = b2bList.find(b => String(b.name || b.full_name || "").trim().toLowerCase().includes(clean));
+  matched = list.find(b => String(b.name || b.full_name || "").trim().toLowerCase().includes(clean));
   if (matched) return matched;
   return null;
 };
@@ -200,7 +203,8 @@ const getAvailableStock = (prodName, prodSize, productsList = []) => {
   if (!prodName) return 0;
   const cleanName = String(prodName).toUpperCase().trim();
   const cleanSize = normalizeSizeForMatching(prodSize);
-  const matched = (productsList || []).find(
+  const list = Array.isArray(productsList) ? productsList : (productsList?.products || productsList?.items || []);
+  const matched = list.find(
     (p) => (p.name || "").toUpperCase().trim() === cleanName && normalizeSizeForMatching(p.size) === cleanSize
   );
   if (matched) {
@@ -213,8 +217,9 @@ const autofillFromProductMaster = (row, productsList) => {
   if (!row || !row.product) return row;
   const cleanName = String(row.product).toUpperCase().trim();
   const cleanSize = normalizeSizeForMatching(row.size);
+  const list = Array.isArray(productsList) ? productsList : (productsList?.products || productsList?.items || []);
 
-  const sameName = (productsList || []).filter((p) => (p.name || "").toUpperCase().trim() === cleanName);
+  const sameName = list.filter((p) => (p.name || "").toUpperCase().trim() === cleanName);
   let matched = sameName.find((p) => normalizeSizeForMatching(p.size) === cleanSize);
   if (!matched && sameName.length === 1) {
     matched = sameName[0];
@@ -294,8 +299,9 @@ const parseArraysToRows = (arrays, mode = "inward", clients = [], productsList =
       high_value_goods: false,
     };
 
-    if (productsList && productsList.length > 0) {
-      rowObj = autofillFromProductMaster(rowObj, productsList);
+    const safeProducts = Array.isArray(productsList) ? productsList : (productsList?.products || []);
+    if (safeProducts.length > 0) {
+      rowObj = autofillFromProductMaster(rowObj, safeProducts);
     }
 
     return rowObj;
@@ -412,7 +418,9 @@ export default function ManualBulkImport({
   const [clients, setClients] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [b2bCustomers, setB2bCustomers] = useState([]);
-  const [productsList, setProductsList] = useState(products || []);
+  const [productsList, setProductsList] = useState(
+    Array.isArray(products) ? products : (products?.products || [])
+  );
   const [globalDefaults, setGlobalDefaults] = useState({
     date: new Date().toISOString().split("T")[0],
     reference_type: "Challan Number",
@@ -467,6 +475,15 @@ export default function ManualBulkImport({
   }, []);
 
   useEffect(() => {
+    if (products) {
+      const arr = Array.isArray(products) ? products : (products?.products || []);
+      if (arr.length > 0) {
+        setProductsList(arr);
+      }
+    }
+  }, [products]);
+
+  useEffect(() => {
     if (!open) {
       resetState();
       return;
@@ -478,19 +495,37 @@ export default function ManualBulkImport({
       api.get("/vendors"),
       api.get("/inventory/b2b-customers"),
     ]).then(([resClients, resVendors, resB2b]) => {
-      if (resClients.status === "fulfilled") setClients(resClients.value?.data || []);
-      if (resVendors.status === "fulfilled") setVendors(resVendors.value?.data || []);
-      if (resB2b.status === "fulfilled") setB2bCustomers(resB2b.value?.data || []);
+      if (resClients.status === "fulfilled") {
+        const d = resClients.value?.data;
+        const list = Array.isArray(d) ? d : (d?.clients || d?.items || []);
+        setClients(list);
+      }
+      if (resVendors.status === "fulfilled") {
+        const d = resVendors.value?.data;
+        const list = Array.isArray(d) ? d : (d?.vendors || d?.items || []);
+        setVendors(list);
+      }
+      if (resB2b.status === "fulfilled") {
+        const d = resB2b.value?.data;
+        const list = Array.isArray(d) ? d : (d?.customers || d?.b2b_customers || d?.items || []);
+        setB2bCustomers(list);
+      }
     });
 
-    if (!products || products.length === 0) {
+    const hasPassedProducts = Array.isArray(products) ? products.length > 0 : Boolean(products?.products?.length);
+    if (!hasPassedProducts) {
       const cached = getCachedProducts();
-      if (cached && cached.length > 0) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         setProductsList(cached);
       }
-      fetchProductsDeduplicated().then((list) => setProductsList(list || [])).catch(() => {});
+      fetchProductsDeduplicated()
+        .then((list) => {
+          const arr = Array.isArray(list) ? list : (list?.products || []);
+          setProductsList(arr);
+        })
+        .catch(() => {});
     } else {
-      setProductsList(products);
+      setProductsList(Array.isArray(products) ? products : (products?.products || []));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -499,13 +534,14 @@ export default function ManualBulkImport({
     if (!name) return "empty";
     const cleanName = name.toUpperCase().trim();
     const cleanSize = normalizeSizeForMatching(size);
+    const list = Array.isArray(productsList) ? productsList : (productsList?.products || []);
 
-    const sameName = productsList.filter((p) => (p.name || "").toUpperCase().trim() === cleanName);
+    const sameName = list.filter((p) => (p.name || "").toUpperCase().trim() === cleanName);
     if (sameName.length > 0) {
       if (sameName.some(p => normalizeSizeForMatching(p.size) === cleanSize)) return "matched";
     }
 
-    if (productsList.find((p) => (p.name || "").toUpperCase().trim().includes(cleanName))) return "fuzzy";
+    if (list.find((p) => (p.name || "").toUpperCase().trim().includes(cleanName))) return "fuzzy";
     return "new";
   };
 
@@ -964,18 +1000,23 @@ export default function ManualBulkImport({
     setFileName("");
   };
 
-  const productOptions = productsList.map((item) => item.name).filter(Boolean);
-  const clientOptions = clients.map((client) => client.full_name).filter(Boolean);
-  const vendorOptions = vendors.map((v) => v.name).filter(Boolean);
-  const b2bOptions = b2bCustomers.map((b) => b.name || b.full_name).filter(Boolean);
+  const safeProductsList = Array.isArray(productsList) ? productsList : (productsList?.products || []);
+  const safeClients = Array.isArray(clients) ? clients : (clients?.clients || []);
+  const safeVendors = Array.isArray(vendors) ? vendors : (vendors?.vendors || []);
+  const safeB2b = Array.isArray(b2bCustomers) ? b2bCustomers : (b2bCustomers?.customers || []);
+
+  const productOptions = safeProductsList.map((item) => item?.name).filter(Boolean);
+  const clientOptions = safeClients.map((client) => client?.full_name).filter(Boolean);
+  const vendorOptions = safeVendors.map((v) => v?.name).filter(Boolean);
+  const b2bOptions = safeB2b.map((b) => b?.name || b?.full_name).filter(Boolean);
 
   const uniqueChallans = Array.from(new Set(
-    rows.map((r) => (r.reference_number || r.outward_challan_no || r.challan_number || r.bill_number || "").trim()).filter(Boolean)
+    (rows || []).map((r) => (r.reference_number || r.outward_challan_no || r.challan_number || r.bill_number || "").trim()).filter(Boolean)
   ));
   const hasMultipleChallans = uniqueChallans.length > 1;
 
   const uniqueClientSuppliers = Array.from(new Set(
-    rows.map((r) => ((mode === "inward" ? (r.source_name || r.client_name) : (r.client_name || r.source_name)) || "").trim()).filter(Boolean)
+    (rows || []).map((r) => ((mode === "inward" ? (r.source_name || r.client_name) : (r.client_name || r.source_name)) || "").trim()).filter(Boolean)
   ));
   const hasMultipleClients = uniqueClientSuppliers.length > 1;
 
