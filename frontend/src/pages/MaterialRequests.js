@@ -5,6 +5,8 @@ import api, { formatApiError, fileUrl } from "@/lib/api";
 import { useMaterialRequestList, useInvalidateMaterialRequests } from "@/hooks/useMaterialRequests";
 import { useProductList } from "@/hooks/useInventory";
 import { useClientList } from "@/hooks/useClients";
+import { useEmployeeList } from "@/hooks/useTeam";
+import PublicLinksTab from "@/components/MaterialRequests/PublicLinksTab";
 import { usePermission } from "@/lib/permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -38,7 +40,8 @@ import {
   User,
   Building2,
   Layers,
-  ArrowRight
+  ArrowRight,
+  Link2
 } from "lucide-react";
 import dayjs from "dayjs";
 import PageHeader from "@/components/PageHeader";
@@ -60,6 +63,7 @@ export default function MaterialRequests() {
   // Data fetching
   const { data: requests = [], isLoading } = useMaterialRequestList();
   const { data: clients = [] } = useClientList();
+  const { data: employees = [] } = useEmployeeList();
   const invalidateMatReqs = useInvalidateMaterialRequests();
 
   // Filter requests
@@ -269,6 +273,9 @@ export default function MaterialRequests() {
           <TabsTrigger value="history" className="text-xs font-semibold px-4 py-2 gap-1.5" data-testid="tab-mr-history">
             <History className="w-3.5 h-3.5 text-indigo-600" /> Material History ({historyRequests.length})
           </TabsTrigger>
+          <TabsTrigger value="links" className="text-xs font-semibold px-4 py-2 gap-1.5" data-testid="tab-mr-links">
+            <Link2 className="w-3.5 h-3.5 text-blue-600" /> Public Request Links
+          </TabsTrigger>
         </TabsList>
 
         {/* Tab 1: Pending */}
@@ -329,6 +336,11 @@ export default function MaterialRequests() {
             onRetry={handleRetry}
             emptyMessage="No material request history logged yet."
           />
+        </TabsContent>
+
+        {/* Tab 5: Public Request Links */}
+        <TabsContent value="links" className="space-y-4">
+          <PublicLinksTab employees={employees} />
         </TabsContent>
       </Tabs>
 

@@ -48,6 +48,7 @@ const MaterialRequests = lazy(() => import("@/pages/MaterialRequests"));
 const SolarDesigner = lazy(() => import("@/pages/SolarDesigner"));
 const SolarStudio = lazy(() => import("@/pages/SolarDesigner/SolarStudio"));
 const PublicSalesPortal = lazy(() => import("@/pages/PublicSalesPortal"));
+const PublicMaterialRequest = lazy(() => import("@/pages/PublicMaterialRequest"));
 
 // WhatsApp Marketing Module Pages
 const WhatsAppLayout = lazy(() => import("@/pages/WhatsApp/WhatsAppLayout"));
@@ -311,6 +312,11 @@ function App() {
             {/* Public Company-Branded Sales / Lead Capture Portal */}
             <Route path="/s/:token" element={<PublicSalesPortal />} />
             <Route path="/sales/:token" element={<PublicSalesPortal />} />
+
+            {/* Public Material Request Routes */}
+            <Route path="/request/:token" element={<PublicMaterialRequest />} />
+            <Route path="/m/:token" element={<PublicMaterialRequest />} />
+            <Route path="/material-request/:token" element={<PublicMaterialRequest />} />
 
             {/* WhatsApp Marketing & Automation Routes (Gated by ENABLE_WHATSAPP flag) */}
             {ENABLE_WHATSAPP ? (

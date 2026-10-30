@@ -15,6 +15,7 @@ import re
 import uuid
 import logging
 import secrets
+import hashlib
 import requests  # type: ignore
 import bcrypt
 import jwt
@@ -480,8 +481,8 @@ class CursorAdapter:
         return self
 
     async def to_list(self, length=None):
-        # Dedicated persistent synchronization for b2b_customers and vendors via Supabase documents table
-        if self.collection.table_name in ("b2b_customers", "vendors"):
+        # Dedicated persistent synchronization for b2b_customers, vendors, and material_request_links via Supabase documents table
+        if self.collection.table_name in ("b2b_customers", "vendors", "material_request_links"):
             entity_type = self.collection.table_name
             data = []
             cid = None
@@ -1706,9 +1707,9 @@ class CollectionAdapter:
                 await _sync_client_financial_record(document["company_id"], document["client_id"], self.table_name, document, "upsert")
             return InsertOneResult(rec_id)
 
-        # Dedicated persistent synchronization for b2b_customers and vendors via Supabase documents table
-        if self.table_name in ("b2b_customers", "vendors"):
-            rec_id = str(document.get("id") or (f"b2b_cust_{uuid.uuid4().hex[:12]}" if self.table_name == "b2b_customers" else f"ven_{uuid.uuid4().hex[:12]}"))
+        # Dedicated persistent synchronization for b2b_customers, vendors, and material_request_links via Supabase documents table
+        if self.table_name in ("b2b_customers", "vendors", "material_request_links"):
+            rec_id = str(document.get("id") or (f"b2b_cust_{uuid.uuid4().hex[:12]}" if self.table_name == "b2b_customers" else (f"mrl_{uuid.uuid4().hex[:12]}" if self.table_name == "material_request_links" else f"ven_{uuid.uuid4().hex[:12]}")))
             document["id"] = rec_id
             cid = document.get("company_id")
             if "name" in document and "full_name" not in document:
@@ -1729,8 +1730,24 @@ class CollectionAdapter:
             except Exception as e_supa:
                 logger.warning(f"Supabase documents upsert failed for {self.table_name}: {e_supa}")
             await LocalFileCollection(self.table_name).insert_one(document)
-            if cid:
+            if cid and self.table_name in ("b2b_customers", "vendors"):
                 await _sync_company_documents_record(cid, self.table_name, document, "upsert")
+            return InsertOneResult(rec_id)
+
+        # Dedicated persistent storage for material_requests in Supabase material_requests table
+        if self.table_name == "material_requests":
+            rec_id = str(document.get("id") or str(uuid.uuid4()))
+            document["id"] = rec_id
+            supa_doc = {k: v for k, v in document.items() if k in [
+                "id", "company_id", "client_id", "client_name", "sol_id",
+                "requested_by", "requested_by_name", "items", "remarks",
+                "status", "approval", "delivery", "created_at", "updated_at"
+            ]}
+            try:
+                supabase.table("material_requests").insert(supa_doc, returning="minimal").execute()
+            except Exception as e_supa:
+                logger.warning(f"Supabase material_requests insert warning: {e_supa}")
+            await LocalFileCollection(self.table_name).insert_one(document)
             return InsertOneResult(rec_id)
 
         # Serialize metadata for files
@@ -1910,8 +1927,8 @@ class CollectionAdapter:
                 await _sync_client_financial_record(merged_rec["company_id"], merged_rec["client_id"], self.table_name, merged_rec, "upsert")
             return UpdateResult(1, 1)
 
-        # Dedicated persistent synchronization for b2b_customers and vendors via Supabase documents table
-        if self.table_name in ("b2b_customers", "vendors"):
+        # Dedicated persistent synchronization for b2b_customers, vendors, and material_request_links via Supabase documents table
+        if self.table_name in ("b2b_customers", "vendors", "material_request_links"):
             existing = await self.find_one(filter)
             if not existing:
                 if upsert:
@@ -1953,7 +1970,7 @@ class CollectionAdapter:
             except Exception as e_supa:
                 logger.warning(f"Supabase documents update failed for {self.table_name}: {e_supa}")
             await LocalFileCollection(self.table_name).update_one(filter, update, upsert=upsert)
-            if cid:
+            if cid and self.table_name in ("b2b_customers", "vendors"):
                 await _sync_company_documents_record(cid, self.table_name, merged, "upsert")
             return UpdateResult(1, 1)
         
@@ -2186,8 +2203,8 @@ class CollectionAdapter:
             await LocalFileCollection(self.table_name).delete_one(filter)
             return DeleteResult(1)
 
-        # Dedicated persistent synchronization for b2b_customers and vendors via Supabase documents table
-        if self.table_name in ("b2b_customers", "vendors"):
+        # Dedicated persistent synchronization for b2b_customers, vendors, and material_request_links via Supabase documents table
+        if self.table_name in ("b2b_customers", "vendors", "material_request_links"):
             rec_to_del = await self.find_one(filter)
             if rec_to_del and rec_to_del.get("id"):
                 rec_id = str(rec_to_del["id"])
@@ -2197,7 +2214,7 @@ class CollectionAdapter:
                 except Exception as e_supa:
                     logger.warning(f"Supabase documents delete failed for {self.table_name}: {e_supa}")
                 await LocalFileCollection(self.table_name).delete_one(filter)
-                if cid:
+                if cid and self.table_name in ("b2b_customers", "vendors"):
                     await _sync_company_documents_record(cid, self.table_name, rec_to_del, "delete")
             return DeleteResult(1)
 
@@ -2236,8 +2253,8 @@ class CollectionAdapter:
             await LocalFileCollection(self.table_name).delete_many(filter)
             return DeleteResult(len(recs_to_del))
 
-        # Dedicated persistent synchronization for b2b_customers and vendors via Supabase documents table
-        if self.table_name in ("b2b_customers", "vendors"):
+        # Dedicated persistent synchronization for b2b_customers, vendors, and material_request_links via Supabase documents table
+        if self.table_name in ("b2b_customers", "vendors", "material_request_links"):
             recs_to_del = await self.find(filter).to_list(10000)
             for rec_to_del in recs_to_del:
                 if rec_to_del.get("id"):
@@ -2247,7 +2264,7 @@ class CollectionAdapter:
                         supabase.table("documents").delete().eq("id", rec_id).execute()
                     except Exception:
                         pass
-                    if cid:
+                    if cid and self.table_name in ("b2b_customers", "vendors"):
                         await _sync_company_documents_record(cid, self.table_name, rec_to_del, "delete")
             await LocalFileCollection(self.table_name).delete_many(filter)
             return DeleteResult(len(recs_to_del))
@@ -2266,7 +2283,7 @@ class CollectionAdapter:
         return DeleteResult(1)
 
     async def count_documents(self, filter=None):
-        if self.table_name in ("b2b_customers", "vendors"):
+        if self.table_name in ("b2b_customers", "vendors", "material_request_links"):
             docs = await self.find(filter).to_list(100000)
             return len(docs)
         if self.table_name in _known_missing_supabase_tables:
@@ -2284,7 +2301,7 @@ class CollectionAdapter:
             raise e
 
     async def distinct(self, field, filter=None):
-        if self.table_name in ("b2b_customers", "vendors"):
+        if self.table_name in ("b2b_customers", "vendors", "material_request_links"):
             docs = await self.find(filter).to_list(100000)
             vals = {d.get(field) for d in docs if d.get(field) is not None}
             return list(vals)
@@ -8408,6 +8425,529 @@ async def approve_material(req_id: str, data: MaterialApproval, user=Depends(get
     if not refreshed:
         raise HTTPException(status_code=404, detail="Material request not found")
     return await _enrich_request_with_stock(refreshed)
+
+
+# ==============================================================================
+# PUBLIC MATERIAL REQUEST LINKS FOR TEAM MEMBERS
+# ==============================================================================
+
+class CreateMaterialRequestLinkIn(BaseModel):
+    team_member_id: Optional[str] = None
+    assigned_team_member_id: Optional[str] = None
+    remarks: Optional[str] = ""
+
+class UpdateMaterialRequestLinkStatusIn(BaseModel):
+    status: str  # "active", "disabled", "revoked"
+
+class PublicMaterialRequestSubmitIn(BaseModel):
+    token: str
+    client_id: str
+    requester_name: str
+    requester_phone: Optional[str] = ""
+    items: List[Dict[str, Any]]
+    remarks: Optional[str] = ""
+    idempotency_key: Optional[str] = None
+    honeypot: Optional[str] = ""  # Anti-spam: must remain empty
+
+
+# In-memory sliding window rate limiter for public material request endpoints
+_PUBLIC_MR_RATE_LIMIT: Dict[str, List[float]] = {}
+_PUBLIC_MR_RATE_LOCK = threading.Lock()
+
+def _check_public_mr_rate_limit(key: str, max_requests: int = 30, window_secs: int = 60) -> bool:
+    now = time.time()
+    with _PUBLIC_MR_RATE_LOCK:
+        timestamps = _PUBLIC_MR_RATE_LIMIT.get(key, [])
+        timestamps = [t for t in timestamps if now - t < window_secs]
+        if len(timestamps) >= max_requests:
+            _PUBLIC_MR_RATE_LIMIT[key] = timestamps
+            return False
+        timestamps.append(now)
+        _PUBLIC_MR_RATE_LIMIT[key] = timestamps
+        if len(_PUBLIC_MR_RATE_LIMIT) > 1000:
+            for k in list(_PUBLIC_MR_RATE_LIMIT.keys())[:200]:
+                if not _PUBLIC_MR_RATE_LIMIT[k] or now - _PUBLIC_MR_RATE_LIMIT[k][-1] > window_secs:
+                    _PUBLIC_MR_RATE_LIMIT.pop(k, None)
+        return True
+
+
+async def _resolve_active_material_request_link(token: str) -> Tuple[Optional[dict], Optional[str]]:
+    clean = (token or "").strip().split("?")[0].split("#")[0].rstrip("/")
+    if not clean or clean.lower() in ("undefined", "null", ""):
+        return None, "Invalid link token."
+    
+    token_hash = hashlib.sha256(clean.encode("utf-8")).hexdigest()
+    link = await db.material_request_links.find_one({
+        "$or": [
+            {"token_hash": token_hash},
+            {"public_token": clean}
+        ]
+    })
+    if not link:
+        return None, "Material request link not found."
+    
+    status = (link.get("status") or "").lower().strip()
+    if status == "revoked":
+        return None, "This material request link has been permanently revoked. Please request a new link from your company administrator."
+    if status == "disabled" or not link.get("is_active", True):
+        return None, "This material request link is currently disabled. Please contact your company administrator."
+    
+    return link, None
+
+
+@api_router.get("/material-requests/links")
+async def list_material_request_links(user=Depends(get_current_user)):
+    """List all material request links for the user's company."""
+    if is_external_user(user):
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    cid = user["company_id"]
+    links = await db.material_request_links.find({"company_id": cid}).sort("created_at", -1).to_list(500)
+    
+    # Enrich with latest team member details from db.users
+    user_ids = list({l.get("team_member_id") for l in links if l.get("team_member_id")})
+    user_map = {}
+    if user_ids:
+        users = await db.users.find(
+            {"id": {"$in": user_ids}, "company_id": cid},
+            {"_id": 0, "id": 1, "name": 1, "email": 1, "role": 1, "status": 1}
+        ).to_list(len(user_ids))
+        user_map = {u["id"]: u for u in users}
+    
+    enriched = []
+    for l in links:
+        u = user_map.get(l.get("team_member_id")) or {}
+        p_tok = l.get("public_token") or ""
+        m_name = u.get("name") or l.get("team_member_name") or "Team Member"
+        m_email = u.get("email") or ""
+        m_role = u.get("role") or "Staff"
+        m_status = u.get("status") or "Active"
+        stat = l.get("status", "active")
+        act = l.get("is_active", True)
+        
+        enriched.append({
+            "id": l.get("id"),
+            "token": p_tok,
+            "public_token": p_tok,
+            "public_url": f"/request/{p_tok}" if p_tok else "",
+            "team_member_id": l.get("team_member_id"),
+            "assigned_team_member_id": l.get("team_member_id"),
+            "team_member_name": m_name,
+            "assigned_team_member_name": m_name,
+            "team_member_email": m_email,
+            "assigned_team_member_email": m_email,
+            "team_member_role": m_role,
+            "assigned_team_member_role": m_role,
+            "team_member_status": m_status,
+            "assigned_team_member_status": m_status,
+            "status": stat,
+            "is_active": act,
+            "remarks": l.get("remarks", ""),
+            "created_at": l.get("created_at"),
+            "updated_at": l.get("updated_at"),
+            "last_used_at": l.get("last_used_at"),
+            "created_by": l.get("created_by"),
+        })
+    return {
+        "status": "success",
+        "links": enriched
+    }
+
+
+@api_router.post("/material-requests/links")
+async def create_material_request_link(data: CreateMaterialRequestLinkIn, user=Depends(require_active_subscription())):
+    """Create or retrieve a reusable public material request link for a selected team member."""
+    if is_external_user(user) or not (is_owner(user) or has_perm(user, "data_management", "create") or has_perm(user, "project_execution", "create")):
+        raise HTTPException(status_code=403, detail="Missing permission to create material request links")
+    
+    cid = user["company_id"]
+    target_member_id = (data.team_member_id or data.assigned_team_member_id or "").strip()
+    if not target_member_id:
+        raise HTTPException(status_code=400, detail="Team member ID is required")
+
+    team_member = await db.users.find_one({"id": target_member_id, "company_id": cid}, {"_id": 0, "password_hash": 0})
+    if not team_member:
+        raise HTTPException(status_code=404, detail="Team member not found in your company")
+    
+    m_name = team_member.get("full_name") or team_member.get("name") or "Team Member"
+    m_email = team_member.get("email") or ""
+    m_role = team_member.get("role") or "Staff"
+
+    # Enforce: one reusable link per team member by default
+    existing = await db.material_request_links.find_one({
+        "company_id": cid,
+        "team_member_id": target_member_id,
+        "status": {"$in": ["active", "disabled"]}
+    })
+    if existing:
+        p_tok = existing.get("public_token") or ""
+        link_dict = {
+            "id": existing.get("id"),
+            "token": p_tok,
+            "public_token": p_tok,
+            "public_url": f"/request/{p_tok}" if p_tok else "",
+            "team_member_id": existing.get("team_member_id"),
+            "assigned_team_member_id": existing.get("team_member_id"),
+            "team_member_name": m_name,
+            "assigned_team_member_name": m_name,
+            "team_member_email": m_email,
+            "assigned_team_member_email": m_email,
+            "team_member_role": m_role,
+            "assigned_team_member_role": m_role,
+            "status": existing.get("status", "active"),
+            "is_active": existing.get("is_active", True),
+            "created_at": existing.get("created_at"),
+            "updated_at": existing.get("updated_at"),
+            "last_used_at": existing.get("last_used_at"),
+        }
+        return {
+            "status": "success",
+            "message": "Existing active reusable link retrieved for this team member",
+            "is_reused": True,
+            "is_existing": True,
+            "link": link_dict,
+        }
+    
+    raw_token = secrets.token_urlsafe(24)
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    now = now_iso()
+    link_id = str(uuid.uuid4())
+    
+    doc = {
+        "id": link_id,
+        "company_id": cid,
+        "team_member_id": target_member_id,
+        "team_member_name": m_name,
+        "remarks": (data.remarks or "").strip(),
+        "public_token": raw_token,
+        "token_hash": token_hash,
+        "status": "active",
+        "is_active": True,
+        "created_at": now,
+        "updated_at": now,
+        "last_used_at": None,
+        "created_by": user["id"],
+    }
+    await db.material_request_links.insert_one(doc)
+    await log_activity(cid, user["id"], user["name"], "Created Material Request Link", f"For {m_name}")
+    
+    link_dict = {
+        "id": link_id,
+        "token": raw_token,
+        "public_token": raw_token,
+        "public_url": f"/request/{raw_token}",
+        "team_member_id": target_member_id,
+        "assigned_team_member_id": target_member_id,
+        "team_member_name": m_name,
+        "assigned_team_member_name": m_name,
+        "team_member_email": m_email,
+        "assigned_team_member_email": m_email,
+        "team_member_role": m_role,
+        "assigned_team_member_role": m_role,
+        "status": "active",
+        "is_active": True,
+        "created_at": now,
+        "updated_at": now,
+        "last_used_at": None,
+    }
+    return {
+        "status": "success",
+        "message": "Public material request link generated successfully",
+        "is_reused": False,
+        "is_existing": False,
+        "link": link_dict,
+    }
+
+
+@api_router.patch("/material-requests/links/{link_id}/status")
+async def update_material_request_link_status(link_id: str, data: UpdateMaterialRequestLinkStatusIn, user=Depends(require_active_subscription())):
+    """Update link status (active, disabled, revoked)."""
+    if is_external_user(user) or not (is_owner(user) or has_perm(user, "data_management", "edit") or has_perm(user, "project_execution", "edit")):
+        raise HTTPException(status_code=403, detail="Missing permission to update link status")
+    
+    cid = user["company_id"]
+    link = await db.material_request_links.find_one({"id": link_id, "company_id": cid})
+    if not link:
+        raise HTTPException(status_code=404, detail="Material request link not found")
+    
+    target_status = data.status.lower().strip()
+    if target_status not in ("active", "disabled", "revoked"):
+        raise HTTPException(status_code=400, detail="Invalid status. Must be active, disabled, or revoked.")
+    
+    if link.get("status") == "revoked" and target_status != "revoked":
+        raise HTTPException(status_code=400, detail="Revoked links cannot be re-enabled. Please regenerate a new link.")
+    
+    is_active = (target_status == "active")
+    now = now_iso()
+    await db.material_request_links.update_one(
+        {"id": link_id, "company_id": cid},
+        {"$set": {"status": target_status, "is_active": is_active, "updated_at": now}}
+    )
+    await log_activity(cid, user["id"], user["name"], f"Updated Material Request Link to {target_status.title()}", link.get("team_member_name", ""))
+    return {"status": "success", "link_id": link_id, "new_status": target_status, "is_active": is_active}
+
+
+@api_router.post("/material-requests/links/{link_id}/regenerate")
+async def regenerate_material_request_link(link_id: str, user=Depends(require_active_subscription())):
+    """Revoke old token and generate a new cryptographically secure token for this team member."""
+    if is_external_user(user) or not (is_owner(user) or has_perm(user, "data_management", "edit") or has_perm(user, "project_execution", "edit")):
+        raise HTTPException(status_code=403, detail="Missing permission to regenerate material request links")
+    
+    cid = user["company_id"]
+    link = await db.material_request_links.find_one({"id": link_id, "company_id": cid})
+    if not link:
+        raise HTTPException(status_code=404, detail="Material request link not found")
+    
+    new_token = secrets.token_urlsafe(24)
+    new_token_hash = hashlib.sha256(new_token.encode("utf-8")).hexdigest()
+    now = now_iso()
+    
+    await db.material_request_links.update_one(
+        {"id": link_id, "company_id": cid},
+        {"$set": {
+            "public_token": new_token,
+            "token_hash": new_token_hash,
+            "status": "active",
+            "is_active": True,
+            "updated_at": now,
+        }}
+    )
+    await log_activity(cid, user["id"], user["name"], "Regenerated Material Request Link", f"For {link.get('team_member_name')}")
+    
+    m_name = link.get("team_member_name")
+    link_dict = {
+        "id": link_id,
+        "token": new_token,
+        "public_token": new_token,
+        "public_url": f"/request/{new_token}",
+        "team_member_id": link.get("team_member_id"),
+        "assigned_team_member_id": link.get("team_member_id"),
+        "team_member_name": m_name,
+        "assigned_team_member_name": m_name,
+        "is_active": True,
+        "status": "active",
+        "updated_at": now,
+    }
+    return {
+        "status": "success",
+        "message": "Material request link regenerated successfully. Previous token has been revoked.",
+        "link": link_dict,
+    }
+
+
+@api_router.get("/public/material-requests/link/{token}")
+async def get_public_material_request_link_info(token: str, request: Request = None):
+    """Public portal initialization: validates token and returns minimum safe metadata."""
+    if request and request.client:
+        client_ip = request.client.host
+        if not _check_public_mr_rate_limit(f"get_{client_ip}", max_requests=60, window_secs=60):
+            raise HTTPException(status_code=429, detail="Too many requests. Please wait a moment.")
+    
+    link, err_msg = await _resolve_active_material_request_link(token)
+    if not link:
+        status_code = 403 if "disabled" in (err_msg or "") or "revoked" in (err_msg or "") else 404
+        raise HTTPException(status_code=status_code, detail=err_msg or "Material request link not found or inactive")
+    
+    cid = link["company_id"]
+    comp = await db.companies.find_one({"id": cid}, {"_id": 0}) or {}
+    
+    logo_file_id = comp.get("logo_file_id")
+    logo_url = f"/api/files/{logo_file_id}" if logo_file_id else comp.get("logo_url")
+    
+    # Fetch safe minimal client projects for selection (only id, full_name, sol_id, project_name)
+    clients = await db.clients.find(
+        {"company_id": cid},
+        {"_id": 0, "id": 1, "full_name": 1, "sol_id": 1, "project_name": 1, "city": 1, "state": 1}
+    ).sort("full_name", 1).to_list(1000)
+    
+    # Fetch safe minimal product catalog for autocomplete (only id, name, size, unit, category, brand)
+    products = await db.products.find(
+        {"company_id": cid},
+        {"_id": 0, "id": 1, "name": 1, "size": 1, "unit": 1, "category": 1, "brand": 1}
+    ).sort("name", 1).to_list(2000)
+
+    # Get member role if available
+    member_user = await db.users.find_one({"id": link.get("team_member_id")}, {"_id": 0, "role": 1}) or {}
+    m_name = link.get("team_member_name") or "Authorized Team Member"
+    m_role = member_user.get("role") or ""
+    
+    c_name = comp.get("company_name") or comp.get("name") or "Solar EPC Company"
+    c_city = comp.get("city") or ""
+    c_state = comp.get("state") or ""
+
+    return {
+        "valid": True,
+        "company_name": c_name,
+        "logo_url": logo_url,
+        "city": c_city,
+        "state": c_state,
+        "company": {
+            "name": c_name,
+            "logo_url": logo_url,
+            "city": c_city,
+            "state": c_state,
+        },
+        "assigned_team_member_name": m_name,
+        "assigned_team_member_role": m_role,
+        "assigned_to": {
+            "name": m_name,
+            "role": m_role,
+        },
+        "projects": clients,
+        "clients": clients,
+        "products": products,
+    }
+
+
+@api_router.post("/public/material-requests/submit")
+async def submit_public_material_request(data: PublicMaterialRequestSubmitIn, request: Request = None):
+    """Submit a material request via an active public link without logging in."""
+    if request and request.client:
+        client_ip = request.client.host
+        if not _check_public_mr_rate_limit(f"post_{client_ip}", max_requests=20, window_secs=60):
+            raise HTTPException(status_code=429, detail="Too many submissions. Please slow down and wait a minute.")
+    
+    # Anti-spam Honeypot Check: Must remain empty (silently return success to mislead spammers)
+    if data.honeypot and data.honeypot.strip():
+        return {
+            "status": "success",
+            "message": "Material request submitted successfully.",
+            "is_honeypot": True,
+        }
+    
+    # Validate link token and active status
+    link, err_msg = await _resolve_active_material_request_link(data.token)
+    if not link:
+        status_code = 403 if "disabled" in (err_msg or "") or "revoked" in (err_msg or "") else 404
+        raise HTTPException(status_code=status_code, detail=err_msg or "Material request link is not active")
+    
+    cid = link["company_id"]
+    assigned_team_member_id = link["team_member_id"]
+    assigned_team_member_name = link["team_member_name"]
+    
+    # Atomic Idempotency Check:
+    clean_idempotency_key = (data.idempotency_key or "").strip()
+    if clean_idempotency_key:
+        existing = await db.material_requests.find_one({
+            "idempotency_key": clean_idempotency_key,
+            "company_id": cid
+        }, {"_id": 0})
+        if existing:
+            return {
+                "status": "success",
+                "message": "Material request already submitted successfully",
+                "request": existing,
+                "is_duplicate": True,
+            }
+    
+    # Validate Client/Project belongs to company
+    client = await db.clients.find_one({"id": data.client_id, "company_id": cid}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Selected client project was not found")
+    
+    # Validate Requester Details
+    req_name = (data.requester_name or "").strip()
+    if not req_name:
+        raise HTTPException(status_code=400, detail="Requester Name is required")
+    if len(req_name) > 120:
+        raise HTTPException(status_code=400, detail="Requester Name cannot exceed 120 characters")
+    
+    # Validate Items
+    if not data.items or not isinstance(data.items, list):
+        raise HTTPException(status_code=400, detail="At least one material item is required")
+    if len(data.items) > 50:
+        raise HTTPException(status_code=400, detail="Maximum 50 items allowed per request")
+    
+    normalized_items = []
+    for it in data.items:
+        p_name = (it.get("product") or "").strip().upper()
+        p_size = (it.get("size") or "").strip()
+        p_unit = (it.get("unit") or "Nos").strip()
+        p_qty = float(it.get("quantity") or 0)
+        p_rem = (it.get("remarks") or "").strip()
+        if not p_name or p_qty <= 0:
+            continue
+        normalized_items.append({
+            "product": p_name,
+            "size": p_size,
+            "unit": p_unit,
+            "quantity": p_qty,
+            "remarks": p_rem,
+        })
+    
+    if not normalized_items:
+        raise HTTPException(status_code=400, detail="Please enter at least one item with a valid product name and quantity greater than zero")
+    
+    # Sequential Request Number
+    year = datetime.now(timezone.utc).year
+    seq_doc = await db.counters.find_one_and_update(
+        {"company_id": cid, "year": year, "type": "material_request"},
+        {"$inc": {"seq": 1}},
+        upsert=True
+    )
+    seq_val = seq_doc.get("seq") if (seq_doc and isinstance(seq_doc, dict)) else 1
+    request_no = f"MR-{year}-{seq_val:04d}"
+    
+    # Check plan limit
+    from plan_config import check_plan_limit, increment_usage
+    chk_mr = await check_plan_limit(cid, "material_requests", increment=1, db=db)
+    if not chk_mr["allowed"]:
+        raise HTTPException(status_code=403, detail=chk_mr["message"])
+    
+    req_phone = (data.requester_phone or "").strip()
+    formatted_remarks = f"Public Request by: {req_name}" + (f" ({req_phone})" if req_phone else "")
+    if data.remarks and data.remarks.strip():
+        formatted_remarks += f" — {data.remarks.strip()}"
+    
+    req_id = str(uuid.uuid4())
+    now = now_iso()
+    doc = {
+        "id": req_id,
+        "company_id": cid,
+        "client_id": client["id"],
+        "client_name": client.get("full_name"),
+        "sol_id": client.get("sol_id"),
+        "requested_by": assigned_team_member_id,
+        "requested_by_name": assigned_team_member_name,
+        "public_link_id": link["id"],
+        "requester_name": req_name,
+        "requester_phone": req_phone,
+        "idempotency_key": clean_idempotency_key or req_id,
+        "request_no": request_no,
+        "items": normalized_items,
+        "remarks": formatted_remarks,
+        "status": "pending",
+        "approval": None,
+        "delivery": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+    
+    await db.material_requests.insert_one(doc)
+    await increment_usage(cid, "material_requests", 1, db=db)
+    
+    # Update link last_used_at timestamp
+    await db.material_request_links.update_one(
+        {"id": link["id"]},
+        {"$set": {"last_used_at": now}}
+    )
+    
+    doc.pop("_id", None)
+    
+    # Push notification to inventory admin
+    await push_notification(
+        cid,
+        "inventory_admin",
+        "📦 New Public Material Request",
+        f"{req_name} requested materials for {client.get('full_name')} (Assigned: {assigned_team_member_name})."
+    )
+    await log_activity(cid, assigned_team_member_id, assigned_team_member_name, "Public Material Request Submitted", client.get("full_name", ""))
+    
+    return {
+        "status": "success",
+        "message": f"Material request {request_no} submitted successfully.",
+        "request": doc,
+    }
 
 # Verifications
 @api_router.post("/verifications")

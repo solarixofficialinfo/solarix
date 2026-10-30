@@ -58,6 +58,7 @@ const AUTH_ROUTES = [
   "/auth/reset-password",
   "/auth/request-access",
   "/public/sales/",
+  "/public/material-requests/",
 ];
 
 export const isPublicRoute = (pathname = "") =>
@@ -72,7 +73,10 @@ export const isPublicRoute = (pathname = "") =>
   pathname === "/reset-password" ||
   pathname === "/whatsapp-marketing" ||
   pathname.startsWith("/s/") ||
-  pathname.startsWith("/sales/");
+  pathname.startsWith("/sales/") ||
+  pathname.startsWith("/request/") ||
+  pathname.startsWith("/m/") ||
+  pathname.startsWith("/material-request/");
 
 const isAuthRoute = (url = "") =>
   AUTH_ROUTES.some((r) => url.includes(r));
