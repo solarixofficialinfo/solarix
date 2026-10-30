@@ -110,59 +110,38 @@ const hasHeaderRow = (row) => row.some((cell) => {
   return /product|item|description|size|spec|qty|quantity|unit|vendor|supplier|source|client|project|challan|invoice|bill|remarks|status|date/.test(text);
 });
 
-const inferFieldMap = (headerRow, mode) => {
+const inferFieldMap = (headerRow) => {
   const map = {};
-  headerRow.forEach((cell, index) => {
+  let productIdx, sizeIdx, quantityIdx, unitIdx;
+
+  (headerRow || []).forEach((cell, index) => {
     const name = normalizeHeader(cell);
-    if (/product|item|description/.test(name)) {
-      map.product = index;
-    } else if (/size|spec/.test(name)) {
-      map.size = index;
-    } else if (/qty|quantity/.test(name)) {
-      map.quantity = index;
-    } else if (/^unit\b|unit/.test(name)) {
-      map.unit = index;
-    } else if (/client\s*[\/\&]\s*supplier|supplier\s*[\/\&]\s*client|client.*supplier/.test(name)) {
-      map.client_supplier = index;
-      if (mode === "inward") {
-        map.source_name = index;
-      } else {
-        map.client_name = index;
-      }
-    } else if (/vendor|supplier|source name|source/.test(name)) {
-      map.source_name = index;
-    } else if (/source.*type|type/.test(name)) {
-      map.source_type = index;
-    } else if (/client/.test(name)) {
-      map.client_name = index;
-    } else if (/project/.test(name)) {
-      map.project_name = index;
-    } else if (/challan|reference|ref\s*no|ref.*number/.test(name)) {
-      map.reference_number = index;
-      map.outward_challan_no = index;
-      map.challan_number = index;
-      map.challan = index;
-    } else if (/bill.*number|invoice.*number|bill no|invoice no|bill|invoice/.test(name)) {
-      map.bill_number = index;
-      if (map.reference_number === undefined) {
-        map.reference_number = index;
-      }
-    } else if (/remarks|note/.test(name)) {
-      map.remarks = index;
-    } else if (/status/.test(name)) {
-      map.status = index;
-    } else if (/date/.test(name)) {
-      map.date = index;
+    if (productIdx === undefined && /product|item|description|material/.test(name)) {
+      productIdx = index;
+    } else if (sizeIdx === undefined && /size|spec|specification|dimensions|rating|capacity|wp/.test(name)) {
+      sizeIdx = index;
+    } else if (quantityIdx === undefined && /qty|quantity|count|nos|amount|pieces/.test(name)) {
+      quantityIdx = index;
+    } else if (unitIdx === undefined && (/^unit\b|uom|measure/.test(name) || name === "unit")) {
+      unitIdx = index;
     }
   });
 
-  const fallback = mode === "outward"
-    ? ["product", "size", "quantity", "unit", "outward_challan_no", "client_name", "date", "remarks"]
-    : ["product", "size", "quantity", "unit", "reference_number", "source_name", "date", "remarks"];
+  if (productIdx !== undefined) map.product = productIdx;
+  if (sizeIdx !== undefined) map.size = sizeIdx;
+  if (quantityIdx !== undefined) map.quantity = quantityIdx;
+  if (unitIdx !== undefined) map.unit = unitIdx;
 
-  fallback.forEach((field, index) => {
-    if (map[field] === undefined) map[field] = index;
+  // Strict 4-column fallback for positional data:
+  // 0: product, 1: size, 2: quantity, 3: unit.
+  // We NEVER map extra columns (4, 5, 6, etc.) to transaction metadata!
+  const requiredFields = ["product", "size", "quantity", "unit"];
+  requiredFields.forEach((field, index) => {
+    if (map[field] === undefined) {
+      map[field] = index;
+    }
   });
+
   return map;
 };
 
@@ -228,7 +207,9 @@ const autofillFromProductMaster = (row, productsList) => {
 
   const sameName = list.filter((p) => (p.name || "").toUpperCase().trim() === cleanName);
   let matched = sameName.find((p) => normalizeSizeForMatching(p.size) === cleanSize);
-  if (!matched && sameName.length === 1) {
+
+  // If user provided no size, but catalog product has no size and exactly one item exists
+  if (!matched && !cleanSize && sameName.length === 1 && !normalizeSizeForMatching(sameName[0].size)) {
     matched = sameName[0];
   }
 
@@ -238,6 +219,9 @@ const autofillFromProductMaster = (row, productsList) => {
       unit: row.unit ? formatUnit(row.unit) : formatUnit(matched.unit || "Nos"),
       size: row.size || matched.size || "",
       brand: row.brand || matched.brand || "",
+      category: row.category || matched.category || "",
+      master_product_id: matched.id || matched._id || row.master_product_id || "",
+      product_id: matched.product_id || row.product_id || "",
       high_value_goods: row.high_value_goods != null ? row.high_value_goods : Boolean(matched.high_value_goods),
       serial_number_required: row.serial_number_required != null ? row.serial_number_required : Boolean(matched.serial_number_required),
     };
@@ -252,75 +236,64 @@ const parseArraysToRows = (arrays, mode = "inward", clients = [], productsList =
   const cleanArrays = arrays
     .map((row) => row.map((cell) => String(cell ?? "").trim()))
     .filter((row) => row.some((cell) => cell !== ""));
-  if (!cleanArrays.length) return [];
+  if (!cleanArrays.length) return { rows: [], hasExtraColumns: false };
 
   const header = cleanArrays[0];
   const useHeader = hasHeaderRow(header);
-  const fieldMap = inferFieldMap(header, mode);
+  const fieldMap = inferFieldMap(header);
   const body = cleanArrays.slice(useHeader ? 1 : 0);
 
-  return body.map((row, index) => {
+  const maxColumns = Math.max(...cleanArrays.map((r) => r.length));
+  const hasExtraColumns = maxColumns > 4 || (useHeader && header.length > 4);
+
+  const parsedRows = body.map((row, index) => {
     const get = (field) => {
       const idx = fieldMap[field];
-      return idx !== undefined ? String(row[idx] ?? "").trim() : "";
+      return idx !== undefined && idx < row.length ? String(row[idx] ?? "").trim() : "";
     };
 
     const rawProduct = get("product").toUpperCase();
-    const rawSize = get("size");
+    const rawSize = get("size"); // Preserve cable size format exactly including * symbol
     const rawQty = get("quantity");
     const rawUnit = get("unit");
-    const rawChallan = get("reference_number") || get("challan_number") || get("outward_challan_no") || get("challan") || get("bill_number") || "";
-    const rawSupplier = get("source_name") || "";
-    const rawClient = get("client_name") || "";
-    const rawClientSupplier = get("client_supplier") || "";
 
-    const clientSupplierVal = rawClientSupplier || (mode === "inward" ? (rawSupplier || rawClient) : (rawClient || rawSupplier));
-    const matchedClient = findClient(clientSupplierVal, clients);
+    // Accurately parse decimal quantities
+    const cleanQtyStr = String(rawQty || "").replace(/,/g, "").trim();
+    let parsedQty = "";
+    if (cleanQtyStr !== "") {
+      const num = parseFloat(cleanQtyStr);
+      parsedQty = isNaN(num) ? "" : num;
+    }
 
-    let unitVal = rawUnit ? formatUnit(rawUnit) : "";
-
-    const hasRawParty = Boolean(clientSupplierVal);
-    const hasRawProject = Boolean(get("project_name"));
-    const hasRawChallan = Boolean(rawChallan);
-    const hasRawDate = Boolean(get("date"));
-    const hasRawRemarks = Boolean(get("remarks"));
-    const hasRawSourceType = Boolean(get("source_type"));
-    const hasRawPartyType = Boolean(get("party_type") || get("outward_type"));
+    // Normalize unit using formatUnit
+    const unitVal = rawUnit ? formatUnit(rawUnit) : "";
 
     let rowObj = {
       _id: index,
       _selected: true,
       product: rawProduct,
       size: rawSize,
-      quantity: rawQty !== "" ? (Number(rawQty.replace(/,/g, "")) || 0) : "",
+      quantity: parsedQty,
       unit: unitVal,
-      source_type: get("source_type") || "",
-      source_name: mode === "inward" ? (rawSupplier || clientSupplierVal) : "",
+      source_type: "",
+      source_name: "",
       vendor_id: "",
-      party_type: get("party_type") || get("outward_type") || "",
-      outward_type: get("party_type") || get("outward_type") || "",
-      reference_number: rawChallan,
-      challan_number: rawChallan,
-      outward_challan_no: rawChallan,
-      reference_type: get("reference_type") || "",
-      bill_number: get("bill_number") || "",
-      client_id: mode === "outward" && matchedClient ? matchedClient.id : "",
-      client_name: mode === "outward" ? (matchedClient ? matchedClient.full_name : (rawClient || clientSupplierVal)) : "",
-      project_name: mode === "outward" ? (get("project_name") || (matchedClient ? (matchedClient.project_name || matchedClient.full_name) : "")) : "",
-      project_id: mode === "outward" && matchedClient ? matchedClient.id : "",
-      status: get("status") || (mode === "outward" ? "Dispatched" : ""),
-      remarks: get("remarks") || "",
-      date: get("date") || "",
+      party_type: "",
+      outward_type: "",
+      reference_number: "",
+      challan_number: "",
+      outward_challan_no: "",
+      reference_type: "",
+      bill_number: "",
+      client_id: "",
+      client_name: "",
+      project_name: "",
+      project_id: "",
+      status: mode === "outward" ? "Dispatched" : "",
+      remarks: "",
+      date: "",
       high_value_goods: false,
-      _overrides: {
-        ...(hasRawParty ? { client_supplier: true, client_name: true, source_name: true } : {}),
-        ...(hasRawProject ? { project_name: true } : {}),
-        ...(hasRawChallan ? { reference_number: true } : {}),
-        ...(hasRawDate ? { date: true } : {}),
-        ...(hasRawRemarks ? { remarks: true } : {}),
-        ...(hasRawSourceType ? { source_type: true } : {}),
-        ...(hasRawPartyType ? { party_type: true } : {}),
-      },
+      _overrides: {},
     };
 
     const safeProducts = Array.isArray(productsList) ? productsList : (productsList?.products || []);
@@ -329,7 +302,9 @@ const parseArraysToRows = (arrays, mode = "inward", clients = [], productsList =
     }
 
     return rowObj;
-  }).filter((row) => row.product || row.quantity);
+  }).filter((row) => row.product || row.quantity !== "");
+
+  return { rows: parsedRows, hasExtraColumns };
 };
 
 const buildCsvArrays = (text) => {
@@ -381,7 +356,7 @@ const getRefHeaderLabel = (refType) => {
   return refType;
 };
 
-const getRowValidationErrors = (row, mode, productsList = []) => {
+const getRowValidationErrors = (row, mode, productsList = [], isFinalReview = true) => {
   const errs = [];
   if (!row.product?.trim()) errs.push("Product required");
   if (!row.unit?.trim()) errs.push("Unit required");
@@ -390,23 +365,27 @@ const getRowValidationErrors = (row, mode, productsList = []) => {
     errs.push("Invalid quantity");
   }
   if (mode === "outward") {
-    if (!row.client_name?.trim() && !row.client_id && !row.source_name?.trim()) {
-      errs.push("Party required");
-    }
     const avail = getAvailableStock(row.product, row.size, productsList);
     if (qty > avail) {
       errs.push(`Max stock: ${avail}`);
     }
+    if (isFinalReview) {
+      if (!row.client_name?.trim() && !row.client_id && !row.source_name?.trim()) {
+        errs.push("Party required");
+      }
+    }
   } else {
     // Inward
-    if (row.source_type === "Client Return" && !row.client_name?.trim() && !row.client_id) {
-      errs.push("Client required");
+    if (isFinalReview) {
+      if (row.source_type === "Client Return" && !row.client_name?.trim() && !row.client_id) {
+        errs.push("Client required");
+      }
     }
   }
   return errs;
 };
 
-const isRowValid = (row, mode, productsList = []) => getRowValidationErrors(row, mode, productsList).length === 0;
+const isRowValid = (row, mode, productsList = [], isFinalReview = true) => getRowValidationErrors(row, mode, productsList, isFinalReview).length === 0;
 
 const propagateDefaults = (currentRows, defaults, mode) => {
   return (currentRows || []).map((row) => {
@@ -829,6 +808,7 @@ export default function ManualBulkImport({
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [errors, setErrors] = useState("");
   const [processing, setProcessing] = useState(false);
+  const [hasExtraColumnsWarning, setHasExtraColumnsWarning] = useState(false);
   const [previewPage, setPreviewPage] = useState(1);
   const [importProgress, setImportProgress] = useState(0);
   const [cancelImport, setCancelImport] = useState(false);
@@ -869,6 +849,7 @@ export default function ManualBulkImport({
     setAttachments([]);
     setErrors("");
     setProcessing(false);
+    setHasExtraColumnsWarning(false);
     setPreviewPage(1);
     setImportProgress(0);
     setCancelImport(false);
@@ -990,14 +971,15 @@ export default function ManualBulkImport({
     setProcessing(true);
     setErrors("");
     try {
-      let parsed = [];
+      let result = { rows: [], hasExtraColumns: false };
       if (inputMode === "file") {
         if (!file) throw new Error("Select a CSV or Excel file first.");
-        parsed = await loadRowsFromFile(file);
+        result = await loadRowsFromFile(file);
       } else {
         if (!rawText.trim()) throw new Error("Paste tabular text into the editor first.");
-        parsed = await loadRowsFromText(rawText);
+        result = await loadRowsFromText(rawText);
       }
+      const parsed = result.rows || [];
       if (!parsed.length) throw new Error("No rows could be parsed from the input.");
 
       const enriched = parsed.map((row, index) => {
@@ -1006,9 +988,13 @@ export default function ManualBulkImport({
       });
 
       setRows(enriched);
-      // Stay on Step 1 ("input") so user can review and edit parsed rows before continuing
+      setHasExtraColumnsWarning(Boolean(result.hasExtraColumns));
       setStep("input");
-      toast.success(`Parsed ${enriched.length} rows. You can review and edit them below before proceeding.`);
+      if (result.hasExtraColumns) {
+        toast.warning("Extra columns detected and ignored. Only Product, Size, Quantity, and Unit are imported.");
+      } else {
+        toast.success(`Parsed ${enriched.length} rows. Review and edit them below before proceeding.`);
+      }
     } catch (err) {
       setErrors(err?.message || "Unable to parse the input.");
     } finally {
@@ -1133,44 +1119,13 @@ export default function ManualBulkImport({
 
   const goToDefaultsStep = () => {
     if (!rows.length) return;
-    
-    // Extract unique non-empty challans
-    const challans = Array.from(new Set(
-      rows.map((r) => (r.reference_number || r.outward_challan_no || r.challan_number || r.bill_number || "").trim()).filter(Boolean)
-    ));
-    
-    // Extract unique non-empty client/suppliers
-    const clientSuppliers = Array.from(new Set(
-      rows.map((r) => ((mode === "inward" ? (r.source_name || r.client_name) : (r.client_name || r.source_name)) || "").trim()).filter(Boolean)
-    ));
-    
-    // Extract unique non-empty dates
-    const dates = Array.from(new Set(rows.map((r) => (r.date || "").trim()).filter(Boolean)));
-
     setGlobalDefaults((prev) => {
       const next = { ...prev };
       if (!next.date || next.date === "") {
-        next.date = dates.length === 1 ? dates[0] : (prev.date || new Date().toISOString().split("T")[0]);
-      } else if (dates.length === 1) {
-        next.date = dates[0];
-      }
-      
-      if (challans.length === 1) {
-        next.reference_number = challans[0];
-      }
-      
-      if (clientSuppliers.length === 1) {
-        if (mode === "inward") {
-          next.source_name = clientSuppliers[0];
-        } else {
-          const matched = findClient(clientSuppliers[0], clients);
-          next.client_name = matched ? matched.full_name : clientSuppliers[0];
-          next.client_id = matched ? matched.id : "";
-        }
+        next.date = new Date().toISOString().split("T")[0];
       }
       return next;
     });
-    
     setStep("defaults");
   };
 
@@ -1232,10 +1187,11 @@ export default function ManualBulkImport({
   };
 
   const selectedRows = rows.filter((row) => row._selected);
-  const invalidRowsCount = selectedRows.filter((row) => !isRowValid(row, mode, productsList)).length;
+  const isFinalStep = step === "review";
+  const invalidRowsCount = selectedRows.filter((row) => !isRowValid(row, mode, productsList, isFinalStep)).length;
 
   const handleFinalImport = async () => {
-    const validRows = selectedRows.filter((r) => isRowValid(r, mode, productsList));
+    const validRows = selectedRows.filter((r) => isRowValid(r, mode, productsList, true));
     if (!validRows.length) {
       toast.error("Select at least one valid row to import.");
       return;
@@ -1264,6 +1220,7 @@ export default function ManualBulkImport({
         const batchNum = Math.floor(i / CHUNK_SIZE) + 1;
         const chunk = validRows.slice(i, i + CHUNK_SIZE).map((r) => ({
           ...r,
+          quantity: Number(r.quantity),
           attachment_file_id: attId,
           attachment_filename: attFilename,
           attachment_file_ids: attIds,
@@ -1392,7 +1349,7 @@ export default function ManualBulkImport({
                         onChange={(e) => setRawText(e.target.value)}
                         rows={12}
                         className="mt-2 font-mono text-xs"
-                        placeholder={`Paste rows with columns like:\nProduct\tSize\tQty\tUnit\t${mode === "inward" ? "Supplier" : "Client"}\tChallan\tRemarks\n\nExample:\nWAAREE PANEL\t550W\t10\tNos\tABC Supplier\tIN-1045\tIn stock\nDC CABLE\t4 SQ MM\t50\tMtr\tABC Supplier\tIN-1045\tFresh batch`}
+                        placeholder={`Paste rows with 4 product columns (Product, Size, Quantity, Unit):\nProduct\tSize\tQty\tUnit\n\nExample:\nWAAREE PANEL\t550W\t10\tNos\nDC CABLE\t4 SQ MM\t50\tMtr\nCABLE TIE\t200MM\t100\tPkt\n\n(Common transaction details like Date, Party, Challan & Remarks are set in Step 2)`}
                       />
                     </div>
                   ) : (
@@ -1434,29 +1391,34 @@ export default function ManualBulkImport({
                   <div className="flex items-center gap-3 text-slate-700">
                     <Clipboard className="w-5 h-5 text-slate-500" />
                     <div>
-                      <div className="text-sm font-semibold">Supported Columns</div>
-                      <p className="text-xs text-slate-500">Headers are recognized automatically in any order (comma, tab, or pipe separated):</p>
+                      <div className="text-sm font-semibold">Step 1: Product Data Columns (4 Fields)</div>
+                      <p className="text-xs text-slate-500">The parser extracts exactly four product columns. Extra columns are ignored.</p>
                     </div>
                   </div>
                   <ul className="mt-4 grid grid-cols-2 gap-2 text-xs text-slate-600">
-                    <li>• <strong>Product</strong> (or Product Name)</li>
-                    <li>• <strong>Size</strong> (or Spec, Size / Spec)</li>
-                    <li>• <strong>Qty</strong> (or Quantity)</li>
+                    <li>• <strong>Product Name</strong> (e.g. WAAREE 540W)</li>
+                    <li>• <strong>Size / Specification</strong> (e.g. 540W, 4C*0.75)</li>
+                    <li>• <strong>Quantity</strong> (e.g. 10, 12.5)</li>
                     <li>• <strong>Unit</strong> (Nos, Mtr, Kg, Pack, etc.)</li>
-                    <li>• <strong>{mode === "inward" ? "Supplier Name" : "Client Name"}</strong> (Client / Supplier)</li>
-                    <li>• <strong>Challan Number</strong> (or Reference No)</li>
                   </ul>
+                  <div className="mt-3 text-[11px] text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                    ℹ️ <strong>Transaction details</strong> (Date, {mode === "inward" ? "Supplier / Client" : "Client / Vendor"}, Challan No, Project & Remarks) are configured in <strong>Step 2</strong>.
+                  </div>
                 </div>
               </div>
 
               <div className="space-y-6">
                 <div className="rounded-3xl border border-slate-200 bg-white p-6 text-slate-700">
                   <div className="text-sm font-semibold">Example Data</div>
-                  <div className="mt-3 text-[11px] font-mono leading-6 text-slate-500 whitespace-pre-wrap bg-slate-50 p-3 rounded-xl border">
-                    Product,Size,Qty,Unit,{mode === "inward" ? "Supplier" : "Client"},Challan Number,Remarks{"\n"}
-                    WAAREE PANEL,550W,10,Nos,ABC Solar,IN-1045,In stock{"\n"}
-                    DC CABLE,4 SQ MM,50,Mtr,ABC Solar,IN-1045,Roll
+                  <div className="mt-3 text-[11px] font-mono leading-6 text-slate-600 whitespace-pre-wrap bg-slate-50 p-3 rounded-xl border">
+                    Product,Size,Qty,Unit{"\n"}
+                    WAAREE PANEL,550W,10,Nos{"\n"}
+                    DC CABLE,4 SQ MM,50,Mtr{"\n"}
+                    FLEXIBLE CABLE,4C*0.75,25.5,Mtr
                   </div>
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    Comma, tab, or pipe delimiters are automatically supported.
+                  </p>
                 </div>
 
                 <div className="rounded-3xl border border-slate-200 bg-slate-50 p-6 text-slate-700">
@@ -1482,11 +1444,11 @@ export default function ManualBulkImport({
                       {rows.length} rows imported
                     </Badge>
                     <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold text-xs px-2.5 py-1">
-                      {selectedRows.filter((r) => isRowValid(r, mode, productsList)).length} valid
+                      {selectedRows.filter((r) => isRowValid(r, mode, productsList, false)).length} valid
                     </Badge>
-                    {invalidRowsCount > 0 && (
+                    {selectedRows.filter((r) => !isRowValid(r, mode, productsList, false)).length > 0 && (
                       <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 font-semibold text-xs px-2.5 py-1">
-                        {invalidRowsCount} invalid
+                        {selectedRows.filter((r) => !isRowValid(r, mode, productsList, false)).length} invalid
                       </Badge>
                     )}
                   </div>
@@ -1521,31 +1483,24 @@ export default function ManualBulkImport({
                   </div>
                 </div>
 
+                {hasExtraColumnsWarning && (
+                  <div className="flex items-center gap-2.5 p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800 shadow-sm">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span><strong>Extra columns detected and ignored:</strong> Only <strong>Product Name</strong>, <strong>Size</strong>, <strong>Quantity</strong>, and <strong>Unit</strong> are imported. Common transaction details (Date, Supplier/Client, Project, Challan) will be configured in Step 2.</span>
+                  </div>
+                )}
+
                 <div className="overflow-x-auto bg-white border rounded-3xl shadow-sm">
                   <table className="min-w-full text-left text-xs text-slate-600">
                     <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider text-[10px]">
                       <tr>
                         <th className="px-3 py-2.5 w-8">☑</th>
-                        <th className="px-3 py-2.5">Product</th>
-                        <th className="px-3 py-2.5">Size</th>
+                        <th className="px-3 py-2.5">Product Name</th>
+                        <th className="px-3 py-2.5">Size / Specification</th>
                         {mode === "outward" && <th className="px-3 py-2.5">Stock</th>}
                         <th className="px-3 py-2.5">Qty</th>
                         <th className="px-3 py-2.5">Unit</th>
-                        {mode === "inward" ? (
-                          <>
-                            <th className="px-3 py-2.5">Source Type</th>
-                            <th className="px-3 py-2.5">Supplier / Vendor</th>
-                          </>
-                        ) : (
-                          <>
-                            <th className="px-3 py-2.5">Dispatch Type</th>
-                            <th className="px-3 py-2.5">Party Name</th>
-                            <th className="px-3 py-2.5">Project</th>
-                          </>
-                        )}
-                        <th className="px-3 py-2.5">Challan / Ref No</th>
-                        <th className="px-3 py-2.5">Remarks</th>
-                        <th className="px-3 py-2.5">{mode === "inward" ? "High Value" : "Status"}</th>
+                        <th className="px-3 py-2.5">Match Status</th>
                         <th className="px-3 py-2.5 text-center">Action</th>
                       </tr>
                     </thead>
@@ -1554,7 +1509,7 @@ export default function ManualBulkImport({
                         const originalIndex = rows.findIndex((r) => r._id === row._id);
                         if (originalIndex === -1) return null;
                         const status = matchProduct(row.product, row.size);
-                        const rowErrors = getRowValidationErrors(row, mode, productsList);
+                        const rowErrors = getRowValidationErrors(row, mode, productsList, false);
                         const availStock = getAvailableStock(row.product, row.size, productsList);
 
                         return (
@@ -1567,11 +1522,11 @@ export default function ManualBulkImport({
                                 className="mt-2 accent-blue-600 w-4 h-4 cursor-pointer"
                               />
                             </td>
-                            <td className="px-3 py-2.5 align-top min-w-[200px]">
+                            <td className="px-3 py-2.5 align-top min-w-[220px]">
                               <ProductAutocompleteInput
                                 value={row.product || ""}
                                 products={productsList}
-                                placeholder="Search product..."
+                                placeholder="Search or enter product..."
                                 className="text-xs h-8 bg-white border-slate-200"
                                 onChange={(valOrObj) => {
                                   if (typeof valOrObj === "object" && valOrObj !== null) {
@@ -1581,20 +1536,20 @@ export default function ManualBulkImport({
                                   }
                                 }}
                               />
-                              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
-                                <span className={`font-semibold ${status === "matched" ? "text-emerald-600" : status === "fuzzy" ? "text-amber-600" : "text-blue-600"}`}>
-                                  {status === "matched" ? "Matched" : status === "fuzzy" ? "Partial" : "New"}
-                                </span>
-                                {rowErrors.map((err) => (
-                                  <span key={err} className="text-red-600 font-semibold bg-red-50 border border-red-100 px-1.5 py-0.5 rounded-md">{err}</span>
-                                ))}
-                              </div>
+                              {rowErrors.length > 0 && (
+                                <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
+                                  {rowErrors.map((err) => (
+                                    <span key={err} className="text-red-600 font-semibold bg-red-50 border border-red-100 px-1.5 py-0.5 rounded-md">{err}</span>
+                                  ))}
+                                </div>
+                              )}
                             </td>
                             <td className="px-3 py-2.5 align-top">
                               <Input
                                 value={row.size || ""}
                                 onChange={(e) => updateCell(originalIndex, "size", e.target.value)}
-                                className="text-xs h-8 bg-white border-slate-200 w-24"
+                                className="text-xs h-8 bg-white border-slate-200 w-28"
+                                placeholder="Size/Spec"
                               />
                             </td>
                             {mode === "outward" && (
@@ -1607,9 +1562,11 @@ export default function ManualBulkImport({
                             <td className="px-3 py-2.5 align-top">
                               <Input
                                 type="number"
+                                step="any"
                                 value={row.quantity ?? ""}
-                                onChange={(e) => updateCell(originalIndex, "quantity", e.target.value === "" ? "" : (Number(e.target.value) || 0))}
-                                className="text-xs h-8 bg-white border-slate-200 w-20"
+                                onChange={(e) => updateCell(originalIndex, "quantity", e.target.value)}
+                                className="text-xs h-8 bg-white border-slate-200 w-24"
+                                placeholder="Qty"
                               />
                             </td>
                             <td className="px-3 py-2.5 align-top">
@@ -1627,169 +1584,14 @@ export default function ManualBulkImport({
                                 </SelectContent>
                               </Select>
                             </td>
-                            {mode === "inward" ? (
-                              <>
-                                <td className="px-3 py-2.5 align-top">
-                                  <Select
-                                    value={row.source_type || "Supplier Supply"}
-                                    onValueChange={(val) => updateCell(originalIndex, "source_type", val)}
-                                  >
-                                    <SelectTrigger className="h-8 text-xs bg-white border-slate-200 min-w-[130px]">
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {INWARD_SRC_TYPES.map((st) => (
-                                        <SelectItem key={st} value={st}>{st}</SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </td>
-                                <td className="px-3 py-2.5 align-top min-w-[150px]">
-                                  {row.source_type === "Client Return" ? (
-                                    <ClientAutocompleteInput
-                                      value={row.source_name || row.client_name || ""}
-                                      clients={clients}
-                                      placeholder="Select client"
-                                      className="text-xs h-8 bg-white border-slate-200"
-                                      onChange={(label, client) => {
-                                        updateCell(originalIndex, "client_supplier", label, client ? { client, id: client.id, name: client.full_name, project_name: client.project_name, project_id: client.id } : null);
-                                      }}
-                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
-                                    />
-                                  ) : row.source_type === "B2B Return" ? (
-                                    <B2BCustomerAutocompleteInput
-                                      value={row.client_name || row.source_name || ""}
-                                      customers={b2bCustomers}
-                                      placeholder="Select B2B customer"
-                                      className="text-xs h-8 bg-white border-slate-200"
-                                      onChange={(label, cust) => {
-                                        updateCell(originalIndex, "client_supplier", label, cust ? { client: cust, id: cust.id, name: cust.name || cust.full_name } : null);
-                                      }}
-                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
-                                    />
-                                  ) : row.source_type === "Supplier Supply" ? (
-                                    <VendorAutocompleteInput
-                                      value={row.source_name || ""}
-                                      vendors={vendors}
-                                      placeholder="Supplier / Vendor"
-                                      className="text-xs h-8 bg-white border-slate-200"
-                                      onChange={(label, vendor) => {
-                                        updateCell(originalIndex, "client_supplier", label, vendor ? { vendor, id: vendor.id, name: vendor.name } : null);
-                                      }}
-                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
-                                    />
-                                  ) : (
-                                    <Input
-                                      value={row.source_name || ""}
-                                      onChange={(e) => updateCell(originalIndex, "source_name", e.target.value)}
-                                      className="text-xs h-8 bg-white border-slate-200"
-                                      placeholder="Source name"
-                                    />
-                                  )}
-                                </td>
-                              </>
-                            ) : (
-                              <>
-                                <td className="px-3 py-2.5 align-top">
-                                  <Select
-                                    value={row.party_type || row.outward_type || "Client Sale"}
-                                    onValueChange={(val) => updateCell(originalIndex, "party_type", val)}
-                                  >
-                                    <SelectTrigger className="h-8 text-xs bg-white border-slate-200 min-w-[130px]">
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {OUTWARD_TYPES.map((ot) => (
-                                        <SelectItem key={ot} value={ot}>{ot}</SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </td>
-                                <td className="px-3 py-2.5 align-top min-w-[150px]">
-                                  {row.party_type === "Return to Supplier" ? (
-                                    <VendorAutocompleteInput
-                                      value={row.client_name || row.source_name || ""}
-                                      vendors={vendors}
-                                      placeholder="Select vendor"
-                                      className="text-xs h-8 bg-white border-slate-200"
-                                      onChange={(label, vendor) => {
-                                        updateCell(originalIndex, "client_supplier", label, vendor ? { vendor, id: vendor.id, name: vendor.name } : null);
-                                      }}
-                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
-                                    />
-                                  ) : row.party_type === "B2B Sale" ? (
-                                    <B2BCustomerAutocompleteInput
-                                      value={row.client_name || row.source_name || ""}
-                                      customers={b2bCustomers}
-                                      placeholder="Select B2B customer"
-                                      className="text-xs h-8 bg-white border-slate-200"
-                                      onChange={(label, cust) => {
-                                        updateCell(originalIndex, "client_supplier", label, cust ? { client: cust, id: cust.id, name: cust.name || cust.full_name } : null);
-                                      }}
-                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
-                                    />
-                                  ) : (
-                                    <ClientAutocompleteInput
-                                      value={row.client_name || row.source_name || ""}
-                                      clients={clients}
-                                      placeholder="Select client"
-                                      className="text-xs h-8 bg-white border-slate-200"
-                                      onChange={(label, client) => {
-                                        updateCell(originalIndex, "client_supplier", label, client ? { client, id: client.id, name: client.full_name, project_name: client.project_name, project_id: client.id } : null);
-                                      }}
-                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
-                                    />
-                                  )}
-                                </td>
-                                <td className="px-3 py-2.5 align-top">
-                                  <Input
-                                    value={row.project_name || ""}
-                                    onChange={(e) => updateCell(originalIndex, "project_name", e.target.value)}
-                                    className="text-xs h-8 bg-white border-slate-200 min-w-[110px]"
-                                    placeholder="Project"
-                                  />
-                                </td>
-                              </>
-                            )}
                             <td className="px-3 py-2.5 align-top">
-                              <Input
-                                value={row.reference_number || row.challan_number || row.outward_challan_no || ""}
-                                onChange={(e) => updateCell(originalIndex, "reference_value", e.target.value)}
-                                className="text-xs h-8 bg-white border-slate-200 font-mono w-28"
-                                placeholder="Challan No"
-                              />
-                            </td>
-                            <td className="px-3 py-2.5 align-top">
-                              <Input
-                                value={row.remarks || ""}
-                                onChange={(e) => updateCell(originalIndex, "remarks", e.target.value)}
-                                className="text-xs h-8 bg-white border-slate-200 min-w-[100px]"
-                              />
-                            </td>
-                            <td className="px-3 py-2.5 align-top">
-                              {mode === "inward" ? (
-                                <label className="flex items-center gap-1.5 text-[11px] text-slate-700 font-medium cursor-pointer mt-2">
-                                  <input
-                                    type="checkbox"
-                                    checked={Boolean(row.high_value_goods)}
-                                    onChange={(e) => updateCell(originalIndex, "high_value_goods", e.target.checked)}
-                                    className="w-3.5 h-3.5 rounded border-slate-300 text-slate-900"
-                                  />
-                                  High Value
-                                </label>
-                              ) : (
-                                <Select
-                                  value={row.status || "Dispatched"}
-                                  onValueChange={(value) => updateCell(originalIndex, "status", value)}
-                                >
-                                  <SelectTrigger className="h-8 text-xs bg-white border-slate-200 min-w-[95px]">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {STATUS_OPTIONS.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
-                                  </SelectContent>
-                                </Select>
-                              )}
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold mt-1.5 ${
+                                status === "matched" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" :
+                                status === "fuzzy" ? "bg-amber-50 text-amber-700 border border-amber-200" :
+                                "bg-blue-50 text-blue-700 border border-blue-200"
+                              }`}>
+                                {status === "matched" ? "Matched" : status === "fuzzy" ? "Partial" : "New"}
+                              </span>
                             </td>
                             <td className="px-3 py-2.5 align-top text-center">
                               <button
@@ -2264,16 +2066,16 @@ export default function ManualBulkImport({
                       Rows: {rows.length}
                     </Badge>
                     <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold text-xs px-2.5 py-1">
-                      Valid: {selectedRows.filter((r) => isRowValid(r, mode, productsList)).length}
+                      Valid: {selectedRows.filter((r) => isRowValid(r, mode, productsList, true)).length}
                     </Badge>
-                    {rows.length - selectedRows.filter((r) => isRowValid(r, mode, productsList)).length > 0 && (
+                    {rows.length - selectedRows.filter((r) => isRowValid(r, mode, productsList, true)).length > 0 && (
                       <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 font-semibold text-xs px-2.5 py-1">
-                        Skipped: {rows.length - selectedRows.filter((r) => isRowValid(r, mode, productsList)).length}
+                        Skipped: {rows.length - selectedRows.filter((r) => isRowValid(r, mode, productsList, true)).length}
                       </Badge>
                     )}
-                    {invalidRowsCount > 0 && (
+                    {selectedRows.filter((r) => !isRowValid(r, mode, productsList, true)).length > 0 && (
                       <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 font-semibold text-xs px-2.5 py-1">
-                        Invalid: {invalidRowsCount}
+                        Invalid: {selectedRows.filter((r) => !isRowValid(r, mode, productsList, true)).length}
                       </Badge>
                     )}
                     <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 font-semibold text-xs px-2.5 py-1">
@@ -2341,7 +2143,7 @@ export default function ManualBulkImport({
                           const originalIndex = rows.findIndex((r) => r._id === row._id);
                           if (originalIndex === -1) return null;
                           const status = matchProduct(row.product, row.size);
-                          const rowErrors = getRowValidationErrors(row, mode, productsList);
+                          const rowErrors = getRowValidationErrors(row, mode, productsList, true);
                           const availStock = getAvailableStock(row.product, row.size, productsList);
 
                           return (
@@ -2394,8 +2196,9 @@ export default function ManualBulkImport({
                               <td className="px-3 py-2.5 align-top">
                                 <Input
                                   type="number"
+                                  step="any"
                                   value={row.quantity ?? ""}
-                                  onChange={(e) => updateCell(originalIndex, "quantity", e.target.value === "" ? "" : (Number(e.target.value) || 0))}
+                                  onChange={(e) => updateCell(originalIndex, "quantity", e.target.value)}
                                   className="text-xs h-8 bg-white border-slate-200 w-20"
                                 />
                               </td>
@@ -2674,12 +2477,12 @@ export default function ManualBulkImport({
               <Button variant="outline" onClick={() => setStep("defaults")}><ArrowLeft className="w-4 h-4 mr-1.5" /> Back</Button>
               <Button
                 onClick={handleFinalImport}
-                disabled={processing || selectedRows.filter((r) => isRowValid(r, mode, productsList)).length === 0}
+                disabled={processing || selectedRows.filter((r) => isRowValid(r, mode, productsList, true)).length === 0}
               >
                 {processing
                   ? "Importing…"
                   : invalidRowsCount > 0
-                  ? `Import ${selectedRows.filter((r) => isRowValid(r, mode, productsList)).length} Valid Rows (${invalidRowsCount} skipped)`
+                  ? `Import ${selectedRows.filter((r) => isRowValid(r, mode, productsList, true)).length} Valid Rows (${invalidRowsCount} skipped)`
                   : `Import ${selectedRows.length} Rows`}
               </Button>
             </>
