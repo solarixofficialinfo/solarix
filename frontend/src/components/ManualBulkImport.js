@@ -14,7 +14,14 @@ import {
   Plus, Camera, AlertTriangle, AlertCircle, Search, User, Loader2
 } from "lucide-react";
 import { fetchProductsDeduplicated, getCachedProducts } from "@/lib/productCache";
-import { normalizeSizeForMatching } from "./Inventory/_shared";
+import {
+  normalizeSizeForMatching,
+  ControlledAutocompleteInput,
+  ProductAutocompleteInput,
+  VendorAutocompleteInput,
+  ClientAutocompleteInput,
+  B2BCustomerAutocompleteInput,
+} from "./Inventory/_shared";
 import { UNIT_OPTIONS, formatUnit, normalizeUnit, getStandardizedUnitOptions } from "@/lib/units";
 
 const MODE_CONFIG = {
@@ -185,8 +192,6 @@ const findVendor = (identifier, vendorsList = []) => {
   if (matched) return matched;
   matched = list.find(v => String(v.id || "").trim().toLowerCase() === clean);
   if (matched) return matched;
-  matched = list.find(v => String(v.name || "").trim().toLowerCase().includes(clean));
-  if (matched) return matched;
   return null;
 };
 
@@ -197,8 +202,6 @@ const findB2bCustomer = (identifier, b2bList = []) => {
   let matched = list.find(b => String(b.name || b.full_name || "").trim().toLowerCase() === clean);
   if (matched) return matched;
   matched = list.find(b => String(b.id || "").trim().toLowerCase() === clean);
-  if (matched) return matched;
-  matched = list.find(b => String(b.name || b.full_name || "").trim().toLowerCase().includes(clean));
   if (matched) return matched;
   return null;
 };
@@ -276,6 +279,14 @@ const parseArraysToRows = (arrays, mode = "inward", clients = [], productsList =
 
     let unitVal = rawUnit ? formatUnit(rawUnit) : "";
 
+    const hasRawParty = Boolean(clientSupplierVal);
+    const hasRawProject = Boolean(get("project_name"));
+    const hasRawChallan = Boolean(rawChallan);
+    const hasRawDate = Boolean(get("date"));
+    const hasRawRemarks = Boolean(get("remarks"));
+    const hasRawSourceType = Boolean(get("source_type"));
+    const hasRawPartyType = Boolean(get("party_type") || get("outward_type"));
+
     let rowObj = {
       _id: index,
       _selected: true,
@@ -283,15 +294,15 @@ const parseArraysToRows = (arrays, mode = "inward", clients = [], productsList =
       size: rawSize,
       quantity: rawQty !== "" ? (Number(rawQty.replace(/,/g, "")) || 0) : "",
       unit: unitVal,
-      source_type: mode === "inward" ? "Supplier Supply" : "",
+      source_type: get("source_type") || "",
       source_name: mode === "inward" ? (rawSupplier || clientSupplierVal) : "",
       vendor_id: "",
-      party_type: mode === "outward" ? "Client Sale" : "",
-      outward_type: mode === "outward" ? "Client Sale" : "",
+      party_type: get("party_type") || get("outward_type") || "",
+      outward_type: get("party_type") || get("outward_type") || "",
       reference_number: rawChallan,
       challan_number: rawChallan,
       outward_challan_no: rawChallan,
-      reference_type: "Challan Number",
+      reference_type: get("reference_type") || "",
       bill_number: get("bill_number") || "",
       client_id: mode === "outward" && matchedClient ? matchedClient.id : "",
       client_name: mode === "outward" ? (matchedClient ? matchedClient.full_name : (rawClient || clientSupplierVal)) : "",
@@ -301,6 +312,15 @@ const parseArraysToRows = (arrays, mode = "inward", clients = [], productsList =
       remarks: get("remarks") || "",
       date: get("date") || "",
       high_value_goods: false,
+      _overrides: {
+        ...(hasRawParty ? { client_supplier: true, client_name: true, source_name: true } : {}),
+        ...(hasRawProject ? { project_name: true } : {}),
+        ...(hasRawChallan ? { reference_number: true } : {}),
+        ...(hasRawDate ? { date: true } : {}),
+        ...(hasRawRemarks ? { remarks: true } : {}),
+        ...(hasRawSourceType ? { source_type: true } : {}),
+        ...(hasRawPartyType ? { party_type: true } : {}),
+      },
     };
 
     const safeProducts = Array.isArray(productsList) ? productsList : (productsList?.products || []);
@@ -330,13 +350,13 @@ const getBlankRow = (mode) => ({
   size: "",
   quantity: 1,
   unit: "Nos",
-  source_type: mode === "inward" ? "Supplier Supply" : "",
+  source_type: "",
   source_name: "",
   vendor_id: "",
-  party_type: mode === "outward" ? "Client Sale" : "",
-  outward_type: mode === "outward" ? "Client Sale" : "",
+  party_type: "",
+  outward_type: "",
   reference_number: "",
-  reference_type: "Challan Number",
+  reference_type: "",
   challan_number: "",
   bill_number: "",
   client_id: "",
@@ -344,10 +364,11 @@ const getBlankRow = (mode) => ({
   project_name: "",
   project_id: "",
   outward_challan_no: "",
-  status: "Dispatched",
+  status: mode === "outward" ? "Dispatched" : "",
   remarks: "",
   date: "",
   high_value_goods: false,
+  _overrides: {},
 });
 
 const getRefHeaderLabel = (refType) => {
@@ -376,11 +397,172 @@ const getRowValidationErrors = (row, mode, productsList = []) => {
     if (qty > avail) {
       errs.push(`Max stock: ${avail}`);
     }
+  } else {
+    // Inward
+    if (row.source_type === "Client Return" && !row.client_name?.trim() && !row.client_id) {
+      errs.push("Client required");
+    }
   }
   return errs;
 };
 
 const isRowValid = (row, mode, productsList = []) => getRowValidationErrors(row, mode, productsList).length === 0;
+
+const propagateDefaults = (currentRows, defaults, mode) => {
+  return (currentRows || []).map((row) => {
+    const overrides = row._overrides || {};
+
+    const resolvedChallan = overrides.reference_number
+      ? (row.reference_number || row.challan_number || row.outward_challan_no || "")
+      : ((defaults.reference_number || "").trim() || row.reference_number || row.challan_number || row.outward_challan_no || "");
+
+    const resolvedDate = overrides.date
+      ? (row.date || "")
+      : ((defaults.date || "").trim() || row.date || new Date().toISOString().split("T")[0]);
+
+    const resolvedRemarks = overrides.remarks
+      ? (row.remarks || "")
+      : ((defaults.remarks || "").trim() || row.remarks || "");
+
+    const resolvedRefType = overrides.reference_type
+      ? (row.reference_type || "")
+      : (defaults.reference_type || row.reference_type || "Challan Number");
+
+    if (mode === "inward") {
+      const resolvedSourceType = overrides.source_type && row.source_type
+        ? row.source_type
+        : (defaults.source_type || "Supplier Supply");
+
+      let client_name = row.client_name || "";
+      let client_id = row.client_id || "";
+      let source_name = row.source_name || "";
+      let vendor_id = row.vendor_id || "";
+      let project_name = row.project_name || "";
+      let project_id = row.project_id || "";
+
+      if (resolvedSourceType === "Client Return") {
+        if (!overrides.client_name && !overrides.client_supplier) {
+          client_name = defaults.client_name || "";
+          client_id = defaults.client_id || "";
+          source_name = defaults.client_name || "";
+        } else {
+          source_name = client_name;
+        }
+        if (!overrides.project_name) {
+          project_name = defaults.project_name || "";
+          project_id = defaults.project_id || "";
+        }
+      } else if (resolvedSourceType === "Supplier Supply") {
+        if (!overrides.source_name && !overrides.client_supplier) {
+          source_name = defaults.source_name || "";
+          vendor_id = defaults.vendor_id || "";
+          client_name = "";
+          client_id = "";
+        }
+      } else if (resolvedSourceType === "B2B Return") {
+        if (!overrides.client_name && !overrides.client_supplier) {
+          client_name = defaults.client_name || "";
+          client_id = defaults.client_id || "";
+          source_name = defaults.client_name || "";
+        } else {
+          source_name = client_name;
+        }
+      } else {
+        if (!overrides.source_name && !overrides.client_supplier) {
+          source_name = defaults.source_name || "";
+        }
+      }
+
+      const resolvedHighValue = overrides.high_value_goods != null
+        ? Boolean(row.high_value_goods)
+        : Boolean(defaults.high_value_goods);
+
+      return {
+        ...row,
+        reference_number: resolvedChallan,
+        challan_number: resolvedChallan,
+        outward_challan_no: resolvedChallan,
+        bill_number: row.bill_number || (resolvedRefType === "Bill Number" || resolvedRefType === "Purchase Invoice" ? resolvedChallan : ""),
+        date: resolvedDate,
+        remarks: resolvedRemarks,
+        reference_type: resolvedRefType,
+        source_type: resolvedSourceType,
+        source_name,
+        vendor_id,
+        client_name,
+        client_id,
+        project_name,
+        project_id,
+        high_value_goods: resolvedHighValue,
+        high_value_asset: resolvedHighValue,
+        _overrides: overrides,
+      };
+    } else {
+      // Outward
+      const resolvedPartyType = overrides.party_type && row.party_type
+        ? row.party_type
+        : (defaults.party_type || "Client Sale");
+
+      let client_name = row.client_name || "";
+      let client_id = row.client_id || "";
+      let source_name = row.source_name || "";
+      let vendor_id = row.vendor_id || "";
+      let project_name = row.project_name || "";
+      let project_id = row.project_id || "";
+
+      if (resolvedPartyType === "Client Sale") {
+        if (!overrides.client_name && !overrides.client_supplier) {
+          client_name = defaults.client_name || "";
+          client_id = defaults.client_id || "";
+          source_name = defaults.client_name || "";
+        }
+        if (!overrides.project_name) {
+          project_name = defaults.project_name || "";
+          project_id = defaults.project_id || "";
+        }
+      } else if (resolvedPartyType === "Return to Supplier") {
+        if (!overrides.client_name && !overrides.client_supplier) {
+          client_name = defaults.client_name || defaults.source_name || "";
+          source_name = client_name;
+          vendor_id = defaults.vendor_id || "";
+          client_id = "";
+        }
+      } else if (resolvedPartyType === "B2B Sale") {
+        if (!overrides.client_name && !overrides.client_supplier) {
+          client_name = defaults.client_name || "";
+          client_id = defaults.client_id || "";
+          source_name = defaults.client_name || "";
+          vendor_id = "";
+        }
+      }
+
+      const resolvedStatus = overrides.status
+        ? (row.status || "Dispatched")
+        : (defaults.status || row.status || "Dispatched");
+
+      return {
+        ...row,
+        reference_number: resolvedChallan,
+        challan_number: resolvedChallan,
+        outward_challan_no: resolvedChallan,
+        bill_number: row.bill_number || "",
+        date: resolvedDate,
+        remarks: resolvedRemarks,
+        reference_type: resolvedRefType,
+        party_type: resolvedPartyType,
+        outward_type: resolvedPartyType,
+        client_name,
+        client_id,
+        source_name,
+        vendor_id,
+        project_name,
+        project_id,
+        status: resolvedStatus,
+        _overrides: overrides,
+      };
+    }
+  });
+};
 
 function ClientReturnSelector({
   value,
@@ -834,10 +1016,12 @@ export default function ManualBulkImport({
     }
   };
 
-  const updateCell = (rowIndex, field, value) => {
+  const updateCell = (rowIndex, field, value, extraObj = null) => {
     setRows((prev) => {
       const next = [...prev];
       let row = { ...next[rowIndex] };
+      const overrides = { ...(row._overrides || {}), [field]: true };
+      row._overrides = overrides;
 
       if (field === "reference_value" || field === "reference_number" || field === "challan" || field === "outward_challan_no") {
         const cleanVal = String(value ?? "").trim();
@@ -851,57 +1035,70 @@ export default function ManualBulkImport({
         if (mode === "inward") {
           row.source_name = value;
           if (row.source_type === "Client Return") {
-            const matched = findClient(value, clients);
-            row.client_name = matched ? matched.full_name : value;
-            row.client_id = matched ? matched.id : "";
+            const matched = extraObj?.client || findClient(value, clients);
+            row.client_name = extraObj?.name || (matched ? matched.full_name : value);
+            row.client_id = extraObj?.id || (matched ? matched.id : "");
+            row.source_name = row.client_name;
+            if (matched?.project_name) row.project_name = matched.project_name;
+            if (matched?.id) row.project_id = matched.id;
           } else if (row.source_type === "B2B Return") {
-            const matched = findB2bCustomer(value, b2bCustomers);
-            row.client_name = matched ? (matched.name || matched.full_name) : value;
-            row.client_id = matched ? matched.id : "";
+            const matched = extraObj?.client || findB2bCustomer(value, b2bCustomers);
+            row.client_name = extraObj?.name || (matched ? (matched.name || matched.full_name) : value);
+            row.client_id = extraObj?.id || (matched ? matched.id : "");
+            row.source_name = row.client_name;
           } else {
-            const matched = findVendor(value, vendors);
-            row.vendor_id = matched ? matched.id : "";
+            const matched = extraObj?.vendor || findVendor(value, vendors);
+            row.vendor_id = extraObj?.id || (matched ? matched.id : "");
+            row.source_name = extraObj?.name || (matched ? matched.name : value);
+            row.client_name = "";
+            row.client_id = "";
           }
         } else {
           // Outward
           if (row.party_type === "Return to Supplier") {
-            const matched = findVendor(value, vendors);
-            row.client_name = matched ? matched.name : value;
-            row.vendor_id = matched ? matched.id : "";
+            const matched = extraObj?.vendor || findVendor(value, vendors);
+            row.client_name = extraObj?.name || (matched ? matched.name : value);
+            row.source_name = row.client_name;
+            row.vendor_id = extraObj?.id || (matched ? matched.id : "");
             row.client_id = "";
           } else if (row.party_type === "B2B Sale") {
-            const matched = findB2bCustomer(value, b2bCustomers);
-            row.client_name = matched ? (matched.name || matched.full_name) : value;
-            row.client_id = matched ? matched.id : "";
+            const matched = extraObj?.client || findB2bCustomer(value, b2bCustomers);
+            row.client_name = extraObj?.name || (matched ? (matched.name || matched.full_name) : value);
+            row.source_name = row.client_name;
+            row.client_id = extraObj?.id || (matched ? matched.id : "");
             row.vendor_id = "";
           } else {
-            const matched = findClient(value, clients);
-            row.client_name = matched ? matched.full_name : value;
-            row.client_id = matched ? matched.id : "";
-            row.project_name = matched ? (matched.project_name || matched.full_name) : (row.project_name || value);
-            row.project_id = matched ? matched.id : "";
+            const matched = extraObj?.client || findClient(value, clients);
+            row.client_name = extraObj?.name || (matched ? matched.full_name : value);
+            row.source_name = row.client_name;
+            row.client_id = extraObj?.id || (matched ? matched.id : "");
+            row.project_name = extraObj?.project_name || (matched ? (matched.project_name || matched.full_name) : (row.project_name || value));
+            row.project_id = extraObj?.project_id || (matched ? matched.id : "");
             row.vendor_id = "";
           }
         }
       } else if (field === "client_name") {
-        const matched = findClient(value, clients);
-        row.client_name = matched ? matched.full_name : value;
-        row.client_id = matched ? matched.id : "";
-        row.project_name = matched ? (matched.project_name || matched.full_name) : (row.project_name || value);
-        row.project_id = matched ? matched.id : "";
+        const matched = extraObj?.client || findClient(value, clients);
+        row.client_name = extraObj?.name || (matched ? matched.full_name : value);
+        row.client_id = extraObj?.id || (matched ? matched.id : "");
+        row.source_name = row.client_name;
+        if (extraObj?.project_name || matched?.project_name) {
+          row.project_name = extraObj?.project_name || matched.project_name;
+          row.project_id = extraObj?.project_id || matched?.id || "";
+        }
       } else if (field === "source_name") {
         row.source_name = value;
         if (row.source_type === "Client Return") {
-          const matched = findClient(value, clients);
-          row.client_name = matched ? matched.full_name : value;
-          row.client_id = matched ? matched.id : "";
+          const matched = extraObj?.client || findClient(value, clients);
+          row.client_name = extraObj?.name || (matched ? matched.full_name : value);
+          row.client_id = extraObj?.id || (matched ? matched.id : "");
         } else if (row.source_type === "B2B Return") {
-          const matched = findB2bCustomer(value, b2bCustomers);
-          row.client_name = matched ? (matched.name || matched.full_name) : value;
-          row.client_id = matched ? matched.id : "";
+          const matched = extraObj?.client || findB2bCustomer(value, b2bCustomers);
+          row.client_name = extraObj?.name || (matched ? (matched.name || matched.full_name) : value);
+          row.client_id = extraObj?.id || (matched ? matched.id : "");
         } else {
-          const matched = findVendor(value, vendors);
-          row.vendor_id = matched ? matched.id : "";
+          const matched = extraObj?.vendor || findVendor(value, vendors);
+          row.vendor_id = extraObj?.id || (matched ? matched.id : "");
         }
       } else if (field === "source_type") {
         row.source_type = value;
@@ -914,6 +1111,16 @@ export default function ManualBulkImport({
         row.unit = formatUnit(value);
       } else if (field === "product") {
         row.product = String(value).toUpperCase();
+        if (extraObj) {
+          if (extraObj.size && (!row.size || row.size === "N/A" || !overrides.size)) row.size = extraObj.size;
+          if (extraObj.unit && (!row.unit || row.unit === "PCS" || !overrides.unit)) row.unit = formatUnit(extraObj.unit);
+          if (extraObj.category && !row.category) row.category = extraObj.category;
+          if (extraObj.product_id) row.product_id = extraObj.product_id;
+          if (extraObj.id) row.master_product_id = extraObj.id;
+        }
+        row = autofillFromProductMaster(row, productsList);
+      } else if (field === "size") {
+        row.size = value;
         row = autofillFromProductMaster(row, productsList);
       } else {
         row[field] = value;
@@ -968,131 +1175,7 @@ export default function ManualBulkImport({
   };
 
   const handleReviewTransition = () => {
-    setRows((prevRows) => {
-      return prevRows.map((row) => {
-        // Precedence 1: Explicit row value, Precedence 2: Step 2 default, Precedence 3: System default
-        const rowChallan = (row.reference_number || row.outward_challan_no || row.challan_number || "").trim();
-        const defaultChallan = (globalDefaults.reference_number || "").trim();
-        const resolvedChallan = rowChallan || defaultChallan;
-
-        const rowDate = (row.date || "").trim();
-        const defaultDate = (globalDefaults.date || "").trim();
-        const resolvedDate = rowDate || defaultDate || new Date().toISOString().split("T")[0];
-
-        const rowRemarks = (row.remarks || "").trim();
-        const defaultRemarks = (globalDefaults.remarks || "").trim();
-        const resolvedRemarks = rowRemarks || defaultRemarks;
-
-        const resolvedStatus = row.status || globalDefaults.status || "Dispatched";
-        const resolvedHighValue = row.high_value_goods != null ? row.high_value_goods : Boolean(globalDefaults.high_value_goods);
-        const resolvedRefType = row.reference_type || globalDefaults.reference_type || "Challan Number";
-
-        let client_name = (row.client_name || "").trim();
-        let client_id = row.client_id || "";
-        let source_name = (row.source_name || "").trim();
-        let source_type = row.source_type || globalDefaults.source_type || (mode === "inward" ? "Supplier Supply" : "");
-        let party_type = row.party_type || globalDefaults.party_type || (mode === "outward" ? "Client Sale" : "");
-        let outward_type = row.outward_type || globalDefaults.outward_type || party_type;
-        let vendor_id = row.vendor_id || globalDefaults.vendor_id || "";
-        let project_name = (row.project_name || "").trim();
-        let project_id = row.project_id || "";
-
-        if (mode === "inward") {
-          if (!source_name) {
-            source_name = (globalDefaults.source_name || "").trim();
-          }
-          if (source_type === "Supplier Supply") {
-            if (!vendor_id && source_name) {
-              const matched = findVendor(source_name, vendors);
-              if (matched) vendor_id = matched.id;
-            }
-          } else if (source_type === "Client Return") {
-            if (!client_name) {
-              client_name = (globalDefaults.client_name || source_name || "").trim();
-            }
-            if (!client_id && client_name) {
-              if (globalDefaults.client_id && (globalDefaults.client_name === client_name)) {
-                client_id = globalDefaults.client_id;
-              } else {
-                const matched = findClient(client_name, clients);
-                if (matched) {
-                  client_id = matched.id;
-                  client_name = matched.full_name;
-                }
-              }
-            }
-            if (!source_name) {
-              source_name = client_name;
-            }
-          } else if (source_type === "B2B Return") {
-            if (!client_name) client_name = source_name || globalDefaults.client_name;
-            if (!client_id && client_name) {
-              const matched = findB2bCustomer(client_name, b2bCustomers);
-              if (matched) {
-                client_id = matched.id;
-                client_name = matched.name || matched.full_name;
-              }
-            }
-          }
-        } else {
-          // Outward
-          if (!client_name) {
-            client_name = (globalDefaults.client_name || "").trim();
-          }
-          if (party_type === "Return to Supplier") {
-            if (!vendor_id && client_name) {
-              const matched = findVendor(client_name, vendors);
-              if (matched) {
-                vendor_id = matched.id;
-                client_name = matched.name;
-              }
-            }
-          } else if (party_type === "B2B Sale") {
-            if (!client_id && client_name) {
-              const matched = findB2bCustomer(client_name, b2bCustomers);
-              if (matched) {
-                client_id = matched.id;
-                client_name = matched.name || matched.full_name;
-              }
-            }
-          } else {
-            // Client Sale
-            if (!client_id && client_name) {
-              const matched = findClient(client_name, clients);
-              if (matched) {
-                client_id = matched.id;
-                client_name = matched.full_name;
-                if (!project_name) project_name = matched.sol_id || matched.full_name;
-                if (!project_id) project_id = matched.id;
-              }
-            }
-          }
-        }
-
-        return {
-          ...row,
-          date: resolvedDate,
-          reference_type: resolvedRefType,
-          reference_number: resolvedChallan,
-          challan_number: resolvedChallan,
-          outward_challan_no: resolvedChallan,
-          bill_number: row.bill_number || (resolvedRefType === "Bill Number" || resolvedRefType === "Purchase Invoice" ? resolvedChallan : ""),
-          source_name,
-          source_type,
-          party_type,
-          outward_type,
-          vendor_id,
-          client_name,
-          client_id,
-          project_name: project_name || globalDefaults.project_name || "",
-          project_id: project_id || globalDefaults.project_id || "",
-          remarks: resolvedRemarks,
-          status: resolvedStatus,
-          high_value_goods: resolvedHighValue,
-          high_value_asset: resolvedHighValue,
-        };
-      });
-    });
+    setRows((prevRows) => propagateDefaults(prevRows, globalDefaults, mode));
     setStep("review");
   };
 
@@ -1220,7 +1303,9 @@ export default function ManualBulkImport({
           }
         }
 
-        toast.success(`Successfully imported ${validRows.length} ${mode} entries.`);
+        const totalRowsCount = rows.length;
+        const skippedCount = totalRowsCount - importedCount;
+        toast.success(`Import complete: ${importedCount} imported${skippedCount > 0 ? `, ${skippedCount} skipped` : ""}.`);
         resetState();
         handleOpenChange(false);
         return;
@@ -1250,10 +1335,6 @@ export default function ManualBulkImport({
   const safeVendors = Array.isArray(vendors) ? vendors : (vendors?.vendors || []);
   const safeB2b = Array.isArray(b2bCustomers) ? b2bCustomers : (b2bCustomers?.customers || []);
 
-  const productOptions = safeProductsList.map((item) => item?.name).filter(Boolean);
-  const clientOptions = safeClients.map((client) => client?.full_name).filter(Boolean);
-  const vendorOptions = safeVendors.map((v) => v?.name).filter(Boolean);
-  const b2bOptions = safeB2b.map((b) => b?.name || b?.full_name).filter(Boolean);
 
   const uniqueChallans = Array.from(new Set(
     (rows || []).map((r) => (r.reference_number || r.outward_challan_no || r.challan_number || r.bill_number || "").trim()).filter(Boolean)
@@ -1487,12 +1568,18 @@ export default function ManualBulkImport({
                               />
                             </td>
                             <td className="px-3 py-2.5 align-top min-w-[200px]">
-                              <Textarea
-                                value={row.product}
-                                onChange={(e) => updateCell(originalIndex, "product", e.target.value)}
-                                rows={2}
-                                className="text-xs bg-white border border-slate-200 rounded p-1 w-full text-slate-800"
-                                list="manual-product-list"
+                              <ProductAutocompleteInput
+                                value={row.product || ""}
+                                products={productsList}
+                                placeholder="Search product..."
+                                className="text-xs h-8 bg-white border-slate-200"
+                                onChange={(valOrObj) => {
+                                  if (typeof valOrObj === "object" && valOrObj !== null) {
+                                    updateCell(originalIndex, "product", valOrObj.name || valOrObj.product_name, valOrObj);
+                                  } else {
+                                    updateCell(originalIndex, "product", valOrObj);
+                                  }
+                                }}
                               />
                               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
                                 <span className={`font-semibold ${status === "matched" ? "text-emerald-600" : status === "fuzzy" ? "text-amber-600" : "text-blue-600"}`}>
@@ -1557,26 +1644,48 @@ export default function ManualBulkImport({
                                     </SelectContent>
                                   </Select>
                                 </td>
-                                <td className="px-3 py-2.5 align-top">
-                                  <Input
-                                    list={
-                                      row.source_type === "Client Return"
-                                        ? "manual-client-list"
-                                        : row.source_type === "B2B Return"
-                                        ? "manual-b2b-list"
-                                        : "manual-vendor-list"
-                                    }
-                                    value={row.source_name || row.client_name || ""}
-                                    onChange={(e) => updateCell(originalIndex, "client_supplier", e.target.value)}
-                                    className="text-xs h-8 bg-white border-slate-200 min-w-[140px]"
-                                    placeholder={
-                                      row.source_type === "Client Return"
-                                        ? "Select client"
-                                        : row.source_type === "B2B Return"
-                                        ? "Select B2B customer"
-                                        : "Supplier / Vendor"
-                                    }
-                                  />
+                                <td className="px-3 py-2.5 align-top min-w-[150px]">
+                                  {row.source_type === "Client Return" ? (
+                                    <ClientAutocompleteInput
+                                      value={row.source_name || row.client_name || ""}
+                                      clients={clients}
+                                      placeholder="Select client"
+                                      className="text-xs h-8 bg-white border-slate-200"
+                                      onChange={(label, client) => {
+                                        updateCell(originalIndex, "client_supplier", label, client ? { client, id: client.id, name: client.full_name, project_name: client.project_name, project_id: client.id } : null);
+                                      }}
+                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                    />
+                                  ) : row.source_type === "B2B Return" ? (
+                                    <B2BCustomerAutocompleteInput
+                                      value={row.client_name || row.source_name || ""}
+                                      customers={b2bCustomers}
+                                      placeholder="Select B2B customer"
+                                      className="text-xs h-8 bg-white border-slate-200"
+                                      onChange={(label, cust) => {
+                                        updateCell(originalIndex, "client_supplier", label, cust ? { client: cust, id: cust.id, name: cust.name || cust.full_name } : null);
+                                      }}
+                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                    />
+                                  ) : row.source_type === "Supplier Supply" ? (
+                                    <VendorAutocompleteInput
+                                      value={row.source_name || ""}
+                                      vendors={vendors}
+                                      placeholder="Supplier / Vendor"
+                                      className="text-xs h-8 bg-white border-slate-200"
+                                      onChange={(label, vendor) => {
+                                        updateCell(originalIndex, "client_supplier", label, vendor ? { vendor, id: vendor.id, name: vendor.name } : null);
+                                      }}
+                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                    />
+                                  ) : (
+                                    <Input
+                                      value={row.source_name || ""}
+                                      onChange={(e) => updateCell(originalIndex, "source_name", e.target.value)}
+                                      className="text-xs h-8 bg-white border-slate-200"
+                                      placeholder="Source name"
+                                    />
+                                  )}
                                 </td>
                               </>
                             ) : (
@@ -1596,26 +1705,41 @@ export default function ManualBulkImport({
                                     </SelectContent>
                                   </Select>
                                 </td>
-                                <td className="px-3 py-2.5 align-top">
-                                  <Input
-                                    list={
-                                      row.party_type === "Return to Supplier"
-                                        ? "manual-vendor-list"
-                                        : row.party_type === "B2B Sale"
-                                        ? "manual-b2b-list"
-                                        : "manual-client-list"
-                                    }
-                                    value={row.client_name || row.source_name || ""}
-                                    onChange={(e) => updateCell(originalIndex, "client_supplier", e.target.value)}
-                                    className="text-xs h-8 bg-white border-slate-200 min-w-[140px]"
-                                    placeholder={
-                                      row.party_type === "Return to Supplier"
-                                        ? "Select vendor"
-                                        : row.party_type === "B2B Sale"
-                                        ? "Select B2B customer"
-                                        : "Select client"
-                                    }
-                                  />
+                                <td className="px-3 py-2.5 align-top min-w-[150px]">
+                                  {row.party_type === "Return to Supplier" ? (
+                                    <VendorAutocompleteInput
+                                      value={row.client_name || row.source_name || ""}
+                                      vendors={vendors}
+                                      placeholder="Select vendor"
+                                      className="text-xs h-8 bg-white border-slate-200"
+                                      onChange={(label, vendor) => {
+                                        updateCell(originalIndex, "client_supplier", label, vendor ? { vendor, id: vendor.id, name: vendor.name } : null);
+                                      }}
+                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                    />
+                                  ) : row.party_type === "B2B Sale" ? (
+                                    <B2BCustomerAutocompleteInput
+                                      value={row.client_name || row.source_name || ""}
+                                      customers={b2bCustomers}
+                                      placeholder="Select B2B customer"
+                                      className="text-xs h-8 bg-white border-slate-200"
+                                      onChange={(label, cust) => {
+                                        updateCell(originalIndex, "client_supplier", label, cust ? { client: cust, id: cust.id, name: cust.name || cust.full_name } : null);
+                                      }}
+                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                    />
+                                  ) : (
+                                    <ClientAutocompleteInput
+                                      value={row.client_name || row.source_name || ""}
+                                      clients={clients}
+                                      placeholder="Select client"
+                                      className="text-xs h-8 bg-white border-slate-200"
+                                      onChange={(label, client) => {
+                                        updateCell(originalIndex, "client_supplier", label, client ? { client, id: client.id, name: client.full_name, project_name: client.project_name, project_id: client.id } : null);
+                                      }}
+                                      onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                    />
+                                  )}
                                 </td>
                                 <td className="px-3 py-2.5 align-top">
                                   <Input
@@ -1841,50 +1965,58 @@ export default function ManualBulkImport({
                               ? "Vendor / Supplier Name"
                               : "Source / Location Name"}
                           </Label>
-                          <Input
-                            list={
-                              globalDefaults.source_type === "B2B Return"
-                                ? "manual-b2b-list"
-                                : globalDefaults.source_type === "Supplier Supply"
-                                ? "manual-vendor-list"
-                                : undefined
-                            }
-                            value={
-                              globalDefaults.source_type === "B2B Return"
-                                ? globalDefaults.client_name
-                                : globalDefaults.source_name
-                            }
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (globalDefaults.source_type === "B2B Return") {
-                                const matched = findB2bCustomer(val, b2bCustomers);
-                                setGlobalDefaults({
-                                  ...globalDefaults,
-                                  client_name: matched ? (matched.name || matched.full_name) : val,
-                                  client_id: matched ? matched.id : "",
-                                });
-                              } else if (globalDefaults.source_type === "Supplier Supply") {
-                                const matched = findVendor(val, vendors);
-                                setGlobalDefaults({
-                                  ...globalDefaults,
-                                  source_name: matched ? matched.name : val,
-                                  vendor_id: matched ? matched.id : "",
-                                });
-                              } else {
-                                setGlobalDefaults({
-                                  ...globalDefaults,
-                                  source_name: val,
-                                });
-                              }
-                            }}
-                            placeholder={
-                              globalDefaults.source_type === "B2B Return"
-                                ? "Search and select B2B customer"
-                                : globalDefaults.source_type === "Supplier Supply"
-                                ? "Search and select supplier / vendor"
-                                : "e.g. Main Warehouse"
-                            }
-                          />
+                          {globalDefaults.source_type === "B2B Return" ? (
+                            <B2BCustomerAutocompleteInput
+                              value={globalDefaults.client_name || globalDefaults.source_name || ""}
+                              customers={b2bCustomers}
+                              placeholder="Search and select B2B customer"
+                              onChange={(label, cust) => {
+                                setGlobalDefaults((prev) => ({
+                                  ...prev,
+                                  client_name: label,
+                                  source_name: label,
+                                  client_id: cust ? cust.id : "",
+                                  vendor_id: "",
+                                }));
+                              }}
+                              onClear={() => {
+                                setGlobalDefaults((prev) => ({
+                                  ...prev,
+                                  client_name: "",
+                                  source_name: "",
+                                  client_id: "",
+                                }));
+                              }}
+                            />
+                          ) : globalDefaults.source_type === "Supplier Supply" ? (
+                            <VendorAutocompleteInput
+                              value={globalDefaults.source_name || ""}
+                              vendors={vendors}
+                              placeholder="Search and select supplier / vendor"
+                              onChange={(label, vendor) => {
+                                setGlobalDefaults((prev) => ({
+                                  ...prev,
+                                  source_name: label,
+                                  vendor_id: vendor ? vendor.id : "",
+                                  client_name: "",
+                                  client_id: "",
+                                }));
+                              }}
+                              onClear={() => {
+                                setGlobalDefaults((prev) => ({
+                                  ...prev,
+                                  source_name: "",
+                                  vendor_id: "",
+                                }));
+                              }}
+                            />
+                          ) : (
+                            <Input
+                              value={globalDefaults.source_name || ""}
+                              onChange={(e) => setGlobalDefaults((prev) => ({ ...prev, source_name: e.target.value }))}
+                              placeholder="e.g. Main Warehouse"
+                            />
+                          )}
                           {hasMultipleClients && (
                             <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 mt-1 font-medium flex items-center gap-1.5">
                               <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
@@ -1928,54 +2060,79 @@ export default function ManualBulkImport({
                             ? "B2B Customer Name"
                             : "Client Name"}
                         </Label>
-                        <Input
-                          list={
-                            globalDefaults.party_type === "Return to Supplier"
-                              ? "manual-vendor-list"
-                              : globalDefaults.party_type === "B2B Sale"
-                              ? "manual-b2b-list"
-                              : "manual-client-list"
-                          }
-                          value={globalDefaults.client_name}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            if (globalDefaults.party_type === "Return to Supplier") {
-                              const matched = findVendor(val, vendors);
-                              setGlobalDefaults({
-                                ...globalDefaults,
-                                client_name: matched ? matched.name : val,
-                                source_name: matched ? matched.name : val,
-                                vendor_id: matched ? matched.id : "",
+                        {globalDefaults.party_type === "Return to Supplier" ? (
+                          <VendorAutocompleteInput
+                            value={globalDefaults.client_name || globalDefaults.source_name || ""}
+                            vendors={vendors}
+                            placeholder="Search and select vendor"
+                            onChange={(label, vendor) => {
+                              setGlobalDefaults((prev) => ({
+                                ...prev,
+                                client_name: label,
+                                source_name: label,
+                                vendor_id: vendor ? vendor.id : "",
                                 client_id: "",
-                              });
-                            } else if (globalDefaults.party_type === "B2B Sale") {
-                              const matched = findB2bCustomer(val, b2bCustomers);
-                              setGlobalDefaults({
-                                ...globalDefaults,
-                                client_name: matched ? (matched.name || matched.full_name) : val,
-                                client_id: matched ? matched.id : "",
+                              }));
+                            }}
+                            onClear={() => {
+                              setGlobalDefaults((prev) => ({
+                                ...prev,
+                                client_name: "",
+                                source_name: "",
                                 vendor_id: "",
-                              });
-                            } else {
-                              const matched = findClient(val, clients);
-                              setGlobalDefaults({
-                                ...globalDefaults,
-                                client_name: matched ? matched.full_name : val,
-                                client_id: matched ? matched.id : "",
-                                project_name: matched ? (matched.sol_id || matched.full_name) : globalDefaults.project_name,
-                                project_id: matched ? matched.id : "",
+                                client_id: "",
+                              }));
+                            }}
+                          />
+                        ) : globalDefaults.party_type === "B2B Sale" ? (
+                          <B2BCustomerAutocompleteInput
+                            value={globalDefaults.client_name || ""}
+                            customers={b2bCustomers}
+                            placeholder="Search and select B2B customer"
+                            onChange={(label, cust) => {
+                              setGlobalDefaults((prev) => ({
+                                ...prev,
+                                client_name: label,
+                                client_id: cust ? cust.id : "",
                                 vendor_id: "",
-                              });
-                            }
-                          }}
-                          placeholder={
-                            globalDefaults.party_type === "Return to Supplier"
-                              ? "Search and select vendor"
-                              : globalDefaults.party_type === "B2B Sale"
-                              ? "Search and select B2B customer"
-                              : "Search and select client"
-                          }
-                        />
+                              }));
+                            }}
+                            onClear={() => {
+                              setGlobalDefaults((prev) => ({
+                                ...prev,
+                                client_name: "",
+                                client_id: "",
+                              }));
+                            }}
+                          />
+                        ) : (
+                          <ClientAutocompleteInput
+                            value={globalDefaults.client_name || ""}
+                            clients={clients}
+                            placeholder="Search and select client by name or SOL ID..."
+                            onChange={(label, client) => {
+                              setGlobalDefaults((prev) => ({
+                                ...prev,
+                                client_name: label,
+                                client_id: client ? client.id : "",
+                                source_name: label,
+                                project_name: client?.project_name || client?.sol_id || prev.project_name || "",
+                                project_id: client?.id || prev.project_id || "",
+                                vendor_id: "",
+                              }));
+                            }}
+                            onClear={() => {
+                              setGlobalDefaults((prev) => ({
+                                ...prev,
+                                client_name: "",
+                                client_id: "",
+                                project_name: "",
+                                project_id: "",
+                                vendor_id: "",
+                              }));
+                            }}
+                          />
+                        )}
                         {hasMultipleClients && (
                           <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 mt-1 font-medium flex items-center gap-1.5">
                             <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
@@ -2037,12 +2194,6 @@ export default function ManualBulkImport({
               </div>
             </div>
           )}
-
-          {/* Datalists for Autocomplete */}
-          <datalist id="manual-product-list">{productOptions.map((name) => <option key={name} value={name} />)}</datalist>
-          <datalist id="manual-client-list">{clientOptions.map((name) => <option key={name} value={name} />)}</datalist>
-          <datalist id="manual-vendor-list">{vendorOptions.map((name) => <option key={name} value={name} />)}</datalist>
-          <datalist id="manual-b2b-list">{b2bOptions.map((name) => <option key={name} value={name} />)}</datalist>
 
           {step === "review" && (() => {
             const itemsPerPage = 50;
@@ -2115,6 +2266,11 @@ export default function ManualBulkImport({
                     <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold text-xs px-2.5 py-1">
                       Valid: {selectedRows.filter((r) => isRowValid(r, mode, productsList)).length}
                     </Badge>
+                    {rows.length - selectedRows.filter((r) => isRowValid(r, mode, productsList)).length > 0 && (
+                      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 font-semibold text-xs px-2.5 py-1">
+                        Skipped: {rows.length - selectedRows.filter((r) => isRowValid(r, mode, productsList)).length}
+                      </Badge>
+                    )}
                     {invalidRowsCount > 0 && (
                       <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 font-semibold text-xs px-2.5 py-1">
                         Invalid: {invalidRowsCount}
@@ -2198,13 +2354,19 @@ export default function ManualBulkImport({
                                   className="mt-2 accent-blue-600 w-4 h-4 cursor-pointer"
                                 />
                               </td>
-                              <td className="px-3 py-2.5 align-top min-w-[180px]">
-                                <Textarea
-                                  value={row.product}
-                                  onChange={(e) => updateCell(originalIndex, "product", e.target.value)}
-                                  rows={2}
-                                  className="text-xs bg-white border border-slate-200 rounded p-1 w-full text-slate-800"
-                                  list="manual-product-list"
+                              <td className="px-3 py-2.5 align-top min-w-[200px]">
+                                <ProductAutocompleteInput
+                                  value={row.product || ""}
+                                  products={productsList}
+                                  placeholder="Search product..."
+                                  className="text-xs h-8 bg-white border-slate-200"
+                                  onChange={(valOrProduct) => {
+                                    if (typeof valOrProduct === "object" && valOrProduct !== null) {
+                                      updateCell(originalIndex, "product", valOrProduct.name || valOrProduct.product_name, valOrProduct);
+                                    } else {
+                                      updateCell(originalIndex, "product", valOrProduct);
+                                    }
+                                  }}
                                 />
                                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
                                   <span className={`font-semibold ${status === "matched" ? "text-emerald-600" : status === "fuzzy" ? "text-amber-600" : "text-blue-600"}`}>
@@ -2269,26 +2431,48 @@ export default function ManualBulkImport({
                                       </SelectContent>
                                     </Select>
                                   </td>
-                                  <td className="px-3 py-2.5 align-top">
-                                    <Input
-                                      list={
-                                        row.source_type === "Client Return"
-                                          ? "manual-client-list"
-                                          : row.source_type === "B2B Return"
-                                          ? "manual-b2b-list"
-                                          : "manual-vendor-list"
-                                      }
-                                      value={row.source_name || row.client_name || ""}
-                                      onChange={(e) => updateCell(originalIndex, "client_supplier", e.target.value)}
-                                      className="text-xs h-8 bg-white border-slate-200 min-w-[140px]"
-                                      placeholder={
-                                        row.source_type === "Client Return"
-                                          ? "Select client"
-                                          : row.source_type === "B2B Return"
-                                          ? "Select B2B customer"
-                                          : "Supplier / Vendor"
-                                      }
-                                    />
+                                  <td className="px-3 py-2.5 align-top min-w-[150px]">
+                                    {row.source_type === "Client Return" ? (
+                                      <ClientAutocompleteInput
+                                        value={row.source_name || row.client_name || ""}
+                                        clients={clients}
+                                        placeholder="Select client"
+                                        className="text-xs h-8 bg-white border-slate-200"
+                                        onChange={(label, client) => {
+                                          updateCell(originalIndex, "client_supplier", label, client ? { client, id: client.id, name: client.full_name, project_name: client.project_name, project_id: client.id } : null);
+                                        }}
+                                        onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                      />
+                                    ) : row.source_type === "B2B Return" ? (
+                                      <B2BCustomerAutocompleteInput
+                                        value={row.client_name || row.source_name || ""}
+                                        customers={b2bCustomers}
+                                        placeholder="Select B2B customer"
+                                        className="text-xs h-8 bg-white border-slate-200"
+                                        onChange={(label, cust) => {
+                                          updateCell(originalIndex, "client_supplier", label, cust ? { client: cust, id: cust.id, name: cust.name || cust.full_name } : null);
+                                        }}
+                                        onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                      />
+                                    ) : row.source_type === "Supplier Supply" ? (
+                                      <VendorAutocompleteInput
+                                        value={row.source_name || ""}
+                                        vendors={vendors}
+                                        placeholder="Supplier / Vendor"
+                                        className="text-xs h-8 bg-white border-slate-200"
+                                        onChange={(label, vendor) => {
+                                          updateCell(originalIndex, "client_supplier", label, vendor ? { vendor, id: vendor.id, name: vendor.name } : null);
+                                        }}
+                                        onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                      />
+                                    ) : (
+                                      <Input
+                                        value={row.source_name || ""}
+                                        onChange={(e) => updateCell(originalIndex, "source_name", e.target.value)}
+                                        className="text-xs h-8 bg-white border-slate-200"
+                                        placeholder="Source name"
+                                      />
+                                    )}
                                   </td>
                                 </>
                               ) : (
@@ -2308,26 +2492,41 @@ export default function ManualBulkImport({
                                       </SelectContent>
                                     </Select>
                                   </td>
-                                  <td className="px-3 py-2.5 align-top">
-                                    <Input
-                                      list={
-                                        row.party_type === "Return to Supplier"
-                                          ? "manual-vendor-list"
-                                          : row.party_type === "B2B Sale"
-                                          ? "manual-b2b-list"
-                                          : "manual-client-list"
-                                      }
-                                      value={row.client_name || row.source_name || ""}
-                                      onChange={(e) => updateCell(originalIndex, "client_supplier", e.target.value)}
-                                      className="text-xs h-8 bg-white border-slate-200 min-w-[140px]"
-                                      placeholder={
-                                        row.party_type === "Return to Supplier"
-                                          ? "Select vendor"
-                                          : row.party_type === "B2B Sale"
-                                          ? "Select B2B customer"
-                                          : "Select client"
-                                      }
-                                    />
+                                  <td className="px-3 py-2.5 align-top min-w-[150px]">
+                                    {row.party_type === "Return to Supplier" ? (
+                                      <VendorAutocompleteInput
+                                        value={row.client_name || row.source_name || ""}
+                                        vendors={vendors}
+                                        placeholder="Select vendor"
+                                        className="text-xs h-8 bg-white border-slate-200"
+                                        onChange={(label, vendor) => {
+                                          updateCell(originalIndex, "client_supplier", label, vendor ? { vendor, id: vendor.id, name: vendor.name } : null);
+                                        }}
+                                        onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                      />
+                                    ) : row.party_type === "B2B Sale" ? (
+                                      <B2BCustomerAutocompleteInput
+                                        value={row.client_name || row.source_name || ""}
+                                        customers={b2bCustomers}
+                                        placeholder="Select B2B customer"
+                                        className="text-xs h-8 bg-white border-slate-200"
+                                        onChange={(label, cust) => {
+                                          updateCell(originalIndex, "client_supplier", label, cust ? { client: cust, id: cust.id, name: cust.name || cust.full_name } : null);
+                                        }}
+                                        onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                      />
+                                    ) : (
+                                      <ClientAutocompleteInput
+                                        value={row.client_name || row.source_name || ""}
+                                        clients={clients}
+                                        placeholder="Select client"
+                                        className="text-xs h-8 bg-white border-slate-200"
+                                        onChange={(label, client) => {
+                                          updateCell(originalIndex, "client_supplier", label, client ? { client, id: client.id, name: client.full_name, project_name: client.project_name, project_id: client.id } : null);
+                                        }}
+                                        onClear={() => updateCell(originalIndex, "client_supplier", "")}
+                                      />
+                                    )}
                                   </td>
                                   <td className="px-3 py-2.5 align-top">
                                     <Input
@@ -2473,8 +2672,15 @@ export default function ManualBulkImport({
           {step === "review" && (
             <>
               <Button variant="outline" onClick={() => setStep("defaults")}><ArrowLeft className="w-4 h-4 mr-1.5" /> Back</Button>
-              <Button onClick={handleFinalImport} disabled={processing || selectedRows.length === 0 || invalidRowsCount > 0}>
-                {processing ? "Importing…" : `Import ${selectedRows.length} rows`}
+              <Button
+                onClick={handleFinalImport}
+                disabled={processing || selectedRows.filter((r) => isRowValid(r, mode, productsList)).length === 0}
+              >
+                {processing
+                  ? "Importing…"
+                  : invalidRowsCount > 0
+                  ? `Import ${selectedRows.filter((r) => isRowValid(r, mode, productsList)).length} Valid Rows (${invalidRowsCount} skipped)`
+                  : `Import ${selectedRows.length} Rows`}
               </Button>
             </>
           )}

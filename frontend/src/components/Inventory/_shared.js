@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import { getCachedProducts, fetchProductsDeduplicated } from "@/lib/productCache";
 import { useProductList } from "@/hooks/useInventory";
 export {
@@ -189,21 +189,68 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
   const displayedHighValue = useMemo(() => filteredHighValue.slice(0, 50), [filteredHighValue]);
   const displayedOther = useMemo(() => filteredOther.slice(0, 100), [filteredOther]);
   const hasAnyMatches = displayedHighValue.length > 0 || (!highValueOnly && displayedOther.length > 0);
+  const combinedList = useMemo(() => (highValueOnly ? displayedHighValue : [...displayedHighValue, ...displayedOther]), [highValueOnly, displayedHighValue, displayedOther]);
+
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   const handleSelect = useCallback((p) => {
+    const pName = p.name || p.product_name || "";
+    setInputVal(pName);
+    setDebouncedSearch(pName);
     onChange(p);
+    setOpen(false);
+    setHighlightedIndex(-1);
+  }, [onChange]);
+
+  const handleClear = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
     setInputVal("");
     setDebouncedSearch("");
+    onChange("");
     setOpen(false);
+    setHighlightedIndex(-1);
   }, [onChange]);
+
+  const handleKeyDown = (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!open) {
+        setOpen(true);
+        setHighlightedIndex(0);
+      } else {
+        setHighlightedIndex((prev) => (prev < combinedList.length - 1 ? prev + 1 : 0));
+      }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) {
+        setOpen(true);
+        setHighlightedIndex(combinedList.length - 1);
+      } else {
+        setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : combinedList.length - 1));
+      }
+    } else if (e.key === "Enter") {
+      if (open && highlightedIndex >= 0 && combinedList[highlightedIndex]) {
+        e.preventDefault();
+        handleSelect(combinedList[highlightedIndex]);
+      }
+    } else if (e.key === "Escape" || e.key === "Tab") {
+      setOpen(false);
+      setHighlightedIndex(-1);
+    }
+  };
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <div ref={containerRef} className="relative w-full">
           <Input
-            value={value}
-            onChange={(e) => handleInputChange(e.target.value)}
+            value={inputVal}
+            onChange={(e) => {
+              setHighlightedIndex(-1);
+              handleInputChange(e.target.value);
+            }}
+            onKeyDown={handleKeyDown}
             onFocus={() => {
               setOpen(true);
               const v = value || "";
@@ -211,7 +258,7 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
               setDebouncedSearch(v);
             }}
             placeholder={placeholder}
-            className={className}
+            className={`${className} pr-7`}
             data-testid={testid}
             required={required}
             ref={inputRef}
@@ -221,6 +268,17 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
             spellCheck={false}
             name="material_product_name_autocomplete"
           />
+          {inputVal ? (
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={handleClear}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded transition"
+              title="Clear product"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          ) : null}
         </div>
       </PopoverTrigger>
       {open && (
@@ -233,6 +291,7 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
           {!hasAnyMatches ? (
             <div className="px-4 py-3 text-slate-400 italic text-center">
               No materials/products found
+              {inputVal && <div className="text-[11px] text-slate-500 font-normal not-italic mt-1">Using custom: <span className="font-semibold text-slate-700">"{inputVal}"</span></div>}
             </div>
           ) : (
             <>
@@ -242,22 +301,28 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
                     <span>HIGH VALUE GOODS</span>
                     {filteredHighValue.length > 50 && <span className="text-[9px] text-slate-400 font-normal">Showing 50 of {filteredHighValue.length}</span>}
                   </div>
-                  {displayedHighValue.map((p) => (
-                    <button
-                      key={p.id || `${p.name}-${p.size}`}
-                      type="button"
-                      className="w-full text-left px-4 py-2 hover:bg-blue-50/80 font-semibold text-slate-800 transition-colors border-b border-slate-50 last:border-0"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        handleSelect(p);
-                      }}
-                    >
-                      <div className="flex flex-col">
-                        <span className="font-semibold text-slate-900">{p.name}</span>
-                        {p.size && <span className="text-[10px] text-slate-500 font-normal mt-0.5">{p.size}</span>}
-                      </div>
-                    </button>
-                  ))}
+                  {displayedHighValue.map((p, idx) => {
+                    const isHighlighted = idx === highlightedIndex;
+                    return (
+                      <button
+                        key={p.id || `${p.name}-${p.size}`}
+                        type="button"
+                        className={`w-full text-left px-4 py-2 font-semibold transition-colors border-b border-slate-50 last:border-0 ${
+                          isHighlighted ? "bg-blue-100/90 text-blue-900" : "hover:bg-blue-50/80 text-slate-800"
+                        }`}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          handleSelect(p);
+                        }}
+                        onMouseEnter={() => setHighlightedIndex(idx)}
+                      >
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-slate-900">{p.name}</span>
+                          {p.size && <span className="text-[10px] text-slate-500 font-normal mt-0.5">{p.size}</span>}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </>
               )}
 
@@ -268,22 +333,29 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
                     <span>OTHER PRODUCTS (A-Z)</span>
                     {filteredOther.length > 100 && <span className="text-[9px] text-slate-400 font-normal">Showing 100 of {filteredOther.length}</span>}
                   </div>
-                  {displayedOther.map((p) => (
-                    <button
-                      key={p.id || `${p.name}-${p.size}`}
-                      type="button"
-                      className="w-full text-left px-4 py-2 hover:bg-slate-100 text-slate-700 transition-colors border-b border-slate-50 last:border-0"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        handleSelect(p);
-                      }}
-                    >
-                      <div className="flex flex-col">
-                        <span className="font-medium text-slate-800">{p.name}</span>
-                        {p.size && <span className="text-[10px] text-slate-500 font-normal mt-0.5">{p.size}</span>}
-                      </div>
-                    </button>
-                  ))}
+                  {displayedOther.map((p, idx) => {
+                    const globalIdx = displayedHighValue.length + idx;
+                    const isHighlighted = globalIdx === highlightedIndex;
+                    return (
+                      <button
+                        key={p.id || `${p.name}-${p.size}`}
+                        type="button"
+                        className={`w-full text-left px-4 py-2 transition-colors border-b border-slate-50 last:border-0 ${
+                          isHighlighted ? "bg-blue-100/90 text-blue-900 font-semibold" : "hover:bg-slate-100 text-slate-700"
+                        }`}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          handleSelect(p);
+                        }}
+                        onMouseEnter={() => setHighlightedIndex(globalIdx)}
+                      >
+                        <div className="flex flex-col">
+                          <span className="font-medium text-slate-800">{p.name}</span>
+                          {p.size && <span className="text-[10px] text-slate-500 font-normal mt-0.5">{p.size}</span>}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </>
               )}
             </>
@@ -294,35 +366,135 @@ export function ProductAutocompleteInput({ value, onChange, products, placeholde
   );
 }
 
-export function VendorAutocompleteInput({ value, onChange, vendors = [], placeholder = "Supplier company name", className, testid, required }) {
+export function ControlledAutocompleteInput({
+  value = "",
+  onChange,
+  options = [],
+  filterItem,
+  getItemKey,
+  getItemLabel,
+  renderItem,
+  placeholder = "Search...",
+  className = "",
+  testid,
+  required = false,
+  emptyText = "No matches found",
+  disabled = false,
+  allowCustom = true,
+  inputRef,
+  onClear,
+}) {
   const [open, setOpen] = useState(false);
-  const [inputVal, setInputVal] = useState(value || "");
+  const [inputValue, setInputValue] = useState(value || "");
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const internalInputRef = useRef(null);
+  const listRef = useRef(null);
+  const actualInputRef = inputRef || internalInputRef;
 
   useEffect(() => {
-    setInputVal(value || "");
+    setInputValue(value || "");
   }, [value]);
 
-  const filtered = useMemo(() => {
-    const q = (inputVal || "").trim().toLowerCase();
-    if (!q) return vendors.slice(0, 50);
-    return vendors.filter((v) => {
-      const n = (v.name || "").toLowerCase();
-      const g = (v.gstin || "").toLowerCase();
-      const c = (v.contact_person || "").toLowerCase();
-      return n.includes(q) || g.includes(q) || c.includes(q);
-    }).slice(0, 50);
-  }, [vendors, inputVal]);
+  const defaultGetLabel = useCallback((item) => {
+    if (!item) return "";
+    if (typeof item === "string") return item;
+    return item.name || item.full_name || item.title || "";
+  }, []);
 
-  const handleTextChange = (val) => {
-    setInputVal(val);
-    const matched = vendors.find(v => (v.name || "").trim().toLowerCase() === val.trim().toLowerCase());
-    onChange(val, matched);
+  const getLabel = getItemLabel || defaultGetLabel;
+  const getKey = getItemKey || ((item, idx) => item?.id || item?._id || getLabel(item) || idx);
+
+  const filteredOptions = useMemo(() => {
+    const q = (inputValue || "").trim().toLowerCase();
+    const list = Array.isArray(options) ? options : (options?.items || options?.clients || options?.vendors || []);
+    if (!q) {
+      return list.slice(0, 50);
+    }
+    if (filterItem) {
+      return list.filter((item) => filterItem(item, q)).slice(0, 50);
+    }
+    return list.filter((item) => {
+      const label = String(getLabel(item) || "").toLowerCase();
+      const sol = String(item?.sol_id || "").toLowerCase();
+      const phone = String(item?.mobile || item?.phone || "").toLowerCase();
+      const proj = String(item?.project_name || "").toLowerCase();
+      const gstin = String(item?.gstin || "").toLowerCase();
+      return label.includes(q) || sol.includes(q) || phone.includes(q) || proj.includes(q) || gstin.includes(q);
+    }).slice(0, 50);
+  }, [options, inputValue, filterItem, getLabel]);
+
+  useEffect(() => {
+    if (highlightedIndex >= 0 && listRef.current) {
+      const highlightedEl = listRef.current.children[highlightedIndex];
+      if (highlightedEl && highlightedEl.scrollIntoView) {
+        highlightedEl.scrollIntoView({ block: "nearest" });
+      }
+    }
+  }, [highlightedIndex]);
+
+  const handleTextChange = (e) => {
+    const val = e.target.value;
+    setInputValue(val);
+    setHighlightedIndex(-1);
+    setOpen(true);
+    if (onChange) {
+      onChange(val, null);
+    }
   };
 
-  const handleSelect = (v) => {
-    setInputVal(v.name);
-    onChange(v.name, v);
+  const handleSelect = (item) => {
+    const label = getLabel(item);
+    setInputValue(label);
     setOpen(false);
+    setHighlightedIndex(-1);
+    if (onChange) {
+      onChange(label, item);
+    }
+  };
+
+  const handleClear = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setInputValue("");
+    setHighlightedIndex(-1);
+    setOpen(false);
+    if (onClear) {
+      onClear();
+    } else if (onChange) {
+      onChange("", null);
+    }
+    actualInputRef.current?.focus();
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!open) {
+        setOpen(true);
+        setHighlightedIndex(0);
+      } else {
+        setHighlightedIndex((prev) => (prev < filteredOptions.length - 1 ? prev + 1 : 0));
+      }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) {
+        setOpen(true);
+        setHighlightedIndex(filteredOptions.length - 1);
+      } else {
+        setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : filteredOptions.length - 1));
+      }
+    } else if (e.key === "Enter") {
+      if (open && highlightedIndex >= 0 && filteredOptions[highlightedIndex]) {
+        e.preventDefault();
+        handleSelect(filteredOptions[highlightedIndex]);
+      }
+    } else if (e.key === "Escape") {
+      setOpen(false);
+      setHighlightedIndex(-1);
+    } else if (e.key === "Tab") {
+      setOpen(false);
+      setHighlightedIndex(-1);
+    }
   };
 
   return (
@@ -330,214 +502,210 @@ export function VendorAutocompleteInput({ value, onChange, vendors = [], placeho
       <PopoverTrigger asChild>
         <div className="relative w-full">
           <Input
-            value={inputVal}
-            onChange={(e) => handleTextChange(e.target.value)}
+            ref={actualInputRef}
+            value={inputValue}
+            onChange={handleTextChange}
+            onKeyDown={handleKeyDown}
             onFocus={() => setOpen(true)}
             placeholder={placeholder}
-            className={className}
+            className={`${className} pr-7`}
             data-testid={testid}
             required={required}
+            disabled={disabled}
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
           />
+          {inputValue ? (
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={handleClear}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded transition"
+              title="Clear text"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          ) : null}
         </div>
       </PopoverTrigger>
-      {open && filtered.length > 0 && (
+
+      {open && (
         <PopoverContent
-          className="p-0 border border-slate-200 bg-white rounded-xl shadow-2xl z-[99999] min-w-[280px] w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto text-xs py-1 text-left"
+          className="p-1 border border-slate-200 bg-white rounded-xl shadow-2xl z-[99999] min-w-[280px] w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto text-xs py-1 text-left"
           align="start"
           sideOffset={4}
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
-          <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider bg-slate-50 sticky top-0 z-10 border-b border-slate-100">
-            EXISTING VENDORS
-          </div>
-          {filtered.map((v) => (
-            <button
-              key={v.id || v.name}
-              type="button"
-              className="w-full text-left px-4 py-2 hover:bg-blue-50/80 font-medium text-slate-800 transition-colors border-b border-slate-50 last:border-0"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleSelect(v);
-              }}
-            >
-              <div className="flex flex-col">
-                <span className="font-semibold text-slate-900">{v.name}</span>
-                {(v.gstin || v.contact_person) && (
-                  <span className="text-[10px] text-slate-400 font-normal mt-0.5">
-                    {v.gstin ? `GST: ${v.gstin}` : ""} {v.contact_person ? `· ${v.contact_person}` : ""}
-                  </span>
-                )}
-              </div>
-            </button>
-          ))}
+          {filteredOptions.length === 0 ? (
+            <div className="px-3 py-3 text-slate-400 text-center italic">
+              {emptyText}
+              {allowCustom && inputValue && (
+                <div className="text-[11px] text-slate-500 font-normal not-italic mt-1">
+                  Using custom value: <span className="font-semibold text-slate-700">"{inputValue}"</span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div ref={listRef} className="space-y-0.5">
+              {filteredOptions.map((item, idx) => {
+                const isHighlighted = idx === highlightedIndex;
+                return (
+                  <button
+                    key={getKey(item, idx)}
+                    type="button"
+                    className={`w-full text-left px-3 py-2 rounded-lg transition-colors border-b border-slate-50 last:border-0 ${
+                      isHighlighted ? "bg-blue-100/90 text-blue-900 font-semibold" : "hover:bg-blue-50/80 text-slate-800"
+                    }`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      handleSelect(item);
+                    }}
+                    onMouseEnter={() => setHighlightedIndex(idx)}
+                  >
+                    {renderItem ? (
+                      renderItem(item, isHighlighted)
+                    ) : (
+                      <div className="flex flex-col">
+                        <span className="font-semibold text-slate-900">{getLabel(item)}</span>
+                        {(item.project_name || item.sol_id || item.mobile || item.gstin) && (
+                          <span className="text-[10px] text-slate-400 font-normal mt-0.5">
+                            {item.sol_id ? `[${item.sol_id}] ` : ""}
+                            {item.project_name ? `Project: ${item.project_name} ` : ""}
+                            {item.mobile ? `· ${item.mobile} ` : ""}
+                            {item.gstin ? `· GST: ${item.gstin}` : ""}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </PopoverContent>
       )}
     </Popover>
   );
 }
 
-export function ClientAutocompleteInput({ value, onChange, clients = [], placeholder = "Search client name...", className, testid, required }) {
-  const [open, setOpen] = useState(false);
-  const [inputVal, setInputVal] = useState(value || "");
-
-  useEffect(() => {
-    setInputVal(value || "");
-  }, [value]);
-
-  const filtered = useMemo(() => {
-    const q = (inputVal || "").trim().toLowerCase();
-    if (!q) return clients.slice(0, 50);
-    return clients.filter((c) => {
-      const n = (c.full_name || "").toLowerCase();
-      const p = (c.mobile || c.phone || "").toLowerCase();
-      const pr = (c.project_name || "").toLowerCase();
-      return n.includes(q) || p.includes(q) || pr.includes(q);
-    }).slice(0, 50);
-  }, [clients, inputVal]);
-
-  const handleTextChange = (val) => {
-    setInputVal(val);
-    const matched = clients.find(c => (c.full_name || "").trim().toLowerCase() === val.trim().toLowerCase());
-    onChange(val, matched);
-  };
-
-  const handleSelect = (c) => {
-    setInputVal(c.full_name);
-    onChange(c.full_name, c);
-    setOpen(false);
-  };
-
+export function VendorAutocompleteInput({ value, onChange, vendors = [], placeholder = "Supplier company name", className, testid, required, onClear }) {
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <div className="relative w-full">
-          <Input
-            value={inputVal}
-            onChange={(e) => handleTextChange(e.target.value)}
-            onFocus={() => setOpen(true)}
-            placeholder={placeholder}
-            className={className}
-            data-testid={testid}
-            required={required}
-          />
+    <ControlledAutocompleteInput
+      value={value}
+      onChange={(label, item) => {
+        onChange(label, item);
+      }}
+      onClear={onClear}
+      options={vendors}
+      getItemKey={(v) => v.id || v.name}
+      getItemLabel={(v) => v.name || ""}
+      filterItem={(v, q) => {
+        const name = String(v.name || "").toLowerCase();
+        const g = String(v.gstin || "").toLowerCase();
+        const c = String(v.contact_person || "").toLowerCase();
+        const p = String(v.mobile || v.phone || "").toLowerCase();
+        return name.includes(q) || g.includes(q) || c.includes(q) || p.includes(q);
+      }}
+      renderItem={(v) => (
+        <div className="flex flex-col">
+          <span className="font-semibold text-slate-900">{v.name}</span>
+          {(v.gstin || v.contact_person || v.mobile) && (
+            <span className="text-[10px] text-slate-400 font-normal mt-0.5">
+              {v.gstin ? `GST: ${v.gstin}` : ""} {v.contact_person ? `· ${v.contact_person}` : ""} {v.mobile ? `· ${v.mobile}` : ""}
+            </span>
+          )}
         </div>
-      </PopoverTrigger>
-      {open && filtered.length > 0 && (
-        <PopoverContent
-          className="p-0 border border-slate-200 bg-white rounded-xl shadow-2xl z-[99999] min-w-[280px] w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto text-xs py-1 text-left"
-          align="start"
-          sideOffset={4}
-          onOpenAutoFocus={(e) => e.preventDefault()}
-        >
-          <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider bg-slate-50 sticky top-0 z-10 border-b border-slate-100">
-            EXISTING CLIENTS
-          </div>
-          {filtered.map((c) => (
-            <button
-              key={c.id || c.full_name}
-              type="button"
-              className="w-full text-left px-4 py-2 hover:bg-blue-50/80 font-medium text-slate-800 transition-colors border-b border-slate-50 last:border-0"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleSelect(c);
-              }}
-            >
-              <div className="flex flex-col">
-                <span className="font-semibold text-slate-900">{c.full_name}</span>
-                {(c.project_name || c.mobile) && (
-                  <span className="text-[10px] text-slate-400 font-normal mt-0.5">
-                    {c.project_name ? `Project: ${c.project_name}` : ""} {c.mobile ? `· ${c.mobile}` : ""}
-                  </span>
-                )}
-              </div>
-            </button>
-          ))}
-        </PopoverContent>
       )}
-    </Popover>
+      placeholder={placeholder}
+      className={className}
+      testid={testid}
+      required={required}
+      emptyText="No matching suppliers"
+    />
   );
 }
 
-export function B2BCustomerAutocompleteInput({ value, onChange, customers = [], placeholder = "Select B2B customer...", className, testid, required }) {
-  const [open, setOpen] = useState(false);
-  const [inputVal, setInputVal] = useState(value || "");
-
-  useEffect(() => {
-    setInputVal(value || "");
-  }, [value]);
-
-  const filtered = useMemo(() => {
-    const q = (inputVal || "").trim().toLowerCase();
-    if (!q) return customers.slice(0, 50);
-    return customers.filter((c) => {
-      const n = (c.name || c.full_name || "").toLowerCase();
-      const p = (c.mobile || c.phone || "").toLowerCase();
-      const cp = (c.contact_person || "").toLowerCase();
-      const g = (c.gstin || "").toLowerCase();
-      return n.includes(q) || p.includes(q) || cp.includes(q) || g.includes(q);
-    }).slice(0, 50);
-  }, [customers, inputVal]);
-
-  const handleTextChange = (val) => {
-    setInputVal(val);
-    const matched = customers.find(c => (c.name || c.full_name || "").trim().toLowerCase() === val.trim().toLowerCase());
-    onChange(val, matched);
-  };
-
-  const handleSelect = (c) => {
-    const cName = c.name || c.full_name || "";
-    setInputVal(cName);
-    onChange(cName, c);
-    setOpen(false);
-  };
-
+export function ClientAutocompleteInput({ value, onChange, clients = [], placeholder = "Search client name...", className, testid, required, onClear }) {
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <div className="relative w-full">
-          <Input
-            value={inputVal}
-            onChange={(e) => handleTextChange(e.target.value)}
-            onFocus={() => setOpen(true)}
-            placeholder={placeholder}
-            className={className}
-            data-testid={testid}
-            required={required}
-          />
-        </div>
-      </PopoverTrigger>
-      {open && filtered.length > 0 && (
-        <PopoverContent
-          className="p-0 border border-slate-200 bg-white rounded-xl shadow-2xl z-[99999] min-w-[280px] w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto text-xs py-1 text-left"
-          align="start"
-          sideOffset={4}
-          onOpenAutoFocus={(e) => e.preventDefault()}
-        >
-          <div className="px-2.5 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider bg-slate-50 sticky top-0 z-10 border-b border-slate-100">
-            B2B BUSINESS CUSTOMERS
+    <ControlledAutocompleteInput
+      value={value}
+      onChange={(label, item) => {
+        onChange(label, item);
+      }}
+      onClear={onClear}
+      options={clients}
+      getItemKey={(c) => c.id || c.sol_id || c.full_name}
+      getItemLabel={(c) => c.full_name || ""}
+      filterItem={(c, q) => {
+        const name = String(c.full_name || "").toLowerCase();
+        const sol = String(c.sol_id || "").toLowerCase();
+        const phone = String(c.mobile || c.phone || "").toLowerCase();
+        const proj = String(c.project_name || "").toLowerCase();
+        const consumer = String(c.consumer_number || "").toLowerCase();
+        return name.includes(q) || sol.includes(q) || phone.includes(q) || proj.includes(q) || consumer.includes(q);
+      }}
+      renderItem={(c) => (
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col min-w-0">
+            <span className="font-semibold text-slate-900 truncate">{c.full_name}</span>
+            {(c.project_name || c.mobile || c.phone) && (
+              <span className="text-[10px] text-slate-400 font-normal mt-0.5 truncate">
+                {c.project_name ? `Project: ${c.project_name}` : ""}
+                {c.project_name && (c.mobile || c.phone) ? " · " : ""}
+                {c.mobile || c.phone ? `Mobile: ${c.mobile || c.phone}` : ""}
+              </span>
+            )}
           </div>
-          {filtered.map((c) => (
-            <button
-              key={c.id || c.name}
-              type="button"
-              className="w-full text-left px-4 py-2 hover:bg-blue-50/80 font-medium text-slate-800 transition-colors border-b border-slate-50 last:border-0"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                handleSelect(c);
-              }}
-            >
-              <div className="flex flex-col">
-                <span className="font-semibold text-slate-900">{c.name || c.full_name}</span>
-                {(c.contact_person || c.mobile || c.gstin) && (
-                  <span className="text-[10px] text-slate-400 font-normal mt-0.5">
-                    {c.contact_person ? `Contact: ${c.contact_person}` : ""} {c.mobile ? `· ${c.mobile}` : ""} {c.gstin ? `· GSTIN: ${c.gstin}` : ""}
-                  </span>
-                )}
-              </div>
-            </button>
-          ))}
-        </PopoverContent>
+          {c.sol_id && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded shrink-0">
+              {c.sol_id}
+            </span>
+          )}
+        </div>
       )}
-    </Popover>
+      placeholder={placeholder}
+      className={className}
+      testid={testid}
+      required={required}
+      emptyText="No matching clients"
+    />
+  );
+}
+
+export function B2BCustomerAutocompleteInput({ value, onChange, customers = [], placeholder = "Select B2B customer...", className, testid, required, onClear }) {
+  return (
+    <ControlledAutocompleteInput
+      value={value}
+      onChange={(label, item) => {
+        onChange(label, item);
+      }}
+      onClear={onClear}
+      options={customers}
+      getItemKey={(c) => c.id || c.name || c.full_name}
+      getItemLabel={(c) => c.name || c.full_name || ""}
+      filterItem={(c, q) => {
+        const name = String(c.name || c.full_name || "").toLowerCase();
+        const g = String(c.gstin || "").toLowerCase();
+        const cp = String(c.contact_person || "").toLowerCase();
+        const p = String(c.mobile || c.phone || "").toLowerCase();
+        return name.includes(q) || g.includes(q) || cp.includes(q) || p.includes(q);
+      }}
+      renderItem={(c) => (
+        <div className="flex flex-col">
+          <span className="font-semibold text-slate-900">{c.name || c.full_name}</span>
+          {(c.contact_person || c.mobile || c.gstin) && (
+            <span className="text-[10px] text-slate-400 font-normal mt-0.5">
+              {c.contact_person ? `Contact: ${c.contact_person}` : ""} {c.mobile ? `· ${c.mobile}` : ""} {c.gstin ? `· GSTIN: ${c.gstin}` : ""}
+            </span>
+          )}
+        </div>
+      )}
+      placeholder={placeholder}
+      className={className}
+      testid={testid}
+      required={required}
+      emptyText="No matching B2B customers"
+    />
   );
 }
