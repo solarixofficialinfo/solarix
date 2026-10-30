@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api, { formatApiError, fileUrl } from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -8,9 +8,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import {
   FileSpreadsheet, Upload, Clipboard, CheckCircle2, ArrowLeft, X,
-  Plus, Camera, AlertTriangle, AlertCircle
+  Plus, Camera, AlertTriangle, AlertCircle, Search, User, Loader2
 } from "lucide-react";
 import { fetchProductsDeduplicated, getCachedProducts } from "@/lib/productCache";
 import { normalizeSizeForMatching } from "./Inventory/_shared";
@@ -168,7 +169,10 @@ const findClient = (identifier, clientsList = []) => {
   if (matched) return matched;
   matched = list.find(c => String(c.id || "").trim().toLowerCase() === clean);
   if (matched) return matched;
-  matched = list.find(c => String(c.full_name || "").trim().toLowerCase().includes(clean));
+  matched = list.find(c => {
+    const formatted = `${c.full_name || ""} (${c.sol_id || ""})`.trim().toLowerCase();
+    return formatted === clean;
+  });
   if (matched) return matched;
   return null;
 };
@@ -378,6 +382,238 @@ const getRowValidationErrors = (row, mode, productsList = []) => {
 
 const isRowValid = (row, mode, productsList = []) => getRowValidationErrors(row, mode, productsList).length === 0;
 
+function ClientReturnSelector({
+  value,
+  clientId,
+  clients = [],
+  onSelect,
+  onClear,
+  onClientsLoaded,
+}) {
+  const [open, setOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearchingApi, setIsSearchingApi] = useState(false);
+  const searchInputRef = useRef(null);
+  const debounceTimerRef = useRef(null);
+
+  // Identify currently selected client
+  const selectedClient = useMemo(() => {
+    const list = Array.isArray(clients) ? clients : (clients?.clients || []);
+    if (clientId) {
+      const match = list.find((c) => String(c.id) === String(clientId));
+      if (match) return match;
+    }
+    if (value) {
+      const cleanVal = String(value).trim().toLowerCase();
+      const match = list.find((c) => String(c.full_name || "").trim().toLowerCase() === cleanVal);
+      if (match) return match;
+      const matchSol = list.find((c) => String(c.sol_id || "").trim().toLowerCase() === cleanVal);
+      if (matchSol) return matchSol;
+    }
+    return null;
+  }, [clients, clientId, value]);
+
+  // Debounced API search for full workspace coverage
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) return;
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        setIsSearchingApi(true);
+        const res = await api.get("/clients", { params: { search: q, limit: 100 } });
+        const list = Array.isArray(res?.data) ? res.data : (res?.data?.clients || res?.data?.items || []);
+        if (list.length > 0 && onClientsLoaded) {
+          onClientsLoaded(list);
+        }
+      } catch (e) {
+        // Ignore background search errors
+      } finally {
+        setIsSearchingApi(false);
+      }
+    }, 300);
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [searchQuery, onClientsLoaded]);
+
+  // Filter clients locally
+  const filteredClients = useMemo(() => {
+    const list = Array.isArray(clients) ? clients : (clients?.clients || []);
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) {
+      return list.slice(0, 100);
+    }
+    return list.filter((c) => {
+      const name = String(c.full_name || "").toLowerCase();
+      const sol = String(c.sol_id || "").toLowerCase();
+      const phone = String(c.mobile || c.phone || "").toLowerCase();
+      const proj = String(c.project_name || "").toLowerCase();
+      const consumer = String(c.consumer_number || "").toLowerCase();
+      return name.includes(q) || sol.includes(q) || phone.includes(q) || proj.includes(q) || consumer.includes(q);
+    }).slice(0, 100);
+  }, [clients, searchQuery]);
+
+  const handleSelectClient = (c) => {
+    onSelect(c);
+    setSearchQuery("");
+    setOpen(false);
+  };
+
+  const handleClear = (e) => {
+    e?.stopPropagation?.();
+    onClear();
+    setSearchQuery("");
+    setOpen(false);
+  };
+
+  const hasSelection = Boolean(value || clientId);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      {hasSelection ? (
+        <div className="flex items-center justify-between p-2.5 bg-blue-50/70 border border-blue-200/90 rounded-2xl transition shadow-sm">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+              <User className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold text-slate-900 text-xs sm:text-sm truncate">
+                  {selectedClient?.full_name || value}
+                </span>
+                {(selectedClient?.sol_id || selectedClient?.id) && (
+                  <Badge variant="outline" className="bg-white text-blue-700 border-blue-200 text-[10px] font-mono font-medium px-1.5 py-0">
+                    {selectedClient?.sol_id || `ID: ${String(selectedClient.id).slice(0, 8)}`}
+                  </Badge>
+                )}
+              </div>
+              <div className="text-[11px] text-slate-500 truncate mt-0.5">
+                {selectedClient?.project_name ? `Project: ${selectedClient.project_name}` : ""}
+                {selectedClient?.project_name && (selectedClient?.mobile || selectedClient?.phone) ? " · " : ""}
+                {selectedClient?.mobile || selectedClient?.phone ? `Mobile: ${selectedClient.mobile || selectedClient.phone}` : ""}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 shrink-0 ml-2">
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-100/70 h-8 px-2.5 rounded-lg"
+              >
+                Change
+              </Button>
+            </PopoverTrigger>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={handleClear}
+              className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+              title="Clear client selection"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <PopoverTrigger asChild>
+          <div className="relative w-full cursor-pointer">
+            <Input
+              readOnly
+              value=""
+              placeholder="Search and select client by name or SOL ID..."
+              className="pl-9 pr-8 h-10 text-xs bg-white border-slate-200 rounded-xl cursor-pointer"
+            />
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
+        </PopoverTrigger>
+      )}
+
+      <PopoverContent
+        className="p-2 border border-slate-200 bg-white rounded-2xl shadow-2xl z-[99999] w-[var(--radix-popover-trigger-width)] min-w-[320px] max-w-[500px]"
+        align="start"
+        sideOffset={4}
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          setTimeout(() => searchInputRef.current?.focus(), 50);
+        }}
+      >
+        <div className="relative mb-2">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <Input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Type name, SOL ID, mobile..."
+            className="h-8 text-xs pl-8 pr-7 bg-slate-50 border-slate-200 rounded-lg"
+            autoFocus
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        <div className="max-h-60 overflow-y-auto space-y-0.5 divide-y divide-slate-100">
+          {isSearchingApi && (
+            <div className="flex items-center justify-center gap-1.5 py-2 text-xs text-slate-400">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>Searching clients...</span>
+            </div>
+          )}
+
+          {filteredClients.length === 0 && !isSearchingApi ? (
+            <div className="text-center py-6 text-xs text-slate-400">
+              No matching clients found
+              {searchQuery && <span className="block text-[11px] text-slate-400 mt-0.5">Try searching with a different name or SOL ID</span>}
+            </div>
+          ) : (
+            filteredClients.map((c) => (
+              <button
+                key={c.id || c.sol_id || c.full_name}
+                type="button"
+                className="w-full text-left px-3 py-2 hover:bg-blue-50/80 rounded-xl transition flex items-center justify-between gap-2"
+                onClick={() => handleSelectClient(c)}
+              >
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-900 text-xs truncate">
+                    {c.full_name}
+                  </div>
+                  <div className="text-[11px] text-slate-500 truncate mt-0.5">
+                    {c.project_name ? `Project: ${c.project_name}` : ""}
+                    {c.project_name && (c.mobile || c.phone) ? " · " : ""}
+                    {c.mobile || c.phone ? `Mobile: ${c.mobile || c.phone}` : ""}
+                  </div>
+                </div>
+                {c.sol_id && (
+                  <Badge variant="outline" className="bg-slate-50 text-blue-700 border-blue-200 text-[10px] font-mono font-medium shrink-0">
+                    {c.sol_id}
+                  </Badge>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 const EMPTY_PRODUCTS = [];
 
 export default function ManualBulkImport({
@@ -491,7 +727,7 @@ export default function ManualBulkImport({
     resetState();
 
     Promise.allSettled([
-      api.get("/clients"),
+      api.get("/clients", { params: { limit: 500 } }),
       api.get("/vendors"),
       api.get("/inventory/b2b-customers"),
     ]).then(([resClients, resVendors, resB2b]) => {
@@ -771,13 +1007,22 @@ export default function ManualBulkImport({
               if (matched) vendor_id = matched.id;
             }
           } else if (source_type === "Client Return") {
-            if (!client_name) client_name = source_name || globalDefaults.client_name;
+            if (!client_name) {
+              client_name = (globalDefaults.client_name || source_name || "").trim();
+            }
             if (!client_id && client_name) {
-              const matched = findClient(client_name, clients);
-              if (matched) {
-                client_id = matched.id;
-                client_name = matched.full_name;
+              if (globalDefaults.client_id && (globalDefaults.client_name === client_name)) {
+                client_id = globalDefaults.client_id;
+              } else {
+                const matched = findClient(client_name, clients);
+                if (matched) {
+                  client_id = matched.id;
+                  client_name = matched.full_name;
+                }
               }
+            }
+            if (!source_name) {
+              source_name = client_name;
             }
           } else if (source_type === "B2B Return") {
             if (!client_name) client_name = source_name || globalDefaults.client_name;
@@ -1514,6 +1759,8 @@ export default function ManualBulkImport({
                               source_name: "",
                               client_name: "",
                               client_id: "",
+                              project_name: "",
+                              project_id: "",
                               vendor_id: "",
                             });
                           }}
@@ -1527,89 +1774,123 @@ export default function ManualBulkImport({
                         </Select>
                       </div>
 
-                      <div className="space-y-1.5">
-                        <Label>
-                          {globalDefaults.source_type === "Client Return"
-                            ? "Client Name"
-                            : globalDefaults.source_type === "B2B Return"
-                            ? "B2B Customer Name"
-                            : globalDefaults.source_type === "Supplier Supply"
-                            ? "Vendor / Supplier Name"
-                            : "Source / Location Name"}
-                        </Label>
-                        <Input
-                          list={
-                            globalDefaults.source_type === "Client Return"
-                              ? "manual-client-list"
-                              : globalDefaults.source_type === "B2B Return"
-                              ? "manual-b2b-list"
-                              : globalDefaults.source_type === "Supplier Supply"
-                              ? "manual-vendor-list"
-                              : undefined
-                          }
-                          value={
-                            globalDefaults.source_type === "Client Return" || globalDefaults.source_type === "B2B Return"
-                              ? globalDefaults.client_name
-                              : globalDefaults.source_name
-                          }
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            if (globalDefaults.source_type === "Client Return") {
-                              const matched = findClient(val, clients);
-                              setGlobalDefaults({
-                                ...globalDefaults,
-                                client_name: matched ? matched.full_name : val,
-                                client_id: matched ? matched.id : "",
-                                project_name: matched ? (matched.sol_id || matched.full_name) : globalDefaults.project_name,
-                                project_id: matched ? matched.id : "",
-                              });
-                            } else if (globalDefaults.source_type === "B2B Return") {
-                              const matched = findB2bCustomer(val, b2bCustomers);
-                              setGlobalDefaults({
-                                ...globalDefaults,
-                                client_name: matched ? (matched.name || matched.full_name) : val,
-                                client_id: matched ? matched.id : "",
-                              });
-                            } else if (globalDefaults.source_type === "Supplier Supply") {
-                              const matched = findVendor(val, vendors);
-                              setGlobalDefaults({
-                                ...globalDefaults,
-                                source_name: matched ? matched.name : val,
-                                vendor_id: matched ? matched.id : "",
-                              });
-                            } else {
-                              setGlobalDefaults({
-                                ...globalDefaults,
-                                source_name: val,
-                              });
-                            }
-                          }}
-                          placeholder={
-                            globalDefaults.source_type === "Client Return"
-                              ? "Search and select client"
-                              : globalDefaults.source_type === "B2B Return"
-                              ? "Search and select B2B customer"
-                              : globalDefaults.source_type === "Supplier Supply"
-                              ? "Search and select supplier / vendor"
-                              : "e.g. Main Warehouse"
-                          }
-                        />
-                        {hasMultipleClients && (
-                          <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 mt-1 font-medium flex items-center gap-1.5">
-                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                            <span>Multiple supplier / client values detected (row-level values will be preserved)</span>
+                      {globalDefaults.source_type === "Client Return" ? (
+                        <>
+                          <div className="space-y-1.5">
+                            <Label className="flex items-center justify-between">
+                              <span>Client <span className="text-slate-400 font-normal">(Client Return)</span></span>
+                              {globalDefaults.client_id && (
+                                <span className="text-[11px] text-emerald-600 font-medium">Selected</span>
+                              )}
+                            </Label>
+                            <ClientReturnSelector
+                              value={globalDefaults.client_name}
+                              clientId={globalDefaults.client_id}
+                              clients={clients}
+                              onSelect={(client) => {
+                                setGlobalDefaults((prev) => ({
+                                  ...prev,
+                                  client_name: client.full_name || "",
+                                  client_id: client.id || "",
+                                  source_name: client.full_name || "",
+                                  project_name: client.project_name || client.sol_id || client.full_name || "",
+                                  project_id: client.id || "",
+                                }));
+                              }}
+                              onClear={() => {
+                                setGlobalDefaults((prev) => ({
+                                  ...prev,
+                                  client_name: "",
+                                  client_id: "",
+                                  source_name: "",
+                                  project_name: "",
+                                  project_id: "",
+                                }));
+                              }}
+                              onClientsLoaded={(newClients) => {
+                                setClients((prev) => {
+                                  const existingIds = new Set(prev.map((c) => String(c.id)));
+                                  const toAdd = newClients.filter((c) => !existingIds.has(String(c.id)));
+                                  return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+                                });
+                              }}
+                            />
+                            {hasMultipleClients && (
+                              <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 mt-1 font-medium flex items-center gap-1.5">
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                <span>Multiple supplier / client values detected (row-level values will be preserved)</span>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
 
-                      {globalDefaults.source_type === "Client Return" && (
+                          <div className="space-y-1.5">
+                            <Label>Project / Site Name</Label>
+                            <Input
+                              value={globalDefaults.project_name || ""}
+                              onChange={(e) => setGlobalDefaults((prev) => ({ ...prev, project_name: e.target.value }))}
+                              placeholder="Project name or site identifier"
+                            />
+                          </div>
+                        </>
+                      ) : (
                         <div className="space-y-1.5">
-                          <Label>Project / Site Name</Label>
+                          <Label>
+                            {globalDefaults.source_type === "B2B Return"
+                              ? "B2B Customer Name"
+                              : globalDefaults.source_type === "Supplier Supply"
+                              ? "Vendor / Supplier Name"
+                              : "Source / Location Name"}
+                          </Label>
                           <Input
-                            value={globalDefaults.project_name}
-                            onChange={(e) => setGlobalDefaults({ ...globalDefaults, project_name: e.target.value })}
-                            placeholder="Project name"
+                            list={
+                              globalDefaults.source_type === "B2B Return"
+                                ? "manual-b2b-list"
+                                : globalDefaults.source_type === "Supplier Supply"
+                                ? "manual-vendor-list"
+                                : undefined
+                            }
+                            value={
+                              globalDefaults.source_type === "B2B Return"
+                                ? globalDefaults.client_name
+                                : globalDefaults.source_name
+                            }
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (globalDefaults.source_type === "B2B Return") {
+                                const matched = findB2bCustomer(val, b2bCustomers);
+                                setGlobalDefaults({
+                                  ...globalDefaults,
+                                  client_name: matched ? (matched.name || matched.full_name) : val,
+                                  client_id: matched ? matched.id : "",
+                                });
+                              } else if (globalDefaults.source_type === "Supplier Supply") {
+                                const matched = findVendor(val, vendors);
+                                setGlobalDefaults({
+                                  ...globalDefaults,
+                                  source_name: matched ? matched.name : val,
+                                  vendor_id: matched ? matched.id : "",
+                                });
+                              } else {
+                                setGlobalDefaults({
+                                  ...globalDefaults,
+                                  source_name: val,
+                                });
+                              }
+                            }}
+                            placeholder={
+                              globalDefaults.source_type === "B2B Return"
+                                ? "Search and select B2B customer"
+                                : globalDefaults.source_type === "Supplier Supply"
+                                ? "Search and select supplier / vendor"
+                                : "e.g. Main Warehouse"
+                            }
                           />
+                          {hasMultipleClients && (
+                            <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 mt-1 font-medium flex items-center gap-1.5">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                              <span>Multiple supplier / client values detected (row-level values will be preserved)</span>
+                            </div>
+                          )}
                         </div>
                       )}
                     </>
