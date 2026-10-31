@@ -171,6 +171,23 @@ export default function PublicLinksTab({
     }
   };
 
+  // Confirm and execute Delete Link
+  const executeDelete = async () => {
+    const link = confirmDialog.link;
+    if (!link) return;
+    setActionLoadingId(link.id);
+    setConfirmDialog({ open: false, type: null, link: null });
+    try {
+      await api.delete(`/material-requests/links/${link.id}`);
+      toast.success("Public request link deleted successfully.");
+      fetchLinks();
+    } catch (err) {
+      toast.error(formatApiError(err) || "Failed to delete link");
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
   // Helper to format absolute URL
   const getAbsoluteUrl = (link) => {
     if (!link) return "";
@@ -352,7 +369,7 @@ export default function PublicLinksTab({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 text-[11px] text-slate-500 pt-0.5">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 pt-0.5">
                       <Badge
                         variant="outline"
                         className={`text-[10px] uppercase font-bold px-2 py-0.5 ${
@@ -360,11 +377,14 @@ export default function PublicLinksTab({
                             ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                             : link.status === "disabled"
                             ? "bg-amber-50 text-amber-700 border-amber-200"
-                            : "bg-slate-100 text-slate-600 border-slate-200"
+                            : "bg-red-50 text-red-600 border-red-200"
                         }`}
                       >
                         {link.status}
                       </Badge>
+                      <span className="font-semibold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-[10px]">
+                        {link.request_count || 0} {(link.request_count === 1) ? "submission" : "submissions"}
+                      </span>
                       <span>• Created {dayjs(link.created_at).format("DD MMM YYYY")}</span>
                       <span>• Last used: {link.last_used_at ? dayjs(link.last_used_at).fromNow() : "Never"}</span>
                     </div>
@@ -416,7 +436,7 @@ export default function PublicLinksTab({
                     </div>
                   </div>
 
-                  {/* Status Toggle & Regeneration Actions */}
+                  {/* Status Toggle & Management Actions */}
                   <div className="flex items-center gap-1.5 shrink-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100">
                     {link.status !== "revoked" && (
                       <Button
@@ -429,7 +449,7 @@ export default function PublicLinksTab({
                             ? "text-amber-700 hover:bg-amber-50 border-amber-200"
                             : "text-emerald-700 hover:bg-emerald-50 border-emerald-200"
                         }`}
-                        title={link.status === "active" ? "Temporarily disable link" : "Enable link"}
+                        title={link.status === "active" ? "Temporarily disable link (blocks new submissions)" : "Enable link"}
                       >
                         <Power className="w-3 h-3 mr-1" />
                         {link.status === "active" ? "Disable" : "Enable"}
@@ -448,18 +468,16 @@ export default function PublicLinksTab({
                       Regenerate
                     </Button>
 
-                    {link.status !== "revoked" && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={isActionLoading}
-                        onClick={() => setConfirmDialog({ open: true, type: "revoke", link })}
-                        className="text-xs h-8 px-2 text-red-600 hover:bg-red-50 hover:text-red-700"
-                        title="Permanently Revoke Link"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </Button>
-                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={isActionLoading}
+                      onClick={() => setConfirmDialog({ open: true, type: "delete", link })}
+                      className="text-xs h-8 px-2 text-red-600 hover:bg-red-50 hover:text-red-700"
+                      title="Permanently Delete Link"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
                   </div>
                 </div>
               </Card>
@@ -655,19 +673,31 @@ export default function PublicLinksTab({
         </Dialog>
       )}
 
-      {/* Modal: Confirm Regenerate / Revoke */}
+      {/* Modal: Confirm Regenerate / Revoke / Delete */}
       {confirmDialog.open && (
         <Dialog open={confirmDialog.open} onOpenChange={(val) => !val && setConfirmDialog({ open: false, type: null, link: null })}>
           <DialogContent className="max-w-sm bg-white">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-sm">
-                <AlertTriangle className="w-4 h-4 text-amber-600" />
-                {confirmDialog.type === "regenerate" ? "Regenerate Request Link?" : "Revoke Public Link?"}
+                <AlertTriangle className={`w-4 h-4 ${confirmDialog.type === "delete" ? "text-red-600" : "text-amber-600"}`} />
+                {confirmDialog.type === "regenerate"
+                  ? "Regenerate Request Link?"
+                  : confirmDialog.type === "delete"
+                  ? "Delete Public Request Link?"
+                  : "Revoke Public Link?"}
               </DialogTitle>
               <DialogDescription className="text-xs text-slate-600 pt-1">
                 {confirmDialog.type === "regenerate" ? (
                   <>
                     Regenerating will create a <strong>new URL token</strong>. Anyone with the old link will no longer be able to submit requests.
+                  </>
+                ) : confirmDialog.type === "delete" ? (
+                  <>
+                    Are you sure you want to delete the public link for <strong>{confirmDialog.link?.assigned_team_member_name}</strong>?
+                    <br />
+                    <span className="text-red-600 font-medium block mt-1.5">
+                      The public link and token will be permanently removed. Existing submitted material requests and project history will NOT be deleted.
+                    </span>
                   </>
                 ) : (
                   <>
@@ -688,12 +718,24 @@ export default function PublicLinksTab({
               </Button>
               <Button
                 size="sm"
-                onClick={confirmDialog.type === "regenerate" ? executeRegenerate : executeRevoke}
+                onClick={
+                  confirmDialog.type === "regenerate"
+                    ? executeRegenerate
+                    : confirmDialog.type === "delete"
+                    ? executeDelete
+                    : executeRevoke
+                }
                 className={`text-xs font-semibold text-white ${
-                  confirmDialog.type === "regenerate" ? "bg-blue-600 hover:bg-blue-700" : "bg-red-600 hover:bg-red-700"
+                  confirmDialog.type === "regenerate"
+                    ? "bg-blue-600 hover:bg-blue-700"
+                    : "bg-red-600 hover:bg-red-700"
                 }`}
               >
-                {confirmDialog.type === "regenerate" ? "Confirm & Regenerate" : "Revoke Permanently"}
+                {confirmDialog.type === "regenerate"
+                  ? "Confirm & Regenerate"
+                  : confirmDialog.type === "delete"
+                  ? "Confirm & Delete"
+                  : "Revoke Permanently"}
               </Button>
             </DialogFooter>
           </DialogContent>

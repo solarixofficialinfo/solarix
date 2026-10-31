@@ -8132,7 +8132,21 @@ async def create_material_request(data: MaterialRequestIn, user=Depends(require_
 async def _enrich_requests_with_stock_batch(requests_list: List[Dict[str, Any]], company_id: str) -> List[Dict[str, Any]]:
     if not requests_list:
         return []
-    items, _, _, _ = await _compute_inventory_balances(company_id)
+    has_items = any(req.get("items") for req in requests_list)
+    if not has_items:
+        return requests_list
+
+    now = time.monotonic()
+    items = None
+    if company_id in _PRODUCTS_CACHE:
+        cache_time, cached_items = _PRODUCTS_CACHE[company_id]
+        if now - cache_time < _PRODUCTS_CACHE_TTL_S:
+            items = cached_items
+
+    if items is None:
+        items, _, _, _ = await _compute_inventory_balances(company_id)
+        _PRODUCTS_CACHE[company_id] = (now, items)
+
     stock_by_pid = {}
     stock_by_spec = {}
     for p in items:
@@ -8465,7 +8479,7 @@ class UpdateMaterialRequestLinkStatusIn(BaseModel):
 class PublicMaterialRequestSubmitIn(BaseModel):
     token: str
     client_id: str
-    requester_name: str
+    requester_name: Optional[str] = ""
     requester_phone: Optional[str] = ""
     items: List[Dict[str, Any]]
     remarks: Optional[str] = ""
@@ -8527,6 +8541,29 @@ async def list_material_request_links(user=Depends(get_current_user)):
     cid = user["company_id"]
     links = await db.material_request_links.find({"company_id": cid}).sort("created_at", -1).to_list(500)
     
+    # Enrich with request usage counts
+    link_ids = {l.get("id") for l in links if l.get("id")}
+    member_ids = {l.get("team_member_id") for l in links if l.get("team_member_id")}
+    usage_counts = {}
+    if link_ids:
+        try:
+            req_docs = await db.material_requests.find(
+                {"company_id": cid},
+                {"_id": 0, "public_link_id": 1, "requested_by": 1}
+            ).to_list(2000)
+            for r in req_docs:
+                lid = r.get("public_link_id")
+                req_by = r.get("requested_by")
+                if lid and lid in link_ids:
+                    usage_counts[lid] = usage_counts.get(lid, 0) + 1
+                elif req_by:
+                    # Match by assigned team member if public_link_id was not directly set
+                    for l in links:
+                        if l.get("team_member_id") == req_by:
+                            usage_counts[l["id"]] = usage_counts.get(l["id"], 0) + 1
+        except Exception as e:
+            logger.warning(f"Failed to fetch public link usage counts: {e}")
+
     # Enrich with latest team member details from db.users
     user_ids = list({l.get("team_member_id") for l in links if l.get("team_member_id")})
     user_map = {}
@@ -8565,6 +8602,7 @@ async def list_material_request_links(user=Depends(get_current_user)):
             "assigned_team_member_status": m_status,
             "status": stat,
             "is_active": act,
+            "request_count": usage_counts.get(l.get("id"), 0),
             "remarks": l.get("remarks", ""),
             "created_at": l.get("created_at"),
             "updated_at": l.get("updated_at"),
@@ -8690,7 +8728,12 @@ async def create_material_request_link(data: CreateMaterialRequestLinkIn, user=D
 @api_router.patch("/material-requests/links/{link_id}/status")
 async def update_material_request_link_status(link_id: str, data: UpdateMaterialRequestLinkStatusIn, user=Depends(require_active_subscription())):
     """Update link status (active, disabled, revoked)."""
-    if is_external_user(user) or not (is_owner(user) or has_perm(user, "data_management", "edit") or has_perm(user, "project_execution", "edit")):
+    if is_external_user(user) or not (
+        is_owner(user)
+        or has_perm(user, "data_management", "edit")
+        or has_perm(user, "project_execution", "edit")
+        or has_perm(user, "material_requests", "edit")
+    ):
         raise HTTPException(status_code=403, detail="Missing permission to update link status")
     
     cid = user["company_id"]
@@ -8713,6 +8756,27 @@ async def update_material_request_link_status(link_id: str, data: UpdateMaterial
     )
     await log_activity(cid, user["id"], user["name"], f"Updated Material Request Link to {target_status.title()}", link.get("team_member_name", ""))
     return {"status": "success", "link_id": link_id, "new_status": target_status, "is_active": is_active}
+
+
+@api_router.delete("/material-requests/links/{link_id}")
+async def delete_material_request_link(link_id: str, user=Depends(require_active_subscription())):
+    """Permanently delete / revoke a material request link after explicit confirmation."""
+    if is_external_user(user) or not (
+        is_owner(user)
+        or has_perm(user, "data_management", "delete")
+        or has_perm(user, "project_execution", "delete")
+        or has_perm(user, "material_requests", "delete")
+    ):
+        raise HTTPException(status_code=403, detail="Missing permission to delete material request links")
+    
+    cid = user["company_id"]
+    link = await db.material_request_links.find_one({"id": link_id, "company_id": cid})
+    if not link:
+        raise HTTPException(status_code=404, detail="Material request link not found")
+    
+    await db.material_request_links.delete_one({"id": link_id, "company_id": cid})
+    await log_activity(cid, user["id"], user["name"], "Deleted Material Request Link", f"For {link.get('team_member_name')}")
+    return {"status": "success", "message": "Material request link deleted successfully."}
 
 
 @api_router.post("/material-requests/links/{link_id}/regenerate")
@@ -8788,11 +8852,24 @@ async def get_public_material_request_link_info(token: str, request: Request = N
         {"_id": 0, "id": 1, "full_name": 1, "sol_id": 1, "project_name": 1, "city": 1, "state": 1}
     ).sort("full_name", 1).to_list(1000)
     
-    # Fetch safe minimal product catalog for autocomplete (only id, name, size, unit, category, brand)
-    products = await db.products.find(
-        {"company_id": cid},
-        {"_id": 0, "id": 1, "name": 1, "size": 1, "unit": 1, "category": 1, "brand": 1}
+    # Fetch safe minimal product catalog for autocomplete (strictly safe fields: id, name, size, unit, category)
+    products_raw = await db.products.find(
+        {"company_id": cid, "status": {"$ne": "Archived"}},
+        {"_id": 0, "id": 1, "name": 1, "size": 1, "unit": 1, "category": 1}
     ).sort("name", 1).to_list(2000)
+
+    # Sanitize to strictly safe public information (no costs, pricing, min_stock, or stock balances)
+    products = [
+        {
+            "id": p.get("id"),
+            "name": p.get("name") or "",
+            "size": p.get("size") or "",
+            "unit": p.get("unit") or "Nos",
+            "category": p.get("category") or "",
+        }
+        for p in products_raw
+        if p.get("name")
+    ]
 
     # Get member role if available
     member_user = await db.users.find_one({"id": link.get("team_member_id")}, {"_id": 0, "role": 1}) or {}
@@ -8873,12 +8950,10 @@ async def submit_public_material_request(data: PublicMaterialRequestSubmitIn, re
     if not client:
         raise HTTPException(status_code=404, detail="Selected client project was not found")
     
-    # Validate Requester Details
-    req_name = (data.requester_name or "").strip()
-    if not req_name:
-        raise HTTPException(status_code=400, detail="Requester Name is required")
+    # Validate Requester Details (optional in public form; defaults to assigned team member)
+    req_name = (data.requester_name or "").strip() or assigned_team_member_name
     if len(req_name) > 120:
-        raise HTTPException(status_code=400, detail="Requester Name cannot exceed 120 characters")
+        req_name = req_name[:120]
     
     # Validate Items
     if not data.items or not isinstance(data.items, list):
@@ -8893,9 +8968,11 @@ async def submit_public_material_request(data: PublicMaterialRequestSubmitIn, re
         p_unit = (it.get("unit") or "Nos").strip()
         p_qty = float(it.get("quantity") or 0)
         p_rem = (it.get("remarks") or "").strip()
+        p_id = it.get("product_id") or None
         if not p_name or p_qty <= 0:
             continue
         normalized_items.append({
+            "product_id": p_id,
             "product": p_name,
             "size": p_size,
             "unit": p_unit,
@@ -8923,7 +9000,10 @@ async def submit_public_material_request(data: PublicMaterialRequestSubmitIn, re
         raise HTTPException(status_code=403, detail=chk_mr["message"])
     
     req_phone = (data.requester_phone or "").strip()
-    formatted_remarks = f"Public Request by: {req_name}" + (f" ({req_phone})" if req_phone else "")
+    if (data.requester_name or "").strip():
+        formatted_remarks = f"Public Request by: {req_name}" + (f" ({req_phone})" if req_phone else "")
+    else:
+        formatted_remarks = f"Public Request via link (Assigned: {assigned_team_member_name})"
     if data.remarks and data.remarks.strip():
         formatted_remarks += f" — {data.remarks.strip()}"
     
@@ -9919,12 +9999,12 @@ def _save_local_high_value_product(product_name: str, is_high_value: bool):
         pass
 
 _PRODUCTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
-_PRODUCTS_CACHE_TTL_S = 5.0
+_PRODUCTS_CACHE_TTL_S = 60.0
 
 # Separate ultra-lightweight cache for the dropdown/search endpoint.
 # Only contains the 6 fields needed for product selection — NO aggregation at all.
 _PRODUCTS_SEARCH_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
-_PRODUCTS_SEARCH_CACHE_TTL_S = 5.0  # 5s – refreshed on every product write
+_PRODUCTS_SEARCH_CACHE_TTL_S = 60.0  # 60s – refreshed on every product write / transaction
 
 def invalidate_products_cache(company_id: Optional[str] = None):
     global _PRODUCTS_CACHE, _PRODUCTS_SEARCH_CACHE

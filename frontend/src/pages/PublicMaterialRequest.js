@@ -26,8 +26,10 @@ import {
   FileCheck2,
   Clock,
   Send,
-  Boxes
+  Boxes,
+  FileSpreadsheet
 } from "lucide-react";
+import PublicMaterialImportModal from "@/components/MaterialRequests/PublicMaterialImportModal";
 
 // Standard inventory units
 const STANDARD_UNITS = [
@@ -57,17 +59,15 @@ export default function PublicMaterialRequest() {
   const [isWakingServer, setIsWakingServer] = useState(false);
 
   // Form State
-  const [requesterName, setRequesterName] = useState("");
-  const [requesterPhone, setRequesterPhone] = useState("");
   const [selectedClientId, setSelectedClientId] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
   const [remarks, setRemarks] = useState("");
   const [honeypot, setHoneypot] = useState("");
 
-  // Items State: Array of { id, product, size, unit, quantity, remarks, showSuggestions }
+  // Items State: Array of { id, product, product_id, isCatalogProduct, size, unit, quantity, remarks, showSuggestions }
   const [items, setItems] = useState([
-    { id: generateUUID(), product: "", size: "", unit: "Nos", quantity: "1", remarks: "" }
+    { id: generateUUID(), product: "", product_id: null, isCatalogProduct: false, size: "", unit: "Nos", quantity: "1", remarks: "", showSuggestions: false }
   ]);
 
   // Idempotency Key (persisted per form session)
@@ -76,6 +76,9 @@ export default function PublicMaterialRequest() {
   // Submission State
   const [submitting, setSubmitting] = useState(false);
   const [submittedResult, setSubmittedResult] = useState(null);
+
+  // Bulk & Manual Import Modal State
+  const [importModalOpen, setImportModalOpen] = useState(false);
 
   const projectDropdownRef = useRef(null);
 
@@ -160,9 +163,25 @@ export default function PublicMaterialRequest() {
       copy[index] = {
         ...copy[index],
         product: productObj.name || productObj.item_name || "",
-        size: productObj.size || productObj.rating || copy[index].size,
+        product_id: productObj.id || null,
+        isCatalogProduct: true,
+        size: productObj.size || productObj.rating || copy[index].size || "",
         unit: productObj.unit || copy[index].unit || "Nos",
         showSuggestions: false
+      };
+      return copy;
+    });
+  };
+
+  const handleProductInputChange = (index, value) => {
+    setItems((prev) => {
+      const copy = [...prev];
+      copy[index] = {
+        ...copy[index],
+        product: value,
+        product_id: null,
+        isCatalogProduct: false,
+        showSuggestions: true
       };
       return copy;
     });
@@ -179,13 +198,25 @@ export default function PublicMaterialRequest() {
   const addItemRow = () => {
     setItems((prev) => [
       ...prev,
-      { id: generateUUID(), product: "", size: "", unit: "Nos", quantity: "1", remarks: "" }
+      { id: generateUUID(), product: "", product_id: null, isCatalogProduct: false, size: "", unit: "Nos", quantity: "1", remarks: "", showSuggestions: false }
     ]);
   };
 
   const removeItemRow = (index) => {
     if (items.length <= 1) return;
     setItems((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  // Handler for importing items from Bulk or Manual Import modal
+  const handleImportRows = (importedItems) => {
+    if (!importedItems || !importedItems.length) return;
+    setItems((prev) => {
+      // If the current list only contains a single untouched blank item, replace it
+      const isInitialBlankOnly =
+        prev.length === 1 && !prev[0].product.trim();
+      const baseList = isInitialBlankOnly ? [] : prev;
+      return [...baseList, ...importedItems];
+    });
   };
 
   // Filter projects by search
@@ -210,11 +241,6 @@ export default function PublicMaterialRequest() {
       return;
     }
 
-    if (!requesterName.trim()) {
-      toast.error("Please enter your name");
-      return;
-    }
-
     if (!selectedClientId) {
       toast.error("Please select a project / site");
       return;
@@ -223,11 +249,12 @@ export default function PublicMaterialRequest() {
     // Filter valid items
     const validItems = items
       .map((it) => ({
+        product_id: it.product_id || null,
         product: it.product.trim(),
-        size: it.size.trim(),
+        size: (it.size || "").trim(),
         unit: it.unit || "Nos",
         quantity: parseFloat(it.quantity) || 0,
-        remarks: it.remarks.trim(),
+        remarks: (it.remarks || "").trim(),
       }))
       .filter((it) => it.product && it.quantity > 0);
 
@@ -241,8 +268,6 @@ export default function PublicMaterialRequest() {
     try {
       const payload = {
         token: cleanToken,
-        requester_name: requesterName.trim(),
-        requester_phone: requesterPhone.trim(),
         client_id: selectedClientId,
         items: validItems,
         remarks: remarks.trim(),
@@ -274,12 +299,10 @@ export default function PublicMaterialRequest() {
 
   const handleResetForNew = () => {
     setSubmittedResult(null);
-    setRequesterName("");
-    setRequesterPhone("");
     setSelectedClientId("");
     setProjectSearch("");
     setRemarks("");
-    setItems([{ id: generateUUID(), product: "", size: "", unit: "Nos", quantity: "1", remarks: "" }]);
+    setItems([{ id: generateUUID(), product: "", product_id: null, isCatalogProduct: false, size: "", unit: "Nos", quantity: "1", remarks: "", showSuggestions: false }]);
     setIdempotencyKey(generateUUID());
   };
 
@@ -485,38 +508,11 @@ export default function PublicMaterialRequest() {
             />
           </div>
 
-          {/* Section 1: Requester & Site Details */}
+          {/* Section 1: Project / Site Details */}
           <Card className="p-5 border-slate-200 bg-white shadow-sm space-y-4">
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5 pb-2 border-b border-slate-100">
-              <Building2 className="w-4 h-4 text-blue-600" /> Requester & Site Information
+              <Building2 className="w-4 h-4 text-blue-600" /> Project / Site Information
             </h2>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-700">
-                  Your Full Name <span className="text-red-500">*</span>
-                </Label>
-                <Input
-                  required
-                  placeholder="e.g. Ramesh Kumar"
-                  value={requesterName}
-                  onChange={(e) => setRequesterName(e.target.value)}
-                  className="text-xs h-9 bg-white"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-700">
-                  Contact Number (WhatsApp/Phone)
-                </Label>
-                <Input
-                  placeholder="e.g. 9876543210"
-                  value={requesterPhone}
-                  onChange={(e) => setRequesterPhone(e.target.value)}
-                  className="text-xs h-9 bg-white"
-                />
-              </div>
-            </div>
 
             {/* Project / Site Selection */}
             <div className="space-y-1.5 relative" ref={projectDropdownRef}>
@@ -589,11 +585,22 @@ export default function PublicMaterialRequest() {
 
           {/* Section 2: Material Items */}
           <Card className="p-5 border-slate-200 bg-white shadow-sm space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
               <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
                 <Layers className="w-4 h-4 text-blue-600" /> Requested Materials ({items.length})
               </h2>
-              <span className="text-[11px] text-slate-400">At least 1 item required</span>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setImportModalOpen(true)}
+                  className="text-xs h-7 px-2.5 font-semibold text-blue-700 hover:text-blue-800 hover:bg-blue-50 border-blue-200 gap-1.5 shadow-2xs"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-blue-600" /> Import Materials
+                </Button>
+                <span className="text-[11px] text-slate-400 hidden sm:inline">• At least 1 item required</span>
+              </div>
             </div>
 
             <div className="space-y-3">
@@ -613,7 +620,18 @@ export default function PublicMaterialRequest() {
                     className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 relative space-y-3"
                   >
                     <div className="flex items-center justify-between text-xs font-semibold text-slate-600">
-                      <span>Item #{idx + 1}</span>
+                      <div className="flex items-center gap-2">
+                        <span>Item #{idx + 1}</span>
+                        {row.isCatalogProduct && row.product_id ? (
+                          <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] font-medium py-0 px-1.5 flex items-center gap-1">
+                            <CheckCircle2 className="w-2.5 h-2.5" /> Catalog Product
+                          </Badge>
+                        ) : row.product && row.product.trim() ? (
+                          <Badge variant="outline" className="text-slate-500 border-slate-200 bg-white text-[10px] font-normal py-0 px-1.5">
+                            Manual Item
+                          </Badge>
+                        ) : null}
+                      </div>
                       {items.length > 1 && (
                         <button
                           type="button"
@@ -628,38 +646,61 @@ export default function PublicMaterialRequest() {
                     <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
                       {/* Product Name with Suggestion Popup */}
                       <div className="sm:col-span-6 relative">
-                        <Label className="text-[11px] font-semibold text-slate-700">
-                          Product Name <span className="text-red-500">*</span>
-                        </Label>
+                        <div className="flex items-center justify-between mb-1">
+                          <Label className="text-[11px] font-semibold text-slate-700">
+                            Product Name <span className="text-red-500">*</span>
+                          </Label>
+                          <span className="text-[10px] text-slate-400">Search or type manually</span>
+                        </div>
                         <Input
                           required
                           placeholder="e.g. Solar Cable 4 sq mm / MC4 / Earthing"
                           value={row.product}
                           onFocus={() => handleItemChange(idx, "showSuggestions", true)}
-                          onChange={(e) => {
-                            handleItemChange(idx, "product", e.target.value);
-                            handleItemChange(idx, "showSuggestions", true);
-                          }}
+                          onBlur={() => setTimeout(() => handleItemChange(idx, "showSuggestions", false), 250)}
+                          onChange={(e) => handleProductInputChange(idx, e.target.value)}
                           className="text-xs h-8 bg-white"
                         />
 
                         {row.showSuggestions && matchingProducts.length > 0 && (
-                          <div className="absolute z-20 top-full left-0 right-0 mt-1 max-h-44 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl p-1 text-xs">
-                            {matchingProducts.slice(0, 10).map((prod, pIdx) => (
+                          <div className="absolute z-30 top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl p-1 text-xs divide-y divide-slate-100">
+                            <div className="px-2 py-1 text-[10px] font-semibold text-blue-600 bg-blue-50/60 rounded flex items-center justify-between">
+                              <span>Product Master Suggestions</span>
+                              <span className="text-[9px] text-slate-400 font-normal">Selection Optional</span>
+                            </div>
+                            {matchingProducts.slice(0, 10).map((prod) => (
                               <button
                                 type="button"
-                                key={pIdx}
-                                onClick={() => handleProductSelect(idx, prod)}
-                                className="w-full text-left p-1.5 rounded hover:bg-blue-50 text-slate-800 transition-colors flex items-center justify-between text-xs"
+                                key={prod.id || prod.name}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  handleProductSelect(idx, prod);
+                                }}
+                                className="w-full text-left p-2 rounded hover:bg-blue-50 text-slate-800 transition-colors flex items-center justify-between text-xs group"
                               >
-                                <span>{prod.name || prod.item_name}</span>
-                                {prod.size && (
-                                  <span className="text-[10px] text-slate-400 font-mono ml-2">
-                                    {prod.size}
-                                  </span>
-                                )}
+                                <div>
+                                  <div className="font-medium text-slate-900 group-hover:text-blue-700">{prod.name}</div>
+                                  {prod.category && (
+                                    <div className="text-[10px] text-slate-400">{prod.category}</div>
+                                  )}
+                                </div>
+                                <div className="text-right">
+                                  {prod.size && (
+                                    <span className="text-[10px] text-slate-500 font-mono block">
+                                      {prod.size}
+                                    </span>
+                                  )}
+                                  {prod.unit && (
+                                    <span className="text-[10px] text-blue-600 font-semibold block">
+                                      {prod.unit}
+                                    </span>
+                                  )}
+                                </div>
                               </button>
                             ))}
+                            <div className="px-2 py-1 text-[10px] text-slate-400 bg-slate-50 text-center italic">
+                              Or finish typing for a custom item
+                            </div>
                           </div>
                         )}
                       </div>
@@ -764,6 +805,14 @@ export default function PublicMaterialRequest() {
             Powered by Solarix Cloud Inventory Management System
           </p>
         </form>
+
+        {/* Bulk & Manual Material Import Modal */}
+        <PublicMaterialImportModal
+          open={importModalOpen}
+          onOpenChange={setImportModalOpen}
+          productsCatalog={linkData?.products || []}
+          onImportRows={handleImportRows}
+        />
       </div>
     </div>
   );
