@@ -317,6 +317,7 @@ function App() {
             <Route path="/request/:token" element={<PublicMaterialRequest />} />
             <Route path="/m/:token" element={<PublicMaterialRequest />} />
             <Route path="/material-request/:token" element={<PublicMaterialRequest />} />
+            <Route path="/material-requests/:token" element={<PublicMaterialRequest />} />
 
             {/* WhatsApp Marketing & Automation Routes (Gated by ENABLE_WHATSAPP flag) */}
             {ENABLE_WHATSAPP ? (

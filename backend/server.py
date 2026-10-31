@@ -487,15 +487,31 @@ class CursorAdapter:
             data = []
             cid = None
             filter_id = None
+            token_filter = None
             if isinstance(self.filter, dict):
                 cid = self.filter.get("company_id")
                 filter_id = self.filter.get("id")
+                if self.filter.get("public_token"):
+                    token_filter = str(self.filter.get("public_token")).strip()
+                elif self.filter.get("token_hash"):
+                    token_filter = str(self.filter.get("token_hash")).strip()
+                elif isinstance(self.filter.get("$or"), list):
+                    for cond in self.filter.get("$or"):
+                        if isinstance(cond, dict):
+                            if cond.get("token_hash"):
+                                token_filter = str(cond.get("token_hash")).strip()
+                                break
+                            if cond.get("public_token"):
+                                token_filter = str(cond.get("public_token")).strip()
+                                break
             try:
                 builder = supabase.table("documents").select("*").eq("details->>_entity_type", entity_type)
                 if cid:
                     builder = builder.eq("company_id", str(cid).strip())
                 if isinstance(filter_id, str) and filter_id:
                     builder = builder.eq("id", filter_id.strip())
+                if token_filter:
+                    builder = builder.or_(f"details->>public_token.eq.{token_filter},details->>token_hash.eq.{token_filter}")
                 res = await asyncio.to_thread(builder.execute)
                 raw_rows = res.data or []
                 for r in raw_rows:
@@ -1589,7 +1605,7 @@ class CollectionAdapter:
         return doc
 
     async def find_one(self, filter=None, projection=None, sort=None, **kwargs):
-        if self.table_name in ("b2b_customers", "vendors"):
+        if self.table_name in ("b2b_customers", "vendors", "material_request_links"):
             cursor = self.find(filter, projection)
             if sort:
                 cursor = cursor.sort(sort)

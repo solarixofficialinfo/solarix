@@ -153,10 +153,33 @@ export default function PublicLinksTab({ employees = [] }) {
     }
   };
 
+  // Helper to format absolute URL
+  const getAbsoluteUrl = (link) => {
+    if (!link) return "";
+    const token = link.public_token || link.token;
+    if (token) {
+      return `${window.location.origin}/request/${token}`;
+    }
+    if (link.public_url && link.public_url.startsWith("http")) {
+      return link.public_url;
+    }
+    if (link.public_url) {
+      return `${window.location.origin}${link.public_url.startsWith("/") ? "" : "/"}${link.public_url}`;
+    }
+    return "";
+  };
+
   // Copy link
-  const handleCopy = (url, id) => {
-    if (!url) return;
-    navigator.clipboard.writeText(url).then(() => {
+  const handleCopy = (linkOrUrl, id) => {
+    let urlToCopy = "";
+    if (typeof linkOrUrl === "object" && linkOrUrl !== null) {
+      urlToCopy = getAbsoluteUrl(linkOrUrl);
+    } else if (typeof linkOrUrl === "string") {
+      urlToCopy = linkOrUrl.startsWith("http") ? linkOrUrl : `${window.location.origin}${linkOrUrl.startsWith("/") ? "" : "/"}${linkOrUrl}`;
+    }
+    if (!urlToCopy) return;
+
+    navigator.clipboard.writeText(urlToCopy).then(() => {
       setCopiedId(id);
       toast.success("Link copied to clipboard!");
       setTimeout(() => setCopiedId(null), 2500);
@@ -167,8 +190,9 @@ export default function PublicLinksTab({ employees = [] }) {
 
   // WhatsApp share
   const handleWhatsAppShare = (link) => {
-    if (!link.public_url) return;
-    const text = `Hello ${link.assigned_team_member_name}, here is your reusable Solarix Material Request Link for site teams:\n\n${link.public_url}\n\nAnyone with this link can submit material requests directly to your tracking workflow without logging in.`;
+    const fullUrl = getAbsoluteUrl(link);
+    if (!fullUrl) return;
+    const text = `Hello ${link.assigned_team_member_name}, here is your reusable Solarix Material Request Link for site teams:\n\n${fullUrl}\n\nAnyone with this link can submit material requests directly to your tracking workflow without logging in.`;
     const waUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
     window.open(waUrl, "_blank", "noopener,noreferrer");
   };
@@ -333,7 +357,7 @@ export default function PublicLinksTab({ employees = [] }) {
                     <div className="flex items-center gap-1.5">
                       <Input
                         readOnly
-                        value={link.public_url || ""}
+                        value={getAbsoluteUrl(link)}
                         className="text-xs h-8 font-mono bg-slate-50 border-slate-200 text-slate-700 select-all"
                         onClick={(e) => e.target.select()}
                       />
@@ -341,7 +365,7 @@ export default function PublicLinksTab({ employees = [] }) {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => handleCopy(link.public_url, link.id)}
+                        onClick={() => handleCopy(link, link.id)}
                         className={`h-8 px-2.5 text-xs font-semibold shrink-0 gap-1 ${
                           isCopied ? "border-emerald-500 text-emerald-700 bg-emerald-50" : ""
                         }`}
@@ -365,7 +389,7 @@ export default function PublicLinksTab({ employees = [] }) {
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() => window.open(link.public_url, "_blank")}
+                        onClick={() => window.open(getAbsoluteUrl(link), "_blank")}
                         className="h-8 w-8 p-0 text-slate-500 hover:text-blue-600 shrink-0"
                         title="Open in new tab"
                       >
