@@ -15,7 +15,7 @@ import {
   AlertTriangle, ShieldCheck, Download, Sliders, Ruler, Maximize2, Minimize2,
   Navigation, Search, Globe, Building2, User, FileText, Compass, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Eye, Focus,
   PlusCircle, Undo2, Edit3, X, HelpCircle, Bell, Grid, Layers2, Image as ImageIcon, Edit2, Zap,
-  Scissors, Move
+  Scissors, Move, Camera
 } from "lucide-react";
 import { toast } from "sonner";
 import dayjs from "dayjs";
@@ -2042,6 +2042,25 @@ export default function SolarStudio() {
       setGeneratingViews(false);
     }
   };
+
+  const [isCapturing3D, setIsCapturing3D] = useState(false);
+
+  // Directly capture whatever is visible in the 3D viewport and download as image
+  const handleCapture3DViewportDownload = useCallback(async () => {
+    if (isCapturing3D) return;
+    if (!viewer3dRef.current?.captureAndDownloadView) {
+      toast.info("Please wait for 3D Viewport to initialize.");
+      return;
+    }
+    setIsCapturing3D(true);
+    try {
+      await viewer3dRef.current.captureAndDownloadView();
+    } catch (err) {
+      toast.error("Failed to capture 3D view: " + (err.message || "Unknown error"));
+    } finally {
+      setIsCapturing3D(false);
+    }
+  }, [isCapturing3D]);
 
   // Direct edit and synchronization of design information parameters
   const handleUpdateDesignInfo = (updates) => {
@@ -4469,6 +4488,18 @@ export default function SolarStudio() {
                 title="Toggle manual panel/row/group/structure micro-adjustment controls"
               >
                 <Sliders className="w-3.5 h-3.5" /> Micro Adjust
+              </button>
+              <div className="w-[1px] h-4 bg-slate-800 mx-1" />
+              <button
+                type="button"
+                onClick={handleCapture3DViewportDownload}
+                disabled={isCapturing3D}
+                className="px-2.5 py-1 text-xs font-bold rounded-lg transition flex items-center gap-1.5 shadow-sm border cursor-pointer bg-blue-600 hover:bg-blue-500 text-white border-blue-400 disabled:opacity-50"
+                title="Capture currently visible 3D viewport and download image"
+                data-testid="capture-3d-view-studio-btn"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>{isCapturing3D ? "Capturing..." : "Capture 3D View"}</span>
               </button>
             </div>
 

@@ -1203,6 +1203,97 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
   const gridHelperRef = useRef(null);
   const groundMeshRef = useRef(null);
 
+  const [isCapturing, setIsCapturing] = useState(false);
+
+  // Directly capture exactly what is currently visible in the 3D viewport and trigger browser download
+  const executeCaptureAndDownload = useCallback(async () => {
+    if (isCapturing) return;
+    setIsCapturing(true);
+
+    try {
+      const renderer = rendererRef.current;
+      const scene = sceneRef.current;
+      const camera = cameraRef.current;
+
+      if (!renderer || !scene || !camera) {
+        throw new Error("3D Viewport is not initialized. Please wait a moment and try again.");
+      }
+
+      const canvas = renderer.domElement;
+      if (!canvas || canvas.width === 0 || canvas.height === 0) {
+        throw new Error("3D Viewport canvas has invalid dimensions.");
+      }
+
+      // Synchronously render the exact current scene and camera state
+      // This guarantees the buffer is 100% up-to-date and avoids black/blank capture
+      renderer.render(scene, camera);
+
+      // Generate descriptive timestamped filename: Solarix_3D_View_YYYY-MM-DD_HH-mm.png
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, "0");
+      const dd = String(now.getDate()).padStart(2, "0");
+      const hh = String(now.getHours()).padStart(2, "0");
+      const min = String(now.getMinutes()).padStart(2, "0");
+      const filename = `Solarix_3D_View_${yyyy}-${mm}-${dd}_${hh}-${min}.png`;
+
+      // Helper to trigger direct browser download
+      const triggerDownload = (urlOrBlob) => {
+        const isBlob = urlOrBlob instanceof Blob;
+        const objectUrl = isBlob ? URL.createObjectURL(urlOrBlob) : urlOrBlob;
+        const link = document.createElement("a");
+        link.href = objectUrl;
+        link.download = filename;
+        link.style.display = "none";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        if (isBlob) {
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 3000);
+        }
+      };
+
+      await new Promise((resolve, reject) => {
+        try {
+          if (canvas.toBlob) {
+            canvas.toBlob((blob) => {
+              if (blob && blob.size > 0) {
+                triggerDownload(blob);
+                resolve();
+              } else {
+                // Fallback to toDataURL if blob was empty
+                const dataUrl = canvas.toDataURL("image/png");
+                if (dataUrl && dataUrl.length > 100) {
+                  triggerDownload(dataUrl);
+                  resolve();
+                } else {
+                  reject(new Error("Captured image is empty or invalid."));
+                }
+              }
+            }, "image/png");
+          } else {
+            const dataUrl = canvas.toDataURL("image/png");
+            if (dataUrl && dataUrl.length > 100) {
+              triggerDownload(dataUrl);
+              resolve();
+            } else {
+              reject(new Error("Captured image is empty or invalid."));
+            }
+          }
+        } catch (canvasErr) {
+          reject(canvasErr);
+        }
+      });
+
+      toast.success(`3D view downloaded: ${filename}`);
+    } catch (err) {
+      console.error("3D Viewport capture error:", err);
+      toast.error(`Capture failed: ${err.message || "Unknown error"}`);
+    } finally {
+      setIsCapturing(false);
+    }
+  }, [isCapturing]);
+
   // Expose snapshot export, multi-view generation, and fit-camera functions to parent
   useImperativeHandle(ref, () => ({
     regenerateStructure: () => {
@@ -1215,6 +1306,7 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
       rendererRef.current.render(sceneRef.current, cameraRef.current);
       return rendererRef.current.domElement.toDataURL("image/png");
     },
+    captureAndDownloadView: () => executeCaptureAndDownload(),
     generateAllViews: (requestedCount = 4, customAngleIds = null) => {
       if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return [];
       const renderer = rendererRef.current;
@@ -3882,6 +3974,17 @@ const Rooftop3DViewer = forwardRef(function Rooftop3DViewer(
           <button onClick={() => setShowRoof(!showRoof)} className={tbBtn(showRoof)}>Roof</button>
           <button onClick={() => setShowStructures(!showStructures)} className={tbBtn(showStructures)}>Structure</button>
           <button onClick={() => setShowPanels(!showPanels)} className={tbBtn(showPanels)}>Panels ({activePanels.length})</button>
+          <button
+            type="button"
+            onClick={executeCaptureAndDownload}
+            disabled={isCapturing}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[10.5px] font-bold bg-blue-600 hover:bg-blue-500 text-white rounded-lg border border-blue-400 shadow-sm transition-all cursor-pointer disabled:opacity-50"
+            title="Capture currently visible 3D viewport and download as image"
+            data-testid="capture-3d-view-viewer-btn"
+          >
+            <Camera className="w-3.5 h-3.5" />
+            <span>{isCapturing ? "Capturing..." : "Capture 3D View"}</span>
+          </button>
           <button
             onClick={() => setIsFullscreen(!isFullscreen)}
             className="h-7 w-7 flex items-center justify-center bg-slate-800 border border-slate-700 rounded-lg text-slate-300 hover:text-white hover:bg-slate-700 transition-all cursor-pointer"
