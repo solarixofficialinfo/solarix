@@ -41,6 +41,9 @@ export default function Receivables() {
   // Add/Edit Payment Modal State
   const [addPaymentOpen, setAddPaymentOpen] = useState(false);
   const [editingPayment, setEditingPayment] = useState(null);
+  const [exportingPaymentExcel, setExportingPaymentExcel] = useState(false);
+  const [paymentSearchFilter, setPaymentSearchFilter] = useState("");
+  const [paymentDateFilter, setPaymentDateFilter] = useState("");
   const [paymentForm, setPaymentForm] = useState({
     payment_type: "Advance",
     amount: "",
@@ -530,6 +533,59 @@ export default function Receivables() {
       loan_id: pay.loan_id || ""
     });
     setAddPaymentOpen(true);
+  };
+
+  // Export Filtered Payment History to Excel (.xlsx)
+  const handleDownloadFilteredPaymentExcel = async (paymentsToExport = []) => {
+    if (exportingPaymentExcel) return;
+    if (!paymentsToExport || paymentsToExport.length === 0) {
+      toast.info("No payment records available for the selected filters.");
+      return;
+    }
+
+    setExportingPaymentExcel(true);
+    try {
+      const XLSX = await import("xlsx");
+      const clientName = projectWorkspace?.client?.full_name || projectWorkspace?.project?.project_name || "Client";
+      const projectName = projectWorkspace?.project?.project_name || clientName;
+
+      // Construct exactly 4 columns: Project Name, Date, Amount (₹), Remarks
+      const excelRows = paymentsToExport.map((pay) => {
+        const rawAmt = pay.amount;
+        const numAmt = typeof rawAmt === "number" ? rawAmt : (parseFloat(rawAmt) || 0);
+        return {
+          "Project Name": projectName,
+          "Date": pay.payment_date || (pay.created_at || "").slice(0, 10),
+          "Amount (₹)": numAmt,
+          "Remarks": pay.remarks || pay.notes || "",
+        };
+      });
+
+      const ws = XLSX.utils.json_to_sheet(excelRows, {
+        header: ["Project Name", "Date", "Amount (₹)", "Remarks"],
+      });
+
+      // Format column widths for optimal readability
+      ws["!cols"] = [
+        { wch: 32 }, // Project Name
+        { wch: 14 }, // Date
+        { wch: 18 }, // Amount (₹)
+        { wch: 35 }, // Remarks
+      ];
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Payment History");
+
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const filename = `Solarix_Payment_History_${todayStr}.xlsx`;
+      XLSX.writeFile(wb, filename);
+
+      toast.success(`Exported ${paymentsToExport.length} payment record${paymentsToExport.length === 1 ? "" : "s"} successfully`);
+    } catch (err) {
+      toast.error(formatApiError(err) || "Failed to generate Payment History Excel");
+    } finally {
+      setExportingPaymentExcel(false);
+    }
   };
 
   const handleOpenAddLoan = (projId) => {
@@ -1601,114 +1657,212 @@ export default function Receivables() {
 
                   {/* ─── TAB 4: PAYMENTS ────────────────────────────────────────── */}
                   <TabsContent value="payments" className="space-y-3 pt-3">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-bold text-xs text-slate-900">Actual Stored Payment Transactions</h4>
-                      <Button
-                        size="sm"
-                        onClick={() => handleOpenAddPayment(activeProjectId)}
-                        className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1"
-                      >
-                        <Plus className="w-3.5 h-3.5" /> Add Payment
-                      </Button>
-                    </div>
+                    {(() => {
+                      const allWorkspacePayments = projectWorkspace?.payments || [];
+                      const filteredWorkspacePayments = allWorkspacePayments.filter((p) => {
+                        if (paymentSearchFilter.trim()) {
+                          const q = paymentSearchFilter.toLowerCase().trim();
+                          const matchesType = (p.payment_type || p.milestone_name || "").toLowerCase().includes(q);
+                          const matchesSource = (p.payment_source || p.payment_mode || "").toLowerCase().includes(q);
+                          const matchesRef = (p.ref_number || "").toLowerCase().includes(q);
+                          const matchesInvoice = (p.invoice_no || p.invoice_id || "").toLowerCase().includes(q);
+                          const matchesRemarks = (p.remarks || p.notes || "").toLowerCase().includes(q);
+                          const matchesStatus = (p.status || "").toLowerCase().includes(q);
+                          if (!matchesType && !matchesSource && !matchesRef && !matchesInvoice && !matchesRemarks && !matchesStatus) {
+                            return false;
+                          }
+                        }
+                        if (paymentDateFilter) {
+                          const payDate = (p.payment_date || (p.created_at || "").slice(0, 10));
+                          if (payDate !== paymentDateFilter) {
+                            return false;
+                          }
+                        }
+                        return true;
+                      });
 
-                    {(projectWorkspace?.payments || []).length === 0 ? (
-                      <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-50 rounded-xl border">
-                        No payment transactions recorded yet.
-                      </div>
-                    ) : (
-                      <div className="overflow-x-auto rounded-xl border border-slate-200">
-                        <table className="w-full text-xs text-left">
-                          <thead className="bg-slate-100 text-slate-600 font-semibold">
-                            <tr>
-                              <th className="p-2.5">Date</th>
-                              <th className="p-2.5">Type</th>
-                              <th className="p-2.5">Source</th>
-                              <th className="p-2.5">Ref / UTR</th>
-                              <th className="p-2.5">Applied Invoice</th>
-                              <th className="p-2.5">Status</th>
-                              <th className="p-2.5 text-right">Amount</th>
-                              <th className="p-2.5 text-center">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {projectWorkspace.payments.map((pay) => (
-                              <tr key={pay.id} className="hover:bg-slate-50">
-                                <td className="p-2.5 font-medium whitespace-nowrap">{pay.payment_date}</td>
-                                <td className="p-2.5 font-semibold text-slate-800">{pay.payment_type || pay.milestone_name}</td>
-                                <td className="p-2.5">{pay.payment_source || pay.payment_mode}</td>
-                                <td className="p-2.5 font-mono text-[11px] text-slate-500">{pay.ref_number || "—"}</td>
-                                <td className="p-2.5">
-                                  {pay.invoice_no || pay.invoice_id ? (
-                                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 font-mono text-[10px]">
-                                      {pay.invoice_no || pay.invoice_id}
-                                    </Badge>
-                                  ) : (
-                                    <Badge variant="outline" className="bg-slate-100 text-slate-600 border-slate-200 text-[10px]">
-                                      Unallocated Advance
-                                    </Badge>
-                                  )}
-                                </td>
-                                <td className="p-2.5">
-                                  <Badge
-                                    variant="outline"
-                                    className={
-                                      pay.status === "Received"
-                                        ? "bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]"
-                                        : pay.status === "Pending"
-                                        ? "bg-amber-50 text-amber-700 border-amber-200 text-[10px]"
-                                        : "bg-rose-50 text-rose-700 border-rose-200 text-[10px]"
-                                    }
-                                  >
-                                    {pay.status || "Received"}
-                                  </Badge>
-                                </td>
-                                <td className="p-2.5 text-right font-bold text-emerald-700 font-mono">
-                                  ₹{Number(pay.amount).toLocaleString("en-IN")}
-                                </td>
-                                <td className="p-2.5 text-center whitespace-nowrap">
-                                  <div className="flex items-center justify-center gap-1">
-                                    {pay.status === "Pending" && (
-                                      <Button
-                                        size="xs"
-                                        variant="outline"
-                                        onClick={() => handleOpenAddPayment(activeProjectId, pay)}
-                                        className="h-6 text-[10px] px-2 bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100 font-semibold"
-                                        title="Record / Receive Payment"
-                                      >
-                                        Receive
-                                      </Button>
-                                    )}
-                                    <Button
-                                      size="xs"
-                                      variant="ghost"
-                                      onClick={() => handleOpenEditPayment(pay)}
-                                      className="h-6 w-6 p-0 text-slate-500 hover:text-blue-600"
-                                      title="Edit Payment"
-                                    >
-                                      <Edit3 className="w-3.5 h-3.5" />
-                                    </Button>
-                                    <Button
-                                      size="xs"
-                                      variant="ghost"
-                                      onClick={() => {
-                                        if (window.confirm("Delete this payment transaction?")) {
-                                          deletePaymentMutation.mutate(pay.id);
-                                        }
-                                      }}
-                                      className="h-6 w-6 p-0 text-slate-500 hover:text-rose-600"
-                                      title="Delete Payment"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </Button>
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
+                      return (
+                        <>
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                            <div>
+                              <h4 className="font-bold text-xs text-slate-900">Payment History & Transactions</h4>
+                              <p className="text-[11px] text-slate-500">
+                                {filteredWorkspacePayments.length} of {allWorkspacePayments.length} payment records matching active filters
+                              </p>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              {/* Search in Payments */}
+                              <div className="relative">
+                                <Search className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                                <Input
+                                  value={paymentSearchFilter}
+                                  onChange={(e) => setPaymentSearchFilter(e.target.value)}
+                                  placeholder="Search payment type, ref, notes..."
+                                  className="h-7 w-40 sm:w-48 pl-7 text-[11px] bg-white border-slate-200"
+                                />
+                              </div>
+
+                              {/* Date filter */}
+                              <Input
+                                type="date"
+                                value={paymentDateFilter}
+                                onChange={(e) => setPaymentDateFilter(e.target.value)}
+                                title="Filter by Payment Date"
+                                className="h-7 w-32 text-[11px] bg-white border-slate-200"
+                              />
+
+                              {(paymentSearchFilter || paymentDateFilter) && (
+                                <Button
+                                  size="xs"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    setPaymentSearchFilter("");
+                                    setPaymentDateFilter("");
+                                  }}
+                                  className="h-7 text-[10px] text-slate-500 hover:text-slate-800 px-2"
+                                >
+                                  Clear Filters
+                                </Button>
+                              )}
+
+                              {/* Download Filtered Excel Button */}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={exportingPaymentExcel}
+                                onClick={() => handleDownloadFilteredPaymentExcel(filteredWorkspacePayments)}
+                                className="h-7 text-xs bg-white hover:bg-slate-50 text-slate-800 border-slate-300 font-semibold gap-1 shadow-2xs"
+                                data-testid="download-filtered-payment-excel-btn"
+                                title="Download filtered payment records to Excel (.xlsx)"
+                              >
+                                {exportingPaymentExcel ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                                    <span>Exporting...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Download className="w-3.5 h-3.5 text-emerald-600" />
+                                    <span>Download Filtered Excel</span>
+                                  </>
+                                )}
+                              </Button>
+
+                              <Button
+                                size="sm"
+                                onClick={() => handleOpenAddPayment(activeProjectId)}
+                                className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1"
+                              >
+                                <Plus className="w-3.5 h-3.5" /> Add Payment
+                              </Button>
+                            </div>
+                          </div>
+
+                          {allWorkspacePayments.length === 0 ? (
+                            <div className="p-6 text-center text-slate-400 text-xs italic bg-slate-50 rounded-xl border">
+                              No payment transactions recorded yet.
+                            </div>
+                          ) : filteredWorkspacePayments.length === 0 ? (
+                            <div className="p-6 text-center text-slate-500 text-xs italic bg-slate-50 rounded-xl border border-dashed border-slate-300">
+                              No payment records available for the selected filters.
+                            </div>
+                          ) : (
+                            <div className="overflow-x-auto rounded-xl border border-slate-200">
+                              <table className="w-full text-xs text-left">
+                                <thead className="bg-slate-100 text-slate-600 font-semibold">
+                                  <tr>
+                                    <th className="p-2.5">Date</th>
+                                    <th className="p-2.5">Type</th>
+                                    <th className="p-2.5">Source</th>
+                                    <th className="p-2.5">Ref / UTR</th>
+                                    <th className="p-2.5">Applied Invoice</th>
+                                    <th className="p-2.5">Status</th>
+                                    <th className="p-2.5 text-right">Amount</th>
+                                    <th className="p-2.5 text-center">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {filteredWorkspacePayments.map((pay) => (
+                                    <tr key={pay.id} className="hover:bg-slate-50">
+                                      <td className="p-2.5 font-medium whitespace-nowrap">{pay.payment_date}</td>
+                                      <td className="p-2.5 font-semibold text-slate-800">{pay.payment_type || pay.milestone_name}</td>
+                                      <td className="p-2.5">{pay.payment_source || pay.payment_mode}</td>
+                                      <td className="p-2.5 font-mono text-[11px] text-slate-500">{pay.ref_number || "—"}</td>
+                                      <td className="p-2.5">
+                                        {pay.invoice_no || pay.invoice_id ? (
+                                          <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 font-mono text-[10px]">
+                                            {pay.invoice_no || pay.invoice_id}
+                                          </Badge>
+                                        ) : (
+                                          <Badge variant="outline" className="bg-slate-100 text-slate-600 border-slate-200 text-[10px]">
+                                            Unallocated Advance
+                                          </Badge>
+                                        )}
+                                      </td>
+                                      <td className="p-2.5">
+                                        <Badge
+                                          variant="outline"
+                                          className={
+                                            pay.status === "Received"
+                                              ? "bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]"
+                                              : pay.status === "Pending"
+                                              ? "bg-amber-50 text-amber-700 border-amber-200 text-[10px]"
+                                              : "bg-rose-50 text-rose-700 border-rose-200 text-[10px]"
+                                          }
+                                        >
+                                          {pay.status || "Received"}
+                                        </Badge>
+                                      </td>
+                                      <td className="p-2.5 text-right font-bold text-emerald-700 font-mono">
+                                        ₹{Number(pay.amount).toLocaleString("en-IN")}
+                                      </td>
+                                      <td className="p-2.5 text-center whitespace-nowrap">
+                                        <div className="flex items-center justify-center gap-1">
+                                          {pay.status === "Pending" && (
+                                            <Button
+                                              size="xs"
+                                              variant="outline"
+                                              onClick={() => handleOpenAddPayment(activeProjectId, pay)}
+                                              className="h-6 text-[10px] px-2 bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100 font-semibold"
+                                              title="Record / Receive Payment"
+                                            >
+                                              Receive
+                                            </Button>
+                                          )}
+                                          <Button
+                                            size="xs"
+                                            variant="ghost"
+                                            onClick={() => handleOpenEditPayment(pay)}
+                                            className="h-6 w-6 p-0 text-slate-500 hover:text-blue-600"
+                                            title="Edit Payment"
+                                          >
+                                            <Edit3 className="w-3.5 h-3.5" />
+                                          </Button>
+                                          <Button
+                                            size="xs"
+                                            variant="ghost"
+                                            onClick={() => {
+                                              if (window.confirm("Delete this payment transaction?")) {
+                                                deletePaymentMutation.mutate(pay.id);
+                                              }
+                                            }}
+                                            className="h-6 w-6 p-0 text-slate-500 hover:text-rose-600"
+                                            title="Delete Payment"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </Button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </TabsContent>
 
                   {/* ─── TAB 5: LOAN / FINANCE ──────────────────────────────────── */}
