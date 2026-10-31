@@ -23476,6 +23476,7 @@ app.include_router(whatsapp_router)
 app.include_router(api_router)
 
 DEFAULT_CORS_ORIGINS = [
+    "https://solarix.gvpsolar.in",
     "https://solarix-cumx-sable.vercel.app",
     "https://solarix.vercel.app",
     "http://localhost:3000",
@@ -23505,7 +23506,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
     allow_origins=allowed_cors_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost:.*|http://127\.0\.0\.1:.*",
+    allow_origin_regex=r"https://.*\.vercel\.app|https://.*\.gvpsolar\.in|http://localhost:.*|http://127\.0\.0\.1:.*",
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"],
