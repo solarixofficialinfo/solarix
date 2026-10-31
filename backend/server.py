@@ -3722,6 +3722,13 @@ def has_team_permission(user: Dict[str, Any], page: str, action: str) -> bool:
     if not isinstance(page_perms, dict):
         return False
     val = page_perms.get(action)
+    if val is None and page == "material_requests":
+        val = (perms.get("material_requests") or {}).get(action)
+        if val is None:
+            dm_perm = (perms.get("data_management") or {}).get(action)
+            pe_perm = (perms.get("project_execution") or {}).get(action)
+            return bool(dm_perm or pe_perm)
+        return val is True
     if val is None and page == "project_execution" and action in PROJ_EXEC_TABS:
         return page_perms.get("view") is True
     if val is None and page == "data_management" and action == "view":
@@ -8573,7 +8580,12 @@ async def list_material_request_links(user=Depends(get_current_user)):
 @api_router.post("/material-requests/links")
 async def create_material_request_link(data: CreateMaterialRequestLinkIn, user=Depends(require_active_subscription())):
     """Create or retrieve a reusable public material request link for a selected team member."""
-    if is_external_user(user) or not (is_owner(user) or has_perm(user, "data_management", "create") or has_perm(user, "project_execution", "create")):
+    if is_external_user(user) or not (
+        is_owner(user)
+        or has_perm(user, "data_management", "create")
+        or has_perm(user, "project_execution", "create")
+        or has_perm(user, "material_requests", "create")
+    ):
         raise HTTPException(status_code=403, detail="Missing permission to create material request links")
     
     cid = user["company_id"]
@@ -9161,7 +9173,15 @@ async def review_verification(v_id: str, data: VerificationReviewIn, user=Depend
 # ---------- Employees ----------
 @api_router.get("/employees")
 async def list_employees(user=Depends(get_current_user)):
-    if is_external_user(user) or not (is_owner(user) or has_perm(user, "team", "view")):
+    can_access = (
+        is_owner(user)
+        or has_perm(user, "team", "view")
+        or has_perm(user, "material_requests", "view")
+        or has_perm(user, "material_requests", "create")
+        or has_perm(user, "data_management", "view")
+        or has_perm(user, "data_management", "create")
+    )
+    if is_external_user(user) or not can_access:
         raise HTTPException(status_code=403, detail="Unauthorized to view team members")
 
     company_doc = await db.companies.find_one({"id": user["company_id"]}, {"_id": 0}) or {}

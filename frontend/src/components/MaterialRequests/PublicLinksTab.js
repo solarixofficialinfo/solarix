@@ -33,7 +33,11 @@ import {
 
 dayjs.extend(relativeTime);
 
-export default function PublicLinksTab({ employees = [] }) {
+export default function PublicLinksTab({ 
+  employees = [], 
+  isEmployeesLoading = false, 
+  employeesError = null 
+}) {
   const [links, setLinks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -43,6 +47,14 @@ export default function PublicLinksTab({ employees = [] }) {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
   const [linkRemarks, setLinkRemarks] = useState("");
   const [creating, setCreating] = useState(false);
+
+  // Link Ready / Share Modal State (shows immediately after creation or reuse)
+  const [shareDialog, setShareDialog] = useState({
+    open: false,
+    link: null,
+    isReused: false,
+    message: "",
+  });
 
   // Action State
   const [copiedId, setCopiedId] = useState(null);
@@ -86,12 +98,18 @@ export default function PublicLinksTab({ employees = [] }) {
         remarks: linkRemarks.trim(),
       });
 
-      if (res.data?.status === "success") {
+      if (res.data?.status === "success" && res.data.link) {
         toast.success(res.data.message || "Public request link generated successfully!");
         setCreateModalOpen(false);
         setSelectedEmployeeId("");
         setLinkRemarks("");
         fetchLinks();
+        setShareDialog({
+          open: true,
+          link: res.data.link,
+          isReused: !!(res.data.is_reused || res.data.is_existing),
+          message: res.data.message || "",
+        });
       }
     } catch (err) {
       toast.error(formatApiError(err) || "Failed to generate link");
@@ -468,21 +486,41 @@ export default function PublicLinksTab({ employees = [] }) {
                 <Label className="text-xs font-semibold text-slate-700">
                   Select Team Member <span className="text-red-500">*</span>
                 </Label>
-                <select
-                  required
-                  value={selectedEmployeeId}
-                  onChange={(e) => setSelectedEmployeeId(e.target.value)}
-                  className="w-full text-xs h-9 bg-white border border-slate-200 rounded-md px-3 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">-- Choose Team Member --</option>
-                  {employees.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.full_name || emp.name || "Unnamed"} {emp.role ? `(${emp.role})` : ""}
-                    </option>
-                  ))}
-                </select>
+
+                {isEmployeesLoading ? (
+                  <div className="flex items-center gap-2 p-2.5 rounded-md bg-slate-50 border border-slate-200 text-xs text-slate-500">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                    <span>Loading company team members...</span>
+                  </div>
+                ) : employeesError ? (
+                  <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-semibold">Unable to load team members:</span> {formatApiError(employeesError) || "Please check permissions or contact your admin."}
+                    </div>
+                  </div>
+                ) : employees.length === 0 ? (
+                  <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                    <div>No eligible internal team members found in your company. Add employees in the Team module first.</div>
+                  </div>
+                ) : (
+                  <select
+                    required
+                    value={selectedEmployeeId}
+                    onChange={(e) => setSelectedEmployeeId(e.target.value)}
+                    className="w-full text-xs h-9 bg-white border border-slate-200 rounded-md px-3 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">-- Choose Team Member --</option>
+                    {employees.map((emp) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.full_name || emp.name || "Unnamed"} {emp.role ? `(${emp.role})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <p className="text-[11px] text-slate-400">
-                  Note: If an active link already exists for this member, it will be reused.
+                  Note: If an active link already exists for this member, it will be retrieved and displayed ready to share.
                 </p>
               </div>
 
@@ -525,6 +563,94 @@ export default function PublicLinksTab({ employees = [] }) {
                 </Button>
               </DialogFooter>
             </form>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Modal: Link Ready to Share (Newly Created or Reused) */}
+      {shareDialog.open && shareDialog.link && (
+        <Dialog open={shareDialog.open} onOpenChange={(val) => !val && setShareDialog({ open: false, link: null, isReused: false, message: "" })}>
+          <DialogContent className="max-w-md bg-white">
+            <DialogHeader>
+              <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mb-1">
+                <Check className="w-5 h-5" />
+              </div>
+              <DialogTitle className="flex items-center gap-2 text-slate-900 font-bold text-base">
+                Link Ready to Share
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-600 space-y-1 pt-1">
+                {shareDialog.isReused ? (
+                  <span className="text-amber-800 font-semibold bg-amber-50 px-2.5 py-1 rounded-md border border-amber-200 inline-block">
+                    ℹ️ Existing Active Reusable Link
+                  </span>
+                ) : (
+                  <span className="text-emerald-800 font-semibold bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200 inline-block">
+                    ✓ New Public Link Generated
+                  </span>
+                )}
+                <div className="pt-1 text-slate-700">
+                  Assigned to: <strong className="text-slate-900">{shareDialog.link.assigned_team_member_name || shareDialog.link.team_member_name}</strong>
+                  {(shareDialog.link.assigned_team_member_role || shareDialog.link.team_member_role) && (
+                    <span className="text-slate-500 font-normal"> ({shareDialog.link.assigned_team_member_role || shareDialog.link.team_member_role})</span>
+                  )}. All public submissions will attribute to their workflow.
+                </div>
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3 pt-2">
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-slate-700">Authoritative Public Request URL</Label>
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    readOnly
+                    value={getAbsoluteUrl(shareDialog.link)}
+                    className="text-xs h-9 font-mono bg-slate-50 border-slate-200 text-slate-800 select-all"
+                    onClick={(e) => e.target.select()}
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleCopy(shareDialog.link, "share-modal")}
+                    className={`h-9 px-3 text-xs font-semibold shrink-0 gap-1.5 ${
+                      copiedId === "share-modal" ? "border-emerald-500 text-emerald-700 bg-emerald-50" : ""
+                    }`}
+                  >
+                    {copiedId === "share-modal" ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedId === "share-modal" ? "Copied" : "Copy"}</span>
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <Button
+                  type="button"
+                  onClick={() => handleWhatsAppShare(shareDialog.link)}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs h-9 gap-1.5 shadow-sm"
+                >
+                  <MessageCircle className="w-4 h-4" /> Share on WhatsApp
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => window.open(getAbsoluteUrl(shareDialog.link), "_blank")}
+                  className="text-xs h-9 px-3 gap-1.5 text-slate-700 border-slate-200"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" /> Test Link
+                </Button>
+              </div>
+            </div>
+
+            <DialogFooter className="pt-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShareDialog({ open: false, link: null, isReused: false, message: "" })}
+                className="text-xs w-full sm:w-auto"
+              >
+                Done
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       )}

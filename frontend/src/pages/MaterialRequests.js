@@ -63,7 +63,11 @@ export default function MaterialRequests() {
   // Data fetching
   const { data: requests = [], isLoading } = useMaterialRequestList();
   const { data: clients = [] } = useClientList();
-  const { data: employees = [] } = useEmployeeList();
+  const { 
+    data: employees = [], 
+    isLoading: isEmployeesLoading, 
+    error: employeesError 
+  } = useEmployeeList();
   const invalidateMatReqs = useInvalidateMaterialRequests();
 
   // Filter requests
@@ -340,7 +344,11 @@ export default function MaterialRequests() {
 
         {/* Tab 5: Public Request Links */}
         <TabsContent value="links" className="space-y-4">
-          <PublicLinksTab employees={employees} />
+          <PublicLinksTab 
+            employees={employees} 
+            isEmployeesLoading={isEmployeesLoading} 
+            employeesError={employeesError} 
+          />
         </TabsContent>
       </Tabs>
 
