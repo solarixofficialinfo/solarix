@@ -35,7 +35,7 @@ import {
   FileText, Eye, Navigation, Send, BarChart2, Clock, Edit, RotateCcw, XCircle, Lock
 } from "lucide-react";
 import dayjs from "dayjs";
-import { ProductAutocompleteInput, formatUnit } from "@/components/Inventory/_shared";
+import { ProductAutocompleteInput, formatUnit, getStandardizedUnitOptions } from "@/components/Inventory/_shared";
 import { useDebounce } from "@/hooks/useDebounce";
 import PageHeader from "@/components/PageHeader";
 
@@ -2705,12 +2705,13 @@ export function MaterialRequest({ clientId, onDone, editRequest = null }) {
       return editRequest.items.map((it) => ({
         product: it.product || "",
         size: it.size || "",
-        quantity: it.quantity || 1,
+        unit: formatUnit(it.unit || "Nos"),
+        quantity: it.quantity != null ? it.quantity : 1,
         remarks: it.remarks || "",
         available_stock: it.available_stock,
       }));
     }
-    return [{ product: "", size: "", quantity: 1, remarks: "" }];
+    return [{ product: "", size: "", unit: "Nos", quantity: 1, remarks: "" }];
   });
   const [remarks, setRemarks] = useState(() => editRequest?.remarks || "");
   const [products, setProducts] = useState(() => getCachedProducts() || []);
@@ -2747,7 +2748,7 @@ export function MaterialRequest({ clientId, onDone, editRequest = null }) {
 
   // Add a new empty row and focus its Product field after render
   const addRow = useCallback((afterIndex) => {
-    const newItems = [...items, { product: "", size: "", quantity: 1, remarks: "" }];
+    const newItems = [...items, { product: "", size: "", unit: "Nos", quantity: 1, remarks: "" }];
     setItems(newItems);
     const newRowIndex = newItems.length - 1;
     setTimeout(() => {
@@ -2806,62 +2807,74 @@ export function MaterialRequest({ clientId, onDone, editRequest = null }) {
           return (
             <div key={i} className="space-y-1 border-b border-slate-100 pb-3 md:pb-2 md:border-b-0">
               <div className="grid grid-cols-12 gap-2 items-center">
-                <div className="col-span-8 md:col-span-4">
+                <div className="col-span-12 sm:col-span-4">
                   <ProductAutocompleteInput
                     value={it.product}
                     onChange={(v) => handleProductChange(i, v)}
                     products={products}
                     placeholder="Product"
-                    className="h-10 uppercase font-medium"
+                    className="h-9 uppercase font-medium"
                     testid={`mat-product-${i}`}
                     inputRef={(el) => { productRefs.current[i] = el; }}
                   />
                 </div>
                 <Input
                   placeholder="Size"
-                  className="col-span-4 md:col-span-2 h-10"
+                  className="col-span-6 sm:col-span-2 h-9 font-mono"
                   value={it.size}
                   onChange={(e) => setItems(items.map((x, idx) => idx === i ? { ...x, size: e.target.value } : x))}
                   data-testid={`mat-size-${i}`}
                 />
                 <Input
                   type="number"
+                  step="any"
+                  min="0.01"
                   placeholder="Qty"
-                  className="col-span-4 md:col-span-2 h-10"
-                  min="1"
-                  value={it.quantity || ""}
+                  className="col-span-3 sm:col-span-2 h-9 font-bold"
+                  value={it.quantity ?? ""}
                   onChange={(e) => {
-                    const val = e.target.value === "" ? "" : Number(e.target.value);
+                    const val = e.target.value === "" ? "" : e.target.value;
                     setItems(items.map((x, idx) => idx === i ? { ...x, quantity: val } : x));
                   }}
                   onKeyDown={(e) => handleQtyKeyDown(e, i)}
                 />
+                <select
+                  value={formatUnit(it.unit || "Nos")}
+                  onChange={(e) => setItems(items.map((x, idx) => idx === i ? { ...x, unit: e.target.value } : x))}
+                  className="col-span-3 sm:col-span-1 h-9 bg-white border border-slate-200 rounded-md px-1 text-xs text-slate-700"
+                >
+                  {getStandardizedUnitOptions(it.unit).map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
                 <Input
                   placeholder="Remarks"
-                  className="col-span-6 md:col-span-3 h-10"
+                  className="col-span-10 sm:col-span-2 h-9"
                   value={it.remarks}
                   onChange={(e) => setItems(items.map((x, idx) => idx === i ? { ...x, remarks: e.target.value } : x))}
                 />
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="col-span-2 md:col-span-1 h-10 flex items-center justify-center p-0 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors"
+                  className="col-span-2 sm:col-span-1 h-9 flex items-center justify-center p-0 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors"
                   onClick={() => setItems(items.filter((_, idx) => idx !== i))}
                 >
                   <Trash2 className="w-4 h-4" />
                 </Button>
               </div>
-              {/* Fix 6: Low stock warning indicator (Warning only — does not block submission) */}
+              {/* Low stock warning indicator (Warning only — does not block submission) */}
               {isLowStock && (
                 <div className="flex items-center gap-1.5 text-xs text-amber-700 font-medium pl-1">
                   <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Low Stock (Available: {availStock})</span>
+                  <span>Low Stock (Available: {availStock}) — Request Allowed</span>
                 </div>
               )}
             </div>
           );
         })}
-        <Button size="sm" variant="outline" onClick={() => setItems([...items, { product: "", size: "", quantity: 1, remarks: "" }])}>
+        <Button size="sm" variant="outline" onClick={() => setItems([...items, { product: "", size: "", unit: "Nos", quantity: 1, remarks: "" }])}>
           <Plus className="w-4 h-4 mr-1" /> Add Item
         </Button>
         <Textarea placeholder="Additional remarks" rows={2} value={remarks} onChange={(e) => setRemarks(e.target.value)} />

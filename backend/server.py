@@ -8078,14 +8078,21 @@ async def create_material_request(data: MaterialRequestIn, user=Depends(require_
         raise HTTPException(status_code=404, detail="Client not found")
     normalized_items = []
     for item in data.items or []:
-        product = (item.get("product") or "").strip().upper()
+        product = (item.get("product") or item.get("product_name") or "").strip().upper()
         size = (item.get("size") or "").strip()
-        quantity = float(item.get("quantity") or 0)
+        unit = (item.get("unit") or "Nos").strip()
+        product_id = item.get("product_id") or None
+        try:
+            quantity = float(item.get("quantity") or 0)
+        except (ValueError, TypeError):
+            quantity = 0.0
         if not product or quantity <= 0:
             continue
         normalized_items.append({
+            "product_id": product_id,
             "product": product,
             "size": size,
+            "unit": unit,
             "quantity": quantity,
             "remarks": item.get("remarks") or "",
         })
@@ -8252,12 +8259,19 @@ async def update_material_request(req_id: str, data: MaterialRequestUpdateIn, us
         for item in data.items:
             product = (item.get("product") or "").strip().upper()
             size = (item.get("size") or "").strip()
-            quantity = float(item.get("quantity") or 0)
+            unit = (item.get("unit") or "Nos").strip()
+            product_id = item.get("product_id") or None
+            try:
+                quantity = float(item.get("quantity") or 0)
+            except (ValueError, TypeError):
+                quantity = 0.0
             if not product or quantity <= 0:
                 continue
             normalized_items.append({
+                "product_id": product_id,
                 "product": product,
                 "size": size,
+                "unit": unit,
                 "quantity": quantity,
                 "remarks": item.get("remarks") or "",
             })
@@ -8963,10 +8977,13 @@ async def submit_public_material_request(data: PublicMaterialRequestSubmitIn, re
     
     normalized_items = []
     for it in data.items:
-        p_name = (it.get("product") or "").strip().upper()
+        p_name = (it.get("product") or it.get("product_name") or "").strip().upper()
         p_size = (it.get("size") or "").strip()
         p_unit = (it.get("unit") or "Nos").strip()
-        p_qty = float(it.get("quantity") or 0)
+        try:
+            p_qty = float(it.get("quantity") or 0)
+        except (ValueError, TypeError):
+            p_qty = 0.0
         p_rem = (it.get("remarks") or "").strip()
         p_id = it.get("product_id") or None
         if not p_name or p_qty <= 0:
@@ -11035,8 +11052,8 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
         if orig_ch_val and f"[orig_ch:" not in remarks_val:
             remarks_val = f"{remarks_val} [orig_ch:{orig_ch_val}]".strip()
 
-        # Return ceiling validation for B2B Return and Client Return
-        if source_type_val in ("B2B Return", "Client Return", "Return From Client"):
+        # Return ceiling validation for B2B Return (Client Return does not restrict by prior dispatch)
+        if source_type_val == "B2B Return":
             orig_doc = None
             if orig_entry_id_val:
                 orig_doc = await db.outward_entries.find_one({"company_id": company_id, "id": orig_entry_id_val})
@@ -11047,7 +11064,7 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
                 orig_qty = float(orig_doc.get("quantity") or 0.0)
                 all_prev = await db.inward_entries.find({
                     "company_id": company_id,
-                    "source_type": {"$in": ["B2B Return", "Client Return", "Return From Client"]}
+                    "source_type": "B2B Return"
                 }).to_list(5000)
                 prev_returns = [
                     r for r in all_prev
@@ -11069,14 +11086,15 @@ async def save_inward_entry_logic(data: InwardIn, company_id: str, user_id: str,
                 all_entity_outs = await db.outward_entries.find(q_out).to_list(5000)
                 matching_outs = [
                     o for o in all_entity_outs
-                    if norm_product_name(o.get("product")) == norm_product_name(pn)
+                    if (o.get("party_type") in ("B2B Customer", "B2B Sale") or "[party_type:B2B" in str(o.get("remarks") or ""))
+                    and norm_product_name(o.get("product")) == norm_product_name(pn)
                     and norm_str(o.get("size")) == norm_str(data.size)
                 ]
                 tot_dispatched = sum(float(o.get("quantity") or 0.0) for o in matching_outs)
 
                 q_in: Dict[str, Any] = {
                     "company_id": company_id,
-                    "source_type": {"$in": ["B2B Return", "Client Return", "Return From Client"]}
+                    "source_type": "B2B Return"
                 }
                 if client_id_val:
                     q_in["$or"] = [
@@ -11979,7 +11997,8 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
     if orig_ch_val and f"[orig_ch:" not in remarks_val:
         remarks_val = f"{remarks_val} [orig_ch:{orig_ch_val}]".strip()
 
-    if source_type_val in ("B2B Return", "Client Return", "Return From Client"):
+    # Return ceiling validation for B2B Return (Client Return does not restrict by prior dispatch)
+    if source_type_val == "B2B Return":
         orig_doc = None
         if orig_entry_id_val:
             orig_doc = await db.outward_entries.find_one({"company_id": cid, "id": orig_entry_id_val})
@@ -11987,7 +12006,7 @@ async def update_inward(entry_id: str, data: InwardIn, user=Depends(get_current_
             orig_qty = float(orig_doc.get("quantity") or 0.0)
             all_prev = await db.inward_entries.find({
                 "company_id": cid,
-                "source_type": {"$in": ["B2B Return", "Client Return", "Return From Client"]}
+                "source_type": "B2B Return"
             }).to_list(5000)
             prev_returns = [
                 r for r in all_prev

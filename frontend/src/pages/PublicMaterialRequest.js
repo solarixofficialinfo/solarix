@@ -30,11 +30,7 @@ import {
   FileSpreadsheet
 } from "lucide-react";
 import PublicMaterialImportModal from "@/components/MaterialRequests/PublicMaterialImportModal";
-
-// Standard inventory units
-const STANDARD_UNITS = [
-  "Nos", "Mtr", "Set", "Kg", "Box", "Pkt", "Bundle", "Roll", "Sq.Ft", "Ltr", "Pairs"
-];
+import { formatUnit, getStandardizedUnitOptions } from "@/lib/units";
 
 function generateUUID() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -166,7 +162,7 @@ export default function PublicMaterialRequest() {
         product_id: productObj.id || null,
         isCatalogProduct: true,
         size: productObj.size || productObj.rating || copy[index].size || "",
-        unit: productObj.unit || copy[index].unit || "Nos",
+        unit: formatUnit(productObj.unit || copy[index].unit || "Nos"),
         showSuggestions: false
       };
       return copy;
@@ -215,7 +211,11 @@ export default function PublicMaterialRequest() {
       const isInitialBlankOnly =
         prev.length === 1 && !prev[0].product.trim();
       const baseList = isInitialBlankOnly ? [] : prev;
-      return [...baseList, ...importedItems];
+      const normalized = importedItems.map((it) => ({
+        ...it,
+        unit: formatUnit(it.unit || "Nos"),
+      }));
+      return [...baseList, ...normalized];
     });
   };
 
@@ -252,7 +252,7 @@ export default function PublicMaterialRequest() {
         product_id: it.product_id || null,
         product: it.product.trim(),
         size: (it.size || "").trim(),
-        unit: it.unit || "Nos",
+        unit: formatUnit(it.unit || "Nos"),
         quantity: parseFloat(it.quantity) || 0,
         remarks: (it.remarks || "").trim(),
       }))
@@ -606,7 +606,7 @@ export default function PublicMaterialRequest() {
             <div className="space-y-3">
               {items.map((row, idx) => {
                 // Filter matching products for autocomplete
-                const matchingProducts = (linkData.products || []).filter((prod) => {
+                const matchingProducts = (linkData?.products || []).filter((prod) => {
                   if (!row.product || !row.showSuggestions) return false;
                   const query = row.product.toLowerCase().trim();
                   if (query.length < 1) return false;
@@ -733,11 +733,11 @@ export default function PublicMaterialRequest() {
                             className="text-xs h-8 bg-white w-20 font-bold"
                           />
                           <select
-                            value={row.unit}
+                            value={formatUnit(row.unit)}
                             onChange={(e) => handleItemChange(idx, "unit", e.target.value)}
                             className="text-xs h-8 bg-white border border-slate-200 rounded px-1.5 flex-1 text-slate-700"
                           >
-                            {STANDARD_UNITS.map((u) => (
+                            {getStandardizedUnitOptions(row.unit).map((u) => (
                               <option key={u} value={u}>
                                 {u}
                               </option>

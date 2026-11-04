@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useCallback } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { formatUnit, normalizeUnit, getStandardizedUnitOptions } from "@/lib/units";
 import {
   FileSpreadsheet,
   Upload,
@@ -22,11 +23,6 @@ import {
   HelpCircle,
   ListPlus
 } from "lucide-react";
-
-// Standard inventory units
-const STANDARD_UNITS = [
-  "Nos", "Mtr", "Set", "Kg", "Box", "Pkt", "Bundle", "Roll", "Sq.Ft", "Ltr", "Pairs"
-];
 
 function generateUUID() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -85,25 +81,58 @@ const splitLine = (line, delimiter) => {
 
 const normalizeHeader = (text) => String(text || "").trim().toLowerCase();
 
-const hasHeaderRow = (row) =>
-  row.some((cell) => {
-    const text = normalizeHeader(cell);
-    return /product|item|description|material|size|spec|specification|qty|quantity|count|unit|uom/.test(text);
-  });
+const isSerialNumberCell = (text) => {
+  const t = normalizeHeader(text);
+  return /^(sr|s\.?no|#|sn|sl\.?no|sr_no|item_no)$/i.test(t);
+};
 
-const inferFieldMap = (headerRow) => {
+const hasHeaderRow = (row) => {
+  if (!row || !row.length) return false;
+  return row.some((cell) => {
+    const text = normalizeHeader(cell);
+    return /^(product|product[\s_]*name|item|item[\s_]*name|item[\s_]*desc|description|material|material[\s_]*name|size|spec|specification|specs|qty|quantity|unit|uom|measure)$/i.test(text);
+  });
+};
+
+const inferFieldMap = (headerRow, hasHeaders = true) => {
+  if (!hasHeaders) {
+    const rowLen = headerRow.length;
+    const firstIsSr = isSerialNumberCell(headerRow[0]) || /^\d+$/.test(String(headerRow[0] || "").trim());
+    if (rowLen >= 5 && firstIsSr) {
+      return { product: 1, size: 2, quantity: 3, unit: 4 };
+    }
+    if (rowLen === 4) {
+      return { product: 0, size: 1, quantity: 2, unit: 3 };
+    }
+    if (rowLen === 3) {
+      const col1IsNum = !isNaN(parseFloat(String(headerRow[1]).replace(/,/g, ""))) && !/[a-zA-Z]/.test(String(headerRow[1]));
+      if (col1IsNum) {
+        return { product: 0, size: -1, quantity: 1, unit: 2 };
+      }
+      return { product: 0, size: 1, quantity: 2, unit: -1 };
+    }
+    if (rowLen === 2) {
+      return { product: 0, size: -1, quantity: 1, unit: -1 };
+    }
+    return { product: 0, size: 1, quantity: 2, unit: 3 };
+  }
+
   let productIdx, sizeIdx, quantityIdx, unitIdx;
 
-  (headerRow || []).forEach((cell, index) => {
+  headerRow.forEach((cell, index) => {
     const name = normalizeHeader(cell);
-    if (productIdx === undefined && /product|item|description|material|name/.test(name)) {
-      productIdx = index;
-    } else if (sizeIdx === undefined && /size|spec|specification|dimensions|rating|capacity/.test(name)) {
-      sizeIdx = index;
-    } else if (quantityIdx === undefined && /qty|quantity|count|nos|amount|pieces/.test(name)) {
-      quantityIdx = index;
-    } else if (unitIdx === undefined && (/^unit\b|uom|measure/.test(name) || name === "unit")) {
+    if (isSerialNumberCell(name)) {
+      return;
+    }
+    // Match unit BEFORE quantity so headers like "Nos", "Unit (Nos)" are assigned to unitIdx
+    if (unitIdx === undefined && (/^unit\b|^uom\b|^measure\b|^units\b|^nos\b/i.test(name) || name === "unit" || name === "uom")) {
       unitIdx = index;
+    } else if (quantityIdx === undefined && (/^qty\b|^quantity\b|^count\b|^req.*qty|^order.*qty/i.test(name) || name === "qty" || name === "quantity")) {
+      quantityIdx = index;
+    } else if (sizeIdx === undefined && (/^size\b|^spec\b|^specification\b|^dimensions\b|^rating\b|^capacity\b/i.test(name) || name === "size" || name === "spec")) {
+      sizeIdx = index;
+    } else if (productIdx === undefined && (/^product\b|^item\b|^description\b|^material\b|^name\b/i.test(name) || name === "product" || name === "item")) {
+      productIdx = index;
     }
   });
 
@@ -122,6 +151,61 @@ export default function PublicMaterialImportModal({
   onImportRows
 }) {
   const [activeTab, setActiveTab] = useState("bulk"); // "bulk" | "manual"
+
+  // ── Pre-indexed Catalog Cache (O(1) Map lookups for instant responsiveness) ──
+  const { catalogMapByNameAndSize, catalogMapByName, searchCatalog } = useMemo(() => {
+    const byNameAndSize = new Map();
+    const byName = new Map();
+    const searchList = [];
+
+    for (const p of productsCatalog || []) {
+      const name = (p.name || "").trim().toUpperCase();
+      const size = (p.size || "").trim().toUpperCase();
+      const unit = formatUnit(p.unit || "Nos");
+      const item = { ...p, name: p.name || "", size: p.size || "", unit };
+
+      if (name && size) {
+        byNameAndSize.set(`${name}:::${size}`, item);
+      }
+      if (name && !byName.has(name)) {
+        byName.set(name, item);
+      }
+
+      searchList.push({
+        ...item,
+        _searchKey: `${name} ${size} ${unit}`.toLowerCase()
+      });
+    }
+
+    return {
+      catalogMapByNameAndSize: byNameAndSize,
+      catalogMapByName: byName,
+      searchCatalog: searchList
+    };
+  }, [productsCatalog]);
+
+  // Try matching product against catalog in O(1) without modifying user input
+  const matchCatalogProduct = useCallback((prodName, prodSize) => {
+    if (!prodName || !prodName.trim()) return { product_id: null, isCatalogProduct: false };
+    const cleanName = prodName.trim().toUpperCase();
+    const cleanSize = (prodSize || "").trim().toUpperCase();
+
+    // 1. Exact Name + Size match (O(1))
+    if (cleanSize) {
+      const exact = catalogMapByNameAndSize.get(`${cleanName}:::${cleanSize}`);
+      if (exact) {
+        return { product_id: exact.id, isCatalogProduct: true, catalogUnit: exact.unit, catalogSize: exact.size };
+      }
+    }
+
+    // 2. Exact Name match only (O(1))
+    const nameMatch = catalogMapByName.get(cleanName);
+    if (nameMatch) {
+      return { product_id: nameMatch.id, isCatalogProduct: true, catalogUnit: nameMatch.unit, catalogSize: nameMatch.size };
+    }
+
+    return { product_id: null, isCatalogProduct: false };
+  }, [catalogMapByNameAndSize, catalogMapByName]);
 
   // ── Bulk Mode State ──
   const [bulkInputType, setBulkInputType] = useState("paste"); // "paste" | "file"
@@ -142,31 +226,23 @@ export default function PublicMaterialImportModal({
     { id: generateUUID(), product: "", product_id: null, isCatalogProduct: false, size: "", quantity: "1", unit: "Nos", remarks: "", showSuggestions: false },
   ]);
 
-  // Try matching product against catalog without modifying user input
-  const matchCatalogProduct = (prodName, prodSize) => {
-    if (!prodName || !prodName.trim()) return { product_id: null, isCatalogProduct: false };
-    const cleanName = prodName.trim().toUpperCase();
-    const cleanSize = (prodSize || "").trim().toUpperCase();
+  // Focused row suggestion state for optimal performance
+  const [activeSuggestionIdx, setActiveSuggestionIdx] = useState(null);
+  const [suggestionQuery, setSuggestionQuery] = useState("");
 
-    // 1. Exact Name + Size match
-    const exactMatch = productsCatalog.find((p) => {
-      const pName = (p.name || "").trim().toUpperCase();
-      const pSize = (p.size || "").trim().toUpperCase();
-      return pName === cleanName && (!cleanSize || pSize === cleanSize);
-    });
-
-    if (exactMatch) {
-      return { product_id: exactMatch.id, isCatalogProduct: true, catalogUnit: exactMatch.unit, catalogSize: exactMatch.size };
+  const activeSuggestions = useMemo(() => {
+    if (activeSuggestionIdx === null || !suggestionQuery.trim()) return [];
+    const q = suggestionQuery.trim().toLowerCase();
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const matches = [];
+    for (const p of searchCatalog) {
+      if (tokens.every((t) => p._searchKey.includes(t))) {
+        matches.push(p);
+        if (matches.length >= 8) break;
+      }
     }
-
-    // 2. Exact Name match only
-    const nameMatch = productsCatalog.find((p) => (p.name || "").trim().toUpperCase() === cleanName);
-    if (nameMatch) {
-      return { product_id: nameMatch.id, isCatalogProduct: true, catalogUnit: nameMatch.unit, catalogSize: nameMatch.size };
-    }
-
-    return { product_id: null, isCatalogProduct: false };
-  };
+    return matches;
+  }, [activeSuggestionIdx, suggestionQuery, searchCatalog]);
 
   // Parse raw text into structured preview rows
   const parseRawArrays = (arrays) => {
@@ -180,7 +256,7 @@ export default function PublicMaterialImportModal({
 
     const firstRow = cleanArrays[0];
     const isHeader = hasHeaderRow(firstRow);
-    const fieldMap = inferFieldMap(firstRow);
+    const fieldMap = inferFieldMap(firstRow, isHeader);
     const bodyRows = cleanArrays.slice(isHeader ? 1 : 0);
 
     if (!bodyRows.length) {
@@ -188,19 +264,18 @@ export default function PublicMaterialImportModal({
     }
 
     return bodyRows.map((row, index) => {
-      const rawProduct = (row[fieldMap.product] || "").trim();
+      const rawProduct = fieldMap.product >= 0 ? (row[fieldMap.product] || "").trim() : "";
       // CRITICAL: Preserve exact size without altering cable notations like 4C*0.75
-      const rawSize = (row[fieldMap.size] || "").trim();
-      const rawQtyStr = (row[fieldMap.quantity] || "").replace(/,/g, "").trim();
+      const rawSize = fieldMap.size >= 0 ? (row[fieldMap.size] || "").trim() : "";
+      const rawQtyCell = fieldMap.quantity >= 0 ? row[fieldMap.quantity] : "";
+      const rawQtyStr = String(rawQtyCell ?? "").replace(/,/g, "").trim();
       const qty = parseFloat(rawQtyStr) || 0;
-      let rawUnit = (row[fieldMap.unit] || "").trim();
-
-      // Normalize unit case to standard if match found, else keep user's unit
-      const standardMatch = STANDARD_UNITS.find((u) => u.toLowerCase() === rawUnit.toLowerCase());
-      const finalUnit = standardMatch || (rawUnit ? rawUnit : "Nos");
+      const rawUnitCell = fieldMap.unit >= 0 ? (row[fieldMap.unit] || "").trim() : "";
+      const finalUnit = formatUnit(rawUnitCell || "Nos");
 
       // Optional Catalog Lookup
       const catalogMatch = matchCatalogProduct(rawProduct, rawSize);
+      const effectiveUnit = catalogMatch.catalogUnit ? formatUnit(catalogMatch.catalogUnit) : finalUnit;
 
       const isValid = rawProduct.length > 0 && qty > 0;
       let errorReason = "";
@@ -217,7 +292,7 @@ export default function PublicMaterialImportModal({
         product: rawProduct,
         size: rawSize,
         quantity: qty > 0 ? String(qty) : (rawQtyStr || "0"),
-        unit: finalUnit,
+        unit: effectiveUnit || "Nos",
         product_id: catalogMatch.product_id,
         isCatalogProduct: catalogMatch.isCatalogProduct,
         isValid,
@@ -349,7 +424,9 @@ export default function PublicMaterialImportModal({
         const match = matchCatalogProduct(value, updated.size);
         updated.product_id = match.product_id;
         updated.isCatalogProduct = match.isCatalogProduct;
-        updated.showSuggestions = true;
+        if (match.catalogUnit) {
+          updated.unit = formatUnit(match.catalogUnit);
+        }
       }
       if (field === "size") {
         const match = matchCatalogProduct(updated.product, value);
@@ -370,11 +447,12 @@ export default function PublicMaterialImportModal({
         product_id: prod.id || null,
         isCatalogProduct: true,
         size: prod.size || copy[index].size || "",
-        unit: prod.unit || copy[index].unit || "Nos",
-        showSuggestions: false
+        unit: formatUnit(prod.unit || copy[index].unit || "Nos"),
       };
       return copy;
     });
+    setActiveSuggestionIdx(null);
+    setSuggestionQuery("");
   };
 
   const addManualRow = () => {
@@ -409,7 +487,7 @@ export default function PublicMaterialImportModal({
       product_id: r.product_id || null,
       isCatalogProduct: Boolean(r.isCatalogProduct && r.product_id),
       size: (r.size || "").trim(),
-      unit: r.unit || "Nos",
+      unit: formatUnit(r.unit || "Nos"),
       quantity: String(r.quantity || "1"),
       remarks: "",
       showSuggestions: false,
@@ -447,8 +525,8 @@ export default function PublicMaterialImportModal({
           product_id: r.product_id || null,
           isCatalogProduct: Boolean(r.isCatalogProduct && r.product_id),
           size: (r.size || "").trim(),
-          unit: r.unit || "Nos",
-          quantity: String(q),
+          unit: formatUnit(r.unit || "Nos"),
+          quantity: String(r.quantity || q),
           remarks: (r.remarks || "").trim(),
           showSuggestions: false,
         });
@@ -752,11 +830,11 @@ export default function PublicMaterialImportModal({
                               </td>
                               <td className="p-2">
                                 <select
-                                  value={row.unit}
+                                  value={formatUnit(row.unit)}
                                   onChange={(e) => handleUpdatePreviewCell(idx, "unit", e.target.value)}
                                   className="text-xs h-7 bg-white border border-slate-200 rounded px-1.5 text-slate-700 w-full"
                                 >
-                                  {STANDARD_UNITS.map((u) => (
+                                  {getStandardizedUnitOptions(row.unit).map((u) => (
                                     <option key={u} value={u}>
                                       {u}
                                     </option>
@@ -847,11 +925,7 @@ export default function PublicMaterialImportModal({
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {manualRows.map((row, idx) => {
-                        const matchingProds = (productsCatalog || []).filter((p) => {
-                          if (!row.product || !row.showSuggestions) return false;
-                          const q = row.product.toLowerCase().trim();
-                          return (p.name || "").toLowerCase().includes(q);
-                        });
+                        const isThisRowActive = activeSuggestionIdx === idx;
 
                         return (
                           <tr key={row.id} className="hover:bg-slate-50/80 transition-colors">
@@ -862,21 +936,30 @@ export default function PublicMaterialImportModal({
                               <Input
                                 value={row.product}
                                 placeholder="Product name (search or manual)"
-                                onFocus={() => handleManualRowChange(idx, "showSuggestions", true)}
-                                onBlur={() => setTimeout(() => handleManualRowChange(idx, "showSuggestions", false), 250)}
-                                onChange={(e) => handleManualRowChange(idx, "product", e.target.value)}
+                                onFocus={() => {
+                                  setActiveSuggestionIdx(idx);
+                                  setSuggestionQuery(row.product);
+                                }}
+                                onBlur={() => setTimeout(() => {
+                                  setActiveSuggestionIdx((curr) => curr === idx ? null : curr);
+                                }, 250)}
+                                onChange={(e) => {
+                                  handleManualRowChange(idx, "product", e.target.value);
+                                  setActiveSuggestionIdx(idx);
+                                  setSuggestionQuery(e.target.value);
+                                }}
                                 className="text-xs h-7 bg-white"
                               />
 
-                              {row.showSuggestions && matchingProds.length > 0 && (
+                              {isThisRowActive && activeSuggestions.length > 0 && (
                                 <div className="absolute z-30 top-full left-2 right-2 mt-1 max-h-40 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl p-1 text-xs divide-y divide-slate-100">
                                   <div className="px-2 py-1 text-[10px] font-semibold text-blue-600 bg-blue-50/60 rounded">
                                     Product Master Suggestions (Optional)
                                   </div>
-                                  {matchingProds.slice(0, 8).map((prod) => (
+                                  {activeSuggestions.map((prod) => (
                                     <button
                                       type="button"
-                                      key={prod.id || prod.name}
+                                      key={prod.id || `${prod.name}-${prod.size}`}
                                       onMouseDown={(e) => {
                                         e.preventDefault();
                                         handleSelectManualProduct(idx, prod);
@@ -884,7 +967,10 @@ export default function PublicMaterialImportModal({
                                       className="w-full text-left p-1.5 rounded hover:bg-blue-50 text-slate-800 transition-colors flex items-center justify-between text-xs"
                                     >
                                       <span className="font-medium text-slate-900">{prod.name}</span>
-                                      <span className="text-[10px] text-slate-400">{prod.size}</span>
+                                      <div className="text-right">
+                                        {prod.size && <span className="text-[10px] text-slate-400 font-mono block">{prod.size}</span>}
+                                        {prod.unit && <span className="text-[10px] text-blue-600 font-semibold block">{formatUnit(prod.unit)}</span>}
+                                      </div>
                                     </button>
                                   ))}
                                 </div>
@@ -911,11 +997,11 @@ export default function PublicMaterialImportModal({
                             </td>
                             <td className="p-2">
                               <select
-                                value={row.unit}
+                                value={formatUnit(row.unit)}
                                 onChange={(e) => handleManualRowChange(idx, "unit", e.target.value)}
                                 className="text-xs h-7 bg-white border border-slate-200 rounded px-1.5 text-slate-700 w-full"
                               >
-                                {STANDARD_UNITS.map((u) => (
+                                {getStandardizedUnitOptions(row.unit).map((u) => (
                                   <option key={u} value={u}>
                                     {u}
                                   </option>

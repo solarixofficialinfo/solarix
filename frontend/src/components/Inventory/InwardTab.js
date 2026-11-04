@@ -141,28 +141,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
   const isB2bReturn = form.source_type === "B2B Return";
   const isRepairSource = form.source_type === "Repair Return";
 
-  // Eligible returns queries for Client Return and B2B Return
-  const { data: eligibleClientReturnsData } = useQuery({
-    queryKey: ["eligible-returns-client", form.client_id, form.client_name, form.source_name, editing?.id],
-    queryFn: async () => {
-      const entId = form.client_id;
-      const entName = form.client_name || form.source_name;
-      if (!entId && !entName) return { transactions: [], total_eligible: 0 };
-      const res = await api.get("/inventory/eligible-returns", {
-        params: {
-          return_type: "client_return",
-          entity_id: entId || undefined,
-          entity_name: entName || undefined,
-          exclude_entry_id: editing?.id || undefined,
-        }
-      });
-      return res.data || { transactions: [], total_eligible: 0 };
-    },
-    enabled: isClientReturn && Boolean(form.client_id || form.source_name || form.client_name),
-    staleTime: 5000,
-  });
-  const eligibleClientOutwards = eligibleClientReturnsData?.transactions || [];
-  const selectedOriginalClientOutward = eligibleClientOutwards.find((o) => o.id === form.original_entry_id);
+  // Eligible returns queries for B2B Return (Client Return does not require outward dispatch matching)
 
   const { data: eligibleB2bReturnsData } = useQuery({
     queryKey: ["eligible-returns-b2b", form.client_id, form.source_name, editing?.id],
@@ -310,11 +289,7 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
       return;
     }
 
-    // Return ceiling validation
-    if (isClientReturn && selectedOriginalClientOutward && Number(form.quantity) > selectedOriginalClientOutward.available_quantity) {
-      toast.error(`Return quantity (${form.quantity}) exceeds remaining available return quantity (${selectedOriginalClientOutward.available_quantity}) for selected outward dispatch!`);
-      return;
-    }
+    // Return ceiling validation (B2B Return only)
     if (isB2bReturn && selectedOriginalB2bSale && Number(form.quantity) > selectedOriginalB2bSale.available_quantity) {
       toast.error(`Return quantity (${form.quantity}) exceeds remaining available return quantity (${selectedOriginalB2bSale.available_quantity}) for selected B2B sale!`);
       return;
@@ -692,96 +667,26 @@ export default function InwardTab({ products = [], onChanged, globalSearch = "" 
                       testid="inw-vendor-input"
                     />
                   ) : isClientReturn ? (
-                    <div className="space-y-2">
-                      <ClientAutocompleteInput
-                        value={form.client_name || form.source_name || ""}
-                        onChange={(val, matchedClient) => {
-                          setForm((prev) => ({
-                            ...prev,
-                            client_id: matchedClient?.id || "",
-                            client_name: matchedClient?.full_name || val,
-                            source_name: matchedClient?.full_name || val,
-                            source_id: matchedClient?.id || "",
-                            vendor_id: "",
-                            original_entry_id: "",
-                            original_challan_no: "",
-                          }));
-                        }}
-                        clients={clients}
-                        placeholder="Search client to match outward..."
-                        className="h-10 text-xs bg-white mt-1 rounded-xl"
-                        testid="inw-client-input"
-                        required
-                      />
-
-                      {/* Original Client Outward Matcher */}
-                      <div>
-                        <Label className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
-                          Original Client Outward <span className="text-slate-400 font-normal">(Match against dispatch)</span>
-                        </Label>
-                        {eligibleClientOutwards.length > 0 ? (
-                          <Select
-                            value={form.original_entry_id || "none"}
-                            onValueChange={(val) => {
-                              if (val === "none") {
-                                setForm((prev) => ({ ...prev, original_entry_id: "", original_challan_no: "" }));
-                                return;
-                              }
-                              const item = eligibleClientOutwards.find((o) => o.id === val);
-                              if (item) {
-                                setForm((prev) => ({
-                                  ...prev,
-                                  original_entry_id: item.id,
-                                  original_challan_no: item.challan_no || item.reference_number || "",
-                                  product: item.product || prev.product,
-                                  product_id: item.product_id || prev.product_id,
-                                  size: item.size || prev.size,
-                                  unit: formatUnit(item.unit || prev.unit || "Nos"),
-                                  quantity: prev.quantity ? prev.quantity : String(item.available_quantity),
-                                }));
-                              }
-                            }}
-                          >
-                            <SelectTrigger className="h-10 text-xs bg-white mt-1 rounded-xl" data-testid="inw-orig-client-select">
-                              <SelectValue placeholder="Select original outward dispatch..." />
-                            </SelectTrigger>
-                            <SelectContent className="max-h-60">
-                              <SelectItem value="none">-- Select original outward dispatch --</SelectItem>
-                              {eligibleClientOutwards.map((o) => (
-                                <SelectItem key={o.id} value={o.id}>
-                                  {o.date} · Ref #{o.challan_no} · {o.product} ({o.size || "Standard"}) — Available: {o.available_quantity} {o.unit} (Orig: {o.original_quantity})
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <div className="mt-1.5 px-3 py-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md">
-                            {form.client_id || form.client_name || form.source_name
-                              ? "No prior outward dispatches with returnable quantity found for this client."
-                              : "Select a client first to view eligible outward dispatches."}
-                          </div>
-                        )}
-
-                        {selectedOriginalClientOutward && (
-                          <div className="mt-2 p-2.5 bg-purple-50/70 border border-purple-200 rounded-lg text-xs space-y-1">
-                            <div className="font-semibold text-purple-900 flex items-center justify-between">
-                              <span>Linked Outward: Ref #{selectedOriginalClientOutward.challan_no} ({selectedOriginalClientOutward.date})</span>
-                              <span className="font-mono bg-purple-100 text-purple-800 px-2 py-0.5 rounded text-[11px]">
-                                Available to return: {selectedOriginalClientOutward.available_quantity} {selectedOriginalClientOutward.unit}
-                              </span>
-                            </div>
-                            <div className="text-purple-700 text-[11px]">
-                              Original Dispatched: {selectedOriginalClientOutward.original_quantity} {selectedOriginalClientOutward.unit} · Already Returned: {selectedOriginalClientOutward.already_returned} {selectedOriginalClientOutward.unit}
-                            </div>
-                            {Number(form.quantity) > selectedOriginalClientOutward.available_quantity && (
-                              <div className="text-red-600 font-semibold text-[11px] mt-1 flex items-center gap-1">
-                                ⚠️ Return quantity ({form.quantity}) exceeds remaining available return quantity ({selectedOriginalClientOutward.available_quantity})!
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                    <ClientAutocompleteInput
+                      value={form.client_name || form.source_name || ""}
+                      onChange={(val, matchedClient) => {
+                        setForm((prev) => ({
+                          ...prev,
+                          client_id: matchedClient?.id || "",
+                          client_name: matchedClient?.full_name || val,
+                          source_name: matchedClient?.full_name || val,
+                          source_id: matchedClient?.id || "",
+                          vendor_id: "",
+                          original_entry_id: "",
+                          original_challan_no: "",
+                        }));
+                      }}
+                      clients={clients}
+                      placeholder="Select existing client..."
+                      className="h-10 text-xs bg-white mt-1 rounded-xl"
+                      testid="inw-client-input"
+                      required
+                    />
                   ) : isB2bReturn ? (
                     <div className="space-y-2">
                       <B2BCustomerAutocompleteInput
