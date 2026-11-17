@@ -1876,28 +1876,37 @@ class CollectionAdapter:
                     await _sync_client_financial_record(doc["company_id"], doc["client_id"], self.table_name, doc, "upsert")
             return InsertManyResult([doc.get("id") for doc in documents])
 
-        if self.table_name == "products" and not _PRODUCTS_HAS_RATE:
-            documents = [{k: v for k, v in doc.items() if k != "rate"} for doc in documents]
+        supa_docs = documents
+        if self.table_name == "products":
+            supa_docs = [_clean_products_doc(doc) for doc in documents]
+            if not _PRODUCTS_HAS_RATE:
+                supa_docs = [{k: v for k, v in doc.items() if k != "rate"} for doc in supa_docs]
+        elif self.table_name == "inward_entries":
+            supa_docs = [_clean_inward_doc(doc) for doc in documents]
+        elif self.table_name == "outward_entries":
+            supa_docs = [_clean_outward_doc(doc) for doc in documents]
+        elif self.table_name == "clients":
+            supa_docs = [_prepare_client_supabase_payload(doc) for doc in documents]
+        elif self.table_name == "companies":
+            supa_docs = [_prepare_company_supabase_payload(doc) for doc in documents]
+
         try:
-            res = supabase.table(self._supabase_table_name).insert(documents, returning="minimal").execute()
+            res = supabase.table(self._supabase_table_name).insert(supa_docs, returning="minimal").execute()
             await LocalFileCollection(self.table_name).insert_many(documents)
             return InsertManyResult([doc.get("id") for doc in documents])
         except Exception as e:
             err_str = str(e)
-            if "PGRST205" in err_str or "Could not find the table" in err_str:
-                return await LocalFileCollection(self.table_name).insert_many(documents)
-            if "PGRST204" in err_str or "Could not find the" in err_str:
-                docs_copy = [{k: v for k, v in doc.items() if k not in ["high_value_asset", "high_value_goods", "serial_number_required", "rate", "opening_stock"]} for doc in documents]
+            logger.warning(f"Batch insert for {self.table_name} failed: {e}. Falling back to individual insert_one.")
+            ids = []
+            for doc in documents:
                 try:
-                    res = supabase.table(self._supabase_table_name).insert(docs_copy, returning="minimal").execute()
-                    await LocalFileCollection(self.table_name).insert_many(documents)
-                    return InsertManyResult([doc.get("id") for doc in documents])
-                except Exception:
-                    return await LocalFileCollection(self.table_name).insert_many(documents)
-            elif "42501" in err_str or "row-level security" in err_str.lower() or "unauthorized" in err_str.lower() or "401" in err_str:
-                return await LocalFileCollection(self.table_name).insert_many(documents)
-            else:
-                return await LocalFileCollection(self.table_name).insert_many(documents)
+                    res = await self.insert_one(doc)
+                    ids.append(res.inserted_id)
+                except Exception as doc_err:
+                    logger.error(f"Fallback insert_one error for {self.table_name}: {doc_err}")
+            if ids:
+                return InsertManyResult(ids)
+            return await LocalFileCollection(self.table_name).insert_many(documents)
 
     async def update_one(self, filter, update, upsert=False):
         global _PRODUCTS_HAS_RATE

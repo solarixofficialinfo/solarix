@@ -392,7 +392,7 @@ const getRefHeaderLabel = (refType) => {
   return refType;
 };
 
-const getRowValidationErrors = (row, mode, productsList = [], isFinalReview = true) => {
+const getRowValidationErrors = (row, mode, productsList = [], isFinalReview = true, globalDefaults = {}) => {
   const errs = [];
   if (!row.product?.trim()) errs.push("Product required");
   if (!row.unit?.trim()) errs.push("Unit required");
@@ -408,22 +408,39 @@ const getRowValidationErrors = (row, mode, productsList = [], isFinalReview = tr
 
   if (mode === "outward") {
     if (isFinalReview) {
-      if (!row.client_name?.trim() && !row.client_id && !row.source_name?.trim()) {
+      const hasParty = Boolean(
+        row.client_name?.trim() ||
+        row.client_id ||
+        row.source_name?.trim() ||
+        globalDefaults?.client_name?.trim() ||
+        globalDefaults?.client_id ||
+        globalDefaults?.source_name?.trim()
+      );
+      if (!hasParty) {
         errs.push("Party required");
       }
     }
   } else {
     // Inward
     if (isFinalReview) {
-      if (row.source_type === "Client Return" && !row.client_name?.trim() && !row.client_id) {
-        errs.push("Client required");
+      if (row.source_type === "Client Return") {
+        const hasClient = Boolean(
+          row.client_name?.trim() ||
+          row.client_id ||
+          globalDefaults?.client_name?.trim() ||
+          globalDefaults?.client_id
+        );
+        if (!hasClient) {
+          errs.push("Client required");
+        }
       }
     }
   }
   return errs;
 };
 
-const isRowValid = (row, mode, productsList = [], isFinalReview = true) => getRowValidationErrors(row, mode, productsList, isFinalReview).length === 0;
+const isRowValid = (row, mode, productsList = [], isFinalReview = true, globalDefaults = {}) =>
+  getRowValidationErrors(row, mode, productsList, isFinalReview, globalDefaults).length === 0;
 
 const propagateDefaults = (currentRows, defaults, mode) => {
   return (currentRows || []).map((row) => {
@@ -1080,6 +1097,24 @@ export default function ManualBulkImport({
         if (row.reference_type === "Bill Number" || globalDefaults.reference_type === "Bill Number" || row.reference_type === "Purchase Invoice") {
           row.bill_number = cleanVal;
         }
+        for (let i = 0; i < next.length; i++) {
+          if (i !== rowIndex && !next[i]._overrides?.reference_value && !next[i]._overrides?.reference_number && !next[i]._overrides?.challan && !next[i]._overrides?.outward_challan_no) {
+            next[i] = {
+              ...next[i],
+              reference_number: cleanVal,
+              challan_number: cleanVal,
+              outward_challan_no: cleanVal,
+              bill_number: row.bill_number || next[i].bill_number,
+            };
+          }
+        }
+      } else if (field === "date") {
+        row.date = value;
+        for (let i = 0; i < next.length; i++) {
+          if (i !== rowIndex && !next[i]._overrides?.date) {
+            next[i] = { ...next[i], date: value };
+          }
+        }
       } else if (field === "client_supplier") {
         if (mode === "inward") {
           row.source_name = value;
@@ -1126,6 +1161,19 @@ export default function ManualBulkImport({
             row.vendor_id = "";
           }
         }
+        for (let i = 0; i < next.length; i++) {
+          if (i !== rowIndex && !next[i]._overrides?.client_supplier && !next[i]._overrides?.client_name) {
+            next[i] = {
+              ...next[i],
+              client_name: row.client_name,
+              client_id: row.client_id,
+              source_name: row.source_name,
+              vendor_id: row.vendor_id,
+              project_name: row.project_name || next[i].project_name,
+              project_id: row.project_id || next[i].project_id,
+            };
+          }
+        }
       } else if (field === "client_name") {
         const matched = extraObj?.client || findClient(value, clients);
         row.client_name = extraObj?.name || (matched ? matched.full_name : value);
@@ -1134,6 +1182,18 @@ export default function ManualBulkImport({
         if (extraObj?.project_name || matched?.project_name) {
           row.project_name = extraObj?.project_name || matched.project_name;
           row.project_id = extraObj?.project_id || matched?.id || "";
+        }
+        for (let i = 0; i < next.length; i++) {
+          if (i !== rowIndex && !next[i]._overrides?.client_supplier && !next[i]._overrides?.client_name) {
+            next[i] = {
+              ...next[i],
+              client_name: row.client_name,
+              client_id: row.client_id,
+              source_name: row.source_name,
+              project_name: row.project_name || next[i].project_name,
+              project_id: row.project_id || next[i].project_id,
+            };
+          }
         }
       } else if (field === "source_name") {
         row.source_name = value;
@@ -1260,12 +1320,12 @@ export default function ManualBulkImport({
     const vRows = [];
     for (let i = 0; i < selectedRows.length; i++) {
       const r = selectedRows[i];
-      if (isRowValid(r, mode, productsList, false)) {
+      if (isRowValid(r, mode, productsList, false, globalDefaults)) {
         vInput++;
       } else {
         invInput++;
       }
-      if (isRowValid(r, mode, productsList, true)) {
+      if (isRowValid(r, mode, productsList, true, globalDefaults)) {
         vReview++;
         vRows.push(r);
       } else {
@@ -1279,12 +1339,44 @@ export default function ManualBulkImport({
       invalidCountReview: invReview,
       validRowsReview: vRows,
     };
-  }, [selectedRows, mode, productsList]);
+  }, [selectedRows, mode, productsList, globalDefaults]);
 
   const invalidRowsCount = isFinalStep ? invalidCountReview : invalidCountInput;
 
   const handleFinalImport = async () => {
-    const validRows = validRowsReview;
+    const validRows = validRowsReview.map((r) => {
+      const rowCopy = { ...r };
+      if (!rowCopy.date && globalDefaults.date) {
+        rowCopy.date = globalDefaults.date;
+      }
+      if (!rowCopy.reference_number && (globalDefaults.reference_number || globalDefaults.challan_number || globalDefaults.outward_challan_no)) {
+        const ref = globalDefaults.reference_number || globalDefaults.challan_number || globalDefaults.outward_challan_no;
+        rowCopy.reference_number = ref;
+        rowCopy.challan_number = ref;
+        rowCopy.outward_challan_no = ref;
+      }
+      if (mode === "outward") {
+        if (!rowCopy.client_name && !rowCopy.source_name && (globalDefaults.client_name || globalDefaults.source_name)) {
+          rowCopy.client_name = globalDefaults.client_name || globalDefaults.source_name || "";
+          rowCopy.source_name = rowCopy.client_name;
+          rowCopy.client_id = globalDefaults.client_id || "";
+        }
+        if (!rowCopy.project_name && globalDefaults.project_name) {
+          rowCopy.project_name = globalDefaults.project_name;
+          rowCopy.project_id = globalDefaults.project_id || "";
+        }
+      } else {
+        if (!rowCopy.source_name && (globalDefaults.source_name || globalDefaults.client_name)) {
+          rowCopy.source_name = globalDefaults.source_name || globalDefaults.client_name || "";
+          rowCopy.vendor_id = globalDefaults.vendor_id || "";
+          if (rowCopy.source_type === "Client Return") {
+            rowCopy.client_name = globalDefaults.client_name || rowCopy.source_name;
+            rowCopy.client_id = globalDefaults.client_id || "";
+          }
+        }
+      }
+      return rowCopy;
+    });
     if (!validRows.length) {
       toast.error("Select at least one valid row to import.");
       return;
@@ -1602,7 +1694,7 @@ export default function ManualBulkImport({
                         const originalIndex = rows.findIndex((r) => r._id === row._id);
                         if (originalIndex === -1) return null;
                         const status = matchProduct(row.product, row.size);
-                        const rowErrors = getRowValidationErrors(row, mode, productsList, false);
+                        const rowErrors = getRowValidationErrors(row, mode, productsList, false, globalDefaults);
                         const availStock = getAvailableStockFast(row.product, row.size);
 
                         return (
@@ -2236,7 +2328,7 @@ export default function ManualBulkImport({
                           const originalIndex = rows.findIndex((r) => r._id === row._id);
                           if (originalIndex === -1) return null;
                           const status = matchProduct(row.product, row.size);
-                          const rowErrors = getRowValidationErrors(row, mode, productsList, true);
+                          const rowErrors = getRowValidationErrors(row, mode, productsList, true, globalDefaults);
                           const availStock = getAvailableStockFast(row.product, row.size);
 
                           return (
