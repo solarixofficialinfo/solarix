@@ -104,26 +104,51 @@ const splitLine = (line, delimiter) => {
   return line.split(delimiter).map((cell) => cell.trim());
 };
 
+const parseQuantity = (val) => {
+  if (val === undefined || val === null) return { value: "", status: "missing" };
+  const str = String(val).replace(/,/g, "").trim();
+  if (str === "") return { value: "", status: "missing" };
+  // Check if string is a valid number: optional sign, digits, optional decimal point and digits
+  // Disallows strings like "3.5C*150", "Nos", "abc", "12a"
+  if (!/^[-+]?(\d+(\.\d+)?|\.\d+)$/.test(str)) {
+    return { value: str, status: "invalid" };
+  }
+  const num = parseFloat(str);
+  if (isNaN(num)) return { value: str, status: "invalid" };
+  if (num <= 0) return { value: num, status: "non_positive" };
+  return { value: num, status: "valid" };
+};
+
+const isSerialHeader = (text) => {
+  const norm = String(text || "").trim().toLowerCase();
+  return /^(sr|sr\.|sr\s*no|s\.?\s*no|serial|serial\s*no|#|no\.?)$/i.test(norm);
+};
+
 const normalizeHeader = (text) => String(text || "").trim().toLowerCase();
 const hasHeaderRow = (row) => row.some((cell) => {
   const text = normalizeHeader(cell);
-  return /product|item|description|size|spec|qty|quantity|unit|vendor|supplier|source|client|project|challan|invoice|bill|remarks|status|date/.test(text);
+  return /product|item|description|material|size|spec|qty|quantity|unit|vendor|supplier|source|client|project|challan|invoice|bill|remarks|status|date|sr\s*no|serial/.test(text);
 });
 
-const inferFieldMap = (headerRow) => {
+const inferFieldMap = (headerRow, sampleRows = []) => {
   const map = {};
   let productIdx, sizeIdx, quantityIdx, unitIdx;
+  let serialIdx;
 
   (headerRow || []).forEach((cell, index) => {
     const name = normalizeHeader(cell);
-    if (productIdx === undefined && /product|item|description|material/.test(name)) {
-      productIdx = index;
-    } else if (sizeIdx === undefined && /size|spec|specification|dimensions|rating|capacity|wp/.test(name)) {
-      sizeIdx = index;
-    } else if (quantityIdx === undefined && /qty|quantity|count|nos|amount|pieces/.test(name)) {
-      quantityIdx = index;
+    if (serialIdx === undefined && isSerialHeader(name)) {
+      serialIdx = index;
     } else if (unitIdx === undefined && (/^unit\b|uom|measure/.test(name) || name === "unit")) {
       unitIdx = index;
+    } else if (quantityIdx === undefined && /^(qty|quantity|quantities|count|pieces|pcs|dispatch\s*qty|inward\s*qty)$/i.test(name.replace(/[^a-z0-9]/g, ""))) {
+      quantityIdx = index;
+    } else if (quantityIdx === undefined && /(qty|quantity|quantities|count|pieces)/i.test(name) && !/amount|rate|price|cost|nos/i.test(name)) {
+      quantityIdx = index;
+    } else if (sizeIdx === undefined && /size|spec|specification|dimensions|rating|capacity|wp/.test(name)) {
+      sizeIdx = index;
+    } else if (productIdx === undefined && /product|item|description|material/.test(name) && !/serial|client|project|vendor|supplier/.test(name)) {
+      productIdx = index;
     }
   });
 
@@ -132,15 +157,23 @@ const inferFieldMap = (headerRow) => {
   if (quantityIdx !== undefined) map.quantity = quantityIdx;
   if (unitIdx !== undefined) map.unit = unitIdx;
 
-  // Strict 4-column fallback for positional data:
-  // 0: product, 1: size, 2: quantity, 3: unit.
-  // We NEVER map extra columns (4, 5, 6, etc.) to transaction metadata!
-  const requiredFields = ["product", "size", "quantity", "unit"];
-  requiredFields.forEach((field, index) => {
-    if (map[field] === undefined) {
-      map[field] = index;
-    }
-  });
+  // Fallback when headers are missing or unclear:
+  // Expected standard format: Column 1 = Product, Column 2 = Size, Column 3 = Quantity, Optional Column 4 = Unit
+  // If first column appears to be a Serial Number (e.g. 1, 2, 3), shift by 1: Col 1 = Product, Col 2 = Size, Col 3 = Quantity
+  const hasHeader = hasHeaderRow(headerRow);
+  const firstColIsSerial = serialIdx === 0 || (!hasHeader && (
+    (sampleRows[0] && sampleRows[0].length >= 4 && /^\d+$/.test(String(sampleRows[0][0]).trim())) ||
+    (/^\d+$/.test(String(headerRow?.[0] || "").trim()) && (headerRow || []).length >= 4)
+  ));
+
+  const startCol = firstColIsSerial ? 1 : 0;
+  const headersFound = productIdx !== undefined || sizeIdx !== undefined || quantityIdx !== undefined;
+  if (!headersFound) {
+    if (map.product === undefined) map.product = startCol;
+    if (map.size === undefined) map.size = startCol + 1;
+    if (map.quantity === undefined) map.quantity = startCol + 2;
+    if (map.unit === undefined) map.unit = startCol + 3;
+  }
 
   return map;
 };
@@ -228,7 +261,7 @@ const autofillFromProductMaster = (row, productsList) => {
   }
   return {
     ...row,
-    unit: row.unit ? formatUnit(row.unit) : "",
+    unit: row.unit ? formatUnit(row.unit) : "Nos",
   };
 };
 
@@ -240,8 +273,8 @@ const parseArraysToRows = (arrays, mode = "inward", clients = [], productsList =
 
   const header = cleanArrays[0];
   const useHeader = hasHeaderRow(header);
-  const fieldMap = inferFieldMap(header);
   const body = cleanArrays.slice(useHeader ? 1 : 0);
+  const fieldMap = inferFieldMap(header, body);
 
   const maxColumns = Math.max(...cleanArrays.map((r) => r.length));
   const hasExtraColumns = maxColumns > 4 || (useHeader && header.length > 4);
@@ -257,12 +290,12 @@ const parseArraysToRows = (arrays, mode = "inward", clients = [], productsList =
     const rawQty = get("quantity");
     const rawUnit = get("unit");
 
-    // Accurately parse decimal quantities
-    const cleanQtyStr = String(rawQty || "").replace(/,/g, "").trim();
+    const qp = parseQuantity(rawQty);
     let parsedQty = "";
-    if (cleanQtyStr !== "") {
-      const num = parseFloat(cleanQtyStr);
-      parsedQty = isNaN(num) ? "" : num;
+    if (qp.status === "valid") {
+      parsedQty = qp.value;
+    } else if (rawQty !== "") {
+      parsedQty = rawQty;
     }
 
     // Normalize unit using formatUnit
@@ -299,6 +332,9 @@ const parseArraysToRows = (arrays, mode = "inward", clients = [], productsList =
     const safeProducts = Array.isArray(productsList) ? productsList : (productsList?.products || []);
     if (safeProducts.length > 0) {
       rowObj = autofillFromProductMaster(rowObj, safeProducts);
+    }
+    if (!rowObj.unit) {
+      rowObj.unit = "Nos";
     }
 
     return rowObj;
@@ -360,15 +396,17 @@ const getRowValidationErrors = (row, mode, productsList = [], isFinalReview = tr
   const errs = [];
   if (!row.product?.trim()) errs.push("Product required");
   if (!row.unit?.trim()) errs.push("Unit required");
-  const qty = Number(row.quantity);
-  if (row.quantity === "" || row.quantity === null || qty <= 0 || isNaN(qty)) {
-    errs.push("Invalid quantity");
+
+  const qp = parseQuantity(row.quantity);
+  if (qp.status === "missing") {
+    errs.push("Quantity required");
+  } else if (qp.status === "invalid") {
+    errs.push("Invalid quantity: not a number");
+  } else if (qp.status === "non_positive") {
+    errs.push("Quantity must be greater than 0");
   }
+
   if (mode === "outward") {
-    const avail = getAvailableStock(row.product, row.size, productsList);
-    if (qty > avail) {
-      errs.push(`Max stock: ${avail}`);
-    }
     if (isFinalReview) {
       if (!row.client_name?.trim() && !row.client_id && !row.source_name?.trim()) {
         errs.push("Party required");
@@ -929,20 +967,45 @@ export default function ManualBulkImport({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const matchProduct = (name, size) => {
-    if (!name) return "empty";
-    const cleanName = name.toUpperCase().trim();
-    const cleanSize = normalizeSizeForMatching(size);
+  const { catalogMapByNameAndSize, catalogMapByName, stockMap } = useMemo(() => {
+    const byNameAndSize = new Map();
+    const byName = new Map();
+    const stock = new Map();
     const list = Array.isArray(productsList) ? productsList : (productsList?.products || []);
-
-    const sameName = list.filter((p) => (p.name || "").toUpperCase().trim() === cleanName);
-    if (sameName.length > 0) {
-      if (sameName.some(p => normalizeSizeForMatching(p.size) === cleanSize)) return "matched";
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      const nameNorm = String(p.name || "").toUpperCase().trim();
+      const sizeNorm = normalizeSizeForMatching(p.size);
+      const key = `${nameNorm}:::${sizeNorm}`;
+      if (!byNameAndSize.has(key)) {
+        byNameAndSize.set(key, p);
+      }
+      if (!byName.has(nameNorm)) {
+        byName.set(nameNorm, p);
+      }
+      const avail = Number(p.available_stock != null ? p.available_stock : (p.balance || 0));
+      stock.set(key, avail);
     }
+    return { catalogMapByNameAndSize: byNameAndSize, catalogMapByName: byName, stockMap: stock };
+  }, [productsList]);
 
-    if (list.find((p) => (p.name || "").toUpperCase().trim().includes(cleanName))) return "fuzzy";
+  const matchProduct = useCallback((name, size) => {
+    if (!name) return "empty";
+    const cleanName = String(name).toUpperCase().trim();
+    const cleanSize = normalizeSizeForMatching(size);
+    const key = `${cleanName}:::${cleanSize}`;
+    if (catalogMapByNameAndSize.has(key)) return "matched";
+    if (catalogMapByName.has(cleanName)) return "fuzzy";
     return "new";
-  };
+  }, [catalogMapByNameAndSize, catalogMapByName]);
+
+  const getAvailableStockFast = useCallback((name, size) => {
+    if (!name) return 0;
+    const cleanName = String(name).toUpperCase().trim();
+    const cleanSize = normalizeSizeForMatching(size);
+    const key = `${cleanName}:::${cleanSize}`;
+    return stockMap.get(key) || 0;
+  }, [stockMap]);
 
   const loadRowsFromText = async (text) => {
     const arrays = buildCsvArrays(text);
@@ -1188,10 +1251,40 @@ export default function ManualBulkImport({
 
   const selectedRows = rows.filter((row) => row._selected);
   const isFinalStep = step === "review";
-  const invalidRowsCount = selectedRows.filter((row) => !isRowValid(row, mode, productsList, isFinalStep)).length;
+
+  const { validCountInput, invalidCountInput, validCountReview, invalidCountReview, validRowsReview } = useMemo(() => {
+    let vInput = 0;
+    let invInput = 0;
+    let vReview = 0;
+    let invReview = 0;
+    const vRows = [];
+    for (let i = 0; i < selectedRows.length; i++) {
+      const r = selectedRows[i];
+      if (isRowValid(r, mode, productsList, false)) {
+        vInput++;
+      } else {
+        invInput++;
+      }
+      if (isRowValid(r, mode, productsList, true)) {
+        vReview++;
+        vRows.push(r);
+      } else {
+        invReview++;
+      }
+    }
+    return {
+      validCountInput: vInput,
+      invalidCountInput: invInput,
+      validCountReview: vReview,
+      invalidCountReview: invReview,
+      validRowsReview: vRows,
+    };
+  }, [selectedRows, mode, productsList]);
+
+  const invalidRowsCount = isFinalStep ? invalidCountReview : invalidCountInput;
 
   const handleFinalImport = async () => {
-    const validRows = selectedRows.filter((r) => isRowValid(r, mode, productsList, true));
+    const validRows = validRowsReview;
     if (!validRows.length) {
       toast.error("Select at least one valid row to import.");
       return;
@@ -1444,11 +1537,11 @@ export default function ManualBulkImport({
                       {rows.length} rows imported
                     </Badge>
                     <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold text-xs px-2.5 py-1">
-                      {selectedRows.filter((r) => isRowValid(r, mode, productsList, false)).length} valid
+                      {validCountInput} valid
                     </Badge>
-                    {selectedRows.filter((r) => !isRowValid(r, mode, productsList, false)).length > 0 && (
+                    {invalidCountInput > 0 && (
                       <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 font-semibold text-xs px-2.5 py-1">
-                        {selectedRows.filter((r) => !isRowValid(r, mode, productsList, false)).length} invalid
+                        {invalidCountInput} invalid
                       </Badge>
                     )}
                   </div>
@@ -1510,7 +1603,7 @@ export default function ManualBulkImport({
                         if (originalIndex === -1) return null;
                         const status = matchProduct(row.product, row.size);
                         const rowErrors = getRowValidationErrors(row, mode, productsList, false);
-                        const availStock = getAvailableStock(row.product, row.size, productsList);
+                        const availStock = getAvailableStockFast(row.product, row.size);
 
                         return (
                           <tr key={row._id} className={`${!row._selected ? "opacity-60" : ""} border-t border-slate-100 hover:bg-slate-50/50`}>
@@ -1554,7 +1647,7 @@ export default function ManualBulkImport({
                             </td>
                             {mode === "outward" && (
                               <td className="px-3 py-2.5 align-top">
-                                <span className={`inline-flex items-center px-2 py-1 rounded text-[11px] font-semibold mt-1 ${Number(row.quantity) > availStock ? "bg-red-50 text-red-700 border border-red-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
+                                <span className="inline-flex items-center px-2 py-1 rounded text-[11px] font-medium mt-1 bg-slate-50 text-slate-700 border border-slate-200" title={`Current in-stock balance: ${availStock}`}>
                                   {availStock}
                                 </span>
                               </td>
@@ -2066,16 +2159,16 @@ export default function ManualBulkImport({
                       Rows: {rows.length}
                     </Badge>
                     <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold text-xs px-2.5 py-1">
-                      Valid: {selectedRows.filter((r) => isRowValid(r, mode, productsList, true)).length}
+                      Valid: {validCountReview}
                     </Badge>
-                    {rows.length - selectedRows.filter((r) => isRowValid(r, mode, productsList, true)).length > 0 && (
+                    {rows.length - validCountReview > 0 && (
                       <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 font-semibold text-xs px-2.5 py-1">
-                        Skipped: {rows.length - selectedRows.filter((r) => isRowValid(r, mode, productsList, true)).length}
+                        Skipped: {rows.length - validCountReview}
                       </Badge>
                     )}
-                    {selectedRows.filter((r) => !isRowValid(r, mode, productsList, true)).length > 0 && (
+                    {invalidCountReview > 0 && (
                       <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 font-semibold text-xs px-2.5 py-1">
-                        Invalid: {selectedRows.filter((r) => !isRowValid(r, mode, productsList, true)).length}
+                        Invalid: {invalidCountReview}
                       </Badge>
                     )}
                     <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 font-semibold text-xs px-2.5 py-1">
@@ -2144,7 +2237,7 @@ export default function ManualBulkImport({
                           if (originalIndex === -1) return null;
                           const status = matchProduct(row.product, row.size);
                           const rowErrors = getRowValidationErrors(row, mode, productsList, true);
-                          const availStock = getAvailableStock(row.product, row.size, productsList);
+                          const availStock = getAvailableStockFast(row.product, row.size);
 
                           return (
                             <tr key={row._id} className={`${!row._selected ? "opacity-60" : ""} border-t border-slate-100 hover:bg-slate-50/50`}>
@@ -2188,7 +2281,7 @@ export default function ManualBulkImport({
                               </td>
                               {mode === "outward" && (
                                 <td className="px-3 py-2.5 align-top">
-                                  <span className={`inline-flex items-center px-2 py-1 rounded text-[11px] font-semibold mt-1 ${Number(row.quantity) > availStock ? "bg-red-50 text-red-700 border border-red-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
+                                  <span className="inline-flex items-center px-2 py-1 rounded text-[11px] font-medium mt-1 bg-slate-50 text-slate-700 border border-slate-200" title={`Current in-stock balance: ${availStock}`}>
                                     {availStock}
                                   </span>
                                 </td>
@@ -2477,12 +2570,12 @@ export default function ManualBulkImport({
               <Button variant="outline" onClick={() => setStep("defaults")}><ArrowLeft className="w-4 h-4 mr-1.5" /> Back</Button>
               <Button
                 onClick={handleFinalImport}
-                disabled={processing || selectedRows.filter((r) => isRowValid(r, mode, productsList, true)).length === 0}
+                disabled={processing || validCountReview === 0}
               >
                 {processing
                   ? "Importing…"
                   : invalidRowsCount > 0
-                  ? `Import ${selectedRows.filter((r) => isRowValid(r, mode, productsList, true)).length} Valid Rows (${invalidRowsCount} skipped)`
+                  ? `Import ${validCountReview} Valid Rows (${invalidRowsCount} skipped)`
                   : `Import ${selectedRows.length} Rows`}
               </Button>
             </>

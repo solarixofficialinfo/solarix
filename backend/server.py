@@ -15336,35 +15336,8 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
         if b_name:
             b2b_map[b_name.lower()] = b
 
-    # 2. Pre-pass: Resolve & bulk-insert missing products in 1 batch query
-    new_prods_to_insert = []
-    for r in data.rows:
-        pn = (r.product or "").strip().upper()
-        if not pn:
-            continue
-        ps = r.size or ""
-        pu = r.unit or gd.get("unit") or "Nos"
-        cache_key = (cid, norm_product_name(pn), norm_str(ps))
-        if cache_key not in prod_cache:
-            prod_doc = {
-                "id": str(uuid.uuid4()),
-                "company_id": cid,
-                "name": pn,
-                "size": ps,
-                "category": "Solar",
-                "unit": norm_unit(pu),
-                "min_stock": 0.0,
-                "status": "Active",
-                "created_at": now_iso()
-            }
-            prod_cache[cache_key] = prod_doc
-            new_prods_to_insert.append(prod_doc)
-            
-    if new_prods_to_insert:
-        try:
-            await db.products.insert_many(new_prods_to_insert)
-        except Exception:
-            pass
+    # 2. Match against existing products without auto-inserting missing products into Product Master
+    # Product Master matching is optional; unmatched items are preserved as-is.
 
     # 3. Build documents in-memory
     for r in data.rows:
@@ -15590,8 +15563,6 @@ async def bulk_inward(data: BulkInwardIn, user=Depends(get_current_user)):
         await increment_usage(cid, "inventory_transactions", amount=len(docs_to_insert), db=db)
         asyncio.create_task(log_activity(cid, user["id"], user["name"], "Bulk Inward Import", f"{len(docs_to_insert)} entries"))
         asyncio.create_task(push_notification(cid, "admin", "Bulk Inventory Import", f"{user['name']} imported {len(docs_to_insert)} inward entries via AI"))
-        if new_prods_to_insert:
-            asyncio.create_task(sync_inventory_master(cid))
 
     return {
         "received": len(data.rows),
@@ -15852,15 +15823,12 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
     prod_cache: Dict[Tuple[str, str, str], Any] = {}
     docs_to_insert = []
 
-    # 1. Pre-fetch existing products, clients, vendors, B2B customers, and live stock balances
-    (existing_prods, existing_clients, existing_vendors, existing_b2b), (bal_items, _, _, _) = await asyncio.gather(
-        asyncio.gather(
-            db.products.find({"company_id": cid}).to_list(10000),
-            db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "full_name": 1}).to_list(10000),
-            db.vendors.find({"company_id": cid}, {"_id": 0, "id": 1, "name": 1}).to_list(5000),
-            db.b2b_customers.find({"company_id": cid}, {"_id": 0, "id": 1, "name": 1, "full_name": 1}).to_list(5000)
-        ),
-        _compute_inventory_balances(cid)
+    # 1. Pre-fetch existing products, clients, vendors, and B2B customers in bulk
+    existing_prods, existing_clients, existing_vendors, existing_b2b = await asyncio.gather(
+        db.products.find({"company_id": cid}).to_list(10000),
+        db.clients.find({"company_id": cid}, {"_id": 0, "id": 1, "full_name": 1}).to_list(10000),
+        db.vendors.find({"company_id": cid}, {"_id": 0, "id": 1, "name": 1}).to_list(5000),
+        db.b2b_customers.find({"company_id": cid}, {"_id": 0, "id": 1, "name": 1, "full_name": 1}).to_list(5000)
     )
 
     for p in (existing_prods or []):
@@ -15885,74 +15853,9 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
         if b_name:
             b2b_map[b_name.lower()] = b
 
-    # Live stock map for balance validation
-    avail_stock_map: Dict[Tuple[str, str], float] = {}
-    for p in bal_items:
-        k = (norm_product_name(p.get("name")), norm_str(p.get("size")))
-        avail_stock_map[k] = float(p.get("available_stock", p.get("balance", 0.0)))
-
-    # Stock balance check across the incoming batch
-    requested_totals: Dict[Tuple[str, str], float] = {}
-    for r in data.rows:
-        pn = (r.product or "").strip().upper()
-        try:
-            qty = float(r.quantity) if r.quantity not in (None, "") else 0.0
-        except (ValueError, TypeError):
-            qty = 0.0
-        if not pn or qty <= 0:
-            continue
-        status_val = r.status or gd.get("status", "Dispatched")
-        if status_val == "Cancelled":
-            continue
-        k = (norm_product_name(pn), norm_str(r.size or ""))
-        requested_totals[k] = requested_totals.get(k, 0.0) + qty
-
-    insufficient_items = []
-    for k, req_qty in requested_totals.items():
-        avail = avail_stock_map.get(k, 0.0)
-        if req_qty > avail:
-            display_size = f" ({k[1]})" if k[1] else ""
-            insufficient_items.append(f"'{k[0]}{display_size}' (Available: {avail}, Requested: {req_qty})")
-
-    if insufficient_items:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot dispatch: Insufficient stock for {'; '.join(insufficient_items)}"
-        )
-
-    # 2. Pre-pass: Resolve & bulk-insert missing products in 1 batch query
-    new_prods_to_insert = []
-    for r in data.rows:
-        pn = (r.product or "").strip().upper()
-        try:
-            qty = float(r.quantity) if r.quantity not in (None, "") else 0.0
-        except (ValueError, TypeError):
-            qty = 0.0
-        if not pn or qty <= 0:
-            continue
-        ps = r.size or ""
-        pu = r.unit or gd.get("unit") or "Nos"
-        cache_key = (cid, norm_product_name(pn), norm_str(ps))
-        if cache_key not in prod_cache:
-            prod_doc = {
-                "id": str(uuid.uuid4()),
-                "company_id": cid,
-                "name": pn,
-                "size": ps,
-                "category": "Solar",
-                "unit": norm_unit(pu),
-                "min_stock": 0.0,
-                "status": "Active",
-                "created_at": now_iso()
-            }
-            prod_cache[cache_key] = prod_doc
-            new_prods_to_insert.append(prod_doc)
-
-    if new_prods_to_insert:
-        try:
-            await db.products.insert_many(new_prods_to_insert)
-        except Exception:
-            pass
+    # 2. Manual Bulk Outward does NOT block on live stock availability.
+    # Dispatches are permitted even if available stock is zero or insufficient, preserving ledger balances.
+    # Missing products are NOT auto-inserted into Product Master. Product Master matching is optional.
 
     # 3. Build documents in-memory
     for r in data.rows:
@@ -16069,8 +15972,6 @@ async def bulk_outward(data: BulkOutwardIn, user=Depends(get_current_user)):
         await increment_usage(cid, "inventory_transactions", amount=len(docs_to_insert), db=db)
         asyncio.create_task(log_activity(cid, user["id"], user["name"], "Bulk Outward Import", f"{len(docs_to_insert)} entries"))
         asyncio.create_task(push_notification(cid, "admin", "Bulk Outward Import", f"{user['name']} imported {len(docs_to_insert)} outward entries via AI"))
-        if new_prods_to_insert:
-            asyncio.create_task(sync_inventory_master(cid))
 
     return {
         "received": len(data.rows),
