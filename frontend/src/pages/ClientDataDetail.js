@@ -229,8 +229,30 @@ export default function ClientDataDetail() {
     const nextState = !c?.stages?.[stageName];
     const newStages = { ...(c?.stages || {}), [stageName]: nextState };
     try {
-      await api.patch(`/clients/${id}/stages`, { stages: newStages });
-      invalidateAllClientQueries(queryClient, id);
+      const { data: updatedClient } = await api.patch(`/clients/${id}/stages`, { stages: newStages });
+      
+      // Targeted cache update: update client stages & progress directly without cascading 17 refetch queries
+      queryClient.setQueryData(queryKeys.clientData.tab(id, "all"), (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          client: {
+            ...prev.client,
+            ...(updatedClient || {}),
+            stages: updatedClient?.stages || newStages,
+            progress: updatedClient?.progress ?? prev.client?.progress,
+            status: updatedClient?.status || prev.client?.status,
+          }
+        };
+      });
+      queryClient.setQueryData(queryKeys.clients.detail(id), (prev) => {
+        if (!prev) return updatedClient;
+        return { ...prev, ...(updatedClient || {}) };
+      });
+      // Invalidate project execution & client lists in background for inactive tabs
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects.all(), refetchType: "inactive" });
+      queryClient.invalidateQueries({ queryKey: queryKeys.clients.list(), refetchType: "inactive" });
+
       toast.success(`${stageName} marked as ${nextState ? "Completed" : "Reset"}`);
     } catch (err) {
       toast.error(formatApiError(err));

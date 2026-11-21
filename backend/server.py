@@ -6423,15 +6423,24 @@ async def update_stages(client_id: str, data: StageUpdate, user=Depends(get_curr
         merged_stages["Onboarding"] = True
     stages = sync_checklist_completed(merged_stages)
     progress = calc_progress(stages, subsidy_eligible)
-    await db.clients.update_one(
-        {"id": client_id},
-        {"$set": {"stages": stages, "progress": progress, "updated_at": now_iso()}}
-    )
+    
+    update_set = {"stages": stages, "progress": progress, "updated_at": now_iso()}
+    handover_completed = False
     if stages.get("Handover") and existing.get("status") != "Handover Complete":
-        await db.clients.update_one({"id": client_id}, {"$set": {"status": "Handover Complete"}})
-        await push_notification(user["company_id"], "admin", "Installation Completed", existing.get("full_name", ""))
-    await log_activity(user["company_id"], user["id"], user["name"], "Updated Progress", existing.get("full_name", ""))
-    return await db.clients.find_one({"id": client_id}, {"_id": 0})
+        update_set["status"] = "Handover Complete"
+        handover_completed = True
+
+    await db.clients.update_one(
+        {"id": client_id, "company_id": user["company_id"]},
+        {"$set": update_set}
+    )
+
+    if handover_completed:
+        asyncio.create_task(push_notification(user["company_id"], "admin", "Installation Completed", existing.get("full_name", "")))
+    asyncio.create_task(log_activity(user["company_id"], user["id"], user["name"], "Updated Progress", existing.get("full_name", "")))
+    
+    # Return merged in-memory client without redundant database round-trip
+    return {**existing, **update_set}
 
 @api_router.patch("/clients/{client_id}/status")
 async def update_status(client_id: str, data: StatusUpdate, user=Depends(get_current_user)):
@@ -12650,12 +12659,14 @@ async def get_b2b_summary(user=Depends(require_active_subscription())):
     cid = user["company_id"]
     # STRICT ARCHITECTURAL SEPARATION:
     # Query ONLY dedicated B2B Business Customers master. Never fetch from CRM / installation db.clients.
-    customers = await db.b2b_customers.find({
-        "company_id": cid,
-        "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
-    }, {"_id": 0}).sort("name", 1).to_list(5000)
-    outwards = await db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1, "party_type": 1}).to_list(50000)
-    inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "source_name": 1, "source_type": 1, "remarks": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1}).to_list(50000)
+    customers, outwards, inwards = await asyncio.gather(
+        db.b2b_customers.find({
+            "company_id": cid,
+            "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
+        }, {"_id": 0}).sort("name", 1).to_list(5000),
+        db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1, "party_type": 1}).to_list(50000),
+        db.inward_entries.find({"company_id": cid}, {"_id": 0, "id": 1, "client_id": 1, "client_name": 1, "source_name": 1, "source_type": 1, "remarks": 1, "product": 1, "quantity": 1, "date": 1, "created_at": 1}).to_list(50000)
+    )
 
     # Pre-index outwards and inwards by client_id and lower-cased name
     out_by_client: Dict[str, List[dict]] = {}
@@ -12750,10 +12761,10 @@ async def get_b2b_client_history(
     cid = user["company_id"]
     
     # Fetch B2B customer(s)
-    b2b_custs = await _fetch_all_docs(db.b2b_customers, {
+    b2b_custs = await db.b2b_customers.find({
         "company_id": cid,
         "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
-    })
+    }, {"_id": 0}).to_list(5000)
     b2b_cust_ids = {str(c["id"]).strip() for c in b2b_custs if c.get("id")}
     b2b_name_to_customer = {}
     for c in b2b_custs:
@@ -12774,14 +12785,16 @@ async def get_b2b_client_history(
             raise HTTPException(status_code=404, detail="B2B Business Customer not found")
         c_name = (target_customer.get("name") or target_customer.get("full_name") or "").strip()
         
-        outwards_raw = await _fetch_all_docs(db.outward_entries, {
-            "company_id": cid,
-            "$or": [
-                {"client_id": client_id},
-                {"client_name": {"$regex": f"^{re.escape(c_name)}$", "$options": "i"}}
-            ]
-        })
-        inwards_raw = await _fetch_all_docs(db.inward_entries, {"company_id": cid})
+        outwards_raw, inwards_raw = await asyncio.gather(
+            db.outward_entries.find({
+                "company_id": cid,
+                "$or": [
+                    {"client_id": client_id},
+                    {"client_name": {"$regex": f"^{re.escape(c_name)}$", "$options": "i"}}
+                ]
+            }, {"_id": 0}).to_list(10000),
+            db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+        )
         inwards = []
         for inv in inwards_raw:
             parsed = parse_inward_client_info(inv)
@@ -12792,8 +12805,11 @@ async def get_b2b_client_history(
                 inwards.append(parsed)
         outwards = outwards_raw
     else:
-        # Fetch all B2B outwards
-        outwards_raw = await _fetch_all_docs(db.outward_entries, {"company_id": cid, "status": "Dispatched"})
+        # Fetch all B2B outwards and returns concurrently
+        outwards_raw, inwards_raw = await asyncio.gather(
+            db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {"_id": 0}).to_list(10000),
+            db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+        )
         outwards = []
         for o in outwards_raw:
             pt = (o.get("party_type") or "").strip()
@@ -12809,8 +12825,6 @@ async def get_b2b_client_history(
             if is_b2b:
                 outwards.append(o)
         
-        # Fetch all B2B returns
-        inwards_raw = await _fetch_all_docs(db.inward_entries, {"company_id": cid})
         inwards = []
         for inv in inwards_raw:
             parsed = parse_inward_client_info(inv)
@@ -12918,15 +12932,21 @@ async def get_b2b_client_history(
 @api_router.get("/inventory/b2b-sales")
 async def get_b2b_sales(user=Depends(require_active_subscription())):
     cid = user["company_id"]
-    # Fetch authoritative B2B Business Customers to ensure ZERO leakage of installation clients
-    b2b_custs = await db.b2b_customers.find({"company_id": cid}, {"_id": 0, "id": 1, "name": 1, "full_name": 1}).to_list(10000)
+    b2b_custs, outwards = await asyncio.gather(
+        db.b2b_customers.find({"company_id": cid}, {"_id": 0, "id": 1, "name": 1, "full_name": 1}).to_list(10000),
+        db.outward_entries.find({
+            "company_id": cid,
+            "status": "Dispatched"
+        }, {
+            "_id": 0, "id": 1, "date": 1, "bill_number": 1, "outward_challan_no": 1,
+            "reference_number": 1, "client_id": 1, "client_name": 1, "project_name": 1,
+            "product": 1, "size": 1, "quantity": 1, "unit": 1, "total_amount": 1,
+            "amount": 1, "status": 1, "remarks": 1, "party_type": 1, "created_at": 1,
+            "material_request_id": 1, "project_id": 1
+        }).sort([("date", -1), ("created_at", -1)]).to_list(10000)
+    )
     b2b_cust_ids = {c["id"] for c in b2b_custs if c.get("id")}
     b2b_cust_names = {((c.get("name") or c.get("full_name") or "")).strip().lower() for c in b2b_custs if (c.get("name") or c.get("full_name"))}
-
-    outwards = await db.outward_entries.find({
-        "company_id": cid,
-        "status": "Dispatched"
-    }, {"_id": 0}).sort([("date", -1), ("created_at", -1)]).to_list(10000)
     
     sales = []
     for o in outwards:
@@ -12975,8 +12995,10 @@ async def get_supply_entries(
     user=Depends(require_active_subscription())
 ):
     cid = user["company_id"]
-    inwards = await _fetch_all_docs(db.inward_entries, {"company_id": cid})
-    vendors = await db.vendors.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+    inwards, vendors = await asyncio.gather(
+        _fetch_all_docs(db.inward_entries, {"company_id": cid}),
+        db.vendors.find({"company_id": cid}, {"_id": 0}).to_list(10000)
+    )
     vendor_ids = {str(v["id"]).strip() for v in vendors if v.get("id")}
     vendor_names = {(v.get("name") or "").strip().lower() for v in vendors if v.get("name")}
     
@@ -13031,12 +13053,20 @@ async def get_supply_entries(
 @api_router.get("/inventory/supply-summary")
 async def get_supply_summary(user=Depends(require_active_subscription())):
     cid = user["company_id"]
-    vendors = await db.vendors.find({
-        "company_id": cid,
-        "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
-    }, {"_id": 0}).sort("name", 1).to_list(1000)
-    inwards = await db.inward_entries.find({"company_id": cid}, {"_id": 0}).to_list(50000)
-    outwards = await db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {"_id": 0}).to_list(50000)
+    vendors, inwards, outwards = await asyncio.gather(
+        db.vendors.find({
+            "company_id": cid,
+            "status": {"$nin": ["Archived", "Deleted", "archived", "deleted"]}
+        }, {"_id": 0}).sort("name", 1).to_list(1000),
+        db.inward_entries.find({"company_id": cid}, {
+            "_id": 0, "id": 1, "vendor_id": 1, "source_name": 1, "source_type": 1,
+            "quantity": 1, "date": 1, "created_at": 1
+        }).to_list(50000),
+        db.outward_entries.find({"company_id": cid, "status": "Dispatched"}, {
+            "_id": 0, "id": 1, "vendor_id": 1, "client_id": 1, "client_name": 1,
+            "party_type": 1, "quantity": 1, "date": 1, "created_at": 1, "remarks": 1
+        }).to_list(50000)
+    )
     
     suppliers_data = []
     for v in vendors:

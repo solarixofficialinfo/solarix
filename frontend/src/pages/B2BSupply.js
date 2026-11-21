@@ -138,10 +138,11 @@ export default function B2BSupply() {
       const res = await api.get("/inventory/b2b-summary");
       return res.data;
     },
+    enabled: section === "b2b",
     staleTime: 5000,
   });
 
-  // 2. Fetch B2B Dedicated Customer Master
+  // 2. Fetch B2B Dedicated Customer Master (fallback only, b2b-summary already includes customers)
   const {
     data: b2bCustomersData,
     isLoading: loadingB2bCustomers,
@@ -152,6 +153,7 @@ export default function B2BSupply() {
       const res = await api.get("/inventory/b2b-customers");
       return res.data;
     },
+    enabled: false,
     staleTime: 5000,
   });
 
@@ -166,6 +168,7 @@ export default function B2BSupply() {
       const res = await api.get("/inventory/b2b-sales");
       return res.data;
     },
+    enabled: section === "b2b" && b2bTab === "sales",
     staleTime: 5000,
   });
 
@@ -181,6 +184,7 @@ export default function B2BSupply() {
       const res = await api.get(`/inventory/b2b-client-history/${targetId}`);
       return res.data;
     },
+    enabled: section === "b2b" && b2bTab === "ledger",
     staleTime: 5000,
   });
 
@@ -222,6 +226,7 @@ export default function B2BSupply() {
       const res = await api.get("/inventory/supply-summary");
       return res.data;
     },
+    enabled: section === "supply",
     staleTime: 5000,
   });
 
@@ -237,7 +242,7 @@ export default function B2BSupply() {
       const res = await api.get(`/inventory/supplier-history/${selectedLedgerSupplierId}`);
       return res.data;
     },
-    enabled: Boolean(selectedLedgerSupplierId),
+    enabled: section === "supply" && supplyTab === "ledger" && Boolean(selectedLedgerSupplierId),
     staleTime: 5000,
   });
 
@@ -252,6 +257,7 @@ export default function B2BSupply() {
       const res = await api.get("/inventory/supply-entries");
       return res.data;
     },
+    enabled: section === "supply" && supplyTab === "entries",
     staleTime: 5000,
   });
 
