@@ -1199,21 +1199,47 @@ async def _sync_client_financial_record(cid: str, client_id: str, record_type: s
     try:
         supa = get_supabase_client(use_service_key=True)
         c_id_clean = client_id.strip()
-        res = supa.table("clients").select("id, stages").eq("company_id", cid).or_(f"id.eq.{c_id_clean},sol_id.eq.{c_id_clean}").limit(1).execute()
+        res = await asyncio.to_thread(lambda: supa.table("clients").select("id, stages").eq("company_id", cid).or_(f"id.eq.{c_id_clean},sol_id.eq.{c_id_clean}").limit(1).execute())
         client_row: Optional[Dict[str, Any]] = res.data[0] if (res.data and isinstance(res.data, list) and len(res.data) > 0 and isinstance(res.data[0], dict)) else None
         target_client_uuid = client_row.get("id") if client_row else (c_id_clean if not c_id_clean.startswith("SOL-") else None)
         
-        stages = dict((client_row.get("stages") if client_row else None) or {})
-        ob = dict(stages.get("onboarding_data") or {})
-        rec_list = list(ob.get(record_type) or [])
+        stages_raw = client_row.get("stages") if client_row else None
+        if isinstance(stages_raw, str):
+            try:
+                stages = json.loads(stages_raw)
+            except Exception:
+                stages = {}
+        elif isinstance(stages_raw, dict):
+            stages = dict(stages_raw)
+        else:
+            stages = {}
+
+        ob_raw = stages.get("onboarding_data")
+        if isinstance(ob_raw, dict):
+            ob = dict(ob_raw)
+        else:
+            ob = {}
+
+        rec_list_raw = ob.get(record_type)
+        if isinstance(rec_list_raw, list):
+            rec_list = list(rec_list_raw)
+        elif isinstance(rec_list_raw, str):
+            try:
+                rec_list = json.loads(rec_list_raw)
+                if not isinstance(rec_list, list):
+                    rec_list = []
+            except Exception:
+                rec_list = []
+        else:
+            rec_list = []
         
         rec_id = record.get("id")
         if action == "delete":
-            rec_list = [r for r in rec_list if r.get("id") != rec_id]
+            rec_list = [r for r in rec_list if isinstance(r, dict) and r.get("id") != rec_id]
         else:
             updated = False
             for idx, r in enumerate(rec_list):
-                if r.get("id") == rec_id:
+                if isinstance(r, dict) and r.get("id") == rec_id:
                     rec_list[idx] = {**r, **record}
                     updated = True
                     break
@@ -1225,7 +1251,7 @@ async def _sync_client_financial_record(cid: str, client_id: str, record_type: s
         
         if target_client_uuid:
             try:
-                supa.table("clients").update({"stages": stages, "updated_at": now_iso()}).eq("id", target_client_uuid).eq("company_id", cid).execute()
+                await asyncio.to_thread(lambda: supa.table("clients").update({"stages": stages, "updated_at": now_iso()}).eq("id", target_client_uuid).eq("company_id", cid).execute())
             except Exception as e_supa:
                 logger.debug(f"Supabase stages update for {record_type}: {e_supa}")
                 
@@ -1233,8 +1259,18 @@ async def _sync_client_financial_record(cid: str, client_id: str, record_type: s
         try:
             local_client = await LocalFileCollection("clients").find_one({"$or": [{"id": c_id_clean}, {"sol_id": c_id_clean}], "company_id": cid})
             if local_client:
-                loc_stages = dict(local_client.get("stages") or {})
-                loc_ob = dict(loc_stages.get("onboarding_data") or {})
+                loc_stages_raw = local_client.get("stages")
+                if isinstance(loc_stages_raw, str):
+                    try:
+                        loc_stages = json.loads(loc_stages_raw)
+                    except Exception:
+                        loc_stages = {}
+                elif isinstance(loc_stages_raw, dict):
+                    loc_stages = dict(loc_stages_raw)
+                else:
+                    loc_stages = {}
+
+                loc_ob = dict(loc_stages.get("onboarding_data") or {}) if isinstance(loc_stages.get("onboarding_data"), dict) else {}
                 loc_ob[record_type] = rec_list
                 loc_stages["onboarding_data"] = loc_ob
                 await LocalFileCollection("clients").update_one(
@@ -1255,12 +1291,34 @@ async def _sync_company_documents_record(cid: str, record_type: str, record: dic
         return
     try:
         supa = get_supabase_client(use_service_key=True)
-        res = supa.table("companies").select("documents").eq("id", cid).limit(1).execute()
+        res = await asyncio.to_thread(lambda: supa.table("companies").select("documents").eq("id", cid).limit(1).execute())
         if not res.data:
             return
         company_row = res.data[0]
-        docs = dict(company_row.get("documents") or {})
-        rec_list = list(docs.get(record_type) or [])
+        docs_raw = company_row.get("documents")
+        if isinstance(docs_raw, str):
+            try:
+                docs = json.loads(docs_raw)
+            except Exception:
+                docs = {}
+        elif isinstance(docs_raw, dict):
+            docs = dict(docs_raw)
+        else:
+            docs = {}
+
+        rec_list_raw = docs.get(record_type)
+        if isinstance(rec_list_raw, list):
+            rec_list = list(rec_list_raw)
+        elif isinstance(rec_list_raw, str):
+            try:
+                rec_list = json.loads(rec_list_raw)
+                if not isinstance(rec_list, list):
+                    rec_list = []
+            except Exception:
+                rec_list = []
+        else:
+            rec_list = []
+
         rec_id = str(record.get("id"))
 
         if action == "delete":
@@ -1275,7 +1333,7 @@ async def _sync_company_documents_record(cid: str, record_type: str, record: dic
             if not updated:
                 rec_list.append(record)
         docs[record_type] = rec_list
-        supa.table("companies").update({"documents": docs}).eq("id", cid).execute()
+        await asyncio.to_thread(lambda: supa.table("companies").update({"documents": docs}).eq("id", cid).execute())
     except Exception as e:
         logger.debug(f"Error in _sync_company_documents_record ({record_type}, {action}): {e}")
 
@@ -23571,4 +23629,9 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=86400,
 )
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)
 
