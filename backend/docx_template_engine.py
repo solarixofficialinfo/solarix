@@ -65,7 +65,8 @@ SYSTEM_VARIABLES: List[Dict[str, str]] = [
     {"key": "meter_number", "label": "Meter Number", "source": "client", "path": "meter_number"},
     {"key": "vendor_name", "label": "Vendor / Company Name", "source": "company", "path": "company_name"},
     {"key": "installer", "label": "Installer", "source": "client", "path": "installer"},
-    {"key": "bu_no", "label": "BU Number", "source": "manual", "path": "manual"},
+    {"key": "bu_no", "label": "BU Number", "source": "client", "path": "bu_number"},
+    {"key": "bu_text", "label": "BU Text / Tax", "source": "client", "path": "bu_text"},
     {"key": "survey_date", "label": "Survey Date", "source": "client", "path": "survey_date"},
     {"key": "installation_date", "label": "Installation Date", "source": "computed", "path": "today"},
     {"key": "latitude", "label": "Latitude", "source": "client", "path": "latitude"},
@@ -183,6 +184,7 @@ MAPPING_HINTS: Dict[str, List[str]] = {
     "vendor_name": ["vendor name", "company name", "epc name", "vendor"],
     "installer": ["installer", "installer name"],
     "bu_no": ["bu no", "bu number", "business unit"],
+    "bu_text": ["bu text", "tax", "sub division", "subdivision"],
     "survey_date": ["survey date", "surveyed date"],
     "installation_date": ["installation date", "commissioning date", "install date"],
     "latitude": ["latitude", "lat"],
@@ -353,7 +355,11 @@ def resolve_value(key: str, client: dict, company: dict, overrides: Dict[str, An
     if key == "installer":
         return _safe_str(client.get("installer") or client.get("installer_name"))
     if key == "bu_no":
-        return _safe_str(overrides.get("bu_no") or client.get("bu_no"))
+        ob = (client.get("stages") or {}).get("onboarding_data") or {}
+        return _safe_str(overrides.get("bu_no") or client.get("bu_number") or client.get("bu_no") or ob.get("bu_number") or ob.get("bu_no"))
+    if key == "bu_text":
+        ob = (client.get("stages") or {}).get("onboarding_data") or {}
+        return _safe_str(overrides.get("bu_text") or client.get("bu_text") or ob.get("bu_text"))
     if key == "survey_date":
         return _safe_str(client.get("survey_date") or client.get("surveyed_date"))
     if key == "installation_date":

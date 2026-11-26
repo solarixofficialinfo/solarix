@@ -957,6 +957,8 @@ def _prepare_client_supabase_payload(payload: dict) -> dict:
         extra_onboarding["aadhaar_image"] = payload["aadhaar_image"]
     if "bu_number" in payload and payload["bu_number"] is not None:
         extra_onboarding["bu_number"] = payload["bu_number"]
+    elif "bu_no" in payload and payload["bu_no"] is not None:
+        extra_onboarding["bu_number"] = payload["bu_no"]
     if "bu_text" in payload and payload["bu_text"] is not None:
         extra_onboarding["bu_text"] = payload["bu_text"]
     if "pan_number" in payload and payload["pan_number"] is not None:
@@ -3349,6 +3351,9 @@ class ClientIn(BaseModel):
     mobile: str
     alt_mobile: Optional[str] = ""
     consumer_number: Optional[str] = ""
+    bu_number: Optional[str] = ""
+    bu_no: Optional[str] = ""
+    bu_text: Optional[str] = ""
     section_number: Optional[str] = ""
     section_no: Optional[str] = ""
     address: Optional[str] = ""
@@ -5886,6 +5891,13 @@ def _normalize_client_payload(payload: dict) -> dict:
         a_val = payload.get("aadhaar") or payload.get("aadhaar_number") or ""
         payload["aadhaar"] = a_val
         payload["aadhaar_number"] = a_val
+    if "bu_number" in payload or "bu_no" in payload:
+        bu_val = payload.get("bu_number") if payload.get("bu_number") is not None else payload.get("bu_no")
+        bu_val = bu_val or ""
+        payload["bu_number"] = bu_val
+        payload["bu_no"] = bu_val
+    if "bu_text" in payload:
+        payload["bu_text"] = payload.get("bu_text") or ""
     return payload
 
 def _verify_client_db_write(original_payload: dict, read_back_doc: dict):
@@ -5896,7 +5908,7 @@ def _verify_client_db_write(original_payload: dict, read_back_doc: dict):
     mismatches = []
     
     fields_to_check = [
-        "full_name", "mobile", "alt_mobile", "consumer_number", "section_number", "address",
+        "full_name", "mobile", "alt_mobile", "consumer_number", "bu_number", "bu_text", "section_number", "address",
         "city", "state", "pincode", "aadhaar", "system_kw", "panel_make", "panel_brand",
         "panel_technology", "panel_wattage", "num_panels", "inverter_make", "inverter_brand",
         "inverter_capacity", "inverter_serial", "inverter_model", "inverter_year",

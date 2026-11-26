@@ -27,6 +27,8 @@ export default function ClientNew() {
       mobile: fromLead?.mobile || "",
       alt_mobile: fromLead?.alt_mobile || "",
       consumer_number: "",
+      bu_number: "",
+      bu_text: "",
       address: fromLead?.address || "",
       city: fromLead?.city || "",
       state: "",
@@ -341,6 +343,8 @@ export default function ClientNew() {
               <F label="Mobile *"><Input value={form.mobile} onChange={set("mobile")} required data-testid="client-mobile" /></F>
               <F label="Alternate Mobile"><Input value={form.alt_mobile} onChange={set("alt_mobile")} /></F>
               <F label="Consumer Number"><Input value={form.consumer_number} onChange={set("consumer_number")} data-testid="client-consumer" /></F>
+              <F label="BU Number"><Input value={form.bu_number} onChange={set("bu_number")} placeholder="e.g. 4710" data-testid="client-bu-number" /></F>
+              <F label="BU Text / Tax"><Input value={form.bu_text} onChange={set("bu_text")} placeholder="e.g. ICHALKARANJI A S/DN." data-testid="client-bu-text" /></F>
               <F label="Street Address / Landmark" full><Input value={form.address} onChange={set("address")} placeholder="Building, Street, Landmark" /></F>
               <div className="col-span-full">
                 <LocationAutoFill

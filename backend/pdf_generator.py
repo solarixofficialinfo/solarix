@@ -3337,13 +3337,15 @@ def generate_net_meter_agreement_pdf(client: dict, company: dict) -> bytes:
         date_str = date_str[:10]
         
     company_name = company.get("company_name") or ""
+    stages_dict = dict(client.get("stages") or {})
+    ob_dict = dict(stages_dict.get("onboarding_data") or {})
     # BU Number and BU Text from onboarding (enriched via _enrich_client_doc before this call)
-    raw_bu = str(client.get("bu_number") or client.get("bu_no") or client.get("bu") or "").strip()
+    raw_bu = str(client.get("bu_number") or client.get("bu_no") or client.get("bu") or ob_dict.get("bu_number") or ob_dict.get("bu_no") or "").strip()
     if raw_bu:
         bu_no = raw_bu if raw_bu.upper().startswith("BU-") else f"BU-{raw_bu}"
     else:
         bu_no = ""
-    bu_text = client.get("bu_text") or ""
+    bu_text = (client.get("bu_text") or ob_dict.get("bu_text") or "").strip()
     sub_div = bu_text or client.get("sub_division") or ""
     division = client.get("division") or ""
 
@@ -3369,7 +3371,17 @@ def generate_net_meter_agreement_pdf(client: dict, company: dict) -> bytes:
 
     discom_code = client.get("discom_code") or client.get("discom") or "MSEDCL"
     discom_name = client.get("discom_name") or "Maharashtra State Electricity Distribution Company Limited"
-    licensee_title = client.get("distribution_licensee") or f"Additional Executive Engineer{licensee_sub}, {discom_code}"
+    base_licensee = (client.get("distribution_licensee") or "").strip()
+    if base_licensee:
+        if sub_bu_str and sub_bu_str not in base_licensee:
+            if f", {discom_code}" in base_licensee:
+                licensee_title = base_licensee.replace(f", {discom_code}", f"{licensee_sub}, {discom_code}", 1)
+            else:
+                licensee_title = f"{base_licensee}{licensee_sub}"
+        else:
+            licensee_title = base_licensee
+    else:
+        licensee_title = f"Additional Executive Engineer{licensee_sub}, {discom_code}"
 
     preamble_p1 = (
         f"This Agreement is made and entered into at (location) <b>{city}</b> on this "
@@ -3696,10 +3708,20 @@ def generate_vendor_agreement_pdf(client: dict, company: dict) -> bytes:
     story.append(Spacer(1, 0.2 * cm))
 
     discom_code = client.get("discom_code") or client.get("discom") or "MSEDCL"
+    stages_dict = dict(client.get("stages") or {})
+    ob_dict = dict(stages_dict.get("onboarding_data") or {})
+    raw_bu = str(client.get("bu_number") or client.get("bu_no") or client.get("bu") or ob_dict.get("bu_number") or ob_dict.get("bu_no") or "").strip()
+    bu_no = (raw_bu if raw_bu.upper().startswith("BU-") else f"BU-{raw_bu}") if raw_bu else ""
+    bu_text = (client.get("bu_text") or ob_dict.get("bu_text") or client.get("sub_division") or "").strip()
+    if bu_text and bu_no:
+        sub_bu_str = bu_no if bu_text.upper() in ("BU", "BU-") else f"{bu_text} {bu_no}"
+    else:
+        sub_bu_str = bu_text or bu_no
+    bu_clause = f" (<b>{sub_bu_str}</b>)" if sub_bu_str else ""
 
     story.append(Paragraph("<b>Between</b>", style_center_b))
     applicant_p = (
-        f"<b>{client_name}</b> has residential electricity connection with consumer number <b>{consumer_no}</b> "
+        f"<b>{client_name}</b> has residential electricity connection with consumer number <b>{consumer_no}</b>{bu_clause} "
         f"from {discom_code} (DISCOM) at <b>{full_address} PIN code : {pincode}</b> (Hereinafter referred to as Applicant)."
     )
     story.append(Paragraph(applicant_p, style_body))
@@ -4917,16 +4939,16 @@ def _generate_sldr_docx(client: dict, company: dict) -> bytes:
     from docx.oxml import OxmlElement
 
     doc = _build_docx_document(left_cm=1.2, right_cm=1.2, top_cm=1.2, bottom_cm=1.8)
+    stages_dict  = dict(client.get("stages") or {})
+    ob_dict      = dict(stages_dict.get("onboarding_data") or {})
     company_name = (company.get('company_name') or '').strip().upper()
     client_name  = str(client.get('full_name') or client.get('name') or '').upper()
     consumer_num = str(client.get('consumer_number') or '').upper()
-    bu_num       = str(client.get('bu_number') or '').upper()
+    bu_num       = str(client.get('bu_number') or client.get('bu_no') or client.get('bu') or ob_dict.get('bu_number') or ob_dict.get('bu_no') or '').upper()
     sol_kw       = str(client.get('system_kw') or '').strip()
     sol_wp       = str(client.get('panel_wattage') or '').strip()
     num_panels   = str(client.get('num_panels') or '').strip()
     panel_make   = (client.get('panel_brand') or client.get('panel_make') or '').upper()
-    stages_dict  = dict(client.get("stages") or {})
-    ob_dict      = dict(stages_dict.get("onboarding_data") or {})
 
     inverter_list = _get_inverters_list(client)
     distinct_brands = []
@@ -5081,12 +5103,14 @@ def _generate_net_meter_docx(client: dict, company: dict) -> bytes:
     system_kw    = str(client.get("system_kw") or client.get("capacity") or "").strip()
     date_str_raw = client.get("installation_date") or datetime.now().strftime("%d/%m/%Y")
     date_str     = date_str_raw[:10] if len(date_str_raw) > 10 else date_str_raw
-    raw_bu = str(client.get("bu_number") or client.get("bu_no") or client.get("bu") or "").strip()
+    stages_dict  = dict(client.get("stages") or {})
+    ob_dict      = dict(stages_dict.get("onboarding_data") or {})
+    raw_bu = str(client.get("bu_number") or client.get("bu_no") or client.get("bu") or ob_dict.get("bu_number") or ob_dict.get("bu_no") or "").strip()
     if raw_bu:
         bu_no = raw_bu if raw_bu.upper().startswith("BU-") else f"BU-{raw_bu}"
     else:
         bu_no = ""
-    bu_text = client.get("bu_text") or ""
+    bu_text = (client.get("bu_text") or ob_dict.get("bu_text") or "").strip()
     sub_div = bu_text or client.get("sub_division") or ""
     division = client.get("division") or ""
     if sub_div and bu_no:
@@ -5095,7 +5119,17 @@ def _generate_net_meter_docx(client: dict, company: dict) -> bytes:
         sub_bu_str = sub_div or bu_no
     licensee_sub = f", {sub_bu_str}" if sub_bu_str else ""
     discom_code  = client.get("discom_code") or client.get("discom") or "MSEDCL"
-    licensee_title = client.get("distribution_licensee") or f"Additional Executive Engineer{licensee_sub}, {discom_code}"
+    base_licensee = (client.get("distribution_licensee") or "").strip()
+    if base_licensee:
+        if sub_bu_str and sub_bu_str not in base_licensee:
+            if f", {discom_code}" in base_licensee:
+                licensee_title = base_licensee.replace(f", {discom_code}", f"{licensee_sub}, {discom_code}", 1)
+            else:
+                licensee_title = f"{base_licensee}{licensee_sub}"
+        else:
+            licensee_title = base_licensee
+    else:
+        licensee_title = f"Additional Executive Engineer{licensee_sub}, {discom_code}"
 
 
     def _hdr(text, size=14, center=True):
@@ -5276,8 +5310,19 @@ def _generate_vendor_docx(client: dict, company: dict) -> bytes:
           "for design, installation, commissioning and five years comprehensive maintenance of rooftop "
           "solar system to be installed under simplified procedure of Rooftop Solar Program Ph-II.")
     _docx_add_spacer(doc, 4)
+    stages_dict = dict(client.get("stages") or {})
+    ob_dict = dict(stages_dict.get("onboarding_data") or {})
+    raw_bu = str(client.get("bu_number") or client.get("bu_no") or client.get("bu") or ob_dict.get("bu_number") or ob_dict.get("bu_no") or "").strip()
+    bu_no = (raw_bu if raw_bu.upper().startswith("BU-") else f"BU-{raw_bu}") if raw_bu else ""
+    bu_text = (client.get("bu_text") or ob_dict.get("bu_text") or client.get("sub_division") or "").strip()
+    if bu_text and bu_no:
+        sub_bu_str = bu_no if bu_text.upper() in ("BU", "BU-") else f"{bu_text} {bu_no}"
+    else:
+        sub_bu_str = bu_text or bu_no
+    bu_clause = f" ({sub_bu_str})" if sub_bu_str else ""
+
     _hdr("Between", size=10)
-    _body(f"{client_name} has residential electricity connection with consumer number {consumer_no} "
+    _body(f"{client_name} has residential electricity connection with consumer number {consumer_no}{bu_clause} "
           f"from {discom_code} (DISCOM) at {full_address} PIN code : {pincode} (Hereinafter referred to as Applicant).")
     _docx_add_spacer(doc, 4)
     _hdr("And", size=10)

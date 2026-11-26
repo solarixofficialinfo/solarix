@@ -284,6 +284,8 @@ export default function ClientDataDetail() {
       mobile: c.mobile || "",
       alt_mobile: c.alt_mobile || "",
       consumer_number: c.consumer_number || "",
+      bu_number: c.bu_number || c.bu_no || "",
+      bu_text: c.bu_text || "",
       section_number: c.section_number || c.section_no || "",
       address: c.address || "",
       city: c.city || "",
@@ -323,6 +325,9 @@ export default function ClientDataDetail() {
         panel_make: editForm.panel_make || editForm.panel_brand || "",
         section_number: editForm.section_number || editForm.section_no || "",
         section_no: editForm.section_number || editForm.section_no || "",
+        bu_number: editForm.bu_number || "",
+        bu_no: editForm.bu_number || "",
+        bu_text: editForm.bu_text || "",
         consumer_category: editForm.consumer_type || "",
         consumer_type: editForm.consumer_type || "",
         inverters: Array.isArray(editForm.inverters) ? editForm.inverters : [],
@@ -623,6 +628,8 @@ export default function ClientDataDetail() {
                   <Row label="Mobile Number" val={c.mobile} />
                   <Row label="Alternate Mobile" val={c.alt_mobile} />
                   <Row label="Consumer Number" val={c.consumer_number} />
+                  <Row label="BU Number" val={c.bu_number || c.bu_no} />
+                  <Row label="BU Text / Tax" val={c.bu_text} />
                   <Row label="Section Number" val={c.section_number || c.section_no} />
                   <Row label="Address" val={c.address} />
                   <Row label="City & Pincode" val={[c.city, c.pincode].filter(Boolean).join(", ")} />
@@ -1573,6 +1580,8 @@ function EditClientDialog({ form, setForm, onClose, onSave }) {
           <div><Label className="text-xs">Mobile Number</Label><Input value={form.mobile} onChange={e => setF("mobile", e.target.value)} className="mt-1" /></div>
           <div><Label className="text-xs">City</Label><Input value={form.city} onChange={e => setF("city", e.target.value)} className="mt-1" /></div>
           <div><Label className="text-xs">Consumer Number</Label><Input value={form.consumer_number} onChange={e => setF("consumer_number", e.target.value)} className="mt-1" /></div>
+          <div><Label className="text-xs">BU Number</Label><Input value={form.bu_number || ""} onChange={e => setF("bu_number", e.target.value)} placeholder="e.g. 4710" className="mt-1" /></div>
+          <div><Label className="text-xs">BU Text / Tax</Label><Input value={form.bu_text || ""} onChange={e => setF("bu_text", e.target.value)} placeholder="e.g. ICHALKARANJI A S/DN." className="mt-1" /></div>
           <div><Label className="text-xs">Required Capacity (kW)</Label><Input type="number" value={form.system_kw} onChange={e => setF("system_kw", e.target.value)} className="mt-1" /></div>
           <div><Label className="text-xs">Panel Brand</Label><Input value={form.panel_make} onChange={e => setF("panel_make", e.target.value)} className="mt-1" /></div>
           <div><Label className="text-xs">Inverter Brand</Label><Input value={form.inverter_make} onChange={e => setF("inverter_make", e.target.value)} className="mt-1" /></div>
